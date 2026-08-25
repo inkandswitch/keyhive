@@ -14,7 +14,10 @@ use keyhive_crypto::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// [`Revocation`] storage.
@@ -30,6 +33,9 @@ pub struct RevocationStore<
     revocations: CaMap<Signed<Revocation<F, S, T, L>>>,
     #[derive_where(skip(Hash))]
     agent_to_revocations: HashMap<AgentId, HashSet<Arc<Signed<Revocation<F, S, T, L>>>>>,
+    /// Shared projection-generation counter (see DelegationStore).
+    #[derive_where(skip(Hash))]
+    generation: Arc<AtomicU64>,
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
@@ -37,10 +43,21 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 {
     /// Create a new revocation store.
     pub fn new() -> Self {
+        Self::with_generation(Arc::new(AtomicU64::new(0)))
+    }
+
+    /// Create a store whose mutations bump the shared counter.
+    pub fn with_generation(generation: Arc<AtomicU64>) -> Self {
         Self {
             revocations: CaMap::new(),
             agent_to_revocations: HashMap::default(),
+            generation,
         }
+    }
+
+    /// Current mutation generation.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     pub fn len(&self) -> usize {
@@ -82,6 +99,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .entry(agent_id)
             .or_default()
             .insert(revocation);
+        self.generation.fetch_add(1, Ordering::AcqRel);
         digest
     }
 
@@ -99,6 +117,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     self.agent_to_revocations.remove(&agent_id);
                 }
             }
+            self.generation.fetch_add(1, Ordering::AcqRel);
             Some(revocation)
         } else {
             None
