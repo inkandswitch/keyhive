@@ -156,25 +156,6 @@ where
     }
 }
 
-/// Constructors for the default in-memory configuration.
-impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, P: for<'de> Deserialize<'de>>
-    Keyhive<F, S, T, P>
-where
-    MemoryCiphertextStore<T, P>: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-    NoListener: MembershipListener<F, S, T>,
-{
-    /// A keyhive with in-memory storage, for testing.
-    pub async fn in_memory(signer: S) -> Result<Self, SigningError> {
-        Self::generate(
-            signer,
-            MemoryCiphertextStore::new(),
-            NoListener,
-            rand::rngs::OsRng,
-        )
-        .await
-    }
-}
-
 impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
