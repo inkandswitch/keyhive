@@ -745,6 +745,10 @@ pub enum AddMemberError {
 
 #[derive(Debug, Error)]
 pub enum EncryptError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] crate::keyhive::NotFound),
+
     #[error("Encryption failed: {0}")]
     EncryptionFailed(chacha20poly1305::Error),
 

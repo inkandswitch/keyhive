@@ -355,7 +355,7 @@ impl JsKeyhive {
         init_span!("JsKeyhive::force_pcs_update");
         let (_op, new_share_key, new_share_secret_key) = self
             .0
-            .force_pcs_update(doc.inner.dupe())
+            .force_pcs_update(doc.doc_id)
             .await
             .map_err(EncryptContentError::from)
             .map_err(JsEncryptError::from)?;
@@ -367,8 +367,10 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryPcsKeyHash)]
     pub async fn try_pcs_key_hash(&self, doc: &JsDocument) -> Option<Vec<u8>> {
         self.0
-            .try_pcs_key_hash(doc.inner.dupe())
+            .try_pcs_key_hash(doc.doc_id)
             .await
+            .ok()
+            .flatten()
             .map(|d| d.as_slice().to_vec())
     }
 

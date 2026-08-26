@@ -526,11 +526,7 @@ impl TestContext {
 
     /// [`Hive::force_pcs_update`], reduced to the share key the rotation introduced.
     pub async fn force_pcs_update(&self, who: &Instance, doc: DocumentId) -> TestResult<ShareKey> {
-        let handle = who
-            .get_document(doc)
-            .await
-            .ok_or_else(|| TestError::NotSynced(Box::new(doc.into())))?;
-        let (_op, new_key, _secret) = who.force_pcs_update(handle).await?;
+        let (_op, new_key, _secret) = who.force_pcs_update(doc).await?;
         Ok(new_key)
     }
 

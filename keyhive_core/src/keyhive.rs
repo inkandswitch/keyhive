@@ -758,11 +758,21 @@ impl<
         Ok((result, application_secret_key))
     }
 
+    /// The hash of `doc`'s current PCS key, and `None` if it has no key to hash.
+    ///
+    /// Returns an error if we have never heard of `doc`.
     pub async fn try_pcs_key_hash(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
-    ) -> Option<Digest<PcsKey>> {
-        doc.lock().await.cgka_mut().ok()?.try_pcs_key_hash().ok()
+        doc: DocumentId,
+    ) -> Result<Option<Digest<PcsKey>>, NotFound> {
+        let handle = self.document_by_id(doc).await?;
+        let hash = handle
+            .lock()
+            .await
+            .cgka_mut()
+            .ok()
+            .and_then(|cgka| cgka.try_pcs_key_hash().ok());
+        Ok(hash)
     }
 
     /// Try causal decrypt from more than one entrypoint at once.
@@ -845,11 +855,12 @@ impl<
     #[instrument(skip_all)]
     pub async fn force_pcs_update(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
     ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
+        let handle = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
-        let (op, new_share_key, new_share_secret_key) = doc
+        let (op, new_share_key, new_share_secret_key) = handle
             .lock()
             .await
             .pcs_update(&signer, &mut *locked_csprng)
