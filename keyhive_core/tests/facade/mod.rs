@@ -118,14 +118,8 @@ impl From<AddMemberError> for TestError {
 impl From<AddGroupMemberError> for TestError {
     fn from(e: AddGroupMemberError) -> Self {
         match e {
-            AddGroupMemberError::AccessEscalation { wanted, have } => {
-                TestError::Escalation { wanted, held: have }
-            }
-            AddGroupMemberError::AddError(AddError::Escelation { claimed, proof }) => {
-                TestError::Escalation {
-                    wanted: claimed,
-                    held: proof,
-                }
+            AddGroupMemberError::AddError(AddError::Escalation { wanted, held }) => {
+                TestError::Escalation { wanted, held }
             }
             AddGroupMemberError::NoProof => TestError::NoAuthority,
             other => TestError::Other(other.to_string()),
@@ -137,11 +131,8 @@ impl From<RevokeMemberError> for TestError {
     fn from(e: RevokeMemberError) -> Self {
         match e {
             RevokeMemberError::NoProof => TestError::NoAuthority,
-            RevokeMemberError::AddError(AddError::Escelation { claimed, proof }) => {
-                TestError::Escalation {
-                    wanted: claimed,
-                    held: proof,
-                }
+            RevokeMemberError::AddError(AddError::Escalation { wanted, held }) => {
+                TestError::Escalation { wanted, held }
             }
             RevokeMemberError::RedelegationError(inner) => inner.into(),
             other => TestError::Other(other.to_string()),
