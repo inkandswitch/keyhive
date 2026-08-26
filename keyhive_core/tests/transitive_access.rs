@@ -49,7 +49,7 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     let alice = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
 
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.generate_contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
 
     let group = alice.generate_group(vec![]).await?;
@@ -108,7 +108,7 @@ async fn test_individual_admin_on_doc_transitively_reaches_child_doc() -> TestRe
     let alice = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
 
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.generate_contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
     let bob_id = { bob_on_alice.lock().await.id() };
 
@@ -190,7 +190,7 @@ async fn test_group_members_cycle() -> TestResult {
     let alice = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
 
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.generate_contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
 
     let group = alice.generate_group(vec![]).await?;
@@ -260,11 +260,11 @@ async fn test_transitive_admin_can_delegate() -> TestResult {
     let carol = make_simple_keyhive().await?;
 
     // Register Bob and Carol on Alice's keyhive
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.generate_contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
     let bob_id = { bob_on_alice.lock().await.id() };
 
-    let carol_contact = carol.contact_card().await?;
+    let carol_contact = carol.generate_contact_card().await?;
     let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
     let carol_id = { carol_on_alice.lock().await.id() };
 
@@ -358,11 +358,11 @@ async fn test_transitive_read_cannot_delegate_admin() -> TestResult {
     .await?;
     let carol = make_simple_keyhive().await?;
 
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.generate_contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
     let bob_id = { bob_on_alice.lock().await.id() };
 
-    let carol_contact = carol.contact_card().await?;
+    let carol_contact = carol.generate_contact_card().await?;
     let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
     let carol_id = { carol_on_alice.lock().await.id() };
 
@@ -466,11 +466,11 @@ async fn test_transitive_admin_can_delegate_via_group() -> TestResult {
     .await?;
     let carol = make_simple_keyhive().await?;
 
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.generate_contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
     let bob_id = { bob_on_alice.lock().await.id() };
 
-    let carol_contact = carol.contact_card().await?;
+    let carol_contact = carol.generate_contact_card().await?;
     let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
     let carol_id = { carol_on_alice.lock().await.id() };
 
@@ -538,11 +538,11 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     .await?;
     let carol = make_simple_keyhive().await?;
 
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.generate_contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
     let bob_id = { bob_on_alice.lock().await.id() };
 
-    let carol_contact = carol.contact_card().await?;
+    let carol_contact = carol.generate_contact_card().await?;
     let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
     let carol_id = { carol_on_alice.lock().await.id() };
 
@@ -623,11 +623,11 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
     .await?;
     let carol = make_simple_keyhive().await?;
 
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.generate_contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
     let bob_id = { bob_on_alice.lock().await.id() };
 
-    let carol_contact = carol.contact_card().await?;
+    let carol_contact = carol.generate_contact_card().await?;
     let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
     let carol_id = { carol_on_alice.lock().await.id() };
 
@@ -750,19 +750,19 @@ async fn test_deep_chain_revocation() -> TestResult {
     let eve = make_simple_keyhive().await?;
 
     // Register everyone on Alice's keyhive
-    let bob_contact = bob.contact_card().await?;
+    let bob_contact = bob.generate_contact_card().await?;
     let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
     let bob_id = { bob_on_alice.lock().await.id() };
 
-    let carol_contact = carol.contact_card().await?;
+    let carol_contact = carol.generate_contact_card().await?;
     let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
     let carol_id = { carol_on_alice.lock().await.id() };
 
-    let dave_contact = dave.contact_card().await?;
+    let dave_contact = dave.generate_contact_card().await?;
     let dave_on_alice = alice.receive_contact_card(&dave_contact).await?;
     let dave_id = { dave_on_alice.lock().await.id() };
 
-    let eve_contact = eve.contact_card().await?;
+    let eve_contact = eve.generate_contact_card().await?;
     let eve_on_alice = alice.receive_contact_card(&eve_contact).await?;
     let eve_id = { eve_on_alice.lock().await.id() };
 

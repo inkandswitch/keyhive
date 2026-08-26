@@ -1483,10 +1483,10 @@ impl TestContext {
         name: &str,
     ) -> Result<TestIndividual> {
         self.claim_name(name)?;
-        let card = hive.contact_card().await?;
+        let card = hive.generate_contact_card().await?;
         for other in self.hives.values() {
             other.receive_contact_card(&card).await?;
-            hive.receive_contact_card(&other.contact_card().await?)
+            hive.receive_contact_card(&other.generate_contact_card().await?)
                 .await?;
         }
 

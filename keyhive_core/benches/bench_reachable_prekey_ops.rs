@@ -57,7 +57,7 @@ fn reachable_prekey_ops_for_agent(
         let mut last_peer_on_alice = None;
         for _ in 0..n_peers {
             let peer = make_simple_keyhive().await.unwrap();
-            let peer_contact = peer.contact_card().await.unwrap();
+            let peer_contact = peer.generate_contact_card().await.unwrap();
             let peer_on_alice = alice.receive_contact_card(&peer_contact).await.unwrap();
             let peer_id = { peer_on_alice.lock().await.id() };
 

@@ -2,7 +2,7 @@
 //!
 //! The submodules hold more `impl Keyhive`, split by topic.
 
-mod lookup_by_id;
+mod queries;
 
 use crate::{
     access::Access,
@@ -18,8 +18,9 @@ use crate::{
         agent::{id::AgentId, Agent},
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
-            DocCausalDecryptionError, Document, EncryptError, EncryptedContentWithUpdate,
-            GenerateDocError, MissingIndividualError, RevokeMemberUpdate,
+            DocCausalDecryptionError, Document, EncryptError, EncryptInEnvelopeError,
+            EncryptedContentWithUpdate, GenerateDocError, MissingIndividualError,
+            RevokeMemberUpdate,
         },
         group::{
             delegation::{Delegation, StaticDelegation},
@@ -45,8 +46,8 @@ use crate::{
     stats::Stats,
     store::{
         ciphertext::{
-            memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore,
-            CiphertextStoreExt,
+            memory::MemoryCiphertextStore, CausalDecryptionError, CausalDecryptionState,
+            CiphertextStore, CiphertextStoreExt,
         },
         delegation::DelegationStore,
         revocation::RevocationStore,
@@ -152,6 +153,25 @@ where
 {
     fn dupe(&self) -> Self {
         self.clone()
+    }
+}
+
+/// Constructors for the default in-memory configuration.
+impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, P: for<'de> Deserialize<'de>>
+    Keyhive<F, S, T, P>
+where
+    MemoryCiphertextStore<T, P>: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    NoListener: MembershipListener<F, S, T>,
+{
+    /// A keyhive with in-memory storage, for testing.
+    pub async fn in_memory(signer: S) -> Result<Self, SigningError> {
+        Self::generate(
+            signer,
+            MemoryCiphertextStore::new(),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
     }
 }
 
@@ -318,8 +338,12 @@ impl<
         Ok(doc)
     }
 
+    /// Generate a new contact card, rotating a prekey in the process.
+    ///
+    /// Use [`Keyhive::get_existing_contact_card`] to read the current contact card without
+    /// generating one.
     #[instrument(skip_all)]
-    pub async fn contact_card(&self) -> Result<ContactCard, SigningError> {
+    pub async fn generate_contact_card(&self) -> Result<ContactCard, SigningError> {
         let rot_key_op = self
             .active
             .lock()
@@ -686,6 +710,41 @@ impl<
             .0)
     }
 
+    /// Encrypt `content` into `doc` in an [`Envelope`](crate::crypto::envelope::Envelope),
+    /// listing its ancestors and carrying the keys to open them.
+    #[instrument(skip_all)]
+    pub async fn try_encrypt_content_in_envelope(
+        &self,
+        doc: DocumentId,
+        content_ref: &T,
+        pred_refs: &Vec<T>,
+        content: &[u8],
+    ) -> Result<EncryptedContentWithUpdate<T>, EnvelopeError<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let handle = self.document_by_id(doc).await?;
+        let signer = { self.active.lock().await.signer.clone() };
+        let result = {
+            let mut locked_csprng = self.csprng.lock().await;
+            handle
+                .lock()
+                .await
+                .try_encrypt_content_in_envelope(
+                    content_ref,
+                    content,
+                    pred_refs,
+                    &signer,
+                    &mut *locked_csprng,
+                )
+                .await?
+        };
+        if let Some(op) = &result.update_op {
+            self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
+        }
+        Ok(result)
+    }
+
     /// Encrypt `content` into `doc`. Returns the application secret it was
     /// encrypted under.
     #[instrument(skip_all)]
@@ -725,6 +784,22 @@ impl<
         doc.lock().await.cgka_mut().ok()?.try_pcs_key_hash().ok()
     }
 
+    /// Try causal decrypt from more than one entrypoint at once.
+    ///
+    /// [`Keyhive::try_causal_decrypt_content`] takes a single entrypoint.
+    pub async fn try_causal_decrypt_from(
+        &self,
+        entrypoints: &[(Arc<EncryptedContent<P, T>>, SymmetricKey)],
+    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<F, T, P, C>>
+    where
+        T: for<'de> Deserialize<'de>,
+        P: Clone + Serialize + for<'de> Deserialize<'de>,
+    {
+        let mut to_walk = entrypoints.to_vec();
+        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(&self.ciphertext_store, &mut to_walk)
+            .await
+    }
+
     /// Decrypt `encrypted` out of `doc`.
     pub async fn try_decrypt_content(
         &self,
@@ -732,6 +807,26 @@ impl<
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         Ok(self.try_decrypt_content_keyed(doc, encrypted).await?.0)
+    }
+
+    /// Whether decryption actually succeeds.
+    ///
+    /// `Ok(false)` means this instance holds no key for the content, or holds one that does
+    /// not authenticate it. Not knowing about `doc` at all is an error.
+    pub async fn can_decrypt_content(
+        &self,
+        doc: DocumentId,
+        encrypted: &EncryptedContent<P, T>,
+    ) -> Result<bool, DecryptError> {
+        match self.try_decrypt_content(doc, encrypted).await {
+            Ok(_) => Ok(true),
+            Err(
+                DecryptError::KeyNotFound
+                | DecryptError::SivMismatch
+                | DecryptError::DecryptionFailed(_),
+            ) => Ok(false),
+            Err(other) => Err(other),
+        }
     }
 
     /// Decrypt `encrypted` out of `doc`. Returns the application secret that was
@@ -756,10 +851,7 @@ impl<
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,
     {
-        let doc = self
-            .get_document(doc)
-            .await
-            .ok_or_else(|| CausalDecryptError::Unknown(doc.into()))?;
+        let doc = self.document_by_id(doc).await?;
         let out = {
             let mut locked = doc.lock().await;
             locked
@@ -861,7 +953,10 @@ impl<
 
     /// `who` back, if this instance has received the events that describe it.
     async fn known(&self, who: Identifier) -> Result<Identifier, NotFound> {
-        self.agent_by_id(who).await.map(|_| who)
+        self.has_received(who)
+            .await
+            .then_some(who)
+            .ok_or(NotFound(Box::new(who)))
     }
 
     /// The documents `who` reaches.
@@ -2795,12 +2890,23 @@ pub struct NotFound(pub Box<Identifier>);
 /// type parameters.
 #[derive(Debug, Error)]
 pub enum CausalDecryptError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>> {
-    /// This instance has not received the events that would tell it the document exists.
-    #[error("{0} is not known to this keyhive")]
-    Unknown(Identifier),
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
 
     #[error(transparent)]
     Document(#[from] DocCausalDecryptionError<F, T, P, C>),
+}
+
+/// Why content could not be written into an [`Envelope`](crate::crypto::envelope::Envelope).
+#[derive(Debug, Error)]
+pub enum EnvelopeError<T: ContentRef> {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+
+    #[error(transparent)]
+    Encrypt(#[from] EncryptInEnvelopeError<T>),
 }
 
 #[derive(Clone, PartialEq, Eq, Error)]

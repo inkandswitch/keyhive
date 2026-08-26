@@ -468,6 +468,42 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         Ok((op, new_share_key, new_share_secret_key))
     }
 
+    /// Encrypt `content` in an [`Envelope`], listing its ancestors and carrying the keys to
+    /// open them.
+    #[instrument(skip_all)]
+    pub async fn try_encrypt_content_in_envelope<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        content_ref: &T,
+        content: &[u8],
+        pred_refs: &Vec<T>,
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<EncryptedContentWithUpdate<T>, EncryptInEnvelopeError<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let mut ancestors = HashMap::with_capacity(pred_refs.len());
+        for pred in pred_refs {
+            let key = self
+                .known_decryption_keys
+                .get(pred)
+                .copied()
+                .ok_or_else(|| EncryptInEnvelopeError::NoKeyForAncestor(pred.clone()))?;
+            ancestors.insert(pred.clone(), key);
+        }
+
+        let envelope = Envelope {
+            plaintext: content.to_vec(),
+            ancestors,
+        };
+        let bytes = bincode::serialize(&envelope)?;
+
+        let (encrypted, _key) = self
+            .try_encrypt_content_keyed(content_ref, &bytes, pred_refs, signer, csprng)
+            .await?;
+        Ok(encrypted)
+    }
+
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
@@ -510,7 +546,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .map(|(plaintext, _key)| plaintext)
     }
 
-    /// Decrypt content and also return the application secret key that was used.
+    /// Decrypt content and return the application secret that was used.
     #[instrument(skip_all)]
     pub fn try_decrypt_content_keyed<P: for<'de> Deserialize<'de>>(
         &mut self,
@@ -526,6 +562,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         decrypt_key
             .try_decrypt(encrypted_content.nonce, &mut plaintext)
             .map_err(DecryptError::DecryptionFailed)?;
+
+        self.known_decryption_keys
+            .insert(encrypted_content.content_ref.clone(), decrypt_key);
 
         // FIXME for some reason this decrypts successfully,
         // but the bytes of the symmetric key are different,
@@ -714,6 +753,21 @@ pub enum EncryptError {
 
     #[error("Failed to make app secret: {0}")]
     FailedToMakeAppSecret(CgkaError),
+}
+
+/// Why content could not be written into an [`Envelope`].
+#[derive(Debug, Error)]
+pub enum EncryptInEnvelopeError<T: ContentRef> {
+    /// A predecessor was named that this document has never held a key for, so the envelope
+    /// could not carry one.
+    #[error("no key for ancestor {0:?}")]
+    NoKeyForAncestor(T),
+
+    #[error(transparent)]
+    Serialization(#[from] bincode::Error),
+
+    #[error(transparent)]
+    Encrypt(#[from] EncryptError),
 }
 
 #[derive(Debug, Error)]
