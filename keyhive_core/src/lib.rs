@@ -10,7 +10,6 @@
 #![deny(unreachable_pub)]
 #![allow(clippy::type_complexity)]
 
-pub mod ability;
 pub mod access;
 pub mod archive;
 pub mod cgka;

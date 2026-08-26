@@ -6,9 +6,7 @@ use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
     listener::no_listener::NoListener,
-    principal::{
-        agent::Agent, individual::op::KeyOp, membered::Membered, peer::Peer, public::Public,
-    },
+    principal::{agent::Agent, individual::op::KeyOp, peer::Peer, public::Public},
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -84,12 +82,7 @@ fn reachable_prekey_ops_for_agent(
             for doc in &docs {
                 let doc_id = { doc.lock().await.doc_id() };
                 alice
-                    .add_member(
-                        Agent::Individual(peer_id, peer_on_alice.dupe()),
-                        &Membered::Document(doc_id, doc.dupe()),
-                        Access::Edit,
-                        &[],
-                    )
+                    .add_member(peer_id, doc_id, Access::Edit, &[])
                     .await
                     .unwrap();
             }

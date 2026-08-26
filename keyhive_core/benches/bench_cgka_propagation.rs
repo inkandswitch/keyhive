@@ -59,23 +59,13 @@ async fn setup_many_docs_nested(
 
     // g_bottom is a member of g_mid
     alice
-        .add_member(
-            Agent::Group(g_bottom_id, g_bottom.dupe()),
-            &Membered::Group(g_mid_id, g_mid.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(g_bottom_id, g_mid_id, Access::Read, &[])
         .await
         .unwrap();
 
     // g_mid is a member of g_top
     alice
-        .add_member(
-            Agent::Group(g_mid_id, g_mid.dupe()),
-            &Membered::Group(g_top_id, g_top.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(g_mid_id, g_top_id, Access::Read, &[])
         .await
         .unwrap();
 
@@ -83,12 +73,7 @@ async fn setup_many_docs_nested(
     for _ in 0..5 {
         let agent = make_peer_agent(&alice).await;
         alice
-            .add_member(
-                agent,
-                &Membered::Group(g_bottom_id, g_bottom.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(agent.id(), g_bottom_id, Access::Read, &[])
             .await
             .unwrap();
     }
@@ -105,12 +90,7 @@ async fn setup_many_docs_nested(
         if i == 0 || i == n_docs - 1 {
             let doc_id = doc.lock().await.doc_id();
             alice
-                .add_member(
-                    Agent::Group(g_top_id, g_top.dupe()),
-                    &Membered::Document(doc_id, doc.dupe()),
-                    Access::Read,
-                    &[],
-                )
+                .add_member(g_top_id, doc_id, Access::Read, &[])
                 .await
                 .unwrap();
         }
@@ -136,7 +116,7 @@ fn add_member_nested_groups(bencher: divan::Bencher, n_docs: usize) {
             rt.block_on(async {
                 std::hint::black_box(
                     alice
-                        .add_member(agent, &membered, Access::Read, &[])
+                        .add_member(agent.id(), membered.membered_id(), Access::Read, &[])
                         .await
                         .unwrap(),
                 );
@@ -165,7 +145,7 @@ fn revoke_member_nested_groups(bencher: divan::Bencher, n_docs: usize) {
                 let to_revoke = agent.id();
                 // Add the member first so we can revoke them
                 alice
-                    .add_member(agent, &membered, Access::Read, &[])
+                    .add_member(agent.id(), membered.membered_id(), Access::Read, &[])
                     .await
                     .unwrap();
                 (alice, membered, to_revoke)
@@ -173,7 +153,11 @@ fn revoke_member_nested_groups(bencher: divan::Bencher, n_docs: usize) {
         })
         .bench_local_values(|(alice, membered, to_revoke)| {
             rt.block_on(async {
-                let _ = std::hint::black_box(alice.revoke_member(to_revoke, true, &membered).await);
+                let _ = std::hint::black_box(
+                    alice
+                        .revoke_member(to_revoke, true, membered.membered_id())
+                        .await,
+                );
             });
             // Intentional leak: see comment in add_member_nested_groups
             std::mem::forget(alice);

@@ -1,7 +1,10 @@
 //! The primary API for the library.
+//!
+//! The submodules hold more `impl Keyhive`, split by topic.
+
+mod lookup_by_id;
 
 use crate::{
-    ability::Ability,
     access::Access,
     archive::Archive,
     cgka::AllCgkaOps,
@@ -35,7 +38,7 @@ use crate::{
             op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, AllReachablePrekeyOps, KeyOp},
             Individual, ReceivePrekeyOpError,
         },
-        membered::{id::MemberedId, Membered},
+        membered::{id::MemberedId, Member, MemberKind, Membered},
         peer::Peer,
         public::Public,
     },
@@ -481,19 +484,25 @@ impl<
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,
-        to_add: Agent<F, S, T, L>,
-        resource: &Membered<F, S, T, L>,
+        to_add: impl Into<Identifier>,
+        resource: impl Into<MemberedId>,
         can: Access,
         other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        let to_add = self.agent_by_id(to_add.into()).await?;
+        let resource = self
+            .membered_by_id(MemberedId::into(resource.into()))
+            .await?;
+
         let signer = { self.active.lock().await.signer.clone() };
-        let update = match resource {
+        let update = match &resource {
             Membered::Group(group_id, group) => {
                 let mut update = group
                     .lock()
                     .await
                     .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await?;
+                    .await
+                    .map_err(AddMemberError::from)?;
 
                 // Propagate CGKA adds to docs that contain this group.
                 // TODO: O(# of docs x `transitive_members()`). We should replace this approach
@@ -533,7 +542,8 @@ impl<
                         let mut locked_doc = doc.lock().await;
                         let ops = locked_doc
                             .add_cgka_members_from_prekeys(&prekeys, &signer)
-                            .await?;
+                            .await
+                            .map_err(AddMemberError::from)?;
                         update.cgka_ops.extend(ops);
                     }
                 }
@@ -557,16 +567,29 @@ impl<
         Ok(update)
     }
 
+    /// Take `to_revoke`'s membership in `resource` away.
+    ///
+    /// With `retain_all_other_members`, the members `to_revoke` had admitted keep their
+    /// access, because their delegations are re-issued under the revoker.
+    ///
+    /// Errors if this instance has never received `resource`.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn revoke_member(
         &self,
-        to_revoke: Identifier,
+        to_revoke: impl Into<Identifier>,
         retain_all_other_members: bool,
-        resource: &Membered<F, S, T, L>,
+        resource: impl Into<MemberedId>,
     ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
+        let to_revoke = to_revoke.into();
+        let resource = self
+            .membered_by_id(MemberedId::into(resource.into()))
+            .await?;
+        let resource = &resource;
+
+        let active_id = { self.active.lock().await.id().into() };
         let mut relevant_docs = BTreeMap::new();
-        for (doc_id, Ability { doc, .. }) in self.reachable_docs().await {
+        for (doc_id, (doc, _)) in self.doc_handles_reachable_by(active_id).await {
             let locked = doc.lock().await;
             relevant_docs.insert(doc_id, locked.content_heads.iter().cloned().collect());
         }
@@ -648,11 +671,11 @@ impl<
         Ok(update)
     }
 
-    /// Encrypt content for a document.
+    /// Encrypt `content` into `doc`.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
@@ -663,16 +686,17 @@ impl<
             .0)
     }
 
-    /// Encrypt content, also returning the application secret key it was
+    /// Encrypt `content` into `doc`. Returns the application secret it was
     /// encrypted under.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
+        let doc = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
         let (result, application_secret_key) = {
             let mut locked_csprng = self.csprng.lock().await;
@@ -685,7 +709,8 @@ impl<
                     &signer,
                     &mut *locked_csprng,
                 )
-                .await?
+                .await
+                .map_err(EncryptContentError::from)?
         };
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
@@ -700,36 +725,48 @@ impl<
         doc.lock().await.cgka_mut().ok()?.try_pcs_key_hash().ok()
     }
 
+    /// Decrypt `encrypted` out of `doc`.
     pub async fn try_decrypt_content(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
-        doc.lock().await.try_decrypt_content(encrypted)
+        Ok(self.try_decrypt_content_keyed(doc, encrypted).await?.0)
     }
 
-    /// Decrypt content and also return the application secret key that was used.
+    /// Decrypt `encrypted` out of `doc`. Returns the application secret that was
+    /// used.
     pub async fn try_decrypt_content_keyed(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
-        doc.lock().await.try_decrypt_content_keyed(encrypted)
+        let doc = self.document_by_id(doc).await?;
+        let out = doc.lock().await.try_decrypt_content_keyed(encrypted);
+        Ok(out?)
     }
 
+    /// Walk back from `encrypted` through the ancestors it lists.
     pub async fn try_causal_decrypt_content(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
-    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<F, T, P, C>>
+    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptError<F, T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,
     {
-        doc.lock()
+        let doc = self
+            .get_document(doc)
             .await
-            .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
-            .await
+            .ok_or_else(|| CausalDecryptError::Unknown(doc.into()))?;
+        let out = {
+            let mut locked = doc.lock().await;
+            locked
+                .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
+                .await
+        };
+        Ok(out?)
     }
 
     #[instrument(skip_all)]
@@ -748,56 +785,112 @@ impl<
         Ok((op, new_share_key, new_share_secret_key))
     }
 
+    /// Every document active reaches, and at what access level.
     #[instrument(skip_all)]
-    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<F, S, T, L>> {
-        let active = self.active.dupe();
-        let locked_active = self.active.lock().await;
-        self.docs_reachable_by_agent(&Agent::Active(locked_active.id(), active))
+    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Access> {
+        let id = { self.active.lock().await.id().into() };
+        self.doc_handles_reachable_by(id)
             .await
+            .into_iter()
+            .map(|(doc_id, (_, can))| (doc_id, can))
+            .collect()
     }
 
-    #[instrument(skip_all)]
-    #[allow(clippy::type_complexity)]
-    pub async fn reachable_members(
-        &self,
-        membered: Membered<F, S, T, L>,
-    ) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        match membered {
-            Membered::Group(_, group) => group.lock().await.transitive_members().await,
-            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
-        }
-    }
-
+    /// The documents `who` reaches, and at what access level.
+    ///
+    /// Errors if have never heard of `who`.
     #[instrument(skip_all)]
     pub async fn docs_reachable_by_agent(
         &self,
-        agent: &Agent<F, S, T, L>,
-    ) -> BTreeMap<DocumentId, Ability<F, S, T, L>> {
-        let mut caps: BTreeMap<DocumentId, Ability<F, S, T, L>> = BTreeMap::new();
+        who: impl Into<Identifier>,
+    ) -> Result<BTreeMap<DocumentId, Access>, NotFound> {
+        let who = self.known(who.into()).await?;
+        Ok(self
+            .doc_handles_reachable_by(who)
+            .await
+            .into_iter()
+            .map(|(doc_id, (_, can))| (doc_id, can))
+            .collect())
+    }
+
+    /// The groups and documents `who` reaches, and at what access level.
+    ///
+    /// Errors if we have never heard of `who`.
+    #[instrument(skip_all)]
+    pub async fn membered_reachable_by_agent(
+        &self,
+        who: impl Into<Identifier>,
+    ) -> Result<BTreeMap<MemberedId, Access>, NotFound> {
+        let who = self.known(who.into()).await?;
+        Ok(self
+            .membered_handles_reachable_by(who)
+            .await
+            .into_iter()
+            .map(|(id, (_, can))| (id, can))
+            .collect())
+    }
+
+    /// Everyone who reaches `membered`, including through nested groups.
+    ///
+    /// Errors if we have never heard of `membered`.
+    #[instrument(skip_all)]
+    pub async fn reachable_members(
+        &self,
+        membered: impl Into<MemberedId>,
+    ) -> Result<BTreeMap<Identifier, Member>, NotFound> {
+        let raw = match self
+            .membered_by_id(MemberedId::into(membered.into()))
+            .await?
+        {
+            Membered::Group(_, group) => group.lock().await.transitive_members().await,
+            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
+        };
+        Ok(raw
+            .into_iter()
+            .map(|(id, (agent, can))| {
+                (
+                    id,
+                    Member {
+                        kind: MemberKind::from(&agent),
+                        can,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    /// `who` back, if this instance has received the events that describe it.
+    async fn known(&self, who: Identifier) -> Result<Identifier, NotFound> {
+        self.agent_by_id(who).await.map(|_| who)
+    }
+
+    /// The documents `who` reaches.
+    #[allow(clippy::type_complexity)]
+    #[instrument(skip_all)]
+    pub(crate) async fn doc_handles_reachable_by(
+        &self,
+        who: Identifier,
+    ) -> BTreeMap<DocumentId, (Arc<Mutex<Document<F, S, T, L>>>, Access)> {
+        let mut caps = BTreeMap::new();
 
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
             let locked = doc.lock().await;
-            if let Some((_, cap)) = locked.transitive_members().await.get(&agent.id()) {
-                caps.insert(
-                    locked.doc_id(),
-                    Ability {
-                        doc: doc.dupe(),
-                        can: *cap,
-                    },
-                );
+            if let Some((_, can)) = locked.transitive_members().await.get(&who) {
+                caps.insert(locked.doc_id(), (doc.dupe(), *can));
             }
         }
 
         caps
     }
 
+    /// The groups and documents reachable by `who`.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub async fn membered_reachable_by_agent(
+    pub(crate) async fn membered_handles_reachable_by(
         &self,
-        agent: &Agent<F, S, T, L>,
+        who: Identifier,
     ) -> HashMap<MemberedId, (Membered<F, S, T, L>, Access)> {
         let mut caps = HashMap::new();
 
@@ -811,7 +904,7 @@ impl<
         };
         for group in groups {
             let locked = group.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
+            if let Some((_, can)) = locked.transitive_members().await.get(&who) {
                 let membered = Membered::Group(locked.group_id(), group.dupe());
                 caps.insert(locked.group_id().into(), (membered, *can));
             }
@@ -820,7 +913,7 @@ impl<
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
             let locked = doc.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
+            if let Some((_, can)) = locked.transitive_members().await.get(&who) {
                 let membered = Membered::Document(locked.doc_id(), doc.dupe());
                 caps.insert(locked.doc_id().into(), (membered, *can));
             }
@@ -885,9 +978,9 @@ impl<
         agent: &Agent<F, S, T, L>,
     ) -> Vec<Arc<Signed<CgkaOperation>>> {
         let mut ops = Vec::new();
-        let reachable = self.docs_reachable_by_agent(agent).await;
-        for (doc_id, ability) in reachable {
-            let epochs = match ability.doc.lock().await.cgka_ops() {
+        let reachable = self.doc_handles_reachable_by(agent.id()).await;
+        for (doc_id, (doc, _)) in reachable {
+            let epochs = match doc.lock().await.cgka_ops() {
                 Ok(epochs) => epochs,
                 Err(CgkaError::NotInitialized) => continue,
                 Err(e) => {
@@ -935,7 +1028,11 @@ impl<
             MembershipOperation<F, S, T, L>,
         )> = Vec::new();
 
-        for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).await.values() {
+        for (mem_rc, _) in self
+            .membered_handles_reachable_by(agent.id())
+            .await
+            .values()
+        {
             for (hash, dlg_head) in mem_rc.delegation_heads().await.iter() {
                 heads.push((hash.coerce(), dlg_head.dupe().into()));
             }
@@ -2687,6 +2784,25 @@ where
     }
 }
 
+/// An identifier this instance has never received.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{0} is not known to this keyhive")]
+pub struct NotFound(pub Box<Identifier>);
+
+/// Why a causal decryption named by identifier could not be carried out.
+///
+/// Separate from the other errors because it carries the store's own error type and
+/// type parameters.
+#[derive(Debug, Error)]
+pub enum CausalDecryptError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>> {
+    /// This instance has not received the events that would tell it the document exists.
+    #[error("{0} is not known to this keyhive")]
+    Unknown(Identifier),
+
+    #[error(transparent)]
+    Document(#[from] DocCausalDecryptionError<F, T, P, C>),
+}
+
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
 pub enum StaticEventConversionError<
@@ -2786,6 +2902,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
 #[derive(Debug, Error)]
 pub enum EncryptContentError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+
     #[error(transparent)]
     EncryptError(#[from] EncryptError),
 
@@ -2995,10 +3115,8 @@ mod tests {
 
         // Delegate to an individual and then revoke
         let indie_id = indie.lock().await.id();
-        let indie_agent = Agent::Individual(indie_id, indie.dupe());
-        kh.add_member(indie_agent, &membered_doc, Access::Edit, &[])
-            .await?;
-        kh.revoke_member(indie_id.into(), true, &membered_doc)
+        kh.add_member(indie_id, doc_id, Access::Edit, &[]).await?;
+        kh.revoke_member(indie_id, true, membered_doc.membered_id())
             .await?;
 
         // Create an archive and try to load it into a fresh Keyhive
@@ -3128,9 +3246,7 @@ mod tests {
             .contains_key(&left_group.lock().await.group_id()));
 
         // NOTE: *NOT* the group
-        let left_membered = left
-            .membered_reachable_by_agent(&Public.individual().into())
-            .await;
+        let left_membered = left.membered_reachable_by_agent(Public.id()).await.unwrap();
 
         assert_eq!(left_membered.len(), 1);
         assert!(left_membered.contains_key(&left_doc.lock().await.doc_id().into()));
@@ -3272,10 +3388,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let member = Public.individual().into();
-        let membered = Membered::Document(doc.lock().await.doc_id(), doc.dupe());
+        let doc_id = { doc.lock().await.doc_id() };
         let dlg = keyhive
-            .add_member(member, &membered, Access::Read, &[])
+            .add_member(Public.id(), doc_id, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3307,27 +3422,17 @@ mod tests {
         let (hive2_on_hive1_id, hive2_on_hive1) = register_peer(&hive1, &hive2).await;
 
         let hive3 = make_keyhive().await;
-        let (hive3_on_hive1_id, hive3_on_hive1) = register_peer(&hive1, &hive3).await;
+        let (hive3_on_hive1_id, _hive3_on_hive1) = register_peer(&hive1, &hive3).await;
 
         // Add hive2 as a member of the doc
         hive1
-            .add_member(
-                Agent::Individual(hive2_on_hive1_id, hive2_on_hive1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(hive2_on_hive1_id, doc_id, Access::Edit, &[])
             .await
             .unwrap();
 
         // Add hive3 as a member of the group that was parent of the doc
         hive1
-            .add_member(
-                Agent::Individual(hive3_on_hive1_id, hive3_on_hive1.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(hive3_on_hive1_id, group_id, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3384,12 +3489,7 @@ mod tests {
         let bob_on_alice_id = { bob_on_alice.lock().await.id() };
         let doc_id = { doc.lock().await.doc_id() };
         alice
-            .add_member(
-                Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_on_alice_id, doc_id, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3415,12 +3515,7 @@ mod tests {
         let bob_on_charlie_id = { bob_on_charlie.lock().await.id() };
         let doc2_id = { doc2.lock().await.doc_id() };
         charlie
-            .add_member(
-                Agent::Individual(bob_on_charlie_id, bob_on_charlie.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_on_charlie_id, doc2_id, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3462,12 +3557,7 @@ mod tests {
             .unwrap();
         let doc_id = doc.lock().await.doc_id();
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_on_alice_for_delegation.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_id, doc_id, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3577,61 +3667,27 @@ mod tests {
         // Create doc1 with bob (3 ops) and carol (2 ops)
         let doc1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc1_id = doc1.lock().await.doc_id();
+        alice.add_member(bob_id, doc1_id, Access::Read, &[]).await?;
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(carol_id, doc1_id, Access::Edit, &[])
             .await?;
 
         // Create doc2 with dan (1 op)
         let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let doc2_id = doc2.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Individual(dan_id, dan_indie.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(dan_id, doc2_id, Access::Read, &[]).await?;
 
         // Create a group with carol (2 ops) and eve (4 ops), then add group to doc2
         let group = alice.generate_group(vec![]).await?;
         let group_id = group.lock().await.group_id();
         alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(carol_id, group_id, Access::Read, &[])
             .await?;
         alice
-            .add_member(
-                Agent::Individual(eve_id, eve_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(eve_id, group_id, Access::Edit, &[])
             .await?;
         alice
-            .add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(group_id, doc2_id, Access::Read, &[])
             .await?;
 
         // Get the all-agents result
@@ -3757,75 +3813,37 @@ mod tests {
         // doc1: bob and carol are direct members
         let doc1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc1_id = doc1.lock().await.doc_id();
+        alice.add_member(bob_id, doc1_id, Access::Read, &[]).await?;
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(carol_id, doc1_id, Access::Edit, &[])
             .await?;
 
         // group: bob and carol
         let group = alice.generate_group(vec![]).await?;
         let group_id = group.lock().await.group_id();
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_id, group_id, Access::Read, &[])
             .await?;
         alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(carol_id, group_id, Access::Edit, &[])
             .await?;
 
         // doc2: group is a member (so bob and carol are transitive members)
         let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let doc2_id = doc2.lock().await.doc_id();
         alice
-            .add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(group_id, doc2_id, Access::Read, &[])
             .await?;
 
         // dave: only on doc1 directly (not in any group)
         alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(dave_id, doc1_id, Access::Read, &[])
             .await?;
 
         // eve: registered but not a member of anything (verified below)
 
         // Revoke bob from doc1
-        alice
-            .revoke_member(
-                bob_id.into(),
-                false,
-                &Membered::Document(doc1_id, doc1.dupe()),
-            )
-            .await?;
+        alice.revoke_member(bob_id, false, doc1_id).await?;
 
         // Get the all-agents result
         let all_results = alice.membership_ops_for_all_agents().await;
@@ -3893,21 +3911,11 @@ mod tests {
             .unwrap();
         let doc1_id = doc1.lock().await.doc_id();
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_id, doc1_id, Access::Read, &[])
             .await
             .unwrap();
         alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(carol_id, doc1_id, Access::Edit, &[])
             .await
             .unwrap();
 
@@ -3923,21 +3931,11 @@ mod tests {
         let group = alice.generate_group(vec![]).await.unwrap();
         let group_id = group.lock().await.group_id();
         alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(carol_id, group_id, Access::Read, &[])
             .await
             .unwrap();
         alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(dave_id, group_id, Access::Edit, &[])
             .await
             .unwrap();
 
@@ -3948,12 +3946,7 @@ mod tests {
             .unwrap();
         let doc2_id = doc2.lock().await.doc_id();
         alice
-            .add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(group_id, doc2_id, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3962,14 +3955,7 @@ mod tests {
         // --- Revoke bob from doc1 ---
         // After revocation, bob should no longer see doc1 CGKA ops (and has
         // no other docs), so both methods should agree he has zero.
-        alice
-            .revoke_member(
-                bob_id.into(),
-                false,
-                &Membered::Document(doc1_id, doc1.dupe()),
-            )
-            .await
-            .unwrap();
+        alice.revoke_member(bob_id, false, doc1_id).await.unwrap();
 
         // Get the all-agents result
         let all_results = alice.cgka_ops_for_all_agents().await;
@@ -4087,86 +4073,32 @@ mod tests {
         let frank_kh = make_keyhive().await;
 
         // Register individuals on alice
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-        let (carol_id, carol_indie) = register_peer(&alice, &carol_kh).await;
-        let (dave_id, dave_indie) = register_peer(&alice, &dave_kh).await;
-        let (eve_id, eve_indie) = register_peer(&alice, &eve_kh).await;
-        let (frank_id, frank_indie) = register_peer(&alice, &frank_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (carol_id, _carol_indie) = register_peer(&alice, &carol_kh).await;
+        let (dave_id, _dave_indie) = register_peer(&alice, &dave_kh).await;
+        let (eve_id, _eve_indie) = register_peer(&alice, &eve_kh).await;
+        let (frank_id, _frank_indie) = register_peer(&alice, &frank_kh).await;
 
         // Create G2: Dave, Eve, and Frank
         let g2 = alice.generate_group(vec![]).await?;
         let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(eve_id, eve_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(dave_id, g2_id, Access::Read, &[]).await?;
+        alice.add_member(eve_id, g2_id, Access::Read, &[]).await?;
+        alice.add_member(frank_id, g2_id, Access::Read, &[]).await?;
 
         // Create G1: Carol and G2
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(carol_id, g1_id, Access::Read, &[]).await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
         // Create Doc D: Bob (direct), G1, and Frank (direct)
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
+        alice.add_member(bob_id, doc_id, Access::Read, &[]).await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(frank_id, doc_id, Access::Read, &[])
             .await?;
 
         // Sanity: check CGKA group size before revocation.
@@ -4179,9 +4111,8 @@ mod tests {
         // Revoke G1 from Doc D (not from the group level)
         let update = alice
             .revoke_member(
-                g1_id.into(),
-                true, // retain other doc members (Bob, Frank)
-                &Membered::Document(doc_id, doc.dupe()),
+                g1_id, true, // retain other doc members (Bob, Frank)
+                doc_id,
             )
             .await?;
 
@@ -4262,86 +4193,32 @@ mod tests {
         let frank_kh = make_keyhive().await;
 
         // Register individuals on alice
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-        let (carol_id, carol_indie) = register_peer(&alice, &carol_kh).await;
-        let (dave_id, dave_indie) = register_peer(&alice, &dave_kh).await;
-        let (eve_id, eve_indie) = register_peer(&alice, &eve_kh).await;
-        let (frank_id, frank_indie) = register_peer(&alice, &frank_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (carol_id, _carol_indie) = register_peer(&alice, &carol_kh).await;
+        let (dave_id, _dave_indie) = register_peer(&alice, &dave_kh).await;
+        let (eve_id, _eve_indie) = register_peer(&alice, &eve_kh).await;
+        let (frank_id, _frank_indie) = register_peer(&alice, &frank_kh).await;
 
         // Create G2: Dave, Eve, and Frank
         let g2 = alice.generate_group(vec![]).await?;
         let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(eve_id, eve_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(dave_id, g2_id, Access::Read, &[]).await?;
+        alice.add_member(eve_id, g2_id, Access::Read, &[]).await?;
+        alice.add_member(frank_id, g2_id, Access::Read, &[]).await?;
 
         // Create G1: Carol and G2
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(carol_id, g1_id, Access::Read, &[]).await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
         // Create Doc D: Bob (direct), G1, and Frank (direct)
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
+        alice.add_member(bob_id, doc_id, Access::Read, &[]).await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(frank_id, doc_id, Access::Read, &[])
             .await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
@@ -4349,9 +4226,8 @@ mod tests {
         // Revoke G2 from G1 (group-level revocation, not doc-level)
         let update = alice
             .revoke_member(
-                g2_id.into(),
-                true, // retain Carol in G1
-                &Membered::Group(g1_id, g1.dupe()),
+                g2_id, true, // retain Carol in G1
+                g1_id,
             )
             .await?;
 
@@ -4415,61 +4291,31 @@ mod tests {
         let bob_kh = make_keyhive().await;
         let dave_kh = make_keyhive().await;
 
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
-        let (dave_id, dave_indie) = register_peer(&alice, &dave_kh).await;
+        let (dave_id, _dave_indie) = register_peer(&alice, &dave_kh).await;
 
         // Doc D with Bob as a direct member
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, doc_id, Access::Read, &[]).await?;
 
         // Group G2 with Dave
         let g2 = alice.generate_group(vec![]).await?;
         let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(dave_id, g2_id, Access::Read, &[]).await?;
 
         // Group G with Doc D and G2 as members
         let g = alice.generate_group(vec![]).await?;
         let g_id = g.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Document(doc_id, doc.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(doc_id, g_id, Access::Read, &[]).await?;
+        alice.add_member(g2_id, g_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Revoke G2 from G. D is a member of G (D has access to G), so
         // D's CGKA should be unaffected by changes to G's other members.
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g_id, g.dupe()))
-            .await?;
+        let update = alice.revoke_member(g2_id, true, g_id).await?;
 
         // No CGKA removals should have been produced for Doc D
         let cgka_removes: Vec<_> = update
@@ -4503,7 +4349,7 @@ mod tests {
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
 
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         // Group G (empty besides alice)
         let g = alice.generate_group(vec![]).await?;
@@ -4512,26 +4358,12 @@ mod tests {
         // Doc D with G as a member
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Add Bob to G. Since G is a member of D, Bob should be added to D's CGKA.
-        let update = alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        let update = alice.add_member(bob_id, g_id, Access::Read, &[]).await?;
 
         let added_vks = extract_added_vks(&update);
 
@@ -4557,7 +4389,7 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         // G3 in G2 in G1 in Doc D
         let g3 = alice.generate_group(vec![]).await?;
@@ -4567,45 +4399,17 @@ mod tests {
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
 
-        alice
-            .add_member(
-                Agent::Group(g3_id, g3.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g3_id, g2_id, Access::Read, &[]).await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Add Bob to G3 — should propagate to D via G3→G2→G1→D
-        let update = alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        let update = alice.add_member(bob_id, g3_id, Access::Read, &[]).await?;
 
         let added_vks = extract_added_vks(&update);
 
@@ -4627,44 +4431,23 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
 
         let d1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let d1_id = d1.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d1_id, d1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, d1_id, Access::Read, &[]).await?;
 
         let d2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let d2_id = d2.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d2_id, d2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, d2_id, Access::Read, &[]).await?;
 
         let size_d1_before = d1.lock().await.cgka()?.group_size();
         let size_d2_before = d2.lock().await.cgka()?.group_size();
 
-        let update = alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        let update = alice.add_member(bob_id, g1_id, Access::Read, &[]).await?;
 
         let added_vks = extract_added_vks(&update);
 
@@ -4683,69 +4466,32 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         // G with Bob
         let g = alice.generate_group(vec![]).await?;
         let g_id = g.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, g_id, Access::Read, &[]).await?;
 
         // G1 and G2, both containing G
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g_id, g1_id, Access::Read, &[]).await?;
 
         let g2 = alice.generate_group(vec![]).await?;
         let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g_id, g2_id, Access::Read, &[]).await?;
 
         // Doc D with both G1 and G2
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
+        alice.add_member(g2_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Revoke G from G1 — Bob still reachable via G2
-        let update = alice
-            .revoke_member(g_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
+        let update = alice.revoke_member(g_id, true, g1_id).await?;
 
         let removed_vks = extract_removed_vks(&update);
 
@@ -4826,70 +4572,33 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g = alice.generate_group(vec![]).await?;
         let g_id = g.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, g_id, Access::Read, &[]).await?;
 
         // G1 with G, in D1
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g_id, g1_id, Access::Read, &[]).await?;
         let d1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let d1_id = d1.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d1_id, d1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, d1_id, Access::Read, &[]).await?;
 
         // G2 with G, in D2
         let g2 = alice.generate_group(vec![]).await?;
         let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g_id, g2_id, Access::Read, &[]).await?;
         let d2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let d2_id = d2.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Document(d2_id, d2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g2_id, d2_id, Access::Read, &[]).await?;
 
         let size_d1_before = d1.lock().await.cgka()?.group_size();
         let size_d2_before = d2.lock().await.cgka()?.group_size();
 
         // Revoke G from G1 → Bob removed from D1, not D2
-        let update = alice
-            .revoke_member(g_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
+        let update = alice.revoke_member(g_id, true, g1_id).await?;
 
         let removed_vks = extract_removed_vks(&update);
 
@@ -4918,48 +4627,25 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, g1_id, Access::Read, &[]).await?;
 
         let d1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let d1_id = d1.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d1_id, d1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, d1_id, Access::Read, &[]).await?;
 
         let d2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let d2_id = d2.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d2_id, d2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, d2_id, Access::Read, &[]).await?;
 
         let size_d1_before = d1.lock().await.cgka()?.group_size();
         let size_d2_before = d2.lock().await.cgka()?.group_size();
 
         // Revoke G1 from D1 (doc-level revocation)
-        let update = alice
-            .revoke_member(g1_id.into(), true, &Membered::Document(d1_id, d1.dupe()))
-            .await?;
+        let update = alice.revoke_member(g1_id, true, d1_id).await?;
 
         let removed_vks = extract_removed_vks(&update);
 
@@ -4985,57 +4671,27 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g2 = alice.generate_group(vec![]).await?;
         let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, g2_id, Access::Read, &[]).await?;
 
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
         // G1 in D (so G2 reaches D via G1)
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         // G2 also directly in D
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g2_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Revoke G2 from G1 — Bob still reachable via G2 directly in D
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
+        let update = alice.revoke_member(g2_id, true, g1_id).await?;
 
         let removed_vks = extract_removed_vks(&update);
 
@@ -5056,58 +4712,28 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g3 = alice.generate_group(vec![]).await?;
         let g3_id = g3.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, g3_id, Access::Read, &[]).await?;
 
         let g2 = alice.generate_group(vec![]).await?;
         let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g3_id, g3.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g3_id, g2_id, Access::Read, &[]).await?;
 
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Revoke G2 from G1 — Bob (in G3 in G2) should be removed
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
+        let update = alice.revoke_member(g2_id, true, g1_id).await?;
 
         let removed_vks = extract_removed_vks(&update);
 
@@ -5128,7 +4754,7 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
@@ -5136,46 +4762,18 @@ mod tests {
         let g2_id = g2.lock().await.group_id();
 
         // Create cycle: G1 contains G2, G2 contains G1
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
+        alice.add_member(g1_id, g2_id, Access::Read, &[]).await?;
 
         // G1 in Doc D
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Add Bob to G2 — should reach D via G2→G1→D (cycle doesn't block)
-        let update = alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        let update = alice.add_member(bob_id, g2_id, Access::Read, &[]).await?;
 
         let added_vks = extract_added_vks(&update);
 
@@ -5198,7 +4796,7 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
@@ -5206,49 +4804,19 @@ mod tests {
         let g2_id = g2.lock().await.group_id();
 
         // Cycle + Bob in G2
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
+        alice.add_member(g1_id, g2_id, Access::Read, &[]).await?;
+        alice.add_member(bob_id, g2_id, Access::Read, &[]).await?;
 
         // G1 in D
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Revoke G2 from G1 — G2 still has G1 as its member, so G2→G1→D still works
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
+        let update = alice.revoke_member(g2_id, true, g1_id).await?;
 
         let removed_vks = extract_removed_vks(&update);
 
@@ -5271,7 +4839,7 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
@@ -5281,59 +4849,22 @@ mod tests {
         let g3_id = g3.lock().await.group_id();
 
         // G1 contains G2, G2 contains G3, G3 contains G1
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g3_id, g3.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
+        alice.add_member(g3_id, g2_id, Access::Read, &[]).await?;
+        alice.add_member(g1_id, g3_id, Access::Read, &[]).await?;
 
         // Bob in G3
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, g3_id, Access::Read, &[]).await?;
 
         // G1 in D
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Revoke G2 from G1 — G2 still reaches D via G2→G3→G1→D
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
+        let update = alice.revoke_member(g2_id, true, g1_id).await?;
 
         let removed_vks = extract_removed_vks(&update);
 
@@ -5355,7 +4886,7 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
@@ -5365,64 +4896,25 @@ mod tests {
         let g3_id = g3.lock().await.group_id();
 
         // G1 contains G2, G2 contains G3, G3 contains G1
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g3_id, g3.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
+        alice.add_member(g3_id, g2_id, Access::Read, &[]).await?;
+        alice.add_member(g1_id, g3_id, Access::Read, &[]).await?;
 
         // Bob in G3
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, g3_id, Access::Read, &[]).await?;
 
         // G1 in D
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Revoke G2 from G1 — severs the path from D to G2/G3
-        alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
+        alice.revoke_member(g2_id, true, g1_id).await?;
 
         // Revoke G1 from G3 — further breaks the cycle, should not panic/deadlock
-        alice
-            .revoke_member(g1_id.into(), true, &Membered::Group(g3_id, g3.dupe()))
-            .await?;
+        alice.revoke_member(g1_id, true, g3_id).await?;
 
         // After both revocations, Bob should not be in D's CGKA
         let size_after = doc.lock().await.cgka()?.group_size();
@@ -5443,7 +4935,7 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
@@ -5451,60 +4943,23 @@ mod tests {
         let g2_id = g2.lock().await.group_id();
 
         // Create cycle
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
+        alice.add_member(g1_id, g2_id, Access::Read, &[]).await?;
 
         // Bob in G1
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, g1_id, Access::Read, &[]).await?;
 
         // Both G1 and G2 are direct members of D
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
+        alice.add_member(g2_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = doc.lock().await.cgka()?.group_size();
 
         // Revoke G1 from D — G2 is still in D, and G2 contains G1,
         // so Bob (in G1) is still reachable via D→G2→G1
-        let update = alice
-            .revoke_member(g1_id.into(), true, &Membered::Document(doc_id, doc.dupe()))
-            .await?;
+        let update = alice.revoke_member(g1_id, true, doc_id).await?;
 
         let removed_vks = extract_removed_vks(&update);
 
@@ -5528,28 +4983,18 @@ mod tests {
 
         let alice = make_keyhive().await;
         let frank_kh = make_keyhive().await;
-        let (frank_id, frank_indie) = register_peer(&alice, &frank_kh).await;
+        let (frank_id, _frank_indie) = register_peer(&alice, &frank_kh).await;
 
         let group = alice.generate_group(vec![]).await?;
         let group_id = group.lock().await.group_id();
         alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(frank_id, group_id, Access::Read, &[])
             .await?;
 
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         let doc_id = doc.lock().await.doc_id();
         alice
-            .add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(group_id, doc_id, Access::Read, &[])
             .await?;
 
         let with_one_route = doc.lock().await.cgka()?.group_size();
@@ -5562,12 +5007,7 @@ mod tests {
         // Frank is already reachable through the group. Adding him directly is a second
         // route to the same identity, not a second identity.
         alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(frank_id, doc_id, Access::Read, &[])
             .await?;
 
         assert_eq!(
@@ -5596,20 +5036,10 @@ mod tests {
         let project_id = project.lock().await.doc_id();
 
         alice
-            .add_member(
-                Agent::Document(account_id, account.dupe()),
-                &Membered::Document(project_id, project.dupe()),
-                Access::Admin,
-                &[],
-            )
+            .add_member(account_id, project_id, Access::Admin, &[])
             .await?;
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(account_id, account.dupe()),
-                Access::Admin,
-                &[],
-            )
+            .add_member(bob_id, account_id, Access::Admin, &[])
             .await?;
 
         // Bob receives the delegations that describe both documents and none of the CGKA
@@ -5620,19 +5050,9 @@ mod tests {
         for_bob.retain(|_, event| !matches!(event, Event::CgkaOperation(_)));
         bob.ingest_event_table(for_bob).await?;
 
-        let project_on_bob = bob
-            .get_document(project_id)
-            .await
-            .expect("bob has the document, because its delegations reached him");
-
         let public = Public.individual();
         let result = bob
-            .add_member(
-                Agent::Individual(public.id(), Arc::new(Mutex::new(public))),
-                &Membered::Document(project_id, project_on_bob.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(public.id(), project_id, Access::Read, &[])
             .await;
 
         assert!(

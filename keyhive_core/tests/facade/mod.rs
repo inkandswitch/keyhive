@@ -94,6 +94,18 @@ pub enum TestError {
     Other(String),
 }
 
+impl From<keyhive_core::keyhive::NotFound> for TestError {
+    fn from(e: keyhive_core::keyhive::NotFound) -> Self {
+        TestError::Other(e.to_string())
+    }
+}
+
+impl From<std::convert::Infallible> for TestError {
+    fn from(never: std::convert::Infallible) -> Self {
+        match never {}
+    }
+}
+
 impl From<AddMemberError> for TestError {
     fn from(e: AddMemberError) -> Self {
         match e {
@@ -642,7 +654,9 @@ impl TestContext {
             .await?;
         let res = self.get_membered(issuer, membered).await?;
         let relevant = self.other_relevant_docs(issuer, membered).await;
-        let update = hive.add_member(aud, &res, can, &relevant).await?;
+        let update = hive
+            .add_member(aud.id(), res.membered_id(), can, &relevant)
+            .await?;
         Ok(TestDelegation {
             digest: *update.delegation.digest().raw.as_bytes(),
             // The identity's name, not this instance's.
@@ -685,8 +699,12 @@ impl TestContext {
     ) -> Result<()> {
         let hive = self.hive(issuer)?;
         let res = self.get_membered(issuer, membered).await?;
-        hive.revoke_member(audience.agent_id(), retain_all_other_members, &res)
-            .await?;
+        hive.revoke_member(
+            audience.agent_id(),
+            retain_all_other_members,
+            res.membered_id(),
+        )
+        .await?;
         Ok(())
     }
 
@@ -712,10 +730,10 @@ impl TestContext {
         let hive = self.hive(observer)?;
         let agent = self.get_agent(observer, who.agent_id(), who.name()).await?;
         Ok(hive
-            .docs_reachable_by_agent(&agent)
-            .await
+            .docs_reachable_by_agent(agent.id())
+            .await?
             .get(&doc.id)
-            .map(|a| a.can()))
+            .copied())
     }
 
     /// The groups and documents `audience` reaches, as `observer` sees it, and at what level.
@@ -729,10 +747,10 @@ impl TestContext {
             .await?;
         Ok(self
             .hive(observer)?
-            .membered_reachable_by_agent(&aud)
-            .await
+            .membered_reachable_by_agent(aud.id())
+            .await?
             .into_iter()
-            .map(|(id, (_, access))| (self.name_of(id.into()).to_string(), access))
+            .map(|(id, access)| (self.name_of(id.into()).to_string(), access))
             .collect())
     }
 
@@ -747,10 +765,10 @@ impl TestContext {
         let hive = self.hive(observer)?;
         let aud = self.get_agent(observer, who.agent_id(), who.name()).await?;
         Ok(hive
-            .docs_reachable_by_agent(&aud)
-            .await
+            .docs_reachable_by_agent(aud.id())
+            .await?
             .into_iter()
-            .map(|(id, ability)| (self.name_of(id.into()).to_string(), ability.can()))
+            .map(|(id, access)| (self.name_of(id.into()).to_string(), access))
             .collect())
     }
 
@@ -760,12 +778,17 @@ impl TestContext {
         membered: &impl TestMembered,
     ) -> Result<BTreeMap<String, Access>> {
         let observer = self.individual_by_instance(membered.owner())?;
+        // Resolved first so an unsynced subject is reported by name rather than as a bare
+        // identifier, which is all the library's own lookup failure carries.
         let handle = self.get_membered(&observer, membered).await?;
-        let raw = self.hive(&observer)?.reachable_members(handle).await;
+        let raw = self
+            .hive(&observer)?
+            .reachable_members(handle.membered_id())
+            .await?;
 
         Ok(raw
             .into_iter()
-            .map(|(id, (_, access))| (self.name_of(id).to_string(), access))
+            .map(|(id, member)| (self.name_of(id).to_string(), member.can))
             .collect())
     }
 
@@ -816,12 +839,13 @@ impl TestContext {
     /// For content written with `encrypt_in_envelope` this is the envelope rather than the
     /// payload since unwrapping it is `causal_decrypt`'s role.
     pub async fn read(&self, who: &TestIndividual, ct: &TestEncryptedContent) -> Result<Vec<u8>> {
-        let handle = self
-            .get_document_by_id(who, ct.doc, "that document")
+        // Resolved first so a document this instance has never received is reported as
+        // such, rather than as a decryption failure.
+        self.get_document_by_id(who, ct.doc, "that document")
             .await?;
         Ok(self
             .hive(who)?
-            .try_decrypt_content(handle, &ct.inner)
+            .try_decrypt_content(ct.doc, &ct.inner)
             .await?)
     }
 
@@ -841,10 +865,14 @@ impl TestContext {
         doc: &TestDocument,
     ) -> Result<Option<Access>> {
         let observer = self.individual_by_instance(doc.owner)?;
+        // Resolved first, for the same reason as `transitive_members_of`.
         let handle = self.get_membered(&observer, doc).await?;
-        let members = self.hive(&observer)?.reachable_members(handle).await;
-        let direct = members.get(&who.agent_id()).map(|(_, a)| *a);
-        let public = members.get(&Public.id()).map(|(_, a)| *a);
+        let members = self
+            .hive(&observer)?
+            .reachable_members(handle.membered_id())
+            .await?;
+        let direct = members.get(&who.agent_id()).map(|m| m.can);
+        let public = members.get(&Public.id()).map(|m| m.can);
         // None sorts below every Some, so this is "the better of the two, if either".
         Ok(direct.max(public))
     }
@@ -863,12 +891,12 @@ impl TestContext {
         who: &TestIndividual,
         ct: &TestEncryptedContent,
     ) -> Result<Option<TestSymmetricKey>> {
-        let Ok(handle) = self.get_document_by_id(who, ct.doc, "that document").await else {
+        let Ok(_) = self.get_document_by_id(who, ct.doc, "that document").await else {
             return Ok(None);
         };
         Ok(self
             .hive(who)?
-            .try_decrypt_content_keyed(handle, &ct.inner)
+            .try_decrypt_content_keyed(ct.doc, &ct.inner)
             .await
             .ok()
             .map(|(_, key)| TestSymmetricKey(key)))
@@ -913,11 +941,11 @@ impl TestContext {
             }
             pred_refs.push(pred.inner.content_ref);
         }
-        let handle = self.get_document(who, doc).await?;
+        self.get_document(who, doc).await?;
         let content_ref: [u8; 32] = blake3::hash(content).into();
         let out = self
             .hive(who)?
-            .try_encrypt_content(handle, &content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.id, &content_ref, &pred_refs, content)
             .await?;
         Ok(TestEncryptedContent {
             doc: doc.id,
@@ -973,12 +1001,13 @@ impl TestContext {
         who: &TestIndividual,
         ct: &TestEncryptedContent,
     ) -> Result<TestCausalDecryption> {
-        let handle = self
-            .get_document_by_id(who, ct.doc, "that document")
+        // Resolved first so a document this instance has never received is reported as
+        // such rather than as a decryption failure.
+        self.get_document_by_id(who, ct.doc, "that document")
             .await?;
         let state = self
             .hive(who)?
-            .try_causal_decrypt_content(handle, &ct.inner)
+            .try_causal_decrypt_content(ct.doc, &ct.inner)
             .await
             .map_err(|e| TestError::Other(e.to_string()))?;
         Ok(TestCausalDecryption {
@@ -1029,11 +1058,11 @@ impl TestContext {
         doc: &TestDocument,
         content: &[u8],
     ) -> Result<(TestEncryptedContent, TestSymmetricKey)> {
-        let handle = self.get_document(who, doc).await?;
+        self.get_document(who, doc).await?;
         let content_ref: [u8; 32] = blake3::hash(content).into();
         let (out, key) = self
             .hive(who)?
-            .try_encrypt_content_keyed(handle, &content_ref, &vec![], content)
+            .try_encrypt_content_keyed(doc.id, &content_ref, &vec![], content)
             .await?;
         Ok((
             TestEncryptedContent {

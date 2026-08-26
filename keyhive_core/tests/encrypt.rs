@@ -8,7 +8,7 @@ use keyhive_core::{
     event::static_event::StaticEvent,
     keyhive::Keyhive,
     listener::{log::Log, no_listener::NoListener},
-    principal::{agent::Agent, membered::Membered, peer::Peer},
+    principal::{agent::Agent, peer::Peer, public::Public},
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::{digest::Digest, signer::memory::MemorySigner};
@@ -81,18 +81,16 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
 
-    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    {
+        let indie = bob.active().lock().await.individual().lock().await.clone();
+        alice.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
     alice
-        .add_member(
-            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(bob.id(), doc_id, Access::Read, &[])
         .await?;
 
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash.into(), &vec![], &init_content)
         .await?;
 
     // Sync everything to bob
@@ -104,9 +102,8 @@ async fn test_encrypt_to_added_member() -> TestResult {
 
     // Attempt to decrypt on bob
     let doc_id = { doc.lock().await.doc_id() };
-    let doc_on_bob = bob.get_document(doc_id).await.unwrap();
     let decrypted = bob
-        .try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -130,19 +127,17 @@ async fn test_application_secret_key_round_trips() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
-    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    {
+        let indie = bob.active().lock().await.individual().lock().await.clone();
+        alice.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
     alice
-        .add_member(
-            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(bob.id(), doc_id, Access::Read, &[])
         .await?;
 
     // Encrypt after adding Bob so Bob can reach the key via CGKA.
     let (encrypted, encrypt_key) = alice
-        .try_encrypt_content_keyed(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content_keyed(doc_id, &init_hash.into(), &vec![], &init_content)
         .await?;
 
     // The surfaced key decrypts the envelope directly, with no CGKA.
@@ -157,9 +152,8 @@ async fn test_application_secret_key_round_trips() -> TestResult {
         .await;
 
     // Bob's CGKA-derived key matches Alice's encrypt key, and decrypts.
-    let doc_on_bob = bob.get_document(doc_id).await.unwrap();
     let (decrypted, decrypt_key) = bob
-        .try_decrypt_content_keyed(doc_on_bob.clone(), encrypted.encrypted_content())
+        .try_decrypt_content_keyed(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
     assert_eq!(decrypt_key, encrypt_key);
@@ -198,19 +192,17 @@ async fn test_cannot_decrypt_content_from_before_joining() -> TestResult {
 
     // Encrypt first (before adding Bob)
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash.into(), &vec![], &init_content)
         .await?;
 
     // Then add Bob
     let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
-    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    {
+        let indie = bob.active().lock().await.individual().lock().await.clone();
+        alice.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
     alice
-        .add_member(
-            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(bob.id(), doc_id, Access::Read, &[])
         .await?;
 
     // Sync everything to bob
@@ -224,16 +216,14 @@ async fn test_cannot_decrypt_content_from_before_joining() -> TestResult {
     // content at that epoch, can still decrypt it. This proves the ciphertext
     // is valid and that the failure below is specific to Bob lacking the
     // pre-join key material, not a generally broken encryption.
-    let doc_on_alice = alice.get_document(doc_id).await.unwrap();
     let alice_decrypted = alice
-        .try_decrypt_content(doc_on_alice, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(alice_decrypted, init_content);
 
     // Bob cannot derive the pre-join epoch key, so decryption must fail.
-    let doc_on_bob = bob.get_document(doc_id).await.unwrap();
     let result = bob
-        .try_decrypt_content(doc_on_bob.clone(), encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await;
     assert!(
         matches!(
@@ -266,8 +256,9 @@ async fn test_decrypt_after_to_from_archive() {
         .await
         .unwrap();
 
+    let doc_id = { doc.lock().await.doc_id() };
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash.into(), &vec![], &init_content)
         .await
         .unwrap();
 
@@ -286,13 +277,10 @@ async fn test_decrypt_after_to_from_archive() {
     }
     alice.ingest_unsorted_static_events(events).await;
 
-    let doc = {
-        let locked_doc = doc.lock().await;
-        alice.get_document(locked_doc.doc_id()).await.unwrap()
-    };
+    let doc_id = { doc.lock().await.doc_id() };
 
     let decrypted = alice
-        .try_decrypt_content(doc.dupe(), encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await
         .unwrap();
 
@@ -318,8 +306,9 @@ async fn test_decrypt_after_fork_and_merge() {
         .await
         .unwrap();
 
+    let doc_id = { doc.lock().await.doc_id() };
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash.into(), &vec![], &init_content)
         .await
         .unwrap();
 
@@ -367,13 +356,10 @@ async fn test_decrypt_after_fork_and_merge() {
         keyhive
     };
 
-    let doc = {
-        let locked_doc = doc.lock().await;
-        reloaded.get_document(locked_doc.doc_id()).await.unwrap()
-    };
+    let doc_id = { doc.lock().await.doc_id() };
 
     let decrypted = reloaded
-        .try_decrypt_content(doc.clone(), encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await
         .unwrap();
 
@@ -427,42 +413,34 @@ async fn test_encrypt_decrypt_via_group_transitive_access() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     // Register A and B on Alice, add both to the group with Edit access
-    let indie_a = {
-        peer_a
+    {
+        let indie = peer_a
             .active()
             .lock()
             .await
             .individual()
             .lock()
             .await
-            .clone()
-    };
-    let indie_b = {
-        peer_b
+            .clone();
+        alice.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
+    {
+        let indie = peer_b
             .active()
             .lock()
             .await
             .individual()
             .lock()
             .await
-            .clone()
-    };
+            .clone();
+        alice.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
 
     alice
-        .add_member(
-            Agent::Individual(indie_a.id(), Arc::new(Mutex::new(indie_a.clone()))),
-            &Membered::Group(group_id, group.dupe()),
-            Access::Edit,
-            &[],
-        )
+        .add_member(peer_a.id(), group_id, Access::Edit, &[])
         .await?;
     alice
-        .add_member(
-            Agent::Individual(indie_b.id(), Arc::new(Mutex::new(indie_b.clone()))),
-            &Membered::Group(group_id, group.dupe()),
-            Access::Edit,
-            &[],
-        )
+        .add_member(peer_b.id(), group_id, Access::Edit, &[])
         .await?;
 
     // Sync Alice's events to A
@@ -474,9 +452,8 @@ async fn test_encrypt_decrypt_via_group_transitive_access() -> TestResult {
         .await;
 
     // A encrypts content
-    let doc_on_a = peer_a.get_document(doc_id).await.unwrap();
     let encrypted = peer_a
-        .try_encrypt_content(doc_on_a.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash.into(), &vec![], &init_content)
         .await?;
 
     // Sync Alice's events + A's events to B
@@ -495,9 +472,8 @@ async fn test_encrypt_decrypt_via_group_transitive_access() -> TestResult {
         .await;
 
     // B decrypts
-    let doc_on_b = peer_b.get_document(doc_id).await.unwrap();
     let decrypted = peer_b
-        .try_decrypt_content(doc_on_b.clone(), encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -546,12 +522,7 @@ async fn test_encrypt_decrypt_as_public() -> TestResult {
     // Add Public as a Read member
     let public_agent: Agent<_, _, _, _> = public_agent();
     alice
-        .add_member(
-            public_agent.dupe(),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
 
     // PCS update after adding Public to establish root key with current tree
@@ -566,9 +537,8 @@ async fn test_encrypt_decrypt_as_public() -> TestResult {
         .await;
 
     // A encrypts (falls back to Public's leaf automatically)
-    let doc_on_a = peer_a.get_document(doc_id).await.unwrap();
     let encrypted = peer_a
-        .try_encrypt_content(doc_on_a.clone(), &init_hash.into(), &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash.into(), &vec![], &init_content)
         .await?;
 
     // B ingests the same Public events
@@ -577,9 +547,8 @@ async fn test_encrypt_decrypt_as_public() -> TestResult {
         .await;
 
     // B decrypts (falls back to Public's leaf automatically)
-    let doc_on_b = peer_b.get_document(doc_id).await.unwrap();
     let decrypted = peer_b
-        .try_decrypt_content(doc_on_b.clone(), encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -605,12 +574,7 @@ async fn test_member_encrypt_public_reader_decrypt() -> TestResult {
 
     let public_agent: Agent<_, _, _, _> = public_agent();
     alice
-        .add_member(
-            public_agent.dupe(),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
     alice.force_pcs_update(doc.dupe()).await?;
 
@@ -618,16 +582,15 @@ async fn test_member_encrypt_public_reader_decrypt() -> TestResult {
     let content = "member-encrypted public message".as_bytes().to_vec();
     let content_hash = blake3::hash(&content);
     let encrypted = alice
-        .try_encrypt_content(doc.dupe(), &content_hash.into(), &vec![], &content)
+        .try_encrypt_content(doc_id, &content_hash.into(), &vec![], &content)
         .await?;
 
     // Bob (non-member) ingests the public events and decrypts as Public.
     let public_events = alice.static_events_for_agent(&public_agent).await;
     bob.ingest_unsorted_static_events(public_events.into_values().collect())
         .await;
-    let doc_on_b = bob.get_document(doc_id).await.unwrap();
     let decrypted = bob
-        .try_decrypt_content(doc_on_b.clone(), encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, content);
 
@@ -691,14 +654,11 @@ async fn test_dual_instance_with_added_member_decrypt() -> TestResult {
 
     // Tab adds Bob to the doc. This creates a CGKA Add(Bob) op which
     // blanks the root key in the CGKA tree.
-    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
-    tab.add_member(
-        Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    {
+        let indie = bob.active().lock().await.individual().lock().await.clone();
+        tab.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
+    tab.add_member(bob.id(), doc_id, Access::Read, &[]).await?;
 
     let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
     let tab_events_for_self = tab.static_events_for_agent(&tab_active_agent).await;
@@ -712,12 +672,8 @@ async fn test_dual_instance_with_added_member_decrypt() -> TestResult {
         sw_pending.len()
     );
 
-    let sw_doc = sw
-        .get_document(doc_id)
-        .await
-        .expect("SW should have doc after ingesting Tab events");
     let encrypted = sw
-        .try_encrypt_content(sw_doc.clone(), &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
 
     let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
@@ -739,9 +695,8 @@ async fn test_dual_instance_with_added_member_decrypt() -> TestResult {
         bob_pending.len()
     );
 
-    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
     let decrypted = bob
-        .try_decrypt_content(doc_on_bob, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -778,14 +733,11 @@ async fn test_dual_instance_with_added_member_two_round_sync() -> TestResult {
         .await?;
     let doc_id = { doc.lock().await.doc_id() };
 
-    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
-    tab.add_member(
-        Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    {
+        let indie = bob.active().lock().await.individual().lock().await.clone();
+        tab.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
+    tab.add_member(bob.id(), doc_id, Access::Read, &[]).await?;
 
     // Sync Tab to SW, then SW encrypts
     let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
@@ -795,9 +747,8 @@ async fn test_dual_instance_with_added_member_two_round_sync() -> TestResult {
         .await;
     assert!(sw_pending.is_empty(), "SW pending: {}", sw_pending.len());
 
-    let sw_doc = sw.get_document(doc_id).await.expect("SW should have doc");
     let encrypted = sw
-        .try_encrypt_content(sw_doc.clone(), &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
 
     // Round 1: Bob receives only Tab events (no SW events yet)
@@ -837,9 +788,8 @@ async fn test_dual_instance_with_added_member_two_round_sync() -> TestResult {
         round2_pending.len()
     );
 
-    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
     let decrypted = bob
-        .try_decrypt_content(doc_on_bob, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -875,13 +825,8 @@ async fn test_dual_instance_encrypt_decrypt() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     let public_agent: Agent<_, _, _, _> = public_agent();
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+        .await?;
 
     tab.force_pcs_update(doc.dupe()).await?;
 
@@ -899,12 +844,8 @@ async fn test_dual_instance_encrypt_decrypt() -> TestResult {
     );
 
     // --- SW encrypts content (generates PCS Update op) ---
-    let sw_doc = sw
-        .get_document(doc_id)
-        .await
-        .expect("SW should have the doc after ingesting Tab events");
     let encrypted = sw
-        .try_encrypt_content(sw_doc.clone(), &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
 
     // --- Sync all events to Bob ---
@@ -929,12 +870,8 @@ async fn test_dual_instance_encrypt_decrypt() -> TestResult {
     );
 
     // --- Bob decrypts ---
-    let doc_on_bob = bob
-        .get_document(doc_id)
-        .await
-        .expect("Bob should have the doc");
     let decrypted = bob
-        .try_decrypt_content(doc_on_bob, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -963,13 +900,8 @@ async fn test_dual_instance_without_prekey_secrets() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     let public_agent: Agent<_, _, _, _> = public_agent();
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+        .await?;
     tab.force_pcs_update(doc.dupe()).await?;
 
     // Sync Tab's events to SW without prekey secrets. SW cannot process the
@@ -999,12 +931,8 @@ async fn test_dual_instance_without_prekey_secrets() -> TestResult {
     );
 
     // With SW recovered, it can encrypt content under the doc's current PCS key.
-    let sw_doc = sw
-        .get_document(doc_id)
-        .await
-        .expect("SW should have the doc after importing prekey secrets");
     let encrypted = sw
-        .try_encrypt_content(sw_doc.clone(), &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
 
     // Now collect events from both and send to Bob. With SW recovered, Bob
@@ -1027,9 +955,8 @@ async fn test_dual_instance_without_prekey_secrets() -> TestResult {
     );
 
     // The real end-state: Bob reads the content SW encrypted, via Public.
-    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
     let decrypted = bob
-        .try_decrypt_content(doc_on_bob, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -1063,26 +990,16 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
     let tab_hash1: [u8; 32] = *blake3::hash(&tab_content1).as_bytes();
     let tab_doc1 = tab.generate_doc(vec![], nonempty![tab_hash1]).await?;
     let tab_doc1_id = { tab_doc1.lock().await.doc_id() };
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(tab_doc1_id, tab_doc1.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    tab.add_member(public_agent.dupe().id(), tab_doc1_id, Access::Read, &[])
+        .await?;
     tab.force_pcs_update(tab_doc1.dupe()).await?;
 
     let tab_content2 = b"tab doc 2".to_vec();
     let tab_hash2: [u8; 32] = *blake3::hash(&tab_content2).as_bytes();
     let tab_doc2 = tab.generate_doc(vec![], nonempty![tab_hash2]).await?;
     let tab_doc2_id = { tab_doc2.lock().await.doc_id() };
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(tab_doc2_id, tab_doc2.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    tab.add_member(public_agent.dupe().id(), tab_doc2_id, Access::Read, &[])
+        .await?;
     tab.force_pcs_update(tab_doc2.dupe()).await?;
 
     // SW independently creates 2 docs (before syncing with Tab)
@@ -1090,26 +1007,16 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
     let sw_hash1: [u8; 32] = *blake3::hash(&sw_content1).as_bytes();
     let sw_doc1 = sw.generate_doc(vec![], nonempty![sw_hash1]).await?;
     let sw_doc1_id = { sw_doc1.lock().await.doc_id() };
-    sw.add_member(
-        public_agent.dupe(),
-        &Membered::Document(sw_doc1_id, sw_doc1.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    sw.add_member(public_agent.dupe().id(), sw_doc1_id, Access::Read, &[])
+        .await?;
     sw.force_pcs_update(sw_doc1.dupe()).await?;
 
     let sw_content2 = b"sw doc 2".to_vec();
     let sw_hash2: [u8; 32] = *blake3::hash(&sw_content2).as_bytes();
     let sw_doc2 = sw.generate_doc(vec![], nonempty![sw_hash2]).await?;
     let sw_doc2_id = { sw_doc2.lock().await.doc_id() };
-    sw.add_member(
-        public_agent.dupe(),
-        &Membered::Document(sw_doc2_id, sw_doc2.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    sw.add_member(public_agent.dupe().id(), sw_doc2_id, Access::Read, &[])
+        .await?;
     sw.force_pcs_update(sw_doc2.dupe()).await?;
 
     // Now sync between Tab and SW (simulates eventual consistency)
@@ -1140,17 +1047,17 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
 
     // Tab encrypts its docs, SW encrypts its docs
     let enc_tab1 = tab
-        .try_encrypt_content(tab_doc1.dupe(), &tab_hash1, &vec![], &tab_content1)
+        .try_encrypt_content(tab_doc1_id, &tab_hash1, &vec![], &tab_content1)
         .await?;
     let enc_tab2 = tab
-        .try_encrypt_content(tab_doc2.dupe(), &tab_hash2, &vec![], &tab_content2)
+        .try_encrypt_content(tab_doc2_id, &tab_hash2, &vec![], &tab_content2)
         .await?;
 
     let enc_sw1 = sw
-        .try_encrypt_content(sw_doc1.dupe(), &sw_hash1, &vec![], &sw_content1)
+        .try_encrypt_content(sw_doc1_id, &sw_hash1, &vec![], &sw_content1)
         .await?;
     let enc_sw2 = sw
-        .try_encrypt_content(sw_doc2.dupe(), &sw_hash2, &vec![], &sw_content2)
+        .try_encrypt_content(sw_doc2_id, &sw_hash2, &vec![], &sw_content2)
         .await?;
 
     // Collect all events for Bob
@@ -1173,27 +1080,23 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
     );
 
     // Bob decrypts all 4 docs
-    let doc_on_bob = bob.get_document(tab_doc1_id).await.unwrap();
     assert_eq!(
-        bob.try_decrypt_content(doc_on_bob, enc_tab1.encrypted_content())
+        bob.try_decrypt_content(tab_doc1_id, enc_tab1.encrypted_content())
             .await?,
         tab_content1
     );
-    let doc_on_bob = bob.get_document(tab_doc2_id).await.unwrap();
     assert_eq!(
-        bob.try_decrypt_content(doc_on_bob, enc_tab2.encrypted_content())
+        bob.try_decrypt_content(tab_doc2_id, enc_tab2.encrypted_content())
             .await?,
         tab_content2
     );
-    let doc_on_bob = bob.get_document(sw_doc1_id).await.unwrap();
     assert_eq!(
-        bob.try_decrypt_content(doc_on_bob, enc_sw1.encrypted_content())
+        bob.try_decrypt_content(sw_doc1_id, enc_sw1.encrypted_content())
             .await?,
         sw_content1
     );
-    let doc_on_bob = bob.get_document(sw_doc2_id).await.unwrap();
     assert_eq!(
-        bob.try_decrypt_content(doc_on_bob, enc_sw2.encrypted_content())
+        bob.try_decrypt_content(sw_doc2_id, enc_sw2.encrypted_content())
             .await?,
         sw_content2
     );
@@ -1226,33 +1129,20 @@ async fn test_dual_instance_with_revocations() -> TestResult {
     let doc = tab.generate_doc(vec![], nonempty![init_hash]).await?;
     let doc_id = { doc.lock().await.doc_id() };
 
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+        .await?;
 
     // Revoke Public and re-add. This generates revocations and new delegations
     // with after_revocations dependencies.
     tab.revoke_member(
-        keyhive_core::principal::public::Public
-            .individual()
-            .id()
-            .into(),
+        keyhive_core::principal::public::Public.individual().id(),
         true,
-        &Membered::Document(doc_id, doc.dupe()),
+        doc_id,
     )
     .await?;
 
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+        .await?;
 
     tab.force_pcs_update(doc.dupe()).await?;
 
@@ -1269,9 +1159,8 @@ async fn test_dual_instance_with_revocations() -> TestResult {
     );
 
     // SW encrypts
-    let sw_doc = sw.get_document(doc_id).await.expect("SW should have doc");
     let encrypted = sw
-        .try_encrypt_content(sw_doc, &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
 
     // Sync to Bob
@@ -1293,9 +1182,8 @@ async fn test_dual_instance_with_revocations() -> TestResult {
         bob_pending.len()
     );
 
-    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
     let decrypted = bob
-        .try_decrypt_content(doc_on_bob, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -1338,31 +1226,18 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
     let doc = tab.generate_doc(vec![], nonempty![init_hash]).await?;
     let doc_id = { doc.lock().await.doc_id() };
 
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+        .await?;
 
     tab.revoke_member(
-        keyhive_core::principal::public::Public
-            .individual()
-            .id()
-            .into(),
+        keyhive_core::principal::public::Public.individual().id(),
         true,
-        &Membered::Document(doc_id, doc.dupe()),
+        doc_id,
     )
     .await?;
 
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+        .await?;
 
     tab.force_pcs_update(doc.dupe()).await?;
 
@@ -1379,9 +1254,8 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
     assert!(sw_pending.is_empty(), "SW pending: {}", sw_pending.len());
 
     // SW encrypts
-    let sw_doc = sw.get_document(doc_id).await.expect("SW should have doc");
     let encrypted = sw
-        .try_encrypt_content(sw_doc, &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
 
     // Collect SW events from Log (this is what the sync protocol would send)
@@ -1412,9 +1286,8 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
         bob_pending.len()
     );
 
-    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
     let decrypted = bob
-        .try_decrypt_content(doc_on_bob, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -1448,13 +1321,8 @@ async fn test_dual_instance_multiple_docs() -> TestResult {
         let doc = tab.generate_doc(vec![], nonempty![hash]).await?;
         let doc_id = { doc.lock().await.doc_id() };
 
-        tab.add_member(
-            public_agent.dupe(),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
-        .await?;
+        tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+            .await?;
 
         tab.force_pcs_update(doc.dupe()).await?;
         contents.push((content, hash, doc_id));
@@ -1477,9 +1345,9 @@ async fn test_dual_instance_multiple_docs() -> TestResult {
     // SW encrypts each doc
     let mut encrypted_contents = Vec::new();
     for (content, hash, doc_id) in &contents {
-        let sw_doc = sw.get_document(*doc_id).await.expect("SW should have doc");
+        sw.get_document(*doc_id).await.expect("SW should have doc");
         let encrypted = sw
-            .try_encrypt_content(sw_doc, hash, &vec![], content)
+            .try_encrypt_content(*doc_id, hash, &vec![], content)
             .await?;
         encrypted_contents.push(encrypted);
     }
@@ -1505,12 +1373,11 @@ async fn test_dual_instance_multiple_docs() -> TestResult {
 
     // Bob decrypts all docs
     for (i, (content, _, doc_id)) in contents.iter().enumerate() {
-        let doc_on_bob = bob
-            .get_document(*doc_id)
+        bob.get_document(*doc_id)
             .await
             .expect("Bob should have doc");
         let decrypted = bob
-            .try_decrypt_content(doc_on_bob, encrypted_contents[i].encrypted_content())
+            .try_decrypt_content(*doc_id, encrypted_contents[i].encrypted_content())
             .await?;
         assert_eq!(&decrypted, content);
     }
@@ -1552,16 +1419,17 @@ async fn test_dual_instance_receiver_unknown_invite_prekey() -> TestResult {
     // Alice registers Bob using Bob-Tab's individual. This means Alice
     // only knows Bob's Tab-generated prekeys. When Alice picks a prekey
     // for CGKA Add(Bob), she'll pick a Tab-generated one.
-    let indie_bob_tab = {
-        bob_tab
+    {
+        let indie = bob_tab
             .active()
             .lock()
             .await
             .individual()
             .lock()
             .await
-            .clone()
-    };
+            .clone();
+        alice.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
 
     // Alice creates a doc and individually delegates to Bob.
     let init_content = b"individual delegation test content".to_vec();
@@ -1571,17 +1439,12 @@ async fn test_dual_instance_receiver_unknown_invite_prekey() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     alice
-        .add_member(
-            Agent::Individual(indie_bob_tab.id(), Arc::new(Mutex::new(indie_bob_tab))),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(bob_tab.id(), doc_id, Access::Read, &[])
         .await?;
 
     // Alice encrypts so there's a PCS Update op in the tree
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
 
     // Collect events for Bob from Alice
@@ -1614,12 +1477,8 @@ async fn test_dual_instance_receiver_unknown_invite_prekey() -> TestResult {
 
     // The real end-state: after recovering the invite prekey, SW can derive the
     // key and read the content Alice encrypted.
-    let doc_on_sw = bob_sw
-        .get_document(doc_id)
-        .await
-        .expect("SW should have the doc after draining the pending CGKA ops");
     let decrypted = bob_sw
-        .try_decrypt_content(doc_on_sw, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -1658,40 +1517,31 @@ async fn test_public_delegation_with_server_relay_decrypt() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     // Add server relay to the doc
-    let indie_server = {
-        server
+    {
+        let indie = server
             .active()
             .lock()
             .await
             .individual()
             .lock()
             .await
-            .clone()
-    };
+            .clone();
+        alice.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
     alice
-        .add_member(
-            Agent::Individual(indie_server.id(), Arc::new(Mutex::new(indie_server))),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(server.id(), doc_id, Access::Read, &[])
         .await?;
 
     // setPublicAccess: addMember(Public) + forcePcsUpdate
     let public_agent: Agent<_, _, _, _> = public_agent();
     alice
-        .add_member(
-            public_agent.dupe(),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
     alice.force_pcs_update(doc.dupe()).await?;
 
     // Sender encrypts
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
 
     // Collect all sender events visible to Public
@@ -1708,9 +1558,8 @@ async fn test_public_delegation_with_server_relay_decrypt() -> TestResult {
         bob_pending.len()
     );
 
-    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
     let decrypted = bob
-        .try_decrypt_content(doc_on_bob, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -1739,34 +1588,25 @@ async fn test_public_doc_reachable_via_public_agent_query() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     // Add server relay
-    let indie_server = {
-        server
+    {
+        let indie = server
             .active()
             .lock()
             .await
             .individual()
             .lock()
             .await
-            .clone()
-    };
+            .clone();
+        alice.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
     alice
-        .add_member(
-            Agent::Individual(indie_server.id(), Arc::new(Mutex::new(indie_server))),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(server.id(), doc_id, Access::Read, &[])
         .await?;
 
     // Set public access
     let public_agent: Agent<_, _, _, _> = public_agent();
     alice
-        .add_member(
-            public_agent.dupe(),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
     alice.force_pcs_update(doc.dupe()).await?;
 
@@ -1818,23 +1658,23 @@ async fn test_public_doc_reachable_via_public_agent_query() -> TestResult {
     );
 
     // docs_reachable_by_agent(Public) DOES include the doc
-    let public_reachable = bob.docs_reachable_by_agent(&public_agent).await;
+    let public_reachable = bob.docs_reachable_by_agent(Public.id()).await?;
     assert!(
         public_reachable.contains_key(&doc_id),
         "docs_reachable_by_agent(Public) should include the doc"
     );
     assert_eq!(
-        public_reachable.get(&doc_id).unwrap().can(),
+        public_reachable[&doc_id],
         Access::Read,
         "Public should have Read access"
     );
 
     // Bob can decrypt via the doc handle (getDocument path, not reachable_docs)
     let encrypted = alice
-        .try_encrypt_content(doc.clone(), &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
     let decrypted = bob
-        .try_decrypt_content(bob_doc, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 
@@ -1875,33 +1715,24 @@ async fn test_dual_instance_public_via_server_relay_decrypt() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     // Tab adds server relay
-    let indie_server = {
-        server
+    {
+        let indie = server
             .active()
             .lock()
             .await
             .individual()
             .lock()
             .await
-            .clone()
-    };
-    tab.add_member(
-        Agent::Individual(indie_server.id(), Arc::new(Mutex::new(indie_server))),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+            .clone();
+        tab.register_individual(Arc::new(Mutex::new(indie))).await;
+    }
+    tab.add_member(server.id(), doc_id, Access::Read, &[])
+        .await?;
 
     // Tab calls setPublicAccess
     let public_agent: Agent<_, _, _, _> = public_agent();
-    tab.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+        .await?;
     tab.force_pcs_update(doc.dupe()).await?;
 
     // Sync Tab events to SW
@@ -1913,9 +1744,8 @@ async fn test_dual_instance_public_via_server_relay_decrypt() -> TestResult {
     assert!(sw_pending.is_empty(), "SW pending: {}", sw_pending.len());
 
     // SW encrypts
-    let sw_doc = sw.get_document(doc_id).await.expect("SW should have doc");
     let encrypted = sw
-        .try_encrypt_content(sw_doc, &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
         .await?;
 
     // Events flow through server: Alice (Tab + SW) → Server → Bob
@@ -1949,9 +1779,8 @@ async fn test_dual_instance_public_via_server_relay_decrypt() -> TestResult {
         bob_pending.len()
     );
 
-    let doc_on_bob = bob.get_document(doc_id).await.expect("Bob should have doc");
     let decrypted = bob
-        .try_decrypt_content(doc_on_bob, encrypted.encrypted_content())
+        .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
     assert_eq!(decrypted, init_content);
 

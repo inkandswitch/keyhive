@@ -975,6 +975,10 @@ pub enum AddGroupMemberError {
 
 #[derive(Debug, Error)]
 pub enum RevokeMemberError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] crate::keyhive::NotFound),
+
     #[error(transparent)]
     AddError(#[from] error::AddError),
 
