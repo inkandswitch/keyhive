@@ -10,6 +10,7 @@ pub mod state;
 
 use self::{
     delegation::{Delegation, StaticDelegation},
+    error::AddError,
     membership_operation::MembershipOperation,
     revocation::Revocation,
     state::GroupState,
@@ -489,10 +490,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         } else if let Some(p) = self.get_capability(&signer.verifying_key().into()) {
             // Signer is a direct member of this group.
             if can > p.payload.can {
-                return Err(AddGroupMemberError::AccessEscalation {
+                return Err(AddError::Escalation {
                     wanted: can,
-                    have: p.payload().can,
-                });
+                    held: p.payload().can,
+                }
+                .into());
             }
             Some(p.dupe())
         } else {
@@ -525,10 +527,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             if let Some(proof) = best_proof {
                 Some(proof)
             } else if let Some(access) = best_access {
-                return Err(AddGroupMemberError::AccessEscalation {
+                return Err(AddError::Escalation {
                     wanted: can,
-                    have: access,
-                });
+                    held: access,
+                }
+                .into());
             } else {
                 return Err(AddGroupMemberError::NoProof);
             }
@@ -962,9 +965,6 @@ pub enum AddGroupMemberError {
 
     #[error("No proof found")]
     NoProof,
-
-    #[error("Access escalation. Wanted {wanted}, only have {have}.")]
-    AccessEscalation { wanted: Access, have: Access },
 
     #[error(transparent)]
     AddError(#[from] error::AddError),
