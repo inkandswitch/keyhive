@@ -1,9 +1,7 @@
-mod facade;
-
-use facade::{Result, TestContext};
 use keyhive_core::access::Access::{Admin, Edit, Read};
+use keyhive_core::test_utils::{AddMemberUpdateExt, TestContext, TestResult as Result};
 
-// This is a sanity check for the testing facade.
+// `AddMemberUpdate::summary()` is what the delegation says, as plain values.
 #[tokio::test]
 async fn a_delegation_reports_what_it_conveys() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -11,12 +9,15 @@ async fn a_delegation_reports_what_it_conveys() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    let dlg = ctx.delegate(&alice, &bob, &design_doc, Read).await?;
+    let dlg = alice
+        .add_member(bob.id(), design_doc, Read, &[])
+        .await?
+        .summary();
 
-    assert_eq!(dlg.issuer(), "alice");
-    assert_eq!(dlg.audience(), "bob");
-    assert_eq!(dlg.subject(), "design_doc");
-    assert_eq!(dlg.can(), Read);
+    assert_eq!(&*ctx.name_of(dlg.issuer), "alice");
+    assert_eq!(&*ctx.name_of(dlg.audience), "bob");
+    assert_eq!(&*ctx.name_of(dlg.subject), "design_doc");
+    assert_eq!(dlg.can, Read);
     Ok(())
 }
 
@@ -29,10 +30,22 @@ async fn delegations_differing_in_any_field_are_distinct() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let notes = ctx.doc(&alice, "notes").await?;
 
-    let to_bob = ctx.delegate(&alice, &bob, &design_doc, Read).await?;
-    let to_carol = ctx.delegate(&alice, &carol, &design_doc, Read).await?;
-    let other_doc = ctx.delegate(&alice, &bob, &notes, Read).await?;
-    let other_level = ctx.delegate(&alice, &carol, &notes, Admin).await?;
+    let to_bob = alice
+        .add_member(bob.id(), design_doc, Read, &[])
+        .await?
+        .summary();
+    let to_carol = alice
+        .add_member(carol.id(), design_doc, Read, &[])
+        .await?
+        .summary();
+    let other_doc = alice
+        .add_member(bob.id(), notes, Read, &[])
+        .await?
+        .summary();
+    let other_level = alice
+        .add_member(carol.id(), notes, Admin, &[])
+        .await?
+        .summary();
 
     let all = [&to_bob, &to_carol, &other_doc, &other_level];
     for (i, a) in all.iter().enumerate() {
@@ -41,8 +54,8 @@ async fn delegations_differing_in_any_field_are_distinct() -> Result<()> {
         }
     }
 
-    let for_design_doc = ctx.delegations_for(&alice, &design_doc).await?;
-    let for_notes = ctx.delegations_for(&alice, &notes).await?;
+    let for_design_doc = ctx.delegations_for(&alice, design_doc).await?;
+    let for_notes = ctx.delegations_for(&alice, notes).await?;
     for (dlg, sub) in [
         (&to_bob, &for_design_doc),
         (&to_carol, &for_design_doc),
@@ -62,17 +75,23 @@ async fn a_delegation_keeps_its_identity_as_the_graph_grows() -> Result<()> {
     let carol = ctx.individual("carol").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    let to_bob = ctx.delegate(&alice, &bob, &design_doc, Edit).await?;
+    let to_bob = alice
+        .add_member(bob.id(), design_doc, Edit, &[])
+        .await?
+        .summary();
 
-    ctx.delegate(&alice, &carol, &design_doc, Read).await?;
-    ctx.encrypt(&alice, &design_doc, b"some content").await?;
-    ctx.revoke(&alice, &carol, &design_doc).await?;
+    alice.add_member(carol.id(), design_doc, Read, &[]).await?;
+    ctx.encrypt(&alice, design_doc, b"some content").await?;
+    alice.revoke_member(carol.id(), true, design_doc).await?;
 
-    let for_design_doc = ctx.delegations_for(&alice, &design_doc).await?;
+    let for_design_doc = ctx.delegations_for(&alice, design_doc).await?;
     assert!(
         for_design_doc.contains(&to_bob),
         "bob's delegation should be unchanged: {to_bob:?} is not in {for_design_doc:?}"
     );
-    assert_eq!(ctx.effective_access(&bob, &design_doc).await?, Some(Edit));
+    assert_eq!(
+        alice.access_for_doc(bob.id(), design_doc).await?,
+        Some(Edit)
+    );
     Ok(())
 }
