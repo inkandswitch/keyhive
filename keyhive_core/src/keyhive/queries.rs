@@ -36,7 +36,7 @@ impl<
         who: impl Into<Identifier>,
         doc: DocumentId,
     ) -> Result<Option<Access>, NotFound> {
-        let who = self.known(who.into()).await?;
+        let who = self.check_received(who.into()).await?;
         let members = self
             .document_by_id(doc)
             .await?
@@ -55,7 +55,7 @@ impl<
         who: impl Into<Identifier>,
         doc: DocumentId,
     ) -> Result<Option<Access>, NotFound> {
-        let who = self.known(who.into()).await?;
+        let who = self.check_received(who.into()).await?;
         let members = self.reachable_members(doc).await?;
         let direct = members.get(&who).map(|m| m.can);
         let public = members.get(&Public.id()).map(|m| m.can);

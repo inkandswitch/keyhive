@@ -321,7 +321,7 @@ impl<
 
     /// Generate a new contact card, rotating a prekey in the process.
     ///
-    /// Use [`Keyhive::get_existing_contact_card`] to read the current contact card without
+    /// Use [`Keyhive::get_existing_contact_card`] to read a current contact card without
     /// generating one.
     #[instrument(skip_all)]
     pub async fn generate_contact_card(&self) -> Result<ContactCard, SigningError> {
@@ -877,7 +877,7 @@ impl<
         &self,
         who: impl Into<Identifier>,
     ) -> Result<BTreeMap<DocumentId, Access>, NotFound> {
-        let who = self.known(who.into()).await?;
+        let who = self.check_received(who.into()).await?;
         Ok(self
             .doc_handles_reachable_by(who)
             .await
@@ -894,7 +894,7 @@ impl<
         &self,
         who: impl Into<Identifier>,
     ) -> Result<BTreeMap<MemberedId, Access>, NotFound> {
-        let who = self.known(who.into()).await?;
+        let who = self.check_received(who.into()).await?;
         Ok(self
             .membered_handles_reachable_by(who)
             .await
@@ -932,8 +932,8 @@ impl<
             .collect())
     }
 
-    /// `who` back, if this instance has received the events that describe it.
-    async fn known(&self, who: Identifier) -> Result<Identifier, NotFound> {
+    /// Returns `who` if we have heard of it. Otherwise returns an error.
+    async fn check_received(&self, who: Identifier) -> Result<Identifier, NotFound> {
         self.has_received(who)
             .await
             .then_some(who)
