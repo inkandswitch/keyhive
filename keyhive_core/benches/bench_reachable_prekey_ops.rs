@@ -58,8 +58,8 @@ fn reachable_prekey_ops_for_agent(
         for _ in 0..n_peers {
             let peer = make_simple_keyhive().await.unwrap();
             let peer_contact = peer.generate_contact_card().await.unwrap();
-            let peer_on_alice = alice.receive_contact_card(&peer_contact).await.unwrap();
-            let peer_id = { peer_on_alice.lock().await.id() };
+            let peer_id = alice.receive_contact_card(&peer_contact).await.unwrap();
+            let peer_on_alice = alice.get_individual(peer_id).await.expect("just received");
 
             // Accumulate prekey ops: expand then rotate, propagating each to Alice.
             for _ in 0..PREKEY_ROTATIONS_PER_PEER {

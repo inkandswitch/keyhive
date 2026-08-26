@@ -346,21 +346,20 @@ impl<
             .contact_card()
     }
 
+    /// Receive `contact_card`, and report who it belongs to.
     #[instrument(skip_all)]
     pub async fn receive_contact_card(
         &self,
         contact_card: &ContactCard,
-    ) -> Result<Arc<Mutex<Individual>>, ReceivePrekeyOpError> {
-        let result = if let Some(indie) = self.get_individual(contact_card.id()).await {
+    ) -> Result<IndividualId, ReceivePrekeyOpError> {
+        if let Some(indie) = self.get_individual(contact_card.id()).await {
             indie
                 .lock()
                 .await
                 .receive_prekey_op(contact_card.op().dupe())?;
-            indie.dupe()
         } else {
             let new_user = Arc::new(Mutex::new(Individual::from(contact_card)));
-            self.register_individual(new_user.dupe()).await;
-            new_user
+            self.register_individual(new_user).await;
         };
 
         match contact_card.op() {
@@ -372,7 +371,7 @@ impl<
             }
         }
 
-        Ok(result)
+        Ok(contact_card.id())
     }
 
     #[instrument(skip_all)]
