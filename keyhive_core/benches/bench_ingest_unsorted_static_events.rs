@@ -8,7 +8,7 @@ use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
     event::static_event::StaticEvent,
-    principal::{agent::Agent, membered::Membered, peer::Peer, public::Public},
+    principal::{agent::Agent, peer::Peer, public::Public},
     test_utils::make_simple_keyhive,
 };
 use nonempty::nonempty;
@@ -44,12 +44,7 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
         for doc in &docs {
             let doc_id = { doc.lock().await.doc_id() };
             alice
-                .add_member(
-                    Agent::Individual(peer_id, peer_on_alice.dupe()),
-                    &Membered::Document(doc_id, doc.dupe()),
-                    Access::Edit,
-                    &[],
-                )
+                .add_member(peer_id, doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }

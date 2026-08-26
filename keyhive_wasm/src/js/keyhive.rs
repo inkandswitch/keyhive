@@ -198,7 +198,7 @@ impl JsKeyhive {
 
         Ok(self
             .0
-            .try_encrypt_content(doc.inner.dupe(), content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.doc_id, content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -221,7 +221,7 @@ impl JsKeyhive {
 
         let (inner, key) = self
             .0
-            .try_encrypt_content_keyed(doc.inner.dupe(), content_ref, &pred_refs, content)
+            .try_encrypt_content_keyed(doc.doc_id, content_ref, &pred_refs, content)
             .await?;
         Ok(JsEncryptedKeyed {
             inner,
@@ -246,7 +246,7 @@ impl JsKeyhive {
 
         Ok(self
             .0
-            .try_encrypt_content(doc.inner.dupe(), content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.doc_id, content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -258,10 +258,7 @@ impl JsKeyhive {
         encrypted: &JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
         init_span!("JsKeyhive::try_decrypt");
-        Ok(self
-            .0
-            .try_decrypt_content(doc.inner.dupe(), &encrypted.0)
-            .await?)
+        Ok(self.0.try_decrypt_content(doc.doc_id, &encrypted.0).await?)
     }
 
     /// Decrypt content and also return the 32-byte application secret key used.
@@ -274,7 +271,7 @@ impl JsKeyhive {
         init_span!("JsKeyhive::try_decrypt_keyed");
         let (plaintext, key) = self
             .0
-            .try_decrypt_content_keyed(doc.inner.dupe(), &encrypted.0)
+            .try_decrypt_content_keyed(doc.doc_id, &encrypted.0)
             .await?;
         Ok(JsDecryptedKeyed::new(plaintext, key.as_slice().to_vec()))
     }
@@ -298,8 +295,8 @@ impl JsKeyhive {
         let res = self
             .0
             .add_member(
-                to_add.0.dupe(),
-                &membered.0,
+                to_add.0.id(),
+                membered.0.membered_id(),
                 **access,
                 other_docs.as_slice(),
             )
@@ -318,7 +315,11 @@ impl JsKeyhive {
         init_span!("JsKeyhive::revoke_member");
         let res = self
             .0
-            .revoke_member(to_revoke.id().0, retain_all_other_members, &membered.0)
+            .revoke_member(
+                to_revoke.id().0,
+                retain_all_other_members,
+                membered.0.membered_id(),
+            )
             .await?;
 
         Ok(res
@@ -333,14 +334,13 @@ impl JsKeyhive {
     pub async fn reachable_docs(&self) -> Vec<Summary> {
         init_span!("JsKeyhive::reachable_docs");
         let mut acc = Vec::new();
-        for ability in self.0.reachable_docs().await.into_values() {
-            let doc_id = { ability.doc().lock().await.doc_id() };
+        for (doc_id, can) in self.0.reachable_docs().await {
+            let Some(inner) = self.0.get_document(doc_id).await else {
+                continue;
+            };
             acc.push(Summary {
-                doc: JsDocument {
-                    doc_id,
-                    inner: ability.doc().dupe(),
-                },
-                access: JsAccess(ability.can()),
+                doc: JsDocument { doc_id, inner },
+                access: JsAccess(can),
             });
         }
         acc

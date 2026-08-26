@@ -3,8 +3,7 @@ use keyhive_core::{
     access::Access,
     event::static_event::StaticEvent,
     principal::{
-        agent::Agent, document::id::DocumentId, identifier::Identifier, membered::Membered,
-        peer::Peer,
+        agent::Agent, document::id::DocumentId, identifier::Identifier, peer::Peer, public::Public,
     },
     test_utils::make_simple_keyhive,
 };
@@ -57,12 +56,7 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     let group_id = { group.lock().await.group_id() };
     let bob_id = { bob_on_alice.lock().await.id() };
     alice
-        .add_member(
-            Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &Membered::Group(group_id, group.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(bob_id, group_id, Access::Read, &[])
         .await?;
 
     let doc = alice
@@ -73,11 +67,9 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
         .await?;
     let doc_id = { doc.lock().await.doc_id() };
 
-    let reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe()))
-        .await;
+    let reachable = alice.docs_reachable_by_agent(bob_id).await?;
     assert_eq!(reachable.len(), 1);
-    assert_eq!(reachable.get(&doc_id).unwrap().can(), Access::Read);
+    assert_eq!(reachable[&doc_id], Access::Read);
     Ok(())
 }
 
@@ -130,38 +122,26 @@ async fn test_individual_admin_on_doc_transitively_reaches_child_doc() -> TestRe
 
     // Alice grants Bob Admin access on Doc A
     alice
-        .add_member(
-            Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &Membered::Document(doc_a_id, doc_a.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_id, doc_a_id, Access::Admin, &[])
         .await?;
 
     // Alice adds Doc A as an Admin member of Doc B
     alice
-        .add_member(
-            Agent::Document(doc_a_id, doc_a.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(doc_a_id, doc_b_id, Access::Admin, &[])
         .await?;
 
     // Check which docs Bob can reach transitively
-    let reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe()))
-        .await;
+    let reachable = alice.docs_reachable_by_agent(bob_id).await?;
 
     // Bob should be able to reach both Doc A and Doc B
     assert_eq!(reachable.len(), 2, "Bob should reach both Doc A and Doc B");
     assert_eq!(
-        reachable.get(&doc_a_id).unwrap().can(),
+        reachable[&doc_a_id],
         Access::Admin,
         "Bob should have Admin access to Doc A"
     );
     assert_eq!(
-        reachable.get(&doc_b_id).unwrap().can(),
+        reachable[&doc_b_id],
         Access::Admin,
         "Bob should have Admin access to Doc B transitively through Doc A"
     );
@@ -217,12 +197,7 @@ async fn test_group_members_cycle() -> TestResult {
     let group_id = { group.lock().await.group_id() };
     let bob_id = { bob_on_alice.lock().await.id() };
     alice
-        .add_member(
-            Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &Membered::Group(group_id, group.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(bob_id, group_id, Access::Read, &[])
         .await?;
 
     let doc = alice
@@ -234,20 +209,13 @@ async fn test_group_members_cycle() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     alice
-        .add_member(
-            Agent::Group(group_id, group.dupe()),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(group_id, doc_id, Access::Read, &[])
         .await?;
 
-    let reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe()))
-        .await;
+    let reachable = alice.docs_reachable_by_agent(bob_id).await?;
 
     assert_eq!(reachable.len(), 1);
-    assert_eq!(reachable.get(&doc_id).unwrap().can(), Access::Read);
+    assert_eq!(reachable[&doc_id], Access::Read);
     Ok(())
 }
 
@@ -309,31 +277,19 @@ async fn test_transitive_admin_can_delegate() -> TestResult {
 
     // Alice adds Account Doc A as Admin member of Doc B
     alice
-        .add_member(
-            Agent::Document(doc_a_id, doc_a.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(doc_a_id, doc_b_id, Access::Admin, &[])
         .await?;
 
     // Alice adds Bob as Admin member of Account Doc A
     alice
-        .add_member(
-            Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &Membered::Document(doc_a_id, doc_a.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_id, doc_a_id, Access::Admin, &[])
         .await?;
 
     // Verify Bob can reach Doc B transitively
-    let reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe()))
-        .await;
+    let reachable = alice.docs_reachable_by_agent(bob_id).await?;
     assert_eq!(reachable.len(), 2, "Bob should reach both Doc A and Doc B");
     assert_eq!(
-        reachable.get(&doc_b_id).unwrap().can(),
+        reachable[&doc_b_id],
         Access::Admin,
         "Bob should have Admin access to Doc B transitively"
     );
@@ -353,12 +309,10 @@ async fn test_transitive_admin_can_delegate() -> TestResult {
     }
 
     // Verify Carol can now reach Doc B
-    let carol_reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(carol_id, carol_on_alice.dupe()))
-        .await;
+    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await?;
     assert_eq!(carol_reachable.len(), 1, "Carol should reach Doc B");
     assert_eq!(
-        carol_reachable.get(&doc_b_id).unwrap().can(),
+        carol_reachable[&doc_b_id],
         Access::Edit,
         "Carol should have Edit access to Doc B"
     );
@@ -420,22 +374,12 @@ async fn test_transitive_read_cannot_delegate_admin() -> TestResult {
 
     // Doc A as Admin of Doc B
     alice
-        .add_member(
-            Agent::Document(doc_a_id, doc_a.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(doc_a_id, doc_b_id, Access::Admin, &[])
         .await?;
 
     // Bob as READ of Doc A (not Admin)
     alice
-        .add_member(
-            Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &Membered::Document(doc_a_id, doc_a.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(bob_id, doc_a_id, Access::Read, &[])
         .await?;
 
     // Bob tries to add Carol as Admin of Doc B — should fail
@@ -475,16 +419,14 @@ async fn test_transitive_read_cannot_delegate_admin() -> TestResult {
             .await?;
     }
 
-    let carol_reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(carol_id, carol_on_alice.dupe()))
-        .await;
+    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await?;
     assert_eq!(
         carol_reachable.len(),
         1,
         "Carol should reach Doc B with Read"
     );
     assert_eq!(
-        carol_reachable.get(&doc_b_id).unwrap().can(),
+        carol_reachable[&doc_b_id],
         Access::Read,
         "Carol should have Read access to Doc B"
     );
@@ -541,28 +483,16 @@ async fn test_transitive_admin_can_delegate_via_group() -> TestResult {
 
     // Alice adds Group G as Admin member of Doc B
     alice
-        .add_member(
-            Agent::Group(group_id, group.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(group_id, doc_b_id, Access::Admin, &[])
         .await?;
 
     // Alice adds Bob as Admin member of Group G
     alice
-        .add_member(
-            Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &Membered::Group(group_id, group.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_id, group_id, Access::Admin, &[])
         .await?;
 
     // Verify Bob can reach Doc B transitively
-    let reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(bob_id, bob_on_alice.dupe()))
-        .await;
+    let reachable = alice.docs_reachable_by_agent(bob_id).await?;
     assert_eq!(reachable.len(), 1, "Bob should reach Doc B");
 
     // KEY TEST: Bob adds Carol as Edit member of Doc B via transitive access.
@@ -579,12 +509,10 @@ async fn test_transitive_admin_can_delegate_via_group() -> TestResult {
     }
 
     // Verify Carol can now reach Doc B
-    let carol_reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(carol_id, carol_on_alice.dupe()))
-        .await;
+    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await?;
     assert_eq!(carol_reachable.len(), 1, "Carol should reach Doc B");
     assert_eq!(
-        carol_reachable.get(&doc_b_id).unwrap().can(),
+        carol_reachable[&doc_b_id],
         Access::Edit,
         "Carol should have Edit access to Doc B"
     );
@@ -626,20 +554,10 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
 
     // Alice adds Doc A as Admin of Doc B, Bob as Admin of Doc A
     alice
-        .add_member(
-            Agent::Document(doc_a_id, doc_a.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(doc_a_id, doc_b_id, Access::Admin, &[])
         .await?;
     alice
-        .add_member(
-            Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &Membered::Document(doc_a_id, doc_a.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_id, doc_a_id, Access::Admin, &[])
         .await?;
 
     // Bob adds Carol to Doc B
@@ -656,9 +574,7 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     }
 
     // Verify Carol can reach Doc B
-    let carol_reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(carol_id, carol_on_alice.dupe()))
-        .await;
+    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await?;
     assert_eq!(
         carol_reachable.len(),
         1,
@@ -680,9 +596,7 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     }
 
     // Verify Carol can no longer reach Doc B
-    let carol_reachable_after = alice
-        .docs_reachable_by_agent(&Agent::Individual(carol_id, carol_on_alice.dupe()))
-        .await;
+    let carol_reachable_after = alice.docs_reachable_by_agent(carol_id).await?;
     assert_eq!(
         carol_reachable_after.len(),
         0,
@@ -725,20 +639,10 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
 
     // Alice adds Group G as Admin of Doc B, Bob as Admin of Group G
     alice
-        .add_member(
-            Agent::Group(group_id, group.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(group_id, doc_b_id, Access::Admin, &[])
         .await?;
     alice
-        .add_member(
-            Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &Membered::Group(group_id, group.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_id, group_id, Access::Admin, &[])
         .await?;
 
     // Bob adds Carol to Doc B
@@ -769,9 +673,7 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
     }
 
     // Verify Carol can no longer reach Doc B
-    let carol_reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(carol_id, carol_on_alice.dupe()))
-        .await;
+    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await?;
     assert_eq!(
         carol_reachable.len(),
         0,
@@ -870,12 +772,7 @@ async fn test_deep_chain_revocation() -> TestResult {
 
     // Build the 5-level chain: Alice → Bob → Carol → Dave → Eve
     alice
-        .add_member(
-            Agent::Individual(bob_id, bob_on_alice.dupe()),
-            &Membered::Group(group_id, group.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_id, group_id, Access::Admin, &[])
         .await?;
 
     {
@@ -980,20 +877,10 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
 
     // Set up transitive admin: Bob -> Doc A -> Doc B
     alice
-        .add_member(
-            Agent::Document(doc_a_id, doc_a.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(doc_a_id, doc_b_id, Access::Admin, &[])
         .await?;
     alice
-        .add_member(
-            Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()),
-            &Membered::Document(doc_a_id, doc_a.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_on_alice_id, doc_a_id, Access::Admin, &[])
         .await?;
 
     // Alice shares events to Bob
@@ -1021,24 +908,14 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
         doc_b_on_bob.is_some(),
         "Bob's keyhive should have doc_b after ingesting events"
     );
-    let doc_b_on_bob = doc_b_on_bob.unwrap();
+    let _doc_b_on_bob = doc_b_on_bob.unwrap();
 
     // Bob makes doc_b public on HIS keyhive
-    let public_individual = keyhive_core::principal::public::Public.individual();
-    let public_agent: Agent<_, _, _, _> = Agent::Individual(
-        public_individual.id(),
-        std::sync::Arc::new(futures::lock::Mutex::new(public_individual)),
-    );
-    bob.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_b_id, doc_b_on_bob.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    bob.add_member(Public.id(), doc_b_id, Access::Read, &[])
+        .await?;
 
     // Verify Public can reach doc_b on Bob's keyhive
-    let public_reachable_bob = bob.docs_reachable_by_agent(&public_agent).await;
+    let public_reachable_bob = bob.docs_reachable_by_agent(Public.id()).await?;
     assert_eq!(
         public_reachable_bob.len(),
         1,
@@ -1052,14 +929,14 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
     alice.ingest_event_table(events_for_alice).await?;
 
     // Verify Public can reach doc_b on Alice's keyhive
-    let public_reachable_alice = alice.docs_reachable_by_agent(&public_agent).await;
+    let public_reachable_alice = alice.docs_reachable_by_agent(Public.id()).await?;
     assert_eq!(
         public_reachable_alice.len(),
         1,
         "Public should reach doc_b on Alice's keyhive after ingesting Bob's events"
     );
     assert_eq!(
-        public_reachable_alice.get(&doc_b_id).unwrap().can(),
+        public_reachable_alice[&doc_b_id],
         Access::Read,
         "Public should have Read access to doc_b on Alice's keyhive"
     );
@@ -1103,20 +980,10 @@ async fn test_transitive_admin_make_public_fails_without_cgka_ops() -> TestResul
     let doc_b_id = { doc_b.lock().await.doc_id() };
 
     alice
-        .add_member(
-            Agent::Document(doc_a_id, doc_a.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(doc_a_id, doc_b_id, Access::Admin, &[])
         .await?;
     alice
-        .add_member(
-            Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()),
-            &Membered::Document(doc_a_id, doc_a.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_on_alice_id, doc_a_id, Access::Admin, &[])
         .await?;
 
     // Share events to Bob, but FILTER OUT CGKA ops to simulate partial sync
@@ -1135,21 +1002,11 @@ async fn test_transitive_admin_make_public_fails_without_cgka_ops() -> TestResul
         doc_b_on_bob.is_some(),
         "Bob should have doc_b from delegation events"
     );
-    let doc_b_on_bob = doc_b_on_bob.unwrap();
+    let _doc_b_on_bob = doc_b_on_bob.unwrap();
 
     // Bob tries to make doc_b public — this should fail because CGKA is not initialized
-    let public_individual = keyhive_core::principal::public::Public.individual();
-    let public_agent: Agent<_, _, _, _> = Agent::Individual(
-        public_individual.id(),
-        std::sync::Arc::new(futures::lock::Mutex::new(public_individual)),
-    );
     let result = bob
-        .add_member(
-            public_agent.dupe(),
-            &Membered::Document(doc_b_id, doc_b_on_bob.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(Public.id(), doc_b_id, Access::Read, &[])
         .await;
 
     assert!(
@@ -1184,7 +1041,7 @@ async fn test_transitive_admin_make_public_fails_without_cgka_ops() -> TestResul
     // Check if the Public delegation is in the events
     let has_public_delegation = events_for_alice.values().any(|e| {
         if let keyhive_core::event::Event::Delegated(dlg) = e {
-            dlg.payload.delegate().id() == public_agent.id()
+            dlg.payload.delegate().id() == Public.id()
         } else {
             false
         }
@@ -1197,7 +1054,7 @@ async fn test_transitive_admin_make_public_fails_without_cgka_ops() -> TestResul
     // Try ingesting on Alice's side to see if the delegation arrives
     if has_public_delegation {
         alice.ingest_event_table(events_for_alice).await?;
-        let public_reachable = alice.docs_reachable_by_agent(&public_agent).await;
+        let public_reachable = alice.docs_reachable_by_agent(Public.id()).await?;
         eprintln!(
             "Public reachable on Alice after ingesting Bob's events (no CGKA): {}",
             public_reachable.len()
@@ -1242,12 +1099,7 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     alice
-        .add_member(
-            Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_on_alice_id, doc_id, Access::Admin, &[])
         .await?;
 
     // Share ALL events (including CGKA) to Bob so his CGKA is initialized
@@ -1255,8 +1107,6 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
         .events_for_agent(&Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()))
         .await;
     bob.ingest_event_table(events_for_bob).await?;
-
-    let doc_on_bob = bob.get_document(doc_id).await.unwrap();
 
     // Now both have the doc with CGKA initialized.
     // Alice adds Carol concurrently with Bob adding Public.
@@ -1280,27 +1130,12 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
 
     // Alice adds Carol as Edit member
     alice
-        .add_member(
-            Agent::Individual(carol_on_alice_id, carol_on_alice.dupe()),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Edit,
-            &[],
-        )
+        .add_member(carol_on_alice_id, doc_id, Access::Edit, &[])
         .await?;
 
     // Bob adds Public as Read member (concurrently, before syncing)
-    let public_individual = keyhive_core::principal::public::Public.individual();
-    let public_agent: Agent<_, _, _, _> = Agent::Individual(
-        public_individual.id(),
-        std::sync::Arc::new(futures::lock::Mutex::new(public_individual)),
-    );
-    bob.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_id, doc_on_bob.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    bob.add_member(Public.id(), doc_id, Access::Read, &[])
+        .await?;
 
     // Now sync: Alice sends to Bob, Bob sends to Alice
     let events_alice_to_bob = alice
@@ -1314,23 +1149,21 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
     alice.ingest_event_table(events_bob_to_alice).await?;
 
     // Both should see Carol and Public on the doc
-    let alice_reachable = alice
-        .docs_reachable_by_agent(&Agent::Individual(carol_on_alice_id, carol_on_alice.dupe()))
-        .await;
+    let alice_reachable = alice.docs_reachable_by_agent(carol_on_alice_id).await?;
     assert_eq!(
         alice_reachable.len(),
         1,
         "Alice should see Carol on the doc"
     );
 
-    let alice_public_reachable = alice.docs_reachable_by_agent(&public_agent).await;
+    let alice_public_reachable = alice.docs_reachable_by_agent(Public.id()).await?;
     assert_eq!(
         alice_public_reachable.len(),
         1,
         "Alice should see Public on the doc after ingesting Bob's events"
     );
 
-    let bob_public_reachable = bob.docs_reachable_by_agent(&public_agent).await;
+    let bob_public_reachable = bob.docs_reachable_by_agent(Public.id()).await?;
     assert_eq!(
         bob_public_reachable.len(),
         1,
@@ -1387,12 +1220,7 @@ async fn test_competing_cgka_init_adds() -> TestResult {
     let doc_id = { doc.lock().await.doc_id() };
 
     alice
-        .add_member(
-            Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()),
-            &Membered::Document(doc_id, doc.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_on_alice_id, doc_id, Access::Admin, &[])
         .await?;
 
     // Share only delegation events (no CGKA) to Bob
@@ -1443,26 +1271,14 @@ async fn test_competing_cgka_init_adds() -> TestResult {
 
     // Even if ingest succeeded, try to use the CGKA to see if it's consistent.
     // Bob tries to add Public as a reader — this exercises the CGKA add path.
-    let public_individual = keyhive_core::principal::public::Public.individual();
-    let public_agent: Agent<_, _, _, _> = Agent::Individual(
-        public_individual.id(),
-        std::sync::Arc::new(futures::lock::Mutex::new(public_individual)),
-    );
-    let add_result = bob
-        .add_member(
-            public_agent.dupe(),
-            &Membered::Document(doc_id, doc_on_bob.dupe()),
-            Access::Read,
-            &[],
-        )
-        .await;
+    let add_result = bob.add_member(Public.id(), doc_id, Access::Read, &[]).await;
     eprintln!(
         "Add Public after competing init adds: {:?}",
         add_result.as_ref().map(|_| "ok")
     );
 
     // Check: can Bob still see the doc's transitive members?
-    let bob_public_reachable = bob.docs_reachable_by_agent(&public_agent).await;
+    let bob_public_reachable = bob.docs_reachable_by_agent(Public.id()).await?;
     eprintln!(
         "Public reachable on Bob after competing init adds: {}",
         bob_public_reachable.len()
@@ -1569,40 +1385,20 @@ async fn test_stuck_pending_events_dont_poison_new_events() -> TestResult {
 
     // Server as relay on both docs
     alice
-        .add_member(
-            Agent::Individual(server_on_alice_id, server_on_alice.dupe()),
-            &Membered::Document(doc_a_id, doc_a.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(server_on_alice_id, doc_a_id, Access::Read, &[])
         .await?;
     alice
-        .add_member(
-            Agent::Individual(server_on_alice_id, server_on_alice.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(server_on_alice_id, doc_b_id, Access::Read, &[])
         .await?;
 
     // doc_a as Admin of doc_b (transitive hierarchy)
     alice
-        .add_member(
-            Agent::Document(doc_a_id, doc_a.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(doc_a_id, doc_b_id, Access::Admin, &[])
         .await?;
 
     // Bob as Admin of doc_a
     alice
-        .add_member(
-            Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()),
-            &Membered::Document(doc_a_id, doc_a.dupe()),
-            Access::Admin,
-            &[],
-        )
+        .add_member(bob_on_alice_id, doc_a_id, Access::Admin, &[])
         .await?;
 
     // --- Step 2: Alice syncs to Server ---
@@ -1639,7 +1435,7 @@ async fn test_stuck_pending_events_dont_poison_new_events() -> TestResult {
     // Verify Bob has doc_b
     let bob_doc_b = bob.get_document(doc_b_id).await;
     assert!(bob_doc_b.is_some(), "Bob should have doc_b after sync");
-    let bob_doc_b = bob_doc_b.unwrap();
+    let _bob_doc_b = bob_doc_b.unwrap();
 
     // Capture Bob's event set BEFORE making public (to compute diff later)
     let bob_events_before: HashSet<_> = bob
@@ -1651,18 +1447,8 @@ async fn test_stuck_pending_events_dont_poison_new_events() -> TestResult {
 
     // --- Step 4: Bob makes doc_b public ---
 
-    let public_individual = keyhive_core::principal::public::Public.individual();
-    let public_agent: Agent<_, _, _, _> = Agent::Individual(
-        public_individual.id(),
-        std::sync::Arc::new(futures::lock::Mutex::new(public_individual)),
-    );
-    bob.add_member(
-        public_agent.dupe(),
-        &Membered::Document(doc_b_id, bob_doc_b.dupe()),
-        Access::Read,
-        &[],
-    )
-    .await?;
+    bob.add_member(Public.id(), doc_b_id, Access::Read, &[])
+        .await?;
 
     // --- Step 5: Extract ONLY Bob's new events ---
 
@@ -1712,13 +1498,7 @@ async fn test_stuck_pending_events_dont_poison_new_events() -> TestResult {
         s.register_individual(si.dupe()).await;
         let sd = s.generate_doc(vec![], nonempty![[i as u8; 32]]).await?;
         let sd_id = { sd.lock().await.doc_id() };
-        s.add_member(
-            Agent::Individual(si_id, si.dupe()),
-            &Membered::Document(sd_id, sd.dupe()),
-            Access::Read,
-            &[],
-        )
-        .await?;
+        s.add_member(si_id, sd_id, Access::Read, &[]).await?;
         let sevents: Vec<_> = s
             .static_events_for_agent(&Agent::Individual(si_id, si.dupe()))
             .await
@@ -1762,14 +1542,14 @@ async fn test_stuck_pending_events_dont_poison_new_events() -> TestResult {
     );
 
     // Verify the server sees doc_b as public
-    let public_reachable = server.docs_reachable_by_agent(&public_agent).await;
+    let public_reachable = server.docs_reachable_by_agent(Public.id()).await?;
     assert_eq!(
         public_reachable.len(),
         1,
         "Server should see doc_b as public after ingesting Bob's events"
     );
     assert_eq!(
-        public_reachable.get(&doc_b_id).unwrap().can(),
+        public_reachable[&doc_b_id],
         Access::Read,
         "Public should have Read access to doc_b on server"
     );
@@ -1800,12 +1580,7 @@ async fn test_document_delegate_before_defining_event_reified_as_document() -> T
     let doc_b_id = { doc_b.lock().await.doc_id() };
 
     alice
-        .add_member(
-            Agent::Document(doc_a_id, doc_a.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(doc_a_id, doc_b_id, Access::Read, &[])
         .await?;
 
     // Collect all of Alice's events, then split out Doc A's defining (root)
@@ -1887,12 +1662,7 @@ async fn test_group_delegate_before_defining_event_reified_as_group() -> TestRes
     let doc_b_id = { doc_b.lock().await.doc_id() };
 
     alice
-        .add_member(
-            Agent::Group(group_id, group.dupe()),
-            &Membered::Document(doc_b_id, doc_b.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(group_id, doc_b_id, Access::Read, &[])
         .await?;
 
     // Split out Group G's defining (root) delegation, issued by G itself.

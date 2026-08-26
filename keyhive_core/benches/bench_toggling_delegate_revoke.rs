@@ -9,7 +9,7 @@ use keyhive_core::{
     access::Access,
     keyhive::Keyhive,
     listener::no_listener::NoListener,
-    principal::{agent::Agent, membered::Membered, public::Public},
+    principal::{membered::Membered, public::Public},
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -28,7 +28,7 @@ fn main() {
 fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let (kh, membered_doc, public_agent, public_id) = rt.block_on(async {
+    let (kh, membered_doc, public_id) = rt.block_on(async {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new()));
@@ -53,28 +53,27 @@ fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
         let doc_id = doc.lock().await.doc_id();
         let membered_doc: Membered<Local, _, _, _> = Membered::Document(doc_id, doc.dupe());
 
-        let public_agent: Agent<Local, MemorySigner> = Public.individual().into();
         let public_id = Public.id();
 
         // Build up history of prior toggles
         for _ in 0..prior_toggles {
-            kh.add_member(public_agent.clone(), &membered_doc, Access::Edit, &[])
+            kh.add_member(public_id, membered_doc.membered_id(), Access::Edit, &[])
                 .await
                 .expect("add_member should succeed");
-            kh.revoke_member(public_id, true, &membered_doc)
+            kh.revoke_member(public_id, true, membered_doc.membered_id())
                 .await
                 .expect("revoke_member should succeed");
         }
 
-        (kh, membered_doc, public_agent, public_id)
+        (kh, membered_doc, public_id)
     });
 
     bencher.bench_local(|| {
         rt.block_on(async {
-            kh.add_member(public_agent.clone(), &membered_doc, Access::Edit, &[])
+            kh.add_member(public_id, membered_doc.membered_id(), Access::Edit, &[])
                 .await
                 .expect("add_member should succeed");
-            kh.revoke_member(public_id, true, &membered_doc)
+            kh.revoke_member(public_id, true, membered_doc.membered_id())
                 .await
                 .expect("revoke_member should succeed");
         });

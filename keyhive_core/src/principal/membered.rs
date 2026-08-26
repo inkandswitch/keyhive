@@ -8,6 +8,7 @@ use super::{
         RevokeMemberError,
     },
     identifier::Identifier,
+    public::Public,
 };
 use crate::{
     access::Access,
@@ -28,6 +29,41 @@ use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
 };
+
+/// A member of a group or document. What kind it is and its access level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Member {
+    pub kind: MemberKind,
+    pub can: Access,
+}
+
+/// What kind of principal a [`Member`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MemberKind {
+    Individual,
+    Group,
+    Document,
+    Public,
+}
+
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
+    From<&Agent<F, S, T, L>> for MemberKind
+{
+    fn from(agent: &Agent<F, S, T, L>) -> Self {
+        match agent {
+            Agent::Active(..) => MemberKind::Individual,
+            Agent::Individual(id, _) => {
+                if Identifier::from(*id) == Public.id() {
+                    MemberKind::Public
+                } else {
+                    MemberKind::Individual
+                }
+            }
+            Agent::Group(..) => MemberKind::Group,
+            Agent::Document(..) => MemberKind::Document,
+        }
+    }
+}
 
 /// The union of Agents that have updatable membership
 #[derive(Debug, Clone, Dupe)]

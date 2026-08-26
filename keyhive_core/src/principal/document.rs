@@ -693,6 +693,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
 #[derive(Debug, Error)]
 pub enum AddMemberError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] crate::keyhive::NotFound),
+
     #[error(transparent)]
     AddMemberError(#[from] AddGroupMemberError),
 
@@ -754,6 +758,10 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
 
 #[derive(Debug, Error)]
 pub enum DecryptError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] crate::keyhive::NotFound),
+
     #[error("Key not found")]
     KeyNotFound,
 
