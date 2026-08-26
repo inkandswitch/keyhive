@@ -526,7 +526,7 @@ async fn test_encrypt_decrypt_as_public() -> TestResult {
         .await?;
 
     // PCS update after adding Public to establish root key with current tree
-    alice.force_pcs_update(doc.dupe()).await?;
+    alice.force_pcs_update(doc_id).await?;
 
     // Get events via Public (simulates sync server checking Public access)
     let public_events = alice.static_events_for_agent(&public_agent).await;
@@ -576,7 +576,7 @@ async fn test_member_encrypt_public_reader_decrypt() -> TestResult {
     alice
         .add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
-    alice.force_pcs_update(doc.dupe()).await?;
+    alice.force_pcs_update(doc_id).await?;
 
     // Alice (a member) encrypts the content under her own leaf's PCS key.
     let content = "member-encrypted public message".as_bytes().to_vec();
@@ -828,7 +828,7 @@ async fn test_dual_instance_encrypt_decrypt() -> TestResult {
     tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
 
-    tab.force_pcs_update(doc.dupe()).await?;
+    tab.force_pcs_update(doc_id).await?;
 
     // --- Sync Tab's events to SW (simulates server relay) ---
     let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
@@ -902,7 +902,7 @@ async fn test_dual_instance_without_prekey_secrets() -> TestResult {
     let public_agent: Agent<_, _, _, _> = public_agent();
     tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
-    tab.force_pcs_update(doc.dupe()).await?;
+    tab.force_pcs_update(doc_id).await?;
 
     // Sync Tab's events to SW without prekey secrets. SW cannot process the
     // CGKA Add ops for the active agent, so they stay pending.
@@ -992,7 +992,7 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
     let tab_doc1_id = { tab_doc1.lock().await.doc_id() };
     tab.add_member(public_agent.dupe().id(), tab_doc1_id, Access::Read, &[])
         .await?;
-    tab.force_pcs_update(tab_doc1.dupe()).await?;
+    tab.force_pcs_update(tab_doc1_id).await?;
 
     let tab_content2 = b"tab doc 2".to_vec();
     let tab_hash2: [u8; 32] = *blake3::hash(&tab_content2).as_bytes();
@@ -1000,7 +1000,7 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
     let tab_doc2_id = { tab_doc2.lock().await.doc_id() };
     tab.add_member(public_agent.dupe().id(), tab_doc2_id, Access::Read, &[])
         .await?;
-    tab.force_pcs_update(tab_doc2.dupe()).await?;
+    tab.force_pcs_update(tab_doc2_id).await?;
 
     // SW independently creates 2 docs (before syncing with Tab)
     let sw_content1 = b"sw doc 1".to_vec();
@@ -1009,7 +1009,7 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
     let sw_doc1_id = { sw_doc1.lock().await.doc_id() };
     sw.add_member(public_agent.dupe().id(), sw_doc1_id, Access::Read, &[])
         .await?;
-    sw.force_pcs_update(sw_doc1.dupe()).await?;
+    sw.force_pcs_update(sw_doc1_id).await?;
 
     let sw_content2 = b"sw doc 2".to_vec();
     let sw_hash2: [u8; 32] = *blake3::hash(&sw_content2).as_bytes();
@@ -1017,7 +1017,7 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
     let sw_doc2_id = { sw_doc2.lock().await.doc_id() };
     sw.add_member(public_agent.dupe().id(), sw_doc2_id, Access::Read, &[])
         .await?;
-    sw.force_pcs_update(sw_doc2.dupe()).await?;
+    sw.force_pcs_update(sw_doc2_id).await?;
 
     // Now sync between Tab and SW (simulates eventual consistency)
     let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
@@ -1144,7 +1144,7 @@ async fn test_dual_instance_with_revocations() -> TestResult {
     tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
 
-    tab.force_pcs_update(doc.dupe()).await?;
+    tab.force_pcs_update(doc_id).await?;
 
     let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
     let tab_events = tab.static_events_for_agent(&tab_active_agent).await;
@@ -1239,7 +1239,7 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
     tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
 
-    tab.force_pcs_update(doc.dupe()).await?;
+    tab.force_pcs_update(doc_id).await?;
 
     // Sync Tab events to SW
     let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
@@ -1324,7 +1324,7 @@ async fn test_dual_instance_multiple_docs() -> TestResult {
         tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
             .await?;
 
-        tab.force_pcs_update(doc.dupe()).await?;
+        tab.force_pcs_update(doc_id).await?;
         contents.push((content, hash, doc_id));
         docs.push(doc);
     }
@@ -1537,7 +1537,7 @@ async fn test_public_delegation_with_server_relay_decrypt() -> TestResult {
     alice
         .add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
-    alice.force_pcs_update(doc.dupe()).await?;
+    alice.force_pcs_update(doc_id).await?;
 
     // Sender encrypts
     let encrypted = alice
@@ -1608,7 +1608,7 @@ async fn test_public_doc_reachable_via_public_agent_query() -> TestResult {
     alice
         .add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
-    alice.force_pcs_update(doc.dupe()).await?;
+    alice.force_pcs_update(doc_id).await?;
 
     // Relay through server to bob (matching real sync path)
     let server_agent: Agent<_, _, _, _> = server.active().lock().await.clone().into();
@@ -1733,7 +1733,7 @@ async fn test_dual_instance_public_via_server_relay_decrypt() -> TestResult {
     let public_agent: Agent<_, _, _, _> = public_agent();
     tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
-    tab.force_pcs_update(doc.dupe()).await?;
+    tab.force_pcs_update(doc_id).await?;
 
     // Sync Tab events to SW
     let tab_active_agent: Agent<_, _, _, _> = tab.active().lock().await.clone().into();
