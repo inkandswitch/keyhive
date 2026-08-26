@@ -96,7 +96,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
     ) -> Self {
-        listener.on_delegation(&head).await;
+        listener.on_delegation(group_id.into(), &head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::GroupId(group_id),
             members: HashMap::new(),
@@ -117,7 +117,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
     ) -> Self {
-        listener.on_delegation(&head).await;
+        listener.on_delegation(individual.id().into(), &head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::Individual(individual),
             members: HashMap::new(),
@@ -190,8 +190,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 delegation_heads.insert(rc.dupe());
 
                 let listen = async_listener.dupe();
+                let target = id;
                 futs.push(async move {
-                    listen.on_delegation(&rc).await;
+                    listen.on_delegation(target, &rc).await;
                     Ok::<(), SigningError>(())
                 });
             }
@@ -269,84 +270,24 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        struct GroupAccess<
-            G: FutureForm,
-            Z: AsyncSigner<G>,
-            U: ContentRef,
-            M: MembershipListener<G, Z, U>,
-        > {
-            agent: Agent<G, Z, U, M>,
-            agent_access: Access,
-            parent_access: Access,
-        }
+        transitive_members_walk(self.id().into(), self.direct_members_with_caps()).await
+    }
 
-        let mut explore: Vec<GroupAccess<F, S, T, L>> = vec![];
-        let mut seen: HashSet<([u8; 64], Access)> = HashSet::new();
-
-        for member in self.members.keys() {
-            let dlg = self
-                .get_capability(member)
-                .expect("members have capabilities by defintion");
-
-            seen.insert((dlg.signature.to_bytes(), Access::Admin));
-
-            explore.push(GroupAccess {
-                agent: dlg.payload.delegate.clone(),
-                agent_access: dlg.payload.can,
-                parent_access: Access::Admin,
-            });
-        }
-
-        let mut caps: HashMap<Identifier, (Agent<F, S, T, L>, Access)> = HashMap::new();
-
-        while let Some(GroupAccess {
-            agent: member,
-            agent_access: access,
-            parent_access,
-        }) = explore.pop()
-        {
-            let id = member.id();
-            if id == self.id() {
-                continue;
-            }
-
-            let best_access = *caps
-                .get(&id)
-                .map(|(_, existing_access)| existing_access.max(&access))
-                .unwrap_or(&access);
-
-            let current_path_access = access.min(parent_access);
-            caps.insert(member.id(), (member.dupe(), current_path_access));
-
-            if let Some(membered) = match member {
-                Agent::Group(id, inner_group) => Some(Membered::Group(id, inner_group.dupe())),
-                Agent::Document(id, doc) => Some(Membered::Document(id, doc.dupe())),
-                _ => None,
-            } {
-                for (mem_id, dlgs) in membered.members().await.iter() {
-                    let dlg = membered
-                        .get_capability(mem_id)
-                        .await
-                        .expect("members have capabilities by defintion");
-
-                    caps.insert(*mem_id, (dlg.payload.delegate.dupe(), best_access));
-
-                    'inner: for sub_dlg in dlgs.iter() {
-                        if !seen.insert((sub_dlg.signature.to_bytes(), dlg.payload.can)) {
-                            continue 'inner;
-                        }
-
-                        explore.push(GroupAccess {
-                            agent: sub_dlg.payload.delegate.dupe(),
-                            agent_access: sub_dlg.payload.can,
-                            parent_access: best_access,
-                        });
-                    }
-                }
-            }
-        }
-
-        caps
+    /// The group's direct members and their capabilities.
+    ///
+    /// Must be called while the group's lock is held (it is a sync read of the
+    /// direct membership state). The transitive walk itself is lock-free: see
+    /// [`transitive_members_walk`].
+    pub(crate) fn direct_members_with_caps(&self) -> Vec<(Agent<F, S, T, L>, Access)> {
+        self.members
+            .keys()
+            .map(|member_id| {
+                let dlg = self
+                    .get_capability(member_id)
+                    .expect("members have capabilities by definition");
+                (dlg.payload.delegate.dupe(), dlg.payload.can)
+            })
+            .collect()
     }
 
     /// Returns agents whose delegations were revoked and who have no remaining
@@ -419,9 +360,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         delegation: Arc<Signed<Delegation<F, S, T, L>>>,
     ) -> Result<Digest<Signed<Delegation<F, S, T, L>>>, error::AddError> {
-        let digest = self.state.add_delegation(delegation).await?;
+        let digest = self.state.add_delegation(delegation.clone()).await?;
         tracing::info!("{:x?}", &digest);
         self.rebuild().await;
+        self.listener.on_delegation(self.id(), &delegation).await;
         Ok(digest)
     }
 
@@ -431,15 +373,19 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         revocation: Arc<Signed<Revocation<F, S, T, L>>>,
     ) -> Result<Digest<Signed<Revocation<F, S, T, L>>>, error::AddError> {
-        self.listener.on_revocation(&revocation).await;
-        let digest = self.state.add_revocation(revocation).await?;
+        let digest = self.state.add_revocation(revocation.clone()).await?;
         self.rebuild().await;
+        self.listener.on_revocation(self.id(), &revocation).await;
         Ok(digest)
     }
 
     /// NOTE: Callers must propagate CGKA adds to docs that contain this group.
     /// `Keyhive::add_member` handles this; calling this method directly will
     /// skip that propagation.
+    ///
+    /// `proof` must be precomputed by the caller via [`compute_add_proof`]
+    /// without holding this group's lock (the transitive walk must not run
+    /// while any document/group lock is held).
     #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
     pub async fn add_member(
@@ -448,6 +394,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         can: Access,
         signer: &S,
         relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>],
+        proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddGroupMemberError> {
         let mut after_content = BTreeMap::new();
         for d in relevant_docs {
@@ -458,7 +405,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             );
         }
 
-        self.add_member_with_manual_content(member_to_add, can, signer, after_content)
+        self.add_member_with_manual_content(member_to_add, can, signer, after_content, proof)
             .await
     }
 
@@ -467,63 +414,18 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     /// NOTE: This does not add the added member's individuals to the
     /// CGKAs of documents that contain this group. Callers are responsible for
     /// propagating CGKA adds to affected docs (see `Keyhive::add_member`).
+    ///
+    /// `proof` must be precomputed by the caller via [`compute_add_proof`]
+    /// without holding this group's lock (the transitive walk must not run
+    /// while any document/group lock is held).
     pub(crate) async fn add_member_with_manual_content(
         &mut self,
         member_to_add: Agent<F, S, T, L>,
         can: Access,
         signer: &S,
         after_content: BTreeMap<DocumentId, Vec<T>>,
+        proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddGroupMemberError> {
-        let proof = if self.verifying_key() == signer.verifying_key() {
-            None
-        } else if let Some(p) = self.get_capability(&signer.verifying_key().into()) {
-            // Signer is a direct member of this group.
-            if can > p.payload.can {
-                return Err(AddGroupMemberError::AccessEscalation {
-                    wanted: can,
-                    have: p.payload().can,
-                });
-            }
-            Some(p.dupe())
-        } else {
-            // Check transitive membership through the group graph.
-            // Single pass: find which direct member provides a sufficient
-            // transitive path for the signer.
-            let signer_id = Identifier::from(signer.verifying_key());
-            let mut best_proof = None;
-            let mut best_access: Option<Access> = None;
-
-            for member_id in self.members.keys() {
-                let dlg = self
-                    .get_capability(member_id)
-                    .expect("members have capabilities by definition");
-
-                if let Some(m) = dlg.payload.delegate.as_membered() {
-                    let sub_members = m.transitive_members().await;
-                    if let Some((_, sub_access)) = sub_members.get(&signer_id) {
-                        if *sub_access >= can {
-                            best_proof = Some(dlg.dupe());
-                            break;
-                        }
-                        if best_access.is_none_or(|a| *sub_access > a) {
-                            best_access = Some(*sub_access);
-                        }
-                    }
-                }
-            }
-
-            if let Some(proof) = best_proof {
-                Some(proof)
-            } else if let Some(access) = best_access {
-                return Err(AddGroupMemberError::AccessEscalation {
-                    wanted: can,
-                    have: access,
-                });
-            } else {
-                return Err(AddGroupMemberError::NoProof);
-            }
-        };
-
         let delegation = keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(
             signer,
             Delegation {
@@ -538,8 +440,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
         let rc = Arc::new(delegation);
         let _digest = self.receive_delegation(rc.dupe()).await?;
-        self.listener.on_delegation(&rc).await;
-
         Ok(AddMemberUpdate {
             cgka_ops: Vec::new(),
             delegation: rc,
@@ -559,6 +459,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         retain_all_other_members: bool,
         signer: &S,
         after_content: &BTreeMap<DocumentId, Vec<T>>,
+        // Signer's authority proofs per access level, precomputed by the
+        // caller (via [`compute_revoke_proof`]/[`compute_add_proof`]) without
+        // holding any lock. `signer_authority` authorizes the revocations
+        // themselves (transitive-only proofs — see [`compute_revoke_proof`]);
+        // `re_add_authority` authorizes the re-delegations issued for
+        // `retain_all_other_members` (add semantics — the signer's own
+        // delegation is valid there).
+        signer_authority: &SignerAuthority<F, S, T, L>,
+        re_add_authority: &SignerAuthority<F, S, T, L>,
     ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
         let vk = signer.verifying_key();
         let mut revocations = vec![];
@@ -651,32 +560,21 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 }
 
                 if !found {
-                    // Check transitive membership through the group graph.
-                    let signer_id = Identifier::from(vk);
-                    for mid in self.members.keys() {
-                        let dlg = self
-                            .get_capability(mid)
-                            .expect("members have capabilities by definition");
-
-                        if let Some(m) = dlg.payload.delegate.as_membered() {
-                            let sub_members = m.transitive_members().await;
-                            if let Some((_, sub_access)) = sub_members.get(&signer_id) {
-                                if *sub_access >= to_revoke.payload.can {
-                                    let r = self
-                                        .build_revocation(
-                                            signer,
-                                            to_revoke.dupe(),
-                                            Some(dlg.dupe()),
-                                            after_content.clone(),
-                                        )
-                                        .await?;
-                                    revocations.push(r.dupe());
-                                    self.receive_revocation(r).await?;
-                                    found = true;
-                                    break;
-                                }
-                            }
-                        }
+                    // The transitive walk must not run under this group's lock:
+                    // the signer's authority proofs are precomputed lock-free by
+                    // the caller (see [`compute_add_proof`]).
+                    if let Some(Ok(Some(proof))) = signer_authority.get(&to_revoke.payload.can) {
+                        let r = self
+                            .build_revocation(
+                                signer,
+                                to_revoke.dupe(),
+                                Some(proof.dupe()),
+                                after_content.clone(),
+                            )
+                            .await?;
+                        revocations.push(r.dupe());
+                        self.receive_revocation(r).await?;
+                        found = true;
                     }
                 }
 
@@ -684,10 +582,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     return Err(RevokeMemberError::NoProof);
                 }
             }
-        }
-
-        for r in revocations.iter() {
-            self.listener.on_revocation(r).await
         }
 
         let mut cgka_ops = Vec::new();
@@ -702,12 +596,36 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
                 if let Some(proof) = &dlg.payload.proof {
                     if proof.payload.delegate.id() == member_to_remove {
+                        // The re-delegation's proof is the signer's own authority
+                        // at this access level, precomputed by the caller (lock-free).
+                        let re_add_proof = match re_add_authority.get(&dlg.payload.can) {
+                            Some(Ok(proof)) => proof.dupe(),
+                            Some(Err(e)) => {
+                                // `compute_add_proof` only produces these variants;
+                                // `AddGroupMemberError` is not `Clone`.
+                                let err = match e {
+                                    AddGroupMemberError::AccessEscalation { wanted, have } => {
+                                        AddGroupMemberError::AccessEscalation {
+                                            wanted: *wanted,
+                                            have: *have,
+                                        }
+                                    }
+                                    AddGroupMemberError::NoProof => AddGroupMemberError::NoProof,
+                                    _ => unreachable!(
+                                        "compute_add_proof only returns AccessEscalation/NoProof"
+                                    ),
+                                };
+                                return Err(err.into());
+                            }
+                            None => return Err(AddGroupMemberError::NoProof.into()),
+                        };
                         let update = self
                             .add_member_with_manual_content(
                                 dlg.payload.delegate.dupe(),
                                 dlg.payload.can,
                                 signer,
                                 after_content.clone(),
+                                re_add_proof,
                             )
                             .await?;
 
@@ -793,7 +711,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                             }
                         }
                     } else if d.issuer != self.verifying_key() {
-                        debug_assert!(false, "Delegation without valid root proof");
+                        // A delegation can arrive before its causal root proof
+                        // during network sync. Keep it pending; a later
+                        // rebuild will reconsider it once the dependency is
+                        // present instead of panicking in debug builds.
+                        tracing::debug!(
+                            issuer = ?d.issuer,
+                            group = ?self.group_id(),
+                            "deferring delegation without a valid root proof"
+                        );
                         continue;
                     }
 
@@ -825,7 +751,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                             }
                         }
                     } else if r.issuer != self.verifying_key() {
-                        debug_assert!(false, "Revocation without valid root proof");
+                        // As with delegations, a revocation may be observed
+                        // before its causal root proof. Leave it pending for
+                        // the next rebuild rather than panicking.
+                        tracing::debug!(
+                            issuer = ?r.issuer,
+                            group = ?self.group_id(),
+                            "deferring revocation without a valid root proof"
+                        );
                         continue;
                     }
 
@@ -991,6 +924,72 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rand::rngs::OsRng;
 
+    /// Compute the membership proof for a test signer, snapshotting first so
+    /// the transitive walk never runs under a lock (mirrors the production
+    /// `Membered` wrappers).
+    async fn proof_for_arc<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, T>,
+    >(
+        g: &Arc<Mutex<Group<F, S, T, L>>>,
+        signer: &S,
+        can: Access,
+    ) -> Option<Arc<Signed<Delegation<F, S, T, L>>>> {
+        let (root_vk, members) = {
+            let locked = g.lock().await;
+            (locked.verifying_key(), locked.members().clone())
+        };
+        compute_add_proof(root_vk, &members, signer.verifying_key(), can)
+            .await
+            .expect("test signer should have authority")
+    }
+
+    /// Same as [`proof_for_arc`] but for a directly-held (non-`Mutex`) group.
+    async fn proof_for<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, T>,
+    >(
+        g: &Group<F, S, T, L>,
+        signer: &S,
+        can: Access,
+    ) -> Option<Arc<Signed<Delegation<F, S, T, L>>>> {
+        compute_add_proof(g.verifying_key(), g.members(), signer.verifying_key(), can)
+            .await
+            .expect("test signer should have authority")
+    }
+
+    /// Signer authority proofs per access level, for the direct `revoke_member`
+    /// calls in tests (the production wrappers compute this internally).
+    /// Returns `(revocation_authority, re_add_authority)`.
+    async fn authority_for<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        T: ContentRef,
+        L: MembershipListener<F, S, T>,
+    >(
+        g: &Group<F, S, T, L>,
+        signer: &S,
+    ) -> (SignerAuthority<F, S, T, L>, SignerAuthority<F, S, T, L>) {
+        let mut revocation = HashMap::new();
+        let mut re_add = HashMap::new();
+        for can in [Access::Relay, Access::Read, Access::Edit, Access::Admin] {
+            revocation.insert(
+                can,
+                compute_revoke_proof(g.verifying_key(), g.members(), signer.verifying_key(), can)
+                    .await,
+            );
+            re_add.insert(
+                can,
+                compute_add_proof(g.verifying_key(), g.members(), signer.verifying_key(), can)
+                    .await,
+            );
+        }
+        (revocation, re_add)
+    }
     async fn setup_user<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
     ) -> Active<Sendable, MemorySigner, T> {
@@ -1407,6 +1406,199 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_transitive_access_cannot_exceed_parent() {
+        test_utils::init_logging();
+        let csprng = Arc::new(Mutex::new(OsRng));
+        let delegations = Arc::new(Mutex::new(DelegationStore::new()));
+        let revocations = Arc::new(Mutex::new(RevocationStore::new()));
+
+        let root_owner = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let leaf = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let leaf_id = leaf.lock().await.id();
+        let leaf_agent = Agent::Active(leaf_id, leaf.dupe());
+
+        let leaf_group = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![leaf_agent],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let leaf_group_id = leaf_group.lock().await.group_id();
+
+        let nested_group = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Group(leaf_group_id, leaf_group.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let nested_group_id = nested_group.lock().await.group_id();
+
+        let root_owner_id = root_owner.lock().await.id();
+        let root = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Active(root_owner_id, root_owner.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let root_owner_signer = root_owner.lock().await.signer.clone();
+
+        let proof = proof_for_arc(&root, &root_owner_signer, Access::Read).await;
+        root.lock()
+            .await
+            .add_member(
+                Agent::Group(nested_group_id, nested_group.dupe()),
+                Access::Read,
+                &root_owner_signer,
+                &[],
+                proof,
+            )
+            .await
+            .unwrap();
+
+        let members = root.lock().await.transitive_members().await;
+        assert_eq!(
+            members
+                .get(&nested_group_id.into())
+                .map(|(_, access)| *access),
+            Some(Access::Read)
+        );
+        assert_eq!(
+            members
+                .get(&leaf_group_id.into())
+                .map(|(_, access)| *access),
+            Some(Access::Read)
+        );
+        assert_eq!(
+            members.get(&leaf_id.into()).map(|(_, access)| *access),
+            Some(Access::Read)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transitive_access_uses_best_effective_path() {
+        test_utils::init_logging();
+        let csprng = Arc::new(Mutex::new(OsRng));
+        let delegations = Arc::new(Mutex::new(DelegationStore::new()));
+        let revocations = Arc::new(Mutex::new(RevocationStore::new()));
+
+        let root_owner = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let read_owner = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let edit_owner = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+        let target = Arc::new(Mutex::new(setup_user::<String, _>(&mut OsRng).await));
+
+        let target_id = target.lock().await.id();
+        let target_agent = Agent::Active(target_id, target.dupe());
+
+        let read_owner_id = read_owner.lock().await.id();
+        let read_group = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Active(read_owner_id, read_owner.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let read_owner_signer = read_owner.lock().await.signer.clone();
+        let proof = proof_for_arc(&read_group, &read_owner_signer, Access::Read).await;
+        read_group
+            .lock()
+            .await
+            .add_member(
+                target_agent.dupe(),
+                Access::Read,
+                &read_owner_signer,
+                &[],
+                proof,
+            )
+            .await
+            .unwrap();
+
+        let edit_owner_id = edit_owner.lock().await.id();
+        let edit_group = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Active(edit_owner_id, edit_owner.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let edit_owner_signer = edit_owner.lock().await.signer.clone();
+        let proof = proof_for_arc(&edit_group, &edit_owner_signer, Access::Edit).await;
+        edit_group
+            .lock()
+            .await
+            .add_member(target_agent, Access::Edit, &edit_owner_signer, &[], proof)
+            .await
+            .unwrap();
+
+        let root_owner_id = root_owner.lock().await.id();
+        let root = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![Agent::Active(root_owner_id, root_owner.dupe())],
+                delegations.dupe(),
+                revocations.dupe(),
+                NoListener,
+                csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let root_owner_signer = root_owner.lock().await.signer.clone();
+
+        let proof = proof_for_arc(&root, &root_owner_signer, Access::Admin).await;
+        root.lock()
+            .await
+            .add_member(
+                Agent::Group(read_group.lock().await.group_id(), read_group.dupe()),
+                Access::Admin,
+                &root_owner_signer,
+                &[],
+                proof,
+            )
+            .await
+            .unwrap();
+        let proof = proof_for_arc(&root, &root_owner_signer, Access::Admin).await;
+        root.lock()
+            .await
+            .add_member(
+                Agent::Group(edit_group.lock().await.group_id(), edit_group.dupe()),
+                Access::Admin,
+                &root_owner_signer,
+                &[],
+                proof,
+            )
+            .await
+            .unwrap();
+
+        let members = root.lock().await.transitive_members().await;
+        assert_eq!(
+            members.get(&target_id.into()).map(|(_, access)| *access),
+            Some(Access::Edit)
+        );
+    }
+
+    #[tokio::test]
     async fn test_add_member() {
         test_utils::init_logging();
         let mut csprng = OsRng;
@@ -1480,9 +1672,10 @@ mod tests {
             .unwrap(),
         ));
 
+        let proof = proof_for_arc(&g0, &active_signer, Access::Edit).await;
         g0.lock()
             .await
-            .add_member(carol_agent.dupe(), Access::Edit, &active_signer, &[])
+            .add_member(carol_agent.dupe(), Access::Edit, &active_signer, &[], proof)
             .await
             .unwrap();
 
@@ -1618,12 +1811,24 @@ mod tests {
         .unwrap();
 
         let _alice_adds_bob = g1
-            .add_member(bob_agent.dupe(), Access::Edit, &alice_signer, &[])
+            .add_member(
+                bob_agent.dupe(),
+                Access::Edit,
+                &alice_signer,
+                &[],
+                proof_for(&g1, &alice_signer, Access::Edit).await,
+            )
             .await
             .unwrap();
 
         let _bob_adds_carol = g1
-            .add_member(carol_agent.dupe(), Access::Read, &bob_signer, &[])
+            .add_member(
+                carol_agent.dupe(),
+                Access::Read,
+                &bob_signer,
+                &[],
+                proof_for(&g1, &bob_signer, Access::Read).await,
+            )
             .await
             .unwrap();
 
@@ -1633,7 +1838,13 @@ mod tests {
         assert!(!g1.members().contains_key(&dan_id));
 
         let _carol_adds_dan = g1
-            .add_member(dan_agent.dupe(), Access::Read, &carol_signer, &[])
+            .add_member(
+                dan_agent.dupe(),
+                Access::Read,
+                &carol_signer,
+                &[],
+                proof_for(&g1, &carol_signer, Access::Read).await,
+            )
             .await
             .unwrap();
 
@@ -1643,8 +1854,16 @@ mod tests {
         assert!(g1.members.contains_key(&dan_id));
         assert_eq!(g1.members.len(), 4);
 
+        let (rev_auth, re_add_auth) = authority_for(&g1, &alice_signer).await;
         let _alice_revokes_bob = g1
-            .revoke_member(bob_id.into(), true, &alice_signer, &BTreeMap::new())
+            .revoke_member(
+                bob_id.into(),
+                true,
+                &alice_signer,
+                &BTreeMap::new(),
+                &rev_auth,
+                &re_add_auth,
+            )
             .await
             .unwrap();
 
@@ -1659,7 +1878,13 @@ mod tests {
         assert!(g1.members.contains_key(&dan_id.into()));
 
         let _bob_to_carol = g1
-            .add_member(bob_agent.dupe(), Access::Read, &carol_signer, &[])
+            .add_member(
+                bob_agent.dupe(),
+                Access::Read,
+                &carol_signer,
+                &[],
+                proof_for(&g1, &carol_signer, Access::Read).await,
+            )
             .await
             .unwrap();
 
@@ -1667,8 +1892,16 @@ mod tests {
         assert!(g1.members.contains_key(&carol_id.into()));
         assert!(g1.members.contains_key(&dan_id.into()));
 
+        let (rev_auth, re_add_auth) = authority_for(&g1, &alice_signer).await;
         let _alice_revokes_carol = g1
-            .revoke_member(carol_id.into(), false, &alice_signer, &BTreeMap::new())
+            .revoke_member(
+                carol_id.into(),
+                false,
+                &alice_signer,
+                &BTreeMap::new(),
+                &rev_auth,
+                &re_add_auth,
+            )
             .await
             .unwrap();
 
@@ -1676,12 +1909,316 @@ mod tests {
         assert!(!g1.members.contains_key(&carol_id.into()));
         // FIXME assert!(!g1.members.contains_key(&dan.borrow().id().into()));
 
-        g1.revoke_member(alice_id.into(), false, &alice_signer, &BTreeMap::new())
-            .await
-            .unwrap();
+        let (rev_auth, re_add_auth) = authority_for(&g1, &alice_signer).await;
+        g1.revoke_member(
+            alice_id.into(),
+            false,
+            &alice_signer,
+            &BTreeMap::new(),
+            &rev_auth,
+            &re_add_auth,
+        )
+        .await
+        .unwrap();
 
         assert!(!g1.members.contains_key(&alice_id.into()));
         assert!(!g1.members.contains_key(&carol_id.into()));
         assert!(!g1.members.contains_key(&dan_id.into()));
+    }
+
+    /// Regression: a direct *individual* member revokes a *group* member whose
+    /// delegation was issued by someone else (not in the signer's issuer/ancestor
+    /// chain). The revocation must be authorized through the group intermediary
+    /// (the revoked group itself contains the signer), NOT through the signer's
+    /// own delegation — an Individual delegate is not a valid revocation proof
+    /// and `add_revocation` rejects it ("Invalid proof chain").
+    #[tokio::test]
+    async fn test_revoke_group_member_by_direct_individual_member() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let alice_agent: Agent<Sendable, MemorySigner> =
+            Agent::Active(alice.lock().await.id(), alice.dupe());
+        let (alice_id, alice_signer) = {
+            let locked = alice.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+
+        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let bob_agent: Agent<Sendable, MemorySigner> =
+            Agent::Active(bob.lock().await.id(), bob.dupe());
+        let (bob_id, bob_signer) = {
+            let locked = bob.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
+        // g1: the resource group. Alice (root) plus the intermediary group g2.
+        let g1 = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let g1_id = { g1.lock().await.group_id() };
+
+        // g2: the intermediary group that contains bob (the eventual signer).
+        let g2 = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![bob_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+        let g2_id = { g2.lock().await.group_id() };
+        let g2_agent = Agent::Group(g2_id, g2.dupe());
+
+        // Alice (root) grants g2 and bob direct Admin access to g1. The proofs
+        // are computed BEFORE taking the lock (they snapshot + walk lock-free).
+        let proof = proof_for_arc(&g1, &alice_signer, Access::Admin).await;
+        g1.lock()
+            .await
+            .add_member(g2_agent.dupe(), Access::Admin, &alice_signer, &[], proof)
+            .await
+            .unwrap();
+        let proof = proof_for_arc(&g1, &alice_signer, Access::Admin).await;
+        g1.lock()
+            .await
+            .add_member(bob_agent.dupe(), Access::Admin, &alice_signer, &[], proof)
+            .await
+            .unwrap();
+
+        assert!(g1.lock().await.members.contains_key(&g2_id.into()));
+        assert!(g1.lock().await.members.contains_key(&bob_id.into()));
+
+        // Bob (direct individual member, NOT the root) revokes g2 through the
+        // production `Membered` wrapper. g2's delegation was issued by Alice,
+        // so the issuer/ancestor paths do not apply — the revocation must be
+        // proven through g2 itself (bob is a transitive member of g2).
+        Membered::Group(g1_id, g1.dupe())
+            .revoke_member(g2_id.into(), true, &bob_signer, &mut BTreeMap::new())
+            .await
+            .unwrap();
+
+        assert!(
+            !g1.lock().await.members.contains_key(&g2_id.into()),
+            "g2 must be revoked from g1"
+        );
+        assert!(
+            g1.lock().await.members.contains_key(&bob_id.into()),
+            "bob must remain a member of g1"
+        );
+    }
+}
+
+/// Transitive-membership walk over the membered graph.
+///
+/// Never holds a doc/group lock across an await that acquires another lock.
+/// The root's direct members are passed in (snapshotted by the caller under a
+/// short lock); every visited node is then locked only long enough to clone
+/// its direct members + capabilities before the lock is dropped, so at most
+/// one lock is held at any instant. Concurrent walks rooted at different
+/// docs/groups therefore cannot ABBA-deadlock with each other or with
+/// materialization decrypts that briefly lock a single document.
+pub(crate) async fn transitive_members_walk<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    root_id: Identifier,
+    direct: Vec<(Agent<F, S, T, L>, Access)>,
+) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
+    let mut explore: Vec<(Membered<F, S, T, L>, Access)> = vec![];
+    let mut expanded: HashMap<Identifier, Access> = HashMap::new();
+    let mut caps: HashMap<Identifier, (Agent<F, S, T, L>, Access)> = HashMap::new();
+
+    let enqueue = |agent: Agent<F, S, T, L>,
+                   access: Access,
+                   caps: &mut HashMap<Identifier, (Agent<F, S, T, L>, Access)>,
+                   expanded: &mut HashMap<Identifier, Access>,
+                   explore: &mut Vec<(Membered<F, S, T, L>, Access)>| {
+        let id = agent.id();
+        if id == root_id {
+            return;
+        }
+        if caps
+            .get(&id)
+            .is_none_or(|(_, existing_access)| *existing_access < access)
+        {
+            caps.insert(id, (agent.dupe(), access));
+        }
+        if let Some(membered) = agent.as_membered() {
+            if expanded
+                .get(&id)
+                .is_none_or(|existing_access| *existing_access < access)
+            {
+                expanded.insert(id, access);
+                explore.push((membered, access));
+            }
+        }
+    };
+
+    for (delegate, can) in direct {
+        enqueue(delegate, can, &mut caps, &mut expanded, &mut explore);
+    }
+
+    while let Some((membered, access)) = explore.pop() {
+        let members = membered.members().await;
+        for (mem_id, dlgs) in members.iter() {
+            let dlg = membered
+                .get_capability(mem_id)
+                .await
+                .expect("members have capabilities by definition");
+            let member_access = access.min(dlg.payload.can);
+            if caps
+                .get(mem_id)
+                .is_none_or(|(_, existing_access)| *existing_access < member_access)
+            {
+                caps.insert(*mem_id, (dlg.payload.delegate.dupe(), member_access));
+            }
+            for sub_dlg in dlgs.iter() {
+                enqueue(
+                    sub_dlg.payload.delegate.dupe(),
+                    access.min(sub_dlg.payload.can),
+                    &mut caps,
+                    &mut expanded,
+                    &mut explore,
+                );
+            }
+        }
+    }
+
+    caps
+}
+
+/// Signer-authority proofs per access level, precomputed by the caller
+/// (lock-free) and consumed by the group/document `revoke_member` paths.
+pub(crate) type SignerAuthority<F, S, T, L> =
+    HashMap<Access, Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError>>;
+
+/// Compute the membership proof for adding a member at access level `can`,
+/// without holding any document/group lock.
+///
+/// `members` must be a snapshot of the resource's direct membership (cloned
+/// under a short lock by the caller). The transitive walk acquires only short
+/// per-node locks, so it must never run while another lock is held — callers
+/// must take their snapshot, drop the lock, and only then call this.
+///
+/// Returns `Ok(None)` when the signer is the resource's own signing key.
+pub(crate) async fn compute_add_proof<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    root_vk: ed25519_dalek::VerifyingKey,
+    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+    signer_vk: ed25519_dalek::VerifyingKey,
+    can: Access,
+) -> Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError> {
+    if root_vk == signer_vk {
+        return Ok(None);
+    }
+    let signer_id = Identifier::from(signer_vk);
+    if let Some(p) = members.get(&signer_id).and_then(|dlgs| {
+        dlgs.iter()
+            .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
+    }) {
+        // Signer is a direct member of this group.
+        if can > p.payload.can {
+            return Err(AddGroupMemberError::AccessEscalation {
+                wanted: can,
+                have: p.payload().can,
+            });
+        }
+        return Ok(Some(p.dupe()));
+    }
+    compute_transitive_proof(members, signer_id, can).await
+}
+
+/// Compute the proof authorizing a revocation at access level `can`.
+///
+/// Unlike [`compute_add_proof`], the signer's own direct delegation is NOT a
+/// valid revocation proof: `add_revocation` validates the proof through
+/// `is_transitive_member_of(proof.delegate, revoker, ..)`, which requires the
+/// proof's delegate to be a membered group/doc intermediary — an Individual
+/// delegate fails that check. So the direct-member shortcut is skipped and
+/// only the transitive (membered-intermediary) search is performed, matching
+/// the pre-lock-refactor behavior of `revoke_member`.
+pub(crate) async fn compute_revoke_proof<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    root_vk: ed25519_dalek::VerifyingKey,
+    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+    signer_vk: ed25519_dalek::VerifyingKey,
+    can: Access,
+) -> Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError> {
+    if root_vk == signer_vk {
+        return Ok(None);
+    }
+    compute_transitive_proof(members, Identifier::from(signer_vk), can).await
+}
+
+/// Single-pass transitive search: find a membered (group/doc) direct member
+/// whose transitive members include `signer_id` at access >= `can`, and return
+/// that member's delegation as the proof.
+async fn compute_transitive_proof<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+    signer_id: Identifier,
+    can: Access,
+) -> Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError> {
+    let mut best_access: Option<Access> = None;
+
+    for (member_id, _) in members.iter() {
+        let dlg = members
+            .get(member_id)
+            .and_then(|dlgs| {
+                dlgs.iter()
+                    .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
+            })
+            .expect("members have capabilities by definition");
+
+        if let Some(m) = dlg.payload.delegate.as_membered() {
+            let sub_members = m.transitive_members().await;
+            if let Some((_, sub_access)) = sub_members.get(&signer_id) {
+                if *sub_access >= can {
+                    return Ok(Some(dlg.dupe()));
+                }
+                if best_access.is_none_or(|a| *sub_access > a) {
+                    best_access = Some(*sub_access);
+                }
+            }
+        }
+    }
+
+    if let Some(access) = best_access {
+        Err(AddGroupMemberError::AccessEscalation {
+            wanted: can,
+            have: access,
+        })
+    } else {
+        Err(AddGroupMemberError::NoProof)
     }
 }

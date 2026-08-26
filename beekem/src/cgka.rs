@@ -37,6 +37,40 @@ use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 
+/// A private leaf key generated locally while creating an application secret.
+///
+/// This must be persisted separately from the public [`CgkaOperation`] emitted
+/// by the same update. Replaying that operation reconstructs the public tree,
+/// but cannot reconstruct this private key.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalCgkaSecret {
+    tree_id: TreeId,
+    share_key: ShareKey,
+    share_secret_key: ShareSecretKey,
+}
+
+impl LocalCgkaSecret {
+    pub fn from_secret(tree_id: TreeId, share_secret_key: ShareSecretKey) -> Self {
+        Self {
+            tree_id,
+            share_key: share_secret_key.share_key(),
+            share_secret_key,
+        }
+    }
+
+    pub fn tree_id(&self) -> TreeId {
+        self.tree_id
+    }
+
+    pub fn share_key(&self) -> ShareKey {
+        self.share_key
+    }
+
+    pub fn share_secret_key(&self) -> ShareSecretKey {
+        self.share_secret_key
+    }
+}
+
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
 /// from the group.
@@ -167,8 +201,16 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+    ) -> Result<
+        (
+            ApplicationSecret<T>,
+            Option<Signed<CgkaOperation>>,
+            Option<LocalCgkaSecret>,
+        ),
+        CgkaError,
+    > {
         let mut op = None;
+        let mut local_secret = None;
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
@@ -176,7 +218,18 @@ impl Cgka {
                 .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
             self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
+            let updates_owner_leaf = matches!(
+                &update_op.payload,
+                CgkaOperation::Update { id, .. } if *id == self.owner_id
+            );
             op = Some(update_op);
+            if updates_owner_leaf {
+                local_secret = Some(LocalCgkaSecret {
+                    tree_id: self.doc_id,
+                    share_key: new_share_key,
+                    share_secret_key: new_share_secret_key,
+                });
+            }
             pcs_key
         } else {
             let pcs_key = self.pcs_key_from_tree_root()?;
@@ -202,6 +255,7 @@ impl Cgka {
                     .expect("PcsKey hash should be present because we derived it above"),
             ),
             op,
+            local_secret,
         ))
     }
 
@@ -408,6 +462,9 @@ impl Cgka {
         self.ops_graph.topsort_graph()
     }
 
+    pub fn contains_op_hash(&self, hash: &Digest<Signed<CgkaOperation>>) -> bool {
+        self.ops_graph.contains_op_hash(hash)
+    }
     pub fn contains_predecessors(&self, preds: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
         self.ops_graph.contains_predecessors(preds)
     }
@@ -648,5 +705,105 @@ impl Cgka {
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
+    }
+}
+
+/// Regression coverage for concurrent-update conflict resolution.
+///
+/// Two members produce [`CgkaOperation::Update`]s from the same tree epoch and
+/// cross-merge them. `apply_path` represents the contested nodes as
+/// [`NodeKey::ConflictKeys`]. A subsequent rotation (`update`) walks the
+/// resolution path over those nodes; the desired post-fix behavior is
+/// TreeKEM-style handling of conflicted siblings (blank/merge, deferring the
+/// undecryptable epoch to the next covering update) instead of panicking.
+#[cfg(test)]
+mod concurrent_update_conflict_tests {
+    use super::Cgka;
+    use crate::id::{MemberId, TreeId};
+    use future_form::Sendable;
+    use keyhive_crypto::share_key::ShareSecretKey;
+    use keyhive_crypto::signer::memory::MemorySigner;
+    use keyhive_crypto::verifiable::Verifiable;
+    use rand::{rngs::StdRng, SeedableRng};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn rotation_after_concurrent_updates_resolves_conflicted_siblings() {
+        let mut rng = StdRng::seed_from_u64(0xBEEF);
+        let signer_a = MemorySigner::generate(&mut rng);
+        let signer_b = MemorySigner::generate(&mut rng);
+        let id_a = MemberId(signer_a.verifying_key());
+        let id_b = MemberId(signer_b.verifying_key());
+        let sk_a = ShareSecretKey::generate(&mut rng);
+        let pk_a = sk_a.share_key();
+        let sk_b = ShareSecretKey::generate(&mut rng);
+        let pk_b = sk_b.share_key();
+        let doc_id = TreeId(signer_a.verifying_key());
+
+        // A founds the group and adds B.
+        let mut cgka_a =
+            Cgka::new::<Sendable, _>(doc_id, id_a, pk_a, &signer_a).await.expect("init cgka a");
+        let add_op = cgka_a
+            .add::<Sendable, _>(id_b, pk_b, &signer_a)
+            .await
+            .expect("add b")
+            .expect("b was not yet a member");
+
+        // B reconstructs the group from the init add + membership op.
+        let mut cgka_b = Cgka::new_from_init_add(doc_id, id_b, pk_b, cgka_a.init_add_op())
+            .expect("init cgka b");
+        cgka_b
+            .merge_concurrent_operation(Arc::new(add_op))
+            .expect("sequential membership op merges cleanly");
+
+        // Grow to four members sequentially so later concurrent updates have
+        // deep, partially-overlapping paths.
+        let signer_c = MemorySigner::generate(&mut rng);
+        let signer_d = MemorySigner::generate(&mut rng);
+        let id_c = MemberId(signer_c.verifying_key());
+        let id_d = MemberId(signer_d.verifying_key());
+        let sk_c = ShareSecretKey::generate(&mut rng);
+        let pk_c = sk_c.share_key();
+        let sk_d = ShareSecretKey::generate(&mut rng);
+        let pk_d = sk_d.share_key();
+        for (id, pk) in [(id_c, pk_c), (id_d, pk_d)] {
+            let op = cgka_a
+                .add::<Sendable, _>(id, pk, &signer_a)
+                .await
+                .expect("sequential add")
+                .expect("member was not yet present");
+            cgka_b
+                .merge_concurrent_operation(Arc::new(op))
+                .expect("sequential add merges cleanly");
+        }
+
+        // Conflicting grants from different members: A and B rotate
+        // concurrently from the identical pre-state.
+        let usk_a = ShareSecretKey::generate(&mut rng);
+        let (_, op_ua) = cgka_a
+            .update::<Sendable, _, _>(usk_a.share_key(), usk_a, &signer_a, &mut rng)
+            .await
+            .expect("a's concurrent update");
+        let usk_b = ShareSecretKey::generate(&mut rng);
+        let (_, op_ub) = cgka_b
+            .update::<Sendable, _, _>(usk_b.share_key(), usk_b, &signer_b, &mut rng)
+            .await
+            .expect("b's concurrent update");
+
+        // Cross-merge: overlapping paths must yield conflicted nodes.
+        cgka_a
+            .merge_concurrent_operation(Arc::new(op_ub.clone()))
+            .expect("merge b's concurrent update into a");
+        cgka_b
+            .merge_concurrent_operation(Arc::new(op_ua.clone()))
+            .expect("merge a's concurrent update into b");
+
+        // The next rotation on either side must resolve (not panic on) the
+        // conflicted sibling nodes left by the merged concurrent updates.
+        let usk_c = ShareSecretKey::generate(&mut rng);
+        cgka_a
+            .update::<Sendable, _, _>(usk_c.share_key(), usk_c, &signer_a, &mut rng)
+            .await
+            .expect("rotation after concurrent grants must resolve conflicted siblings");
     }
 }

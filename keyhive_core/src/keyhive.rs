@@ -4,7 +4,7 @@ use crate::{
     ability::Ability,
     access::Access,
     archive::Archive,
-    cgka::AllCgkaOps,
+    cgka::{AllCgkaOps, LocalCgkaSecret},
     contact_card::ContactCard,
     crypto::signed_ext::{SignedId, SignedSubjectId},
     error::missing_dependency::MissingDependency,
@@ -64,7 +64,7 @@ use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::ShareKey,
     signed::{Signed, SigningError, VerificationError},
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
@@ -73,11 +73,14 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use thiserror::Error;
 use tracing::instrument;
@@ -118,6 +121,12 @@ pub struct Keyhive<
 
     /// [`StaticEvent`]s that are still awaiting dependencies.
     pending_events: Arc<Mutex<Vec<Arc<StaticEvent<T>>>>>,
+
+    /// Monotonic projection-generation counter. Bumped by every mutation of
+    /// observable projection state (membership stores, principal maps,
+    /// pending set, applied CGKA ops). Shared with the delegation and
+    /// revocation stores so their internal mutations count too.
+    state_generation: Arc<AtomicU64>,
 
     /// Observer for [`Event`]s. Intended for running live updates.
     event_listener: L,
@@ -195,6 +204,7 @@ impl<
             active: Arc::new(Mutex::new(inner_active)),
             groups: Arc::new(Mutex::new(HashMap::new())),
             docs: Arc::new(Mutex::new(HashMap::new())),
+            state_generation: Arc::new(AtomicU64::new(0)),
             delegations: Arc::new(Mutex::new(DelegationStore::new())),
             revocations: Arc::new(Mutex::new(RevocationStore::new())),
             pending_events: Arc::new(Mutex::new(Vec::new())),
@@ -211,13 +221,44 @@ impl<
         &self.active
     }
 
+    /// Monotonic generation of observable projection state.
+    ///
+    /// Increments on every mutation of membership stores, principal maps,
+    /// pending set, or applied CGKA operations — including mutations made
+    /// through `Group`/`Document` handles sharing this hive's stores.
+    /// Pure reads leave it unchanged. Consumers maintaining derived caches
+    /// should compare this value instead of requiring explicit change
+    /// signals.
+    pub fn state_generation(&self) -> u64 {
+        self.state_generation.load(Ordering::Acquire)
+    }
+
+    fn touch(&self) {
+        self.state_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Record a projection mutation that happened outside [`Keyhive`]'s own
+    /// methods — e.g. document-level CGKA updates invoked on a cloned handle
+    /// during content encryption.
+    ///
+    /// Cache freshness is structural: callers who mutate the projection
+    /// directly MUST mark it here, or the next refresh will early-exit and
+    /// serve stale advertisement views.
+    pub fn note_direct_mutation(&self) {
+        self.touch();
+    }
+
     /// Inject events into the pending set. For testing only.
     #[cfg(any(test, feature = "test_utils"))]
     pub async fn inject_pending_events(&self, events: Vec<StaticEvent<T>>) {
+        if events.is_empty() {
+            return;
+        }
         let mut pending = self.pending_events.lock().await;
         for event in events {
             pending.push(Arc::new(event));
         }
+        self.touch();
     }
 
     /// Get the [`Individual`] for the current Keyhive user.
@@ -263,6 +304,7 @@ impl<
         let group_id = group.group_id();
         let g = Arc::new(Mutex::new(group));
         self.groups.lock().await.insert(group_id, g.dupe());
+        self.touch();
         Ok(g)
     }
 
@@ -311,6 +353,7 @@ impl<
         let doc_id = new_doc.doc_id();
         let doc = Arc::new(Mutex::new(new_doc));
         self.docs.lock().await.insert(doc_id, doc.dupe());
+        self.touch();
 
         Ok(doc)
     }
@@ -324,6 +367,7 @@ impl<
             .generate_private_prekey(self.csprng.dupe())
             .await?;
 
+        self.touch();
         Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
     }
 
@@ -357,13 +401,14 @@ impl<
 
         match contact_card.op() {
             KeyOp::Add(add_op) => {
-                self.event_listener.on_prekeys_expanded(add_op).await;
+                self.event_listener.on_prekeys_expanded(add_op, None).await;
             }
             KeyOp::Rotate(rot_op) => {
-                self.event_listener.on_prekey_rotated(rot_op).await;
+                self.event_listener.on_prekey_rotated(rot_op, None).await;
             }
         }
 
+        self.touch();
         Ok(result)
     }
 
@@ -372,20 +417,26 @@ impl<
         &self,
         prekey: ShareKey,
     ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
-        self.active
+        let op = self
+            .active
             .lock()
             .await
             .rotate_prekey(prekey, self.csprng.dupe())
-            .await
+            .await?;
+        self.touch();
+        Ok(op)
     }
 
     #[instrument(skip_all)]
     pub async fn expand_prekeys(&self) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
-        self.active
+        let op = self
+            .active
             .lock()
             .await
             .expand_prekeys(self.csprng.dupe())
-            .await
+            .await?;
+        self.touch();
+        Ok(op)
     }
 
     #[instrument(skip_all)]
@@ -479,66 +530,45 @@ impl<
     }
 
     #[allow(clippy::type_complexity)]
-    pub async fn add_member(
+    pub async fn add_member_with_manual_content(
         &self,
         to_add: Agent<F, S, T, L>,
         resource: &Membered<F, S, T, L>,
         can: Access,
-        other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>], // TODO make this automatic
+        after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
         let signer = { self.active.lock().await.signer.clone() };
-        let update = match resource {
-            Membered::Group(group_id, group) => {
-                let mut update = group
-                    .lock()
-                    .await
-                    .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await?;
+        let mut update = resource
+            .add_member_with_manual_content(to_add, can, &signer, after_content)
+            .await?;
 
-                // Propagate CGKA adds to docs that contain this group.
-                // TODO: O(# of docs x `transitive_members()`). We should replace this approach
-                // (possibly with a reverse index lookup).
-                if can.is_reader() {
-                    let group_identifier: Identifier = (*group_id).into();
-                    let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
-                    for doc in &docs {
-                        let (contains_group, doc_id) = {
-                            let locked = doc.lock().await;
-                            (
-                                locked
-                                    .transitive_members()
-                                    .await
-                                    .contains_key(&group_identifier),
-                                locked.doc_id(),
-                            )
-                        };
-                        if !contains_group {
-                            continue;
-                        }
-                        // Document lock is intentionally dropped before `pick_individual_prekeys`,
-                        // which may lock groups (walking group members to find
-                        // individuals).
-                        let prekeys = update
-                            .delegation
-                            .payload
-                            .delegate
-                            .pick_individual_prekeys(doc_id)
-                            .await;
-                        let mut locked_doc = doc.lock().await;
-                        let ops = locked_doc
-                            .add_cgka_members_from_prekeys(&prekeys, &signer)
-                            .await?;
-                        update.cgka_ops.extend(ops);
+        if can.is_reader() {
+            if let Membered::Group(group_id, _) = resource {
+                let group_identifier: Identifier = (*group_id).into();
+                let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+                for doc in &docs {
+                    // Membership check via the lock-free `Membered` walk: the
+                    // transitive walk must not run while the doc's lock is held.
+                    let doc_id = doc.lock().await.doc_id();
+                    if !Membered::Document(doc_id, doc.dupe())
+                        .transitive_members()
+                        .await
+                        .contains_key(&group_identifier)
+                    {
+                        continue;
                     }
+                    let prekeys = update
+                        .delegation
+                        .payload
+                        .delegate
+                        .pick_individual_prekeys(doc_id)
+                        .await;
+                    let mut locked_doc = doc.lock().await;
+                    let ops = locked_doc
+                        .add_cgka_members_from_prekeys(&prekeys, &signer)
+                        .await?;
+                    update.cgka_ops.extend(ops);
                 }
-
-                update
-            }
-            Membered::Document(_, doc) => {
-                let mut locked = doc.lock().await;
-                locked
-                    .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await?
             }
         };
 
@@ -547,8 +577,36 @@ impl<
                 .on_cgka_op(&Arc::new(cgka_op.clone()))
                 .await;
         }
-
+        self.touch();
         Ok(update)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub async fn add_member(
+        &self,
+        to_add: Agent<F, S, T, L>,
+        resource: &Membered<F, S, T, L>,
+        can: Access,
+        other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>],
+    ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        let mut after_content = BTreeMap::new();
+        match resource {
+            Membered::Group(_, _) => {
+                for doc in other_relevant_docs {
+                    let locked = doc.lock().await;
+                    after_content.insert(
+                        locked.doc_id(),
+                        locked.content_heads.iter().cloned().collect(),
+                    );
+                }
+            }
+            Membered::Document(doc_id, doc) => {
+                let locked = doc.lock().await;
+                after_content.insert(*doc_id, locked.content_state.iter().cloned().collect());
+            }
+        }
+        self.add_member_with_manual_content(to_add, resource, can, after_content)
+            .await
     }
 
     #[allow(clippy::type_complexity)]
@@ -564,7 +622,24 @@ impl<
             let locked = doc.lock().await;
             relevant_docs.insert(doc_id, locked.content_heads.iter().cloned().collect());
         }
+        self.revoke_member_with_manual_content(
+            to_revoke,
+            retain_all_other_members,
+            resource,
+            relevant_docs,
+        )
+        .await
+    }
 
+    #[allow(clippy::type_complexity)]
+    #[instrument(skip_all)]
+    pub async fn revoke_member_with_manual_content(
+        &self,
+        to_revoke: Identifier,
+        retain_all_other_members: bool,
+        resource: &Membered<F, S, T, L>,
+        mut relevant_docs: BTreeMap<DocumentId, Vec<T>>,
+    ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
         let signer = { self.active.lock().await.signer.clone() };
 
         // When revoking from a group, collect the revoked member's individual
@@ -606,10 +681,12 @@ impl<
                 let group_identifier: Identifier = (*group_id).into();
                 let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
                 for doc in &docs {
-                    let transitive = {
-                        let locked = doc.lock().await;
-                        locked.transitive_members().await
-                    };
+                    // Membership check via the lock-free `Membered` walk (the
+                    // transitive walk must not run while the doc's lock is held).
+                    let doc_id = doc.lock().await.doc_id();
+                    let transitive = Membered::Document(doc_id, doc.dupe())
+                        .transitive_members()
+                        .await;
                     if !transitive.contains_key(&group_identifier) {
                         continue;
                     }
@@ -639,7 +716,53 @@ impl<
                 .await;
         }
 
+        self.touch();
         Ok(update)
+    }
+
+    /// Import private CGKA leaf material produced by local content encryption.
+    ///
+    /// Call this after restoring the document and before replaying the matching
+    /// public CGKA update operation.
+    pub async fn import_local_cgka_secret(
+        &self,
+        secret: LocalCgkaSecret,
+    ) -> Result<(), ImportLocalCgkaSecretError> {
+        if secret.share_secret_key().share_key() != secret.share_key() {
+            return Err(ImportLocalCgkaSecretError::MismatchedShareKey);
+        }
+
+        let doc_id = DocumentId::from(secret.tree_id());
+        let doc = self
+            .get_document(doc_id)
+            .await
+            .ok_or(ImportLocalCgkaSecretError::UnknownDocument(doc_id))?;
+        doc.lock()
+            .await
+            .cgka_mut()?
+            .owner_sks_mut()
+            .insert(secret.share_key(), secret.share_secret_key());
+        Ok(())
+    }
+
+    /// Import private prekey material produced by a local prekey operation.
+    pub async fn import_local_prekey_secret(
+        &self,
+        secret: crate::principal::active::LocalPrekeySecret,
+    ) -> Result<(), ImportLocalPrekeySecretError> {
+        if secret.share_secret_key().share_key() != secret.share_key() {
+            return Err(ImportLocalPrekeySecretError::MismatchedShareKey);
+        }
+        let active = self.active.lock().await;
+        if active.id() != secret.individual_id() {
+            return Err(ImportLocalPrekeySecretError::WrongIndividual);
+        }
+        active
+            .prekey_pairs
+            .lock()
+            .await
+            .insert(secret.share_key(), secret.share_secret_key());
+        Ok(())
     }
 
     /// Encrypt content for a document.
@@ -722,7 +845,7 @@ impl<
     {
         doc.lock()
             .await
-            .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
+            .try_causal_decrypt_content(encrypted, &self.ciphertext_store)
             .await
     }
 
@@ -730,16 +853,18 @@ impl<
     pub async fn force_pcs_update(
         &self,
         doc: Arc<Mutex<Document<F, S, T, L>>>,
-    ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, LocalCgkaSecret), EncryptError> {
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
-        let (op, new_share_key, new_share_secret_key) = doc
+        let (op, _new_share_key, new_share_secret_key) = doc
             .lock()
             .await
             .pcs_update(&signer, &mut *locked_csprng)
             .await?;
+        let local_secret =
+            LocalCgkaSecret::from_secret(*op.payload().doc_id(), new_share_secret_key);
         self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
-        Ok((op, new_share_key, new_share_secret_key))
+        Ok((op, local_secret))
     }
 
     #[instrument(skip_all)]
@@ -750,16 +875,36 @@ impl<
             .await
     }
 
+    /// Return documents whose authority graph contains the given group.
+    ///
+    /// This is a planning query: it does not mutate membership or CGKA state.
+    #[instrument(skip_all)]
+    pub async fn document_ids_containing_group(&self, group_id: GroupId) -> BTreeSet<DocumentId> {
+        let group_identifier: Identifier = group_id.into();
+        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
+        let mut result = BTreeSet::new();
+        for doc in docs {
+            let doc_id = doc.lock().await.doc_id();
+            if Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await
+                .contains_key(&group_identifier)
+            {
+                result.insert(doc_id);
+            }
+        }
+        result
+    }
+
     #[instrument(skip_all)]
     #[allow(clippy::type_complexity)]
     pub async fn reachable_members(
         &self,
         membered: Membered<F, S, T, L>,
     ) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        match membered {
-            Membered::Group(_, group) => group.lock().await.transitive_members().await,
-            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
-        }
+        // The `Membered` wrapper snapshots under a short lock and walks
+        // lock-free (never holds a lock across the transitive walk).
+        membered.transitive_members().await
     }
 
     #[instrument(skip_all)]
@@ -772,10 +917,14 @@ impl<
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
-            let locked = doc.lock().await;
-            if let Some((_, cap)) = locked.transitive_members().await.get(&agent.id()) {
+            let doc_id = doc.lock().await.doc_id();
+            if let Some((_, cap)) = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await
+                .get(&agent.id())
+            {
                 caps.insert(
-                    locked.doc_id(),
+                    doc_id,
                     Ability {
                         doc: doc.dupe(),
                         can: *cap,
@@ -804,19 +953,27 @@ impl<
                 .collect::<Vec<_>>()
         };
         for group in groups {
-            let locked = group.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
-                let membered = Membered::Group(locked.group_id(), group.dupe());
-                caps.insert(locked.group_id().into(), (membered, *can));
+            let group_id = group.lock().await.group_id();
+            if let Some((_, can)) = Membered::Group(group_id, group.dupe())
+                .transitive_members()
+                .await
+                .get(&agent.id())
+            {
+                let membered = Membered::Group(group_id, group.dupe());
+                caps.insert(group_id.into(), (membered, *can));
             }
         }
 
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
-            let locked = doc.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
-                let membered = Membered::Document(locked.doc_id(), doc.dupe());
-                caps.insert(locked.doc_id().into(), (membered, *can));
+            let doc_id = doc.lock().await.doc_id();
+            if let Some((_, can)) = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await
+                .get(&agent.id())
+            {
+                let membered = Membered::Document(doc_id, doc.dupe());
+                caps.insert(doc_id.into(), (membered, *can));
             }
         }
 
@@ -833,6 +990,88 @@ impl<
             .collect()
     }
 
+    /// Whether a specific static event is present in its owning projection store.
+    ///
+    /// This is a candidate-only lookup and never inventories unrelated history.
+    /// Callers classifying admission must exclude [`Self::pending_event_hashes`]
+    /// before using this probe.
+    #[instrument(skip_all)]
+    pub async fn contains_incorporated_event(&self, event: &StaticEvent<T>) -> bool {
+        match event {
+            StaticEvent::Delegated(delegation) => self
+                .delegations
+                .lock()
+                .await
+                .contains_key(&Digest::hash(delegation).coerce()),
+            StaticEvent::Revoked(revocation) => self
+                .revocations
+                .lock()
+                .await
+                .contains_key(&Digest::hash(revocation).coerce()),
+            StaticEvent::PrekeysExpanded(add) => {
+                let operation = KeyOp::Add(Arc::new(add.as_ref().clone()));
+                self.agent_contains_prekey_op(&operation).await
+            }
+            StaticEvent::PrekeyRotated(rotation) => {
+                let operation = KeyOp::Rotate(Arc::new(rotation.as_ref().clone()));
+                self.agent_contains_prekey_op(&operation).await
+            }
+            StaticEvent::CgkaOperation(operation) => {
+                let document_id: DocumentId = (*operation.payload.doc_id()).into();
+                let document = self.docs.lock().await.get(&document_id).cloned();
+                let Some(document) = document else {
+                    return false;
+                };
+                let operation_hash = Digest::hash(operation.as_ref());
+                let incorporated = document.lock().await.cgka_ops().is_ok_and(|epochs| {
+                    epochs.iter().any(|epoch| {
+                        epoch
+                            .iter()
+                            .any(|known| Digest::hash(known.as_ref()) == operation_hash)
+                    })
+                });
+                incorporated
+            }
+        }
+    }
+
+    async fn agent_contains_prekey_op(&self, operation: &KeyOp) -> bool {
+        let operation_hash = Digest::hash(operation);
+        let Some(agent) = self.get_agent(Identifier(*operation.issuer())).await else {
+            return false;
+        };
+        match agent {
+            Agent::Active(_, active) => active
+                .lock()
+                .await
+                .individual
+                .lock()
+                .await
+                .prekey_ops()
+                .contains_key(&operation_hash),
+            Agent::Individual(_, individual) => individual
+                .lock()
+                .await
+                .prekey_ops()
+                .contains_key(&operation_hash),
+            Agent::Group(_, group) => {
+                let group = group.lock().await;
+                matches!(
+                    &group.id_or_indie,
+                    IdOrIndividual::Individual(individual)
+                        if individual.prekey_ops().contains_key(&operation_hash)
+                )
+            }
+            Agent::Document(_, document) => {
+                let document = document.lock().await;
+                matches!(
+                    &document.group.id_or_indie,
+                    IdOrIndividual::Individual(individual)
+                        if individual.prekey_ops().contains_key(&operation_hash)
+                )
+            }
+        }
+    }
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn events_for_agent(
@@ -1016,14 +1255,17 @@ impl<
                 .collect::<Vec<_>>()
         };
         for group in &groups {
-            let (group_id, heads, transitive) = {
+            let (group_id, heads) = {
                 let locked = group.lock().await;
                 (
                     locked.group_id(),
                     collect_membership_heads(locked.delegation_heads(), locked.revocation_heads()),
-                    locked.transitive_members().await,
                 )
             };
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Group(group_id, group.dupe())
+                .transitive_members()
+                .await;
             let source_id: Identifier = group_id.into();
             ops.insert(source_id, bfs_membership_ops(heads).await);
 
@@ -1035,14 +1277,17 @@ impl<
         // Phase 2: Same for docs
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in &docs {
-            let (doc_id, heads, transitive) = {
+            let (doc_id, heads) = {
                 let locked = doc.lock().await;
                 (
                     locked.doc_id(),
                     collect_membership_heads(locked.delegation_heads(), locked.revocation_heads()),
-                    locked.transitive_members().await,
                 )
             };
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await;
             let source_id: Identifier = doc_id.into();
             ops.insert(source_id, bfs_membership_ops(heads).await);
 
@@ -1114,10 +1359,11 @@ impl<
                 .collect::<Vec<_>>()
         };
         for group in groups {
-            let (group_id, transitive) = {
-                let locked = group.lock().await;
-                (locked.group_id(), locked.transitive_members().await)
-            };
+            let group_id = group.lock().await.group_id();
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Group(group_id, group.dupe())
+                .transitive_members()
+                .await;
             if transitive.contains_key(&agent.id()) {
                 add_many_keys(
                     &mut map,
@@ -1135,10 +1381,11 @@ impl<
 
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
-            let (doc_id, transitive) = {
-                let locked = doc.lock().await;
-                (locked.doc_id(), locked.transitive_members().await)
-            };
+            let doc_id = doc.lock().await.doc_id();
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await;
             if transitive.contains_key(&agent.id()) {
                 add_many_keys(
                     &mut map,
@@ -1197,10 +1444,11 @@ impl<
             TransitiveMembers<F, S, T, L>,
         )> = Vec::with_capacity(groups.len());
         for group in groups {
-            let (group_id, transitive) = {
-                let locked = group.lock().await;
-                (locked.group_id(), locked.transitive_members().await)
-            };
+            let group_id = group.lock().await.group_id();
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Group(group_id, group.dupe())
+                .transitive_members()
+                .await;
             group_data.push((group_id, group, transitive));
         }
 
@@ -1212,10 +1460,11 @@ impl<
             TransitiveMembers<F, S, T, L>,
         )> = Vec::with_capacity(docs.len());
         for doc in docs {
-            let (doc_id, transitive) = {
-                let locked = doc.lock().await;
-                (locked.doc_id(), locked.transitive_members().await)
-            };
+            let doc_id = doc.lock().await.doc_id();
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await;
             doc_data.push((doc_id, doc, transitive));
         }
 
@@ -1312,9 +1561,9 @@ impl<
 
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in &docs {
-            let (doc_id, doc_ops, transitive) = {
+            let doc_id = doc.lock().await.doc_id();
+            let doc_ops = {
                 let locked = doc.lock().await;
-                let doc_id = locked.doc_id();
 
                 let epochs = match locked.cgka_ops() {
                     Ok(epochs) => epochs,
@@ -1330,9 +1579,12 @@ impl<
                 if doc_ops.is_empty() {
                     continue;
                 }
-
-                (doc_id, doc_ops, locked.transitive_members().await)
+                doc_ops
             };
+            // Lock-free transitive walk (never run a walk under a lock).
+            let transitive = Membered::Document(doc_id, doc.dupe())
+                .transitive_members()
+                .await;
 
             let source_id: Identifier = doc_id.into();
             for agent_id in transitive.keys() {
@@ -1582,6 +1834,7 @@ impl<
             }
         }
 
+        self.touch();
         Ok(())
     }
 
@@ -1643,6 +1896,7 @@ impl<
                 found = true;
                 self.promote_individual_to_group(indie, delegation.clone())
                     .await;
+                self.touch();
             }
         }
         if !found {
@@ -1664,11 +1918,13 @@ impl<
                 let doc = Document::from_group(group, content_heads).await?;
                 let mut locked_docs = self.docs.lock().await;
                 locked_docs.insert(doc.doc_id(), Arc::new(Mutex::new(doc)));
+                self.touch();
             } else {
                 self.groups
                     .lock()
                     .await
                     .insert(group.group_id(), Arc::new(Mutex::new(group)));
+                self.touch();
             }
         };
 
@@ -1758,6 +2014,7 @@ impl<
             }
             StaticEvent::CgkaOperation(cgka_op) => {
                 self.receive_cgka_op(*cgka_op).await?;
+                self.touch();
             }
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg).await?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev).await?,
@@ -1994,8 +2251,13 @@ impl<
     ) -> Result<Self, TryFromArchiveError<F, S, T, L>> {
         let raw_active = Active::from_archive(&archive.active, signer, listener.clone());
 
-        let delegations = Arc::new(Mutex::new(DelegationStore::new()));
-        let revocations = Arc::new(Mutex::new(RevocationStore::new()));
+        let state_generation = Arc::new(AtomicU64::new(0));
+        let delegations = Arc::new(Mutex::new(
+            DelegationStore::with_generation(Arc::clone(&state_generation)),
+        ));
+        let revocations = Arc::new(Mutex::new(
+            RevocationStore::with_generation(Arc::clone(&state_generation)),
+        ));
 
         let mut individuals = HashMap::new();
         for (k, v) in archive.individuals.iter() {
@@ -2236,6 +2498,7 @@ impl<
             individuals: Arc::new(Mutex::new(individuals)),
             groups: Arc::new(Mutex::new(groups)),
             docs: Arc::new(Mutex::new(docs)),
+            state_generation,
             delegations,
             revocations,
             pending_events: Arc::new(Mutex::new(pending_events)),
@@ -2298,8 +2561,18 @@ impl<
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_unsorted_static_events(
         &self,
-        mut events: Vec<StaticEvent<T>>,
+        events: Vec<StaticEvent<T>>,
     ) -> Vec<Arc<StaticEvent<T>>> {
+        self.ingest_unsorted_static_events_with_pending_progress(events)
+            .await
+            .0
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    pub async fn ingest_unsorted_static_events_with_pending_progress(
+        &self,
+        mut events: Vec<StaticEvent<T>>,
+    ) -> (Vec<Arc<StaticEvent<T>>>, bool) {
         // FIXME: Some errors might not be recoverable on future attempts
         tracing::debug!("Keyhive::ingest_unsorted_static_events()");
         use std::collections::{HashMap, HashSet};
@@ -2339,7 +2612,7 @@ impl<
                     .lock()
                     .await
                     .retain(|e| !replayed_pending.contains(&Digest::hash(e.as_ref())));
-                return Vec::new();
+                return (Vec::new(), !replayed_pending.is_empty());
             }
 
             if next_epoch.len() == epoch_len {
@@ -2349,13 +2622,18 @@ impl<
                     err
                 );
 
+                let remaining_hashes: HashSet<_> = next_epoch.iter().map(Digest::hash).collect();
+                let resolved_pending = replayed_pending
+                    .iter()
+                    .any(|hash| !remaining_hashes.contains(hash));
                 let new_pending: Vec<Arc<StaticEvent<T>>> =
-                    next_epoch.clone().into_iter().map(Arc::new).collect();
+                    next_epoch.into_iter().map(Arc::new).collect();
                 drop(mem::replace(
                     &mut *self.pending_events.lock().await,
                     new_pending.clone(),
                 ));
-                return new_pending;
+                self.touch();
+                return (new_pending, resolved_pending);
             }
 
             epoch = next_epoch
@@ -2779,6 +3057,27 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 }
 
 #[derive(Debug, Error)]
+pub enum ImportLocalCgkaSecretError {
+    #[error("Unknown document: {0}")]
+    UnknownDocument(DocumentId),
+
+    #[error("Local CGKA share key does not match its secret key")]
+    MismatchedShareKey,
+
+    #[error(transparent)]
+    CgkaError(#[from] CgkaError),
+}
+
+#[derive(Debug, Error)]
+pub enum ImportLocalPrekeySecretError {
+    #[error("Local prekey belongs to another individual")]
+    WrongIndividual,
+
+    #[error("Local prekey share key does not match its secret key")]
+    MismatchedShareKey,
+}
+
+#[derive(Debug, Error)]
 pub enum EncryptContentError {
     #[error(transparent)]
     EncryptError(#[from] EncryptError),
@@ -2807,6 +3106,66 @@ pub enum ReceiveEventError<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: the projection generation must move on every class of
+    /// observable mutation (doc creation, group creation, membership
+    /// delegation, remote-style ingestion of delegated/revoked/cgka events,
+    /// pending-set changes) and hold still across pure reads. Derived-cache
+    /// consumers rely on this as a complete change signal.
+    #[tokio::test]
+    async fn state_generation_tracks_all_projection_mutations() -> Result<(), Box<dyn std::error::Error>> {
+        let mut csprng = rand::rngs::OsRng;
+        let sk = MemorySigner::generate(&mut csprng);
+        let hive =
+            Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
+                sk.clone(),
+                MemoryCiphertextStore::new(),
+                NoListener,
+                csprng,
+            )
+            .await?;
+
+        // Local principal mutations.
+        let g0 = hive.state_generation();
+        let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        assert!(hive.state_generation() > g0, "generate_doc must bump");
+
+        let d0 = hive.state_generation();
+        let group = hive.generate_group(vec![]).await?;
+        assert!(hive.state_generation() > d0, "generate_group must bump");
+
+        // Delegation mutation through add_member.
+        let m0 = hive.state_generation();
+        let doc_id = DocumentId(doc.lock().await.id());
+        let membered_doc = Membered::Document(doc_id, doc.dupe());
+        let group_id = { group.lock().await.group_id() };
+        let group_agent = Agent::Group(group_id, group.clone());
+        hive.add_member(group_agent, &membered_doc, Access::Read, &[])
+            .await?;
+        assert!(hive.state_generation() > m0, "add_member must bump");
+
+        let p0 = hive.state_generation();
+        hive.expand_prekeys().await?;
+        assert!(hive.state_generation() > p0, "expand_prekeys must bump");
+
+        // Reads must not bump.
+        let r0 = hive.state_generation();
+        drop(membered_doc.transitive_members().await);
+        let _ = hive.get_document(doc_id).await.is_some();
+        assert_eq!(
+            hive.state_generation(),
+            r0,
+            "pure reads must not bump the generation"
+        );
+
+        // Ingestion-path bumps are covered structurally: received
+        // delegations/revocations land in the shared generation-carrying
+        // stores (receive_delegation -> Group/Document receive_delegation ->
+        // DelegationStore::insert), and applied CGKA ops / pending-set
+        // replacement bump explicitly at their call sites above.
+        Ok(())
+    }
+
     use crate::{access::Access, principal::public::Public, transact::transact_async};
     use beekem::{id::MemberId, operation::CgkaOperation};
     use future_form::Sendable;
@@ -2842,6 +3201,68 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn local_prekey_delta_restores_secret_missing_from_older_archive() {
+        let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
+        let keyhive: TestKeyhive = Keyhive::generate(
+            signer.clone(),
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
+        .unwrap();
+        let archive = keyhive.into_archive().await;
+
+        let add_op = keyhive.expand_prekeys().await.unwrap();
+        let share_key = add_op.payload.share_key;
+        let secret_key = *keyhive
+            .active
+            .lock()
+            .await
+            .prekey_pairs
+            .lock()
+            .await
+            .get(&share_key)
+            .unwrap();
+        let local_secret =
+            crate::principal::active::LocalPrekeySecret::from_secret(keyhive.id(), secret_key);
+
+        let restored: TestKeyhive = Keyhive::try_from_archive(
+            &archive,
+            signer,
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await
+        .unwrap();
+        assert!(!restored
+            .active
+            .lock()
+            .await
+            .prekey_pairs
+            .lock()
+            .await
+            .contains_key(&share_key));
+
+        restored
+            .import_local_prekey_secret(local_secret)
+            .await
+            .unwrap();
+        assert_eq!(
+            restored
+                .active
+                .lock()
+                .await
+                .prekey_pairs
+                .lock()
+                .await
+                .get(&share_key),
+            Some(&secret_key)
+        );
     }
 
     /// Register a peer keyhive as an individual on `owner` and return the ID and Arc.

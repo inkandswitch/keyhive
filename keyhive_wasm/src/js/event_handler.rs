@@ -9,6 +9,7 @@ use keyhive_core::{
     listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
+        identifier::Identifier,
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };
@@ -32,11 +33,19 @@ impl Dupe for JsEventHandler {
 }
 
 impl PrekeyListener<Local> for JsEventHandler {
-    fn on_prekeys_expanded<'a>(&'a self, e: &'a Arc<Signed<AddKeyOp>>) -> LocalBoxFuture<'a, ()> {
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        e: &'a Arc<Signed<AddKeyOp>>,
+        _secret: Option<&'a keyhive_core::principal::active::LocalPrekeySecret>,
+    ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeysExpanded(e.dupe()).into()) })
     }
 
-    fn on_prekey_rotated<'a>(&'a self, e: &'a Arc<Signed<RotateKeyOp>>) -> LocalBoxFuture<'a, ()> {
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        e: &'a Arc<Signed<RotateKeyOp>>,
+        _secret: Option<&'a keyhive_core::principal::active::LocalPrekeySecret>,
+    ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeyRotated(e.dupe()).into()) })
     }
 }
@@ -44,6 +53,7 @@ impl PrekeyListener<Local> for JsEventHandler {
 impl MembershipListener<Local, JsSigner, JsChangeId> for JsEventHandler {
     fn on_delegation<'a>(
         &'a self,
+        _target: Identifier,
         data: &'a Arc<Signed<Delegation<Local, JsSigner, JsChangeId, Self>>>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::Delegated(data.dupe()).into()) })
@@ -51,6 +61,7 @@ impl MembershipListener<Local, JsSigner, JsChangeId> for JsEventHandler {
 
     fn on_revocation<'a>(
         &'a self,
+        _target: Identifier,
         data: &'a Arc<Signed<Revocation<Local, JsSigner, JsChangeId, Self>>>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::Revoked(data.dupe()).into()) })

@@ -12,6 +12,7 @@ use keyhive_crypto::{
     content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
 };
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// [`Delegation`] storage.
 #[allow(clippy::type_complexity)]
@@ -24,6 +25,10 @@ pub struct DelegationStore<
     L: MembershipListener<F, S, T> = NoListener,
 > {
     delegations: CaMap<Signed<Delegation<F, S, T, L>>>,
+    /// Shared projection-generation counter. Bumped on every mutation so
+    /// owners of `.dupe()` clones can detect remote changes to this store.
+    #[derive_where(skip(Hash))]
+    generation: Arc<AtomicU64>,
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
@@ -31,9 +36,20 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 {
     /// Create a new delegation store.
     pub fn new() -> Self {
+        Self::with_generation(Arc::new(AtomicU64::new(0)))
+    }
+
+    /// Create a store whose mutations bump the shared counter.
+    pub fn with_generation(generation: Arc<AtomicU64>) -> Self {
         Self {
             delegations: CaMap::new(),
+            generation,
         }
+    }
+
+    /// Current mutation generation.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     pub fn len(&self) -> usize {
@@ -67,7 +83,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         delegation: Arc<Signed<Delegation<F, S, T, L>>>,
     ) -> Digest<Signed<Delegation<F, S, T, L>>> {
-        self.delegations.insert(delegation)
+        let digest = self.delegations.insert(delegation);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        digest
     }
 
     /// Remove a [`Delegation`] by its [`Digest`].
@@ -75,7 +93,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         hash: &Digest<Signed<Delegation<F, S, T, L>>>,
     ) -> Option<Arc<Signed<Delegation<F, S, T, L>>>> {
-        self.delegations.remove_by_hash(hash)
+        let removed = self.delegations.remove_by_hash(hash);
+        if removed.is_some() {
+            self.generation.fetch_add(1, Ordering::AcqRel);
+        }
+        removed
     }
 
     /// Iterate over all [`Delegation`]s in the store.

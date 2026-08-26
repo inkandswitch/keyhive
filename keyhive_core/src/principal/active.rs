@@ -43,6 +43,39 @@ use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
 
+/// Private prekey material generated alongside a local public prekey operation.
+///
+/// This is local-only and must be durable before the matching public operation
+/// becomes observable to replication.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct LocalPrekeySecret {
+    individual_id: IndividualId,
+    share_key: ShareKey,
+    share_secret_key: ShareSecretKey,
+}
+
+impl LocalPrekeySecret {
+    pub fn from_secret(individual_id: IndividualId, share_secret_key: ShareSecretKey) -> Self {
+        Self {
+            individual_id,
+            share_key: share_secret_key.share_key(),
+            share_secret_key,
+        }
+    }
+
+    pub fn individual_id(&self) -> IndividualId {
+        self.individual_id
+    }
+
+    pub fn share_key(&self) -> ShareKey {
+        self.share_key
+    }
+
+    pub fn share_secret_key(&self) -> ShareSecretKey {
+        self.share_secret_key
+    }
+}
+
 /// The current user agent (which can sign and encrypt).
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -204,6 +237,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
                 .insert(new_public, new_secret);
         }
 
+        let local_secret = LocalPrekeySecret::from_secret(self.id, new_secret);
+
         {
             let mut locked_individual = self.individual.lock().await;
             locked_individual
@@ -215,7 +250,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             locked_individual.prekeys.insert(new_public);
         }
 
-        self.listener.on_prekey_rotated(&rot_op).await;
+        self.listener
+            .on_prekey_rotated(&rot_op, Some(&local_secret))
+            .await;
         Ok(rot_op)
     }
 
@@ -258,7 +295,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
                 .insert(new_public, new_secret);
         }
 
-        self.listener.on_prekeys_expanded(&op).await;
+        let local_secret = LocalPrekeySecret::from_secret(self.id, new_secret);
+
+        self.listener
+            .on_prekeys_expanded(&op, Some(&local_secret))
+            .await;
         Ok(op)
     }
 
