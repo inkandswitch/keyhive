@@ -48,7 +48,7 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
     let mut peers_on_alice = Vec::with_capacity(n_peers);
     for _ in 0..n_peers {
         let peer = make_simple_keyhive().await.unwrap();
-        let peer_contact = peer.contact_card().await.unwrap();
+        let peer_contact = peer.generate_contact_card().await.unwrap();
         let peer_on_alice = alice.receive_contact_card(&peer_contact).await.unwrap();
         let peer_id = { peer_on_alice.lock().await.id() };
 

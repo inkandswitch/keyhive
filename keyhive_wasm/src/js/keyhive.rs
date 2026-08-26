@@ -390,7 +390,7 @@ impl JsKeyhive {
     pub async fn contact_card(&self) -> Result<JsContactCard, JsSigningError> {
         init_span!("JsKeyhive::contact_card");
         self.0
-            .contact_card()
+            .generate_contact_card()
             .await
             .map(Into::into)
             .map_err(Into::into)
