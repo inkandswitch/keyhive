@@ -50,11 +50,10 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
     let bob = make_simple_keyhive().await?;
 
     let bob_contact = bob.generate_contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
+    let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     let group = alice.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
-    let bob_id = { bob_on_alice.lock().await.id() };
     alice
         .add_member(bob_id, group_id, Access::Read, &[])
         .await?;
@@ -109,8 +108,7 @@ async fn test_individual_admin_on_doc_transitively_reaches_child_doc() -> TestRe
     let bob = make_simple_keyhive().await?;
 
     let bob_contact = bob.generate_contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
-    let bob_id = { bob_on_alice.lock().await.id() };
+    let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     // Alice creates Doc A (she is the owner/admin)
     let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
@@ -191,11 +189,10 @@ async fn test_group_members_cycle() -> TestResult {
     let bob = make_simple_keyhive().await?;
 
     let bob_contact = bob.generate_contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
+    let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     let group = alice.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
-    let bob_id = { bob_on_alice.lock().await.id() };
     alice
         .add_member(bob_id, group_id, Access::Read, &[])
         .await?;
@@ -261,12 +258,11 @@ async fn test_transitive_admin_can_delegate() -> TestResult {
 
     // Register Bob and Carol on Alice's keyhive
     let bob_contact = bob.generate_contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
-    let bob_id = { bob_on_alice.lock().await.id() };
+    let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     let carol_contact = carol.generate_contact_card().await?;
-    let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
-    let carol_id = { carol_on_alice.lock().await.id() };
+    let carol_id = alice.receive_contact_card(&carol_contact).await?;
+    let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
     // Alice creates Account Doc A and Doc B
     let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
@@ -359,12 +355,11 @@ async fn test_transitive_read_cannot_delegate_admin() -> TestResult {
     let carol = make_simple_keyhive().await?;
 
     let bob_contact = bob.generate_contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
-    let bob_id = { bob_on_alice.lock().await.id() };
+    let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     let carol_contact = carol.generate_contact_card().await?;
-    let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
-    let carol_id = { carol_on_alice.lock().await.id() };
+    let carol_id = alice.receive_contact_card(&carol_contact).await?;
+    let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
     let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     let doc_a_id = { doc_a.lock().await.doc_id() };
@@ -467,12 +462,11 @@ async fn test_transitive_admin_can_delegate_via_group() -> TestResult {
     let carol = make_simple_keyhive().await?;
 
     let bob_contact = bob.generate_contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
-    let bob_id = { bob_on_alice.lock().await.id() };
+    let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     let carol_contact = carol.generate_contact_card().await?;
-    let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
-    let carol_id = { carol_on_alice.lock().await.id() };
+    let carol_id = alice.receive_contact_card(&carol_contact).await?;
+    let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
     // Alice creates Group G and Doc B
     let group = alice.generate_group(vec![]).await?;
@@ -539,12 +533,11 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     let carol = make_simple_keyhive().await?;
 
     let bob_contact = bob.generate_contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
-    let bob_id = { bob_on_alice.lock().await.id() };
+    let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     let carol_contact = carol.generate_contact_card().await?;
-    let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
-    let carol_id = { carol_on_alice.lock().await.id() };
+    let carol_id = alice.receive_contact_card(&carol_contact).await?;
+    let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
     let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     let doc_a_id = { doc_a.lock().await.doc_id() };
@@ -624,12 +617,11 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
     let carol = make_simple_keyhive().await?;
 
     let bob_contact = bob.generate_contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
-    let bob_id = { bob_on_alice.lock().await.id() };
+    let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     let carol_contact = carol.generate_contact_card().await?;
-    let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
-    let carol_id = { carol_on_alice.lock().await.id() };
+    let carol_id = alice.receive_contact_card(&carol_contact).await?;
+    let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
     let group = alice.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
@@ -751,20 +743,19 @@ async fn test_deep_chain_revocation() -> TestResult {
 
     // Register everyone on Alice's keyhive
     let bob_contact = bob.generate_contact_card().await?;
-    let bob_on_alice = alice.receive_contact_card(&bob_contact).await?;
-    let bob_id = { bob_on_alice.lock().await.id() };
+    let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     let carol_contact = carol.generate_contact_card().await?;
-    let carol_on_alice = alice.receive_contact_card(&carol_contact).await?;
-    let carol_id = { carol_on_alice.lock().await.id() };
+    let carol_id = alice.receive_contact_card(&carol_contact).await?;
+    let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
     let dave_contact = dave.generate_contact_card().await?;
-    let dave_on_alice = alice.receive_contact_card(&dave_contact).await?;
-    let dave_id = { dave_on_alice.lock().await.id() };
+    let dave_id = alice.receive_contact_card(&dave_contact).await?;
+    let dave_on_alice = alice.get_individual(dave_id).await.expect("just received");
 
     let eve_contact = eve.generate_contact_card().await?;
-    let eve_on_alice = alice.receive_contact_card(&eve_contact).await?;
-    let eve_id = { eve_on_alice.lock().await.id() };
+    let eve_id = alice.receive_contact_card(&eve_contact).await?;
+    let eve_on_alice = alice.get_individual(eve_id).await.expect("just received");
 
     // Alice creates Group G
     let group = alice.generate_group(vec![]).await?;

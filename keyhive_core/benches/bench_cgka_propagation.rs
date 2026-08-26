@@ -8,7 +8,7 @@ use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
     listener::no_listener::NoListener,
-    principal::{agent::Agent, membered::Membered, peer::Peer, public::Public},
+    principal::{individual::id::IndividualId, membered::Membered, peer::Peer, public::Public},
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -20,16 +20,13 @@ fn main() {
 }
 
 type BenchMembered = Membered<Sendable, MemorySigner, [u8; 32], NoListener>;
-type BenchAgent = Agent<Sendable, MemorySigner, [u8; 32], NoListener>;
 
 /// Create a fresh peer keyhive, exchange contact cards with alice, and return
-/// the peer's agent as seen by alice.
-async fn make_peer_agent(alice: &bench_utils::BenchKeyhive) -> BenchAgent {
+/// the peer's id as seen by alice.
+async fn make_peer_id(alice: &bench_utils::BenchKeyhive) -> IndividualId {
     let peer = make_simple_keyhive().await.unwrap();
     let peer_contact = peer.generate_contact_card().await.unwrap();
-    let peer_on_alice = alice.receive_contact_card(&peer_contact).await.unwrap();
-    let peer_id = peer_on_alice.lock().await.id();
-    Agent::Individual(peer_id, peer_on_alice)
+    alice.receive_contact_card(&peer_contact).await.unwrap()
 }
 
 /// Build a keyhive with `n_docs` docs and nested group membership.
@@ -41,7 +38,7 @@ async fn make_peer_agent(alice: &bench_utils::BenchKeyhive) -> BenchAgent {
 ///   - A fresh peer is prepared but not yet added to g_bottom
 async fn setup_many_docs_nested(
     n_docs: usize,
-) -> (bench_utils::BenchKeyhive, BenchMembered, BenchAgent) {
+) -> (bench_utils::BenchKeyhive, BenchMembered, IndividualId) {
     let alice = make_simple_keyhive().await.unwrap();
 
     let public_indie = Public.individual();
@@ -71,9 +68,9 @@ async fn setup_many_docs_nested(
 
     // Add 5 peers as members of g_bottom (gives the BFS real membership to walk)
     for _ in 0..5 {
-        let agent = make_peer_agent(&alice).await;
+        let peer = make_peer_id(&alice).await;
         alice
-            .add_member(agent.id(), g_bottom_id, Access::Read, &[])
+            .add_member(peer, g_bottom_id, Access::Read, &[])
             .await
             .unwrap();
     }
@@ -97,11 +94,11 @@ async fn setup_many_docs_nested(
     }
 
     // Prepare a fresh peer to add to g_bottom (the benchmark target)
-    let agent = make_peer_agent(&alice).await;
+    let peer = make_peer_id(&alice).await;
 
     let membered = Membered::Group(g_bottom_id, g_bottom.dupe());
 
-    (alice, membered, agent)
+    (alice, membered, peer)
 }
 
 /// Measures the cost of `add_member` to a nested group when there are many docs.
@@ -112,11 +109,11 @@ fn add_member_nested_groups(bencher: divan::Bencher, n_docs: usize) {
 
     bencher
         .with_inputs(|| rt.block_on(setup_many_docs_nested(n_docs)))
-        .bench_local_values(|(alice, membered, agent)| {
+        .bench_local_values(|(alice, membered, peer)| {
             rt.block_on(async {
                 std::hint::black_box(
                     alice
-                        .add_member(agent.id(), membered.membered_id(), Access::Read, &[])
+                        .add_member(peer, membered.membered_id(), Access::Read, &[])
                         .await
                         .unwrap(),
                 );
@@ -141,11 +138,11 @@ fn revoke_member_nested_groups(bencher: divan::Bencher, n_docs: usize) {
     bencher
         .with_inputs(|| {
             rt.block_on(async {
-                let (alice, membered, agent) = setup_many_docs_nested(n_docs).await;
-                let to_revoke = agent.id();
+                let (alice, membered, peer) = setup_many_docs_nested(n_docs).await;
+                let to_revoke = peer;
                 // Add the member first so we can revoke them
                 alice
-                    .add_member(agent.id(), membered.membered_id(), Access::Read, &[])
+                    .add_member(peer, membered.membered_id(), Access::Read, &[])
                     .await
                     .unwrap();
                 (alice, membered, to_revoke)
