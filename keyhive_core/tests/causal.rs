@@ -5,12 +5,11 @@
 //! given a key for. Keyhive defines the envelope and walks it. Building one is the
 //! application's job, which `encrypt_in_envelope` stands in for.
 
-use keyhive_core::access::Access::Read;
-use keyhive_core::test_utils::{
-    decrypt_with_key, CausalDecryptionExt, TestContext, TestResult as Result,
+use keyhive_core::{
+    access::Access::Read,
+    test_utils::{decrypt_with_key, CausalDecryptionExt, TestContext, TestResult as Result},
 };
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 fn contents(of: &[&[u8]]) -> BTreeSet<Vec<u8>> {
     of.iter().map(|c| c.to_vec()).collect()
@@ -41,7 +40,7 @@ async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     for ct in [&genesis, &left, &right, &head] {
-        ctx.give_content(&bob, &ct).await?;
+        ctx.give_content(&bob, ct).await?;
     }
     let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
 
@@ -230,7 +229,7 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
     ctx.sync_all_unsent().await?;
 
     for held in [&root, &left_head, &right_head, &unrelated] {
-        ctx.give_content(&bob, &held).await?;
+        ctx.give_content(&bob, held).await?;
     }
     // Walking from several heads at once needs the key for each entrypoint, which the
     // reader derives the same way it would for a single one.
@@ -293,7 +292,7 @@ async fn content_that_is_not_an_ancestor_is_not_captured_in_the_walk() -> Result
     ctx.sync_all_unsent().await?;
 
     for held in [&head, &genesis, &unrelated] {
-        ctx.give_content(&bob, &held).await?;
+        ctx.give_content(&bob, held).await?;
     }
     let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
 
@@ -336,7 +335,7 @@ async fn two_missing_ancestors_are_each_reported_with_their_own_key() -> Result<
 
     // Everything except the two roots.
     for held in [&head, &left, &right] {
-        ctx.give_content(&bob, &held).await?;
+        ctx.give_content(&bob, held).await?;
     }
     let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
 

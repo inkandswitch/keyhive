@@ -1,10 +1,10 @@
 //! A testing context that manages a set of keyhives that know about each other, and the
 //! machinery for moving events between them.
 
-use crate::crypto::signed_ext::SignedSubjectId;
 use crate::{
     access::Access,
     archive::Archive,
+    crypto::signed_ext::SignedSubjectId,
     event::static_event::StaticEvent,
     keyhive::{
         CausalDecryptError, EncryptContentError, Keyhive, NotFound, ReceiveStaticEventError,
@@ -34,8 +34,11 @@ use dupe::Dupe;
 use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef, share_key::ShareKey, signed::Signed, signed::SigningError,
-    signer::memory::MemorySigner, symmetric_key::SymmetricKey,
+    content::reference::ContentRef,
+    share_key::ShareKey,
+    signed::{Signed, SigningError},
+    signer::memory::MemorySigner,
+    symmetric_key::SymmetricKey,
 };
 use nonempty::nonempty;
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};

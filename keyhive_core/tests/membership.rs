@@ -1,7 +1,7 @@
-use keyhive_core::access::Access::{Admin, Edit, Read};
-use keyhive_core::principal::document::id::DocumentId;
-use keyhive_core::test_utils::{
-    AddMemberUpdateExt, Instance, TestContext, TestError, TestResult as Result,
+use keyhive_core::{
+    access::Access::{Admin, Edit, Read},
+    principal::document::id::DocumentId,
+    test_utils::{AddMemberUpdateExt, Instance, TestContext, TestError, TestResult as Result},
 };
 use std::collections::BTreeSet;
 

@@ -1,5 +1,7 @@
-use keyhive_core::access::Access::{Admin, Edit, Read};
-use keyhive_core::test_utils::{AddMemberUpdateExt, TestContext, TestResult as Result};
+use keyhive_core::{
+    access::Access::{Admin, Edit, Read},
+    test_utils::{AddMemberUpdateExt, TestContext, TestResult as Result},
+};
 
 // `AddMemberUpdate::summary()` is what the delegation says, as plain values.
 #[tokio::test]
