@@ -819,7 +819,7 @@ impl<
     ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
         let doc = self.document_by_id(doc).await?;
         let out = doc.lock().await.try_decrypt_content_keyed(encrypted);
-        Ok(out?)
+        out
     }
 
     /// Walk back from `encrypted` through the ancestors it lists.

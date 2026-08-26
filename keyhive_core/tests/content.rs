@@ -1,6 +1,8 @@
-use keyhive_core::access::Access::{Edit, Read};
-use keyhive_core::test_utils::{
-    decrypt_with_key, with_a_flipped_bit, TestContext, TestError, TestResult as Result,
+use keyhive_core::{
+    access::Access::{Edit, Read},
+    test_utils::{
+        decrypt_with_key, with_a_flipped_bit, TestContext, TestError, TestResult as Result,
+    },
 };
 
 #[tokio::test]

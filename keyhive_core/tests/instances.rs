@@ -1,10 +1,11 @@
-use keyhive_core::access::Access::{Admin, Read};
-use keyhive_core::keyhive::Keyhive;
-use keyhive_core::listener::no_listener::NoListener;
-use keyhive_core::principal::public::Public;
-use keyhive_core::store::ciphertext::memory::MemoryCiphertextStore;
-use keyhive_core::test_utils::Hive;
-use keyhive_core::test_utils::{EventKind, TestContext, TestError, TestResult as Result};
+use keyhive_core::{
+    access::Access::{Admin, Read},
+    keyhive::Keyhive,
+    listener::no_listener::NoListener,
+    principal::public::Public,
+    store::ciphertext::memory::MemoryCiphertextStore,
+    test_utils::{EventKind, Hive, TestContext, TestError, TestResult as Result},
+};
 use keyhive_crypto::signer::memory::MemorySigner;
 use rand::rngs::OsRng;
 

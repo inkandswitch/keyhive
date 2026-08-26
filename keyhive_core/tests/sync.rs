@@ -1,5 +1,7 @@
-use keyhive_core::access::Access::{self, Edit, Read};
-use keyhive_core::test_utils::{EventKind, TestContext, TestResult as Result};
+use keyhive_core::{
+    access::Access::{self, Edit, Read},
+    test_utils::{EventKind, TestContext, TestResult as Result},
+};
 
 #[tokio::test]
 async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {

@@ -1,6 +1,8 @@
-use keyhive_core::access::Access::{self, Admin, Edit, Read, Relay};
-use keyhive_core::keyhive::NotFound;
-use keyhive_core::test_utils::{TestContext, TestError, TestResult as Result};
+use keyhive_core::{
+    access::Access::{self, Admin, Edit, Read, Relay},
+    keyhive::NotFound,
+    test_utils::{TestContext, TestError, TestResult as Result},
+};
 
 #[tokio::test]
 async fn a_group_member_reaches_the_groups_documents() -> Result<()> {

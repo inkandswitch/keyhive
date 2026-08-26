@@ -1,5 +1,7 @@
-use keyhive_core::access::Access::Read;
-use keyhive_core::test_utils::{PrekeyOp, TestContext, TestResult as Result};
+use keyhive_core::{
+    access::Access::Read,
+    test_utils::{PrekeyOp, TestContext, TestResult as Result},
+};
 
 #[tokio::test]
 async fn expanding_prekeys_adds_a_distinct_key() -> Result<()> {

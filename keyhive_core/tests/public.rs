@@ -1,6 +1,8 @@
-use keyhive_core::access::Access::{Admin, Edit, Read, Relay};
-use keyhive_core::principal::public::Public;
-use keyhive_core::test_utils::{TestContext, TestError, TestResult as Result};
+use keyhive_core::{
+    access::Access::{Admin, Edit, Read, Relay},
+    principal::public::Public,
+    test_utils::{TestContext, TestError, TestResult as Result},
+};
 use std::collections::BTreeMap;
 
 #[tokio::test]

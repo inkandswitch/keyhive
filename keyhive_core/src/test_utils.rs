@@ -7,7 +7,10 @@ pub use context::{
     DelegationSummary, EventKind, Hive, Instance, PrekeyOp, TestContext, TestError, TestResult,
 };
 
-use crate::{keyhive::Keyhive, listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore};
+use crate::{
+    keyhive::Keyhive, listener::no_listener::NoListener,
+    store::ciphertext::memory::MemoryCiphertextStore,
+};
 use keyhive_crypto::{signed::SigningError, signer::memory::MemorySigner};
 use rand::rngs::OsRng;
 

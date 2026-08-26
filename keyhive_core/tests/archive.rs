@@ -1,5 +1,7 @@
-use keyhive_core::access::Access::{Admin, Edit, Read};
-use keyhive_core::test_utils::{TestContext, TestError, TestResult as Result};
+use keyhive_core::{
+    access::Access::{Admin, Edit, Read},
+    test_utils::{TestContext, TestError, TestResult as Result},
+};
 
 #[tokio::test]
 async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Result<()> {
