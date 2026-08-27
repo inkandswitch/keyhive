@@ -1,6 +1,7 @@
 use keyhive_core::{
     access::Access::{self, Admin, Edit, Read, Relay},
     keyhive::NotFound,
+    principal::document::AddMemberError,
     test_utils::{TestContext, TestError, TestResult as Result},
 };
 
@@ -789,6 +790,22 @@ async fn an_identifier_that_was_never_received_says_so() -> Result<()> {
             Err(NotFound(_))
         ),
         "and best_access_for_doc says the same"
+    );
+
+    assert!(
+        matches!(
+            bob.add_member(alice.id(), design_doc, Read, &[]).await,
+            Err(AddMemberError::NotFound(_))
+        ),
+        "bob was never sent the document he is trying to delegate over"
+    );
+    let bobs_own_doc = ctx.doc(&bob, "bobs_own_doc").await?;
+    assert!(
+        matches!(
+            bob.add_member(engineering, bobs_own_doc, Read, &[]).await,
+            Err(AddMemberError::NotFound(_))
+        ),
+        "and over his own document, bob cannot add a group he has never heard of"
     );
     Ok(())
 }
