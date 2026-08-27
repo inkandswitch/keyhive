@@ -777,6 +777,7 @@ impl<
     /// Try causal decrypt from more than one entrypoint at once.
     ///
     /// [`Keyhive::try_causal_decrypt_content`] takes a single entrypoint.
+    #[allow(clippy::result_large_err)]
     pub async fn try_causal_decrypt_from(
         &self,
         entrypoints: &[(Arc<EncryptedContent<P, T>>, SymmetricKey)],
@@ -832,6 +833,7 @@ impl<
     }
 
     /// Walk back from `encrypted` through the ancestors it lists.
+    #[allow(clippy::result_large_err)]
     pub async fn try_causal_decrypt_content(
         &self,
         doc: DocumentId,
