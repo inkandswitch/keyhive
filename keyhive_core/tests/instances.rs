@@ -363,3 +363,102 @@ async fn a_second_instance_takes_its_name_too() -> Result<()> {
     }
     Ok(())
 }
+
+/// The second instance writes, and the member who was just added reads it.
+///
+/// Adding a member blanks the root of the document's key tree, so the instance that writes
+/// next has no key agreed and has to establish one. Here that is not the instance that made
+/// the document or added the member, which is the case that can fail: the second instance has
+/// to have synced the first's events before it can write at all.
+#[tokio::test]
+async fn the_second_instance_writes_and_a_member_reads_it() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let alice_worker = ctx.new_keyhive_instance_for(&alice, "alice-worker").await?;
+    let bob = ctx.individual("bob").await?;
+    ctx.share_prekey_secrets(&alice, &alice_worker).await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    ctx.sync_all_unsent().await?;
+
+    let ct = ctx
+        .encrypt(&alice_worker, design_doc, b"written by the worker")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    assert_eq!(
+        bob.try_decrypt_content(design_doc, &ct).await?,
+        b"written by the worker".to_vec(),
+        "bob reads what the second instance wrote, not only what the first did"
+    );
+    Ok(())
+}
+
+/// The same rule with the reader arriving through a public delegation rather than a
+/// membership, so nothing in the key tree is addressed to them personally.
+#[tokio::test]
+async fn a_public_reader_reads_what_the_second_instance_wrote() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let alice_worker = ctx.new_keyhive_instance_for(&alice, "alice-worker").await?;
+    let bob = ctx.individual("bob").await?;
+    ctx.share_prekey_secrets(&alice, &alice_worker).await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
+    alice.force_pcs_update(design_doc).await?;
+    ctx.sync_all_unsent().await?;
+
+    let ct = ctx
+        .encrypt(&alice_worker, design_doc, b"announcement from the worker")
+        .await?;
+    ctx.sync_as_public(&alice_worker, &bob).await?;
+
+    assert_eq!(
+        alice.access_for_doc(bob.id(), design_doc).await?,
+        None,
+        "bob is not a member and never becomes one"
+    );
+    assert_eq!(
+        bob.try_decrypt_content(design_doc, &ct).await?,
+        b"announcement from the worker".to_vec(),
+        "he reads the second instance's write through the public delegation"
+    );
+    Ok(())
+}
+
+/// And with an intermediary in between, so the events reach the reader by being relayed
+/// rather than by coming straight from either instance that produced them.
+#[tokio::test]
+async fn a_relay_carries_the_second_instances_write_to_a_public_reader() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let alice_worker = ctx.new_keyhive_instance_for(&alice, "alice-worker").await?;
+    let relay = ctx.individual("relay").await?;
+    let bob = ctx.individual("bob").await?;
+    ctx.share_prekey_secrets(&alice, &alice_worker).await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(relay.id(), design_doc, Read, &[]).await?;
+    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
+    alice.force_pcs_update(design_doc).await?;
+    ctx.sync(&alice, &alice_worker).await?;
+
+    let ct = ctx
+        .encrypt(&alice_worker, design_doc, b"relayed from the worker")
+        .await?;
+
+    // Both instances to the relay, and only then the relay onward. Bob is never sent
+    // anything by either instance directly.
+    ctx.sync(&alice, &relay).await?;
+    ctx.sync(&alice_worker, &relay).await?;
+    ctx.sync_as_public(&relay, &bob).await?;
+
+    assert_eq!(
+        bob.try_decrypt_content(design_doc, &ct).await?,
+        b"relayed from the worker".to_vec(),
+        "the relay carried the second instance's write through to a public reader"
+    );
+    Ok(())
+}
