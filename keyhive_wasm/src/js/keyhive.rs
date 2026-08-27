@@ -52,7 +52,7 @@ use future_form::Local;
 use keyhive_core::{
     crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
-    keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
+    keyhive::{EncryptContentError, Keyhive, NotFound, ReceiveStaticEventError},
     principal::{
         agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError, public::Public,
     },
@@ -172,7 +172,7 @@ impl JsKeyhive {
             .0
             .get_document(doc_id)
             .await
-            .expect("generate_doc to have registered the document");
+            .ok_or(NotFound(Box::new(doc_id.into())))?;
 
         Ok(JsDocument { doc_id, inner })
     }
@@ -332,19 +332,21 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]
-    pub async fn reachable_docs(&self) -> Vec<Summary> {
+    pub async fn reachable_docs(&self) -> Result<Vec<Summary>, JsNotFound> {
         init_span!("JsKeyhive::reachable_docs");
         let mut acc = Vec::new();
         for (doc_id, can) in self.0.reachable_docs().await {
-            let Some(inner) = self.0.get_document(doc_id).await else {
-                continue;
-            };
+            let inner = self
+                .0
+                .get_document(doc_id)
+                .await
+                .ok_or(NotFound(Box::new(doc_id.into())))?;
             acc.push(Summary {
                 doc: JsDocument { doc_id, inner },
                 access: JsAccess(can),
             });
         }
-        acc
+        Ok(acc)
     }
 
     /// Force a PCS key rotation and return the new leaf secret, serialized as a
@@ -417,10 +419,10 @@ impl JsKeyhive {
                     .0
                     .get_individual(id)
                     .await
-                    .expect("receive_contact_card to have registered the individual");
+                    .ok_or(NotFound(Box::new(id.into())))?;
                 Ok(JsIndividual { id, inner })
             }
-            Err(err) => Err(JsReceivePreKeyOpError(err)),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -851,9 +853,28 @@ impl JsKeyhive {
     }
 }
 
+/// Something the core named and then could not produce, which means the two disagree.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsReceivePreKeyOpError(#[from] pub(crate) ReceivePrekeyOpError);
+pub struct JsNotFound(#[from] NotFound);
+
+impl From<JsNotFound> for JsValue {
+    fn from(err: JsNotFound) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("NotFound");
+        err.into()
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum JsReceivePreKeyOpError {
+    #[error(transparent)]
+    ReceivePrekeyOp(#[from] ReceivePrekeyOpError),
+
+    /// The individual was registered and could not then be read back.
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+}
 
 impl From<JsReceivePreKeyOpError> for JsValue {
     fn from(err: JsReceivePreKeyOpError) -> Self {
