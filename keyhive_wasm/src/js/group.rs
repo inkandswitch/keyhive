@@ -1,8 +1,15 @@
 use crate::js::membered::JsMembered;
 
 use super::{
-    agent::JsAgent, capability::Capability, change_id::JsChangeId, event_handler::JsEventHandler,
-    group_id::JsGroupId, identifier::JsIdentifier, peer::JsPeer, signer::JsSigner,
+    agent::JsAgent,
+    capability::Capability,
+    change_id::JsChangeId,
+    event_handler::JsEventHandler,
+    group_id::JsGroupId,
+    identifier::JsIdentifier,
+    membership::{individual_memberships, Membership},
+    peer::JsPeer,
+    signer::JsSigner,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
@@ -36,6 +43,14 @@ impl JsGroup {
     #[wasm_bindgen(getter, js_name = groupId)]
     pub fn group_id(&self) -> JsGroupId {
         JsGroupId(self.group_id)
+    }
+
+    /// Everyone who reaches this group, following nested groups all the way
+    /// down, with the access for each one.
+    #[wasm_bindgen(js_name = transitiveMembers)]
+    pub async fn transitive_members(&self) -> Vec<Membership> {
+        let transitive = { self.inner.lock().await.transitive_members().await };
+        individual_memberships(transitive, self.group_id.into())
     }
 
     #[wasm_bindgen]

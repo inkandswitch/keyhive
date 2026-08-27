@@ -198,6 +198,11 @@ impl Cgka {
         self.0.group_size()
     }
 
+    /// The individuals currently in this document's CGKA tree.
+    pub fn member_ids(&self) -> impl Iterator<Item = IndividualId> + '_ {
+        self.0.member_ids().map(IndividualId::from)
+    }
+
     pub fn merge_concurrent_operation(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,

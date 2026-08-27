@@ -129,6 +129,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.group.members()
     }
 
+    /// The individuals in this document's CGKA tree.
+    ///
+    /// Returns [`CgkaError::NotInitialized`] if this document has no CGKA yet.
+    pub fn cgka_members(&self) -> Result<impl Iterator<Item = IndividualId> + '_, CgkaError> {
+        Ok(self.cgka()?.member_ids())
+    }
+
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
         self.group.transitive_members().await
     }

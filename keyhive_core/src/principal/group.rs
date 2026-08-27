@@ -233,9 +233,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.group_id().into()
     }
 
+    /// The individuals reachable from this group by delegations of
+    /// [`Access::Read`] or better.
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         let mut ids = HashSet::new();
         for delegations in self.members.values() {
+            if !delegations.iter().any(|d| d.payload().can.is_reader()) {
+                continue;
+            }
             let more_ids = delegations[0].payload().delegate.individual_ids().await;
             ids.extend(more_ids.iter());
         }
@@ -248,15 +253,22 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     ) -> HashMap<IndividualId, ShareKey> {
         let mut prekeys = HashMap::new();
         let public_id = crate::principal::public::Public.id();
-        for (id, (agent, _access)) in self.transitive_members().await.iter() {
+        for (id, (agent, access)) in self.transitive_members().await {
+            // Anyone whose access here is below `Read` is not entitled to decrypt.
+            if !access.is_reader() {
+                continue;
+            }
+
             // Public must always be added with its single well-known key.
-            if *id == public_id {
+            if id == public_id {
                 prekeys.insert(
                     IndividualId(public_id),
                     crate::principal::public::Public.share_key(),
                 );
-            } else {
-                prekeys.extend(agent.pick_individual_prekeys(doc_id).await.iter());
+            } else if matches!(agent, Agent::Individual(_, _) | Agent::Active(_, _)) {
+                // Nested groups and documents are already flattened into
+                // `transitive_members` so we only look up individuals.
+                prekeys.extend(agent.pick_individual_prekeys(doc_id).await);
             }
         }
         prekeys
@@ -310,36 +322,34 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 continue;
             }
 
-            let best_access = *caps
-                .get(&id)
-                .map(|(_, existing_access)| existing_access.max(&access))
-                .unwrap_or(&access);
-
+            // Reaching someone again by a weaker route does not take away what
+            // a stronger one already gave them.
             let current_path_access = access.min(parent_access);
-            caps.insert(member.id(), (member.dupe(), current_path_access));
+            let effective_access = caps
+                .entry(id)
+                .and_modify(|(_, existing)| {
+                    if current_path_access > *existing {
+                        *existing = current_path_access;
+                    }
+                })
+                .or_insert_with(|| (member.dupe(), current_path_access))
+                .1;
 
             if let Some(membered) = match member {
                 Agent::Group(id, inner_group) => Some(Membered::Group(id, inner_group.dupe())),
                 Agent::Document(id, doc) => Some(Membered::Document(id, doc.dupe())),
                 _ => None,
             } {
-                for (mem_id, dlgs) in membered.members().await.iter() {
-                    let dlg = membered
-                        .get_capability(mem_id)
-                        .await
-                        .expect("members have capabilities by defintion");
-
-                    caps.insert(*mem_id, (dlg.payload.delegate.dupe(), best_access));
-
+                for dlgs in membered.members().await.into_values() {
                     'inner: for sub_dlg in dlgs.iter() {
-                        if !seen.insert((sub_dlg.signature.to_bytes(), dlg.payload.can)) {
+                        if !seen.insert((sub_dlg.signature.to_bytes(), effective_access)) {
                             continue 'inner;
                         }
 
                         explore.push(GroupAccess {
                             agent: sub_dlg.payload.delegate.dupe(),
                             agent_access: sub_dlg.payload.can,
-                            parent_access: best_access,
+                            parent_access: effective_access,
                         });
                     }
                 }
@@ -998,6 +1008,103 @@ mod tests {
         Active::generate(sk, NoListener, csprng).await.unwrap()
     }
 
+    type TestGroup = Arc<Mutex<Group<Sendable, MemorySigner, String>>>;
+
+    /// `outer --Admin--> middle --Read--> a --Admin--> b --Admin--> carol`.
+    ///
+    /// Carol may only read the outer group, but has admin to every link below
+    /// the read delegation into `a`. Alice generated all four groups, so
+    /// she is admin of each of them directly.
+    struct WeakestLinkChain {
+        outer: TestGroup,
+        middle: TestGroup,
+        alice_signer: MemorySigner,
+        carol_signer: MemorySigner,
+    }
+
+    async fn weakest_link_chain() -> WeakestLinkChain {
+        let mut csprng = OsRng;
+
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let (alice_id, alice_signer) = {
+            let locked = alice.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(alice_id, alice.dupe());
+
+        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let (carol_id, carol_signer) = {
+            let locked = carol.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+        let carol_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(carol_id, carol.dupe());
+
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
+        let make = || {
+            let parents = nonempty![alice_agent.dupe()];
+            let dlg = dlg_store.dupe();
+            let rev = rev_store.dupe();
+            let rng = arc_csprng.dupe();
+            async move {
+                Arc::new(Mutex::new(
+                    Group::generate(parents, dlg, rev, NoListener, rng)
+                        .await
+                        .unwrap(),
+                ))
+            }
+        };
+
+        let outer = make().await;
+        let middle = make().await;
+        let a = make().await;
+        let b = make().await;
+
+        let group_agent = |g: &TestGroup| {
+            let g = g.dupe();
+            async move {
+                let gid = { g.lock().await.group_id() };
+                Agent::Group(gid, g)
+            }
+        };
+
+        for (parent, child, can) in [
+            (&outer, &middle, Access::Admin),
+            (&middle, &a, Access::Read),
+            (&a, &b, Access::Admin),
+        ] {
+            parent
+                .lock()
+                .await
+                .add_member(group_agent(child).await, can, &alice_signer, &[])
+                .await
+                .unwrap();
+        }
+        b.lock()
+            .await
+            .add_member(carol_agent, Access::Admin, &alice_signer, &[])
+            .await
+            .unwrap();
+
+        let members = outer.lock().await.transitive_members().await;
+        assert_eq!(
+            members.get(&carol_id.into()).map(|(_, access)| *access),
+            Some(Access::Read),
+            "carol reads the outer group and no more"
+        );
+
+        WeakestLinkChain {
+            outer,
+            middle,
+            alice_signer,
+            carol_signer,
+        }
+    }
+
     async fn setup_groups<T: ContentRef, R: rand::CryptoRng + rand::RngCore>(
         alice: Arc<Mutex<Active<Sendable, MemorySigner, T>>>,
         bob: Arc<Mutex<Active<Sendable, MemorySigner, T>>>,
@@ -1277,6 +1384,489 @@ mod tests {
         )]);
 
         assert_eq!(g0_mems, expected);
+    }
+
+    /// Reaching someone twice, once as an admin and once through a group that
+    /// only has read access, must not demote them to a reader. The order of
+    /// traversal shouldn't matter.
+    #[tokio::test]
+    async fn test_transitive_keeps_the_best_route() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let (alice_id, alice_signer) = {
+            let locked = alice.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(alice_id, alice.dupe());
+
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
+        // Alice is an admin of both groups, because generating one delegates
+        // admin to its parents.
+        let inner = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+
+        let outer = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+
+        // Now Alice also reaches the outer group the long way round, as a
+        // reader, through a group where she is admin.
+        let inner_gid = { inner.lock().await.group_id() };
+        outer
+            .lock()
+            .await
+            .add_member(
+                Agent::Group(inner_gid, inner.dupe()),
+                Access::Read,
+                &alice_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let members = outer.lock().await.transitive_members().await;
+        assert_eq!(
+            members.get(&alice_id.into()).map(|(_, access)| *access),
+            Some(Access::Admin),
+            "an admin who is also in a reader group is still an admin"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transitive_keeps_the_best_route_through_a_nested_group() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        for _ in 0..10 {
+            let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+            let (alice_id, alice_signer) = {
+                let locked = alice.lock().await;
+                (locked.id(), locked.signer.clone())
+            };
+            let alice_agent: Agent<Sendable, MemorySigner, String> =
+                Agent::Active(alice_id, alice.dupe());
+
+            let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+            let carol_id = { carol.lock().await.id() };
+            let carol_agent: Agent<Sendable, MemorySigner, String> =
+                Agent::Active(carol_id, carol.dupe());
+
+            let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+            let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+            let arc_csprng = Arc::new(Mutex::new(csprng));
+
+            let make = || async {
+                Arc::new(Mutex::new(
+                    Group::generate(
+                        nonempty![alice_agent.dupe()],
+                        dlg_store.dupe(),
+                        rev_store.dupe(),
+                        NoListener,
+                        arc_csprng.dupe(),
+                    )
+                    .await
+                    .unwrap(),
+                ))
+            };
+
+            let inner = make().await;
+            let admin_route = make().await;
+            let read_route = make().await;
+            let outer = make().await;
+
+            let group_agent = |g: &Arc<Mutex<Group<Sendable, MemorySigner, String>>>,
+                               gid: GroupId| {
+                Agent::Group(gid, g.dupe())
+            };
+
+            let inner_gid = { inner.lock().await.group_id() };
+            let admin_gid = { admin_route.lock().await.group_id() };
+            let read_gid = { read_route.lock().await.group_id() };
+
+            // Both middle groups administer the inner one.
+            for middle in [&admin_route, &read_route] {
+                middle
+                    .lock()
+                    .await
+                    .add_member(
+                        group_agent(&inner, inner_gid),
+                        Access::Admin,
+                        &alice_signer,
+                        &[],
+                    )
+                    .await
+                    .unwrap();
+            }
+
+            // The outer group reaches one of them as an admin and the other as
+            // a reader, so the inner group is reachable both ways.
+            outer
+                .lock()
+                .await
+                .add_member(
+                    group_agent(&admin_route, admin_gid),
+                    Access::Admin,
+                    &alice_signer,
+                    &[],
+                )
+                .await
+                .unwrap();
+            outer
+                .lock()
+                .await
+                .add_member(
+                    group_agent(&read_route, read_gid),
+                    Access::Read,
+                    &alice_signer,
+                    &[],
+                )
+                .await
+                .unwrap();
+
+            inner
+                .lock()
+                .await
+                .add_member(carol_agent.dupe(), Access::Admin, &alice_signer, &[])
+                .await
+                .unwrap();
+
+            let members = outer.lock().await.transitive_members().await;
+            assert_eq!(
+                members.get(&carol_id.into()).map(|(_, access)| *access),
+                Some(Access::Admin),
+                "the admin route to the inner group is the one that counts"
+            );
+        }
+    }
+
+    /// A group's member's access level is capped by their own delegation and
+    /// by the group's access here, whichever is weaker, no matter how strong anyone else in
+    /// the chain is.
+    #[tokio::test]
+    async fn test_transitive_caps_a_member_by_their_own_delegations() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let (alice_id, alice_signer) = {
+            let locked = alice.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(alice_id, alice.dupe());
+
+        let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let bob_id = { bob.lock().await.id() };
+        let bob_agent: Agent<Sendable, MemorySigner, String> = Agent::Active(bob_id, bob.dupe());
+
+        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let carol_id = { carol.lock().await.id() };
+        let carol_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(carol_id, carol.dupe());
+
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
+        let inner = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+
+        let outer = Arc::new(Mutex::new(
+            Group::generate(
+                nonempty![alice_agent.dupe()],
+                dlg_store.dupe(),
+                rev_store.dupe(),
+                NoListener,
+                arc_csprng.dupe(),
+            )
+            .await
+            .unwrap(),
+        ));
+
+        // The inner group edits the outer one. Alice, who is admin of both,
+        // has the highest access level.
+        let inner_gid = { inner.lock().await.group_id() };
+        outer
+            .lock()
+            .await
+            .add_member(
+                Agent::Group(inner_gid, inner.dupe()),
+                Access::Edit,
+                &alice_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Bob is admin of the inner group, which only has edit for the outer one.
+        inner
+            .lock()
+            .await
+            .add_member(bob_agent, Access::Admin, &alice_signer, &[])
+            .await
+            .unwrap();
+
+        // Carol has read for the inner group, which has edit for the outer one.
+        inner
+            .lock()
+            .await
+            .add_member(carol_agent, Access::Read, &alice_signer, &[])
+            .await
+            .unwrap();
+
+        let members = outer.lock().await.transitive_members().await;
+        assert_eq!(
+            members.get(&alice_id.into()).map(|(_, access)| *access),
+            Some(Access::Admin),
+            "alice is admin of the outer group directly"
+        );
+        assert_eq!(
+            members.get(&bob_id.into()).map(|(_, access)| *access),
+            Some(Access::Edit),
+            "bob is admin of the inner group, which can only edit this one"
+        );
+        assert_eq!(
+            members.get(&carol_id.into()).map(|(_, access)| *access),
+            Some(Access::Read),
+            "carol has only read for the inner group, so she only has read for this one"
+        );
+    }
+
+    /// A three-link chain whose weakest link is the first one. Carol
+    /// is admin of a group that is admin of a group that can only read the
+    /// outer group, so Carol reads it and no more.
+    #[tokio::test]
+    async fn test_transitive_weakest_link_is_the_first_one() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let (alice_id, alice_signer) = {
+            let locked = alice.lock().await;
+            (locked.id(), locked.signer.clone())
+        };
+        let alice_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(alice_id, alice.dupe());
+
+        let carol = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let carol_id = { carol.lock().await.id() };
+        let carol_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(carol_id, carol.dupe());
+
+        let dlg_store = Arc::new(Mutex::new(DelegationStore::new()));
+        let rev_store = Arc::new(Mutex::new(RevocationStore::new()));
+        let arc_csprng = Arc::new(Mutex::new(csprng));
+
+        let make = |parents: NonEmpty<Agent<Sendable, MemorySigner, String>>| {
+            let dlg = dlg_store.dupe();
+            let rev = rev_store.dupe();
+            let rng = arc_csprng.dupe();
+            async move {
+                Arc::new(Mutex::new(
+                    Group::generate(parents, dlg, rev, NoListener, rng)
+                        .await
+                        .unwrap(),
+                ))
+            }
+        };
+
+        let outer = make(nonempty![alice_agent.dupe()]).await;
+        let middle = make(nonempty![alice_agent.dupe()]).await;
+        let inner = make(nonempty![alice_agent.dupe()]).await;
+
+        // outer --Read--> middle --Admin--> inner --Admin--> carol
+        let middle_gid = { middle.lock().await.group_id() };
+        outer
+            .lock()
+            .await
+            .add_member(
+                Agent::Group(middle_gid, middle.dupe()),
+                Access::Read,
+                &alice_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let inner_gid = { inner.lock().await.group_id() };
+        middle
+            .lock()
+            .await
+            .add_member(
+                Agent::Group(inner_gid, inner.dupe()),
+                Access::Admin,
+                &alice_signer,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        inner
+            .lock()
+            .await
+            .add_member(carol_agent, Access::Admin, &alice_signer, &[])
+            .await
+            .unwrap();
+
+        let members = outer.lock().await.transitive_members().await;
+        assert_eq!(
+            members.get(&carol_id.into()).map(|(_, access)| *access),
+            Some(Access::Read),
+            "the chain is only as strong as the read delegation at its head"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_member_beyond_the_weakest_link_is_refused() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let dan = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let dan_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(dan.lock().await.id(), dan.dupe());
+
+        let chain = weakest_link_chain().await;
+
+        // Carol only reads the outer group, so admin is not hers to pass on.
+        let result = chain
+            .outer
+            .lock()
+            .await
+            .add_member(dan_agent, Access::Admin, &chain.carol_signer, &[])
+            .await;
+
+        assert!(
+            matches!(
+                result,
+                Err(AddGroupMemberError::AccessEscalation {
+                    wanted: Access::Admin,
+                    have: Access::Read
+                })
+            ),
+            "a reader made someone else an admin: {:?}",
+            result.map(|_| "delegation created")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_revocation_beyond_the_weakest_link_is_refused() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let erin = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let erin_id = { erin.lock().await.id() };
+        let erin_agent: Agent<Sendable, MemorySigner, String> = Agent::Active(erin_id, erin.dupe());
+
+        let chain = weakest_link_chain().await;
+
+        // Erin is an admin of the outer group in her own right.
+        chain
+            .outer
+            .lock()
+            .await
+            .add_member(erin_agent, Access::Admin, &chain.alice_signer, &[])
+            .await
+            .unwrap();
+
+        let result = chain
+            .outer
+            .lock()
+            .await
+            .revoke_member(erin_id.into(), true, &chain.carol_signer, &BTreeMap::new())
+            .await;
+
+        assert!(
+            result.is_err(),
+            "a reader revoked an admin: {:?}",
+            result.map(|update| update.revocations.len())
+        );
+        assert!(
+            chain
+                .outer
+                .lock()
+                .await
+                .members()
+                .contains_key(&erin_id.into()),
+            "erin is still an admin of the group"
+        );
+    }
+
+    /// Accepting a delegation asks whether its signer really holds the access
+    /// they are passing on, and asks it of `transitive_members`. A chain that
+    /// was not limited to its weakest link would let someone sign delegations at a
+    /// level no path actually granted them.
+    #[tokio::test]
+    async fn test_forged_delegation_beyond_the_weakest_link_is_refused() {
+        test_utils::init_logging();
+        let mut csprng = OsRng;
+
+        let dan = Arc::new(Mutex::new(setup_user(&mut csprng).await));
+        let dan_agent: Agent<Sendable, MemorySigner, String> =
+            Agent::Active(dan.lock().await.id(), dan.dupe());
+
+        let chain = weakest_link_chain().await;
+
+        // Carol signs an admin delegation on the outer group, proving it with
+        // the outer group's own admin delegation to `middle`. The claim does
+        // not exceed that proof, so all that stands in the way is whether
+        // carol is really an admin-level member of `middle`.
+        let middle_id: Identifier = { chain.middle.lock().await.group_id().into() };
+        let proof = {
+            let locked = chain.outer.lock().await;
+            locked.get_capability(&middle_id).unwrap().dupe()
+        };
+        let forged = Arc::new(
+            keyhive_crypto::signer::async_signer::try_sign_async::<Sendable, _, _>(
+                &chain.carol_signer,
+                Delegation {
+                    delegate: dan_agent,
+                    can: Access::Admin,
+                    proof: Some(proof),
+                    after_revocations: vec![],
+                    after_content: BTreeMap::new(),
+                },
+            )
+            .await
+            .unwrap(),
+        );
+
+        let result = chain.outer.lock().await.receive_delegation(forged).await;
+        assert!(
+            result.is_err(),
+            "the outer group accepted an admin delegation from someone who can only read it"
+        );
     }
 
     #[tokio::test]
