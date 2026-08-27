@@ -361,8 +361,8 @@ impl AddMemberUpdateExt for AddMemberUpdate<Sendable, MemorySigner> {
 pub struct TestContext {
     hives: BTreeMap<InstanceId, Instance>,
     /// The store each instance the context built was given, so it can deliver content the
-    /// way an application would. An adopted instance has none, because its store belongs to
-    /// whoever built it.
+    /// way an application would. Only an adopted instance has none, because its store
+    /// belongs to whoever built it.
     stores: BTreeMap<InstanceId, Store>,
     /// One signing key per identity, so a second instance can be given the same one.
     signers: BTreeMap<IndividualId, MemorySigner>,
@@ -483,7 +483,9 @@ impl TestContext {
         .await
         .map_err(|e| TestError::Other(e.to_string()))?;
 
-        self.register_instance(hive, name).await
+        let handle = self.register_instance(hive, name).await?;
+        self.stores.insert(handle.instance, store);
+        Ok(handle)
     }
 
     //////////////////////////////////
@@ -1006,10 +1008,11 @@ impl TestContext {
     /// Every instance passes through here, so this is where a name is claimed.
     async fn register_instance(&mut self, hive: Hive, name: &str) -> TestResult<Instance> {
         self.claim_name(name)?;
-        let card = hive.generate_contact_card().await?;
+        // Reading each card rather than generating one.
+        let card = hive.get_existing_contact_card().await;
         for other in self.hives.values() {
             other.receive_contact_card(&card).await?;
-            hive.receive_contact_card(&other.generate_contact_card().await?)
+            hive.receive_contact_card(&other.get_existing_contact_card().await)
                 .await?;
         }
 

@@ -1,6 +1,6 @@
 use keyhive_core::{
     access::Access::{Admin, Edit, Read},
-    test_utils::{TestContext, TestError, TestResult as Result},
+    test_utils::{CausalDecryptionExt, TestContext, TestError, TestResult as Result},
 };
 
 #[tokio::test]
@@ -229,6 +229,33 @@ async fn ingesting_an_archive_carries_the_key_state_as_well_as_the_graph() -> Re
     assert!(
         restored.can_decrypt_content(design_doc, &ct).await?,
         "so it should be able to read the document it is an admin of"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_rebuilt_instance_can_write_and_walk_back() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    let archive = alice.into_archive().await;
+    let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
+
+    let genesis = ctx
+        .encrypt_in_envelope(&restored, design_doc, &[], b"genesis")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&restored, design_doc, &[&genesis], b"head")
+        .await?;
+
+    let walked = restored
+        .try_causal_decrypt_content(design_doc, &head)
+        .await?;
+    assert_eq!(
+        walked.missing(),
+        0,
+        "the rebuilt instance holds the ancestor it just wrote"
     );
     Ok(())
 }
