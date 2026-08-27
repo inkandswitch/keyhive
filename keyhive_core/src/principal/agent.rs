@@ -62,6 +62,20 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
+/// Queue everyone a group or document delegates to at
+/// [`Access::Read`](crate::access::Access::Read) or better, once each.
+#[allow(clippy::type_complexity)]
+fn push_readers<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>(
+    readers: &mut Vec<Agent<F, S, T, L>>,
+    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+) {
+    for dlgs in members.values() {
+        if dlgs.iter().any(|d| d.payload.can.is_reader()) {
+            readers.push(dlgs[0].payload.delegate.dupe());
+        }
+    }
+}
+
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
     Agent<F, S, T, L>
 {
@@ -83,20 +97,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
     }
 
-    /// Queue everyone a group or document delegates to at
-    /// [`Access::Read`](crate::access::Access::Read) or better, once each.
-    #[allow(clippy::type_complexity)]
-    fn push_readers(
-        stack: &mut Vec<Self>,
-        members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
-    ) {
-        for dlgs in members.values() {
-            if dlgs.iter().any(|d| d.payload.can.is_reader()) {
-                stack.push(dlgs[0].payload.delegate.dupe());
-            }
-        }
-    }
-
     /// The individuals reachable from this agent by delegations of
     /// [`Access::Read`](crate::access::Access::Read) or better.
     ///
@@ -104,9 +104,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
         let mut ids = HashSet::new();
         let mut seen = HashSet::new();
-        let mut stack: Vec<Self> = vec![self.dupe()];
+        let mut readers: Vec<Self> = vec![self.dupe()];
 
-        while let Some(node) = stack.pop() {
+        while let Some(node) = readers.pop() {
             if !seen.insert(node.id()) {
                 continue;
             }
@@ -118,10 +118,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     ids.insert(i_id);
                 }
                 Agent::Group(_, g) => {
-                    Self::push_readers(&mut stack, g.lock().await.members());
+                    push_readers(&mut readers, g.lock().await.members());
                 }
                 Agent::Document(_, d) => {
-                    Self::push_readers(&mut stack, d.lock().await.members());
+                    push_readers(&mut readers, d.lock().await.members());
                 }
             }
         }
@@ -137,9 +137,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     ) -> HashMap<IndividualId, ShareKey> {
         let mut result = HashMap::new();
         let mut seen = HashSet::new();
-        let mut stack: Vec<Self> = vec![self.dupe()];
+        let mut readers: Vec<Self> = vec![self.dupe()];
 
-        while let Some(agent) = stack.pop() {
+        while let Some(agent) = readers.pop() {
             if !seen.insert(agent.id()) {
                 continue;
             }
@@ -161,10 +161,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     result.insert(id, prekey);
                 }
                 Agent::Group(_, g) => {
-                    Self::push_readers(&mut stack, g.lock().await.members());
+                    push_readers(&mut readers, g.lock().await.members());
                 }
                 Agent::Document(_, d) => {
-                    Self::push_readers(&mut stack, d.lock().await.members());
+                    push_readers(&mut readers, d.lock().await.members());
                 }
             }
         }

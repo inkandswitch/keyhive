@@ -787,6 +787,7 @@ impl JsKeyhive {
         self.0.into_archive().await.into()
     }
 
+    #[allow(clippy::result_large_err)]
     #[wasm_bindgen(js_name = ingestArchive)]
     pub async fn ingest_archive(
         &self,
