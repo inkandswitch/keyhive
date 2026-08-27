@@ -599,7 +599,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             raw_entrypoint.as_slice(),
         )
         .map_err(|e| CausalDecryptionError::<F, T, P, C> {
-            progress: acc.clone(),
+            progress: Box::new(acc.clone()),
             cannot: HashMap::from_iter([(
                 encrypted_content.content_ref.clone(),
                 ErrorReason::DeserializationFailed(e),
