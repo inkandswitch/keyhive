@@ -114,7 +114,7 @@ async fn a_key_rotation_changes_the_key_the_same_content_goes_under() -> Result<
     // The same bytes, so only the document's key material differs between the two writes.
     let bytes = b"the same bytes twice";
     let before = ctx.encrypt(&alice, design_doc, bytes).await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
     let after = ctx.encrypt(&alice, design_doc, bytes).await?;
 
     assert_ne!(
@@ -139,7 +139,7 @@ async fn a_key_rotation_does_not_lock_out_a_current_member() -> Result<()> {
     alice.add_member(bob.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
 
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
     let ct = ctx
         .encrypt(&alice, design_doc, b"after the rotation")
         .await?;
@@ -164,7 +164,7 @@ async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Re
         .await?;
     alice.add_member(bob.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
     let successor = ctx
         .encrypt_after(&alice, design_doc, &[&history], b"written after bob")
         .await?;

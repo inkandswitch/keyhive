@@ -9,7 +9,7 @@ async fn expanding_prekeys_adds_a_distinct_key() -> Result<()> {
     let alice = ctx.individual("alice").await?;
 
     let before = ctx.prekey_ops_of(&alice, alice.id()).await?;
-    let added = ctx.expand_prekeys(&alice).await?;
+    let added = alice.expand_prekeys().await?.payload().share_key;
     let after = ctx.prekey_ops_of(&alice, alice.id()).await?;
 
     assert_eq!(after.len(), before.len() + 1, "exactly one op was recorded");
@@ -29,8 +29,8 @@ async fn rotating_a_prekey_records_what_it_replaced() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
-    let old = ctx.expand_prekeys(&alice).await?;
-    let new = ctx.rotate_prekey(&alice, old).await?;
+    let old = alice.expand_prekeys().await?.payload().share_key;
+    let new = alice.rotate_prekey(old).await?.payload().new;
 
     assert_ne!(new, old, "a rotation produces a different key");
     let ops = ctx.prekey_ops_of(&alice, alice.id()).await?;
@@ -54,8 +54,8 @@ async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
     alice.add_member(bob.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
 
-    let old = ctx.expand_prekeys(&alice).await?;
-    let new = ctx.rotate_prekey(&alice, old).await?;
+    let old = alice.expand_prekeys().await?.payload().share_key;
+    let new = alice.rotate_prekey(old).await?.payload().new;
     assert!(
         !ctx.prekey_ops_of(&bob, alice.id())
             .await?
@@ -79,10 +79,10 @@ async fn rotating_a_prekey_replaces_the_old_one() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
-    let old = ctx.expand_prekeys(&alice).await?;
+    let old = alice.expand_prekeys().await?.payload().share_key;
     assert!(ctx.prekeys_of(&alice, alice.id()).await?.contains(&old));
 
-    let new = ctx.rotate_prekey(&alice, old).await?;
+    let new = alice.rotate_prekey(old).await?.payload().new;
     let live = ctx.prekeys_of(&alice, alice.id()).await?;
 
     assert!(live.contains(&new), "the replacement is live");
@@ -95,9 +95,9 @@ async fn a_rotated_away_intermediate_prekey_does_not_survive() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
-    let k1 = ctx.expand_prekeys(&alice).await?;
-    let k2 = ctx.rotate_prekey(&alice, k1).await?;
-    let k3 = ctx.rotate_prekey(&alice, k2).await?;
+    let k1 = alice.expand_prekeys().await?.payload().share_key;
+    let k2 = alice.rotate_prekey(k1).await?.payload().new;
+    let k3 = alice.rotate_prekey(k2).await?.payload().new;
 
     let live = ctx.prekeys_of(&alice, alice.id()).await?;
     assert!(live.contains(&k3), "the last key is live");
@@ -112,7 +112,7 @@ async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let alice_worker = ctx.new_keyhive_instance_for(&alice, "alice-worker").await?;
 
-    let k1 = ctx.expand_prekeys(&alice).await?;
+    let k1 = alice.expand_prekeys().await?.payload().share_key;
     ctx.sync_all_unsent().await?;
     assert!(
         ctx.prekeys_of(&alice_worker, alice.id())
@@ -122,8 +122,8 @@ async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
     );
 
     // Neither rotation has heard of the other.
-    let from_first = ctx.rotate_prekey(&alice, k1).await?;
-    let from_worker = ctx.rotate_prekey(&alice_worker, k1).await?;
+    let from_first = alice.rotate_prekey(k1).await?.payload().new;
+    let from_worker = alice_worker.rotate_prekey(k1).await?.payload().new;
     assert_ne!(from_first, from_worker);
 
     ctx.sync_all_unsent().await?;

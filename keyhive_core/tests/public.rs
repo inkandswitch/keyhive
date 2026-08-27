@@ -84,7 +84,7 @@ async fn a_public_reader_reads_what_a_member_wrote() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
     alice.add_member(Public.id(), design_doc, Read, &[]).await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"announcement").await?;
 
     ctx.sync_as_public(&alice, &bob).await?;
@@ -130,7 +130,7 @@ async fn two_public_readers_meet_through_the_document() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
     alice.add_member(Public.id(), design_doc, Read, &[]).await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
     ctx.sync_as_public(&alice, &bob).await?;
     ctx.sync_as_public(&alice, &carol).await?;
 
@@ -157,7 +157,7 @@ async fn another_member_does_not_displace_the_public_reader() -> Result<()> {
         .add_member(server.id(), design_doc, Relay, &[])
         .await?;
     alice.add_member(Public.id(), design_doc, Read, &[]).await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"relayed").await?;
 
     let pending = ctx.sync_as_public(&alice, &bob).await?;
@@ -188,7 +188,7 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
         .add_member(server.id(), design_doc, Relay, &[])
         .await?;
     alice.add_member(Public.id(), design_doc, Read, &[]).await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"announcement").await?;
 
     // The events reach bob through the server.

@@ -469,16 +469,6 @@ impl TestContext {
         Ok(before.saturating_sub(self.pending_event_count(to).await))
     }
 
-    /// [`Hive::expand_prekeys`], reduced to the key it added.
-    pub async fn expand_prekeys(&self, who: &Instance) -> TestResult<ShareKey> {
-        Ok(who.expand_prekeys().await?.payload().share_key)
-    }
-
-    /// [`Hive::rotate_prekey`], reduced to the key that replaced `old`.
-    pub async fn rotate_prekey(&self, who: &Instance, old: ShareKey) -> TestResult<ShareKey> {
-        Ok(who.rotate_prekey(old).await?.payload().new)
-    }
-
     /// The [`Individual`] `observer` holds for `who`.
     async fn individual_seen_by(
         observer: &Instance,
@@ -538,12 +528,6 @@ impl TestContext {
                 },
             })
             .collect())
-    }
-
-    /// [`Hive::force_pcs_update`], reduced to the share key the rotation introduced.
-    pub async fn force_pcs_update(&self, who: &Instance, doc: DocumentId) -> TestResult<ShareKey> {
-        let (_op, new_key, _secret) = who.force_pcs_update(doc).await?;
-        Ok(new_key)
     }
 
     pub async fn group(&mut self, owner: &Instance, name: &str) -> TestResult<GroupId> {

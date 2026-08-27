@@ -74,7 +74,7 @@ async fn a_later_member_recovers_earlier_content_by_walking_back() -> Result<()>
 
     alice.add_member(bob.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
 
     let entry_point = ctx
         .encrypt_in_envelope(&alice, design_doc, &[&history], b"written after bob")
@@ -132,7 +132,7 @@ async fn a_reader_can_name_an_ancestor_they_decrypted_rather_than_wrote() -> Res
     // Carol joins afterwards, so she cannot derive that key for herself.
     alice.add_member(carol.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
 
     // Bob writes a successor naming the genesis, which means putting its key in the envelope.
     let head = ctx

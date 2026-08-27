@@ -170,7 +170,7 @@ async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
     // Rotations rather than more members, so the backlog grows without adding identities
     // that alice would also have to tell the server about.
     for _ in 0..4 {
-        ctx.force_pcs_update(&stranger, stranger_doc).await?;
+        stranger.force_pcs_update(stranger_doc).await?;
     }
     ctx.sync_without(&stranger, &server, EventKind::Delegated)
         .await?;
@@ -181,7 +181,7 @@ async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
     // Unrelated and entirely valid: alice's own document, which the server may have in full.
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     alice.add_member(server.id(), design_doc, Read, &[]).await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
     let ct = ctx
         .encrypt(&alice, design_doc, b"written despite the backlog")
         .await?;

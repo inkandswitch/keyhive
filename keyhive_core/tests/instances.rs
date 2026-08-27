@@ -145,13 +145,13 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
     // Neither instance knows about the other's document when it makes it.
     let from_alice = ctx.doc(&alice, "notes").await?;
     alice.add_member(Public.id(), from_alice, Read, &[]).await?;
-    ctx.force_pcs_update(&alice, from_alice).await?;
+    alice.force_pcs_update(from_alice).await?;
 
     let from_worker = ctx.doc(&alice_worker, "design_doc").await?;
     alice_worker
         .add_member(Public.id(), from_worker, Read, &[])
         .await?;
-    ctx.force_pcs_update(&alice_worker, from_worker).await?;
+    alice_worker.force_pcs_update(from_worker).await?;
 
     ctx.sync(&alice, &alice_worker).await?;
     ctx.sync(&alice_worker, &alice).await?;
@@ -213,7 +213,7 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
     alice.add_member(Public.id(), design_doc, Read, &[]).await?;
     alice.revoke_member(Public.id(), true, design_doc).await?;
     alice.add_member(Public.id(), design_doc, Read, &[]).await?;
-    ctx.force_pcs_update(&alice, design_doc).await?;
+    alice.force_pcs_update(design_doc).await?;
 
     ctx.sync(&alice, &alice_worker).await?;
     assert_eq!(
