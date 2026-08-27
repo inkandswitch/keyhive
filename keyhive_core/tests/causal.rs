@@ -203,7 +203,6 @@ async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Resul
     Ok(())
 }
 
-/// Walking from two heads reads their shared ancestor once, not once per head.
 #[tokio::test]
 async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -213,22 +212,43 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
     alice.add_member(bob.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
 
-    // One root, two heads over it, and a third head on no path from either.
-    let root = ctx
-        .encrypt_in_envelope(&alice, design_doc, &[], b"root")
+    //   first_root      second_root
+    //      |    \           |
+    //    left    \        right
+    //      |      \_______/  |
+    //  left_head   unrelated_head   right_head
+    let first_root = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"first root")
+        .await?;
+    let second_root = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"second root")
+        .await?;
+    let left = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&first_root], b"left")
+        .await?;
+    let right = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&second_root, &first_root], b"right")
         .await?;
     let left_head = ctx
-        .encrypt_in_envelope(&alice, design_doc, &[&root], b"left head")
+        .encrypt_in_envelope(&alice, design_doc, &[&left], b"left head")
         .await?;
     let right_head = ctx
-        .encrypt_in_envelope(&alice, design_doc, &[&root], b"right head")
+        .encrypt_in_envelope(&alice, design_doc, &[&right], b"right head")
         .await?;
-    let unrelated = ctx
-        .encrypt_in_envelope(&alice, design_doc, &[], b"unrelated")
+    let unrelated_head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&left, &right], b"unrelated head")
         .await?;
     ctx.sync_all_unsent().await?;
 
-    for held in [&root, &left_head, &right_head, &unrelated] {
+    for held in [
+        &first_root,
+        &second_root,
+        &left,
+        &right,
+        &left_head,
+        &right_head,
+        &unrelated_head,
+    ] {
         ctx.give_content(&bob, held).await?;
     }
     // Walking from several heads at once needs the key for each entrypoint, which the
@@ -245,25 +265,32 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
 
     assert_eq!(
         walked.recovered(),
-        contents(&[b"left head", b"right head", b"root"]),
-        "both heads and their shared ancestor, and not the unrelated head"
+        contents(&[
+            b"left head",
+            b"right head",
+            b"left",
+            b"right",
+            b"first root",
+            b"second root",
+        ]),
+        "both entrypoints, both middles and both roots, and not the head above them"
     );
     assert_eq!(
         walked.recovered_count(),
-        3,
-        "the shared ancestor is read once, not once per head"
+        6,
+        "first root is reached through left and through right, and read once"
     );
     assert_eq!(walked.missing(), 0, "bob holds everything the walk reaches");
 
     let key = walked
-        .key_for_recovered(&root)
-        .ok_or("the walk did not report the key it read the root under")?;
+        .key_for_recovered(&first_root)
+        .ok_or("the walk did not report the key it read the shared root under")?;
     assert!(
-        decrypt_with_key(&root, key).is_ok(),
+        decrypt_with_key(&first_root, key).is_ok(),
         "and that key is the one that opens it"
     );
     assert!(
-        walked.key_for_recovered(&unrelated).is_none(),
+        walked.key_for_recovered(&unrelated_head).is_none(),
         "no key is reported for content the walk never reached"
     );
 
