@@ -9,12 +9,14 @@ async fn a_group_member_reaches_the_groups_documents() -> Result<()> {
     // Scenario:
     // Alice and Bob are separate Keyhive agents
     //
-    // 1. Alice registers Bob
-    // 2. Alice creates a new group that she owns
-    // 3. Alice adds Bob to the group
-    // 4. Alice creates a new document that the group controls
+    // 1. Alice creates a new group that she owns
+    // 2. Alice adds Bob to the group at Read
+    // 3. Alice creates a new document and gives the group Edit over it
+    // 4. Alice writes to the document, and Bob reads what she wrote
     //
-    // Both Alice and Bob should be able to access the document
+    // Bob should reach the document through the group, and the key agreement
+    // should have reached him as well. Reaching a document is not by itself
+    // enough to read one, so this checks both.
     //
     // ┌─────────────────────┐   ┌─────────────────────┐
     // │                     │   │                     │
@@ -37,26 +39,6 @@ async fn a_group_member_reaches_the_groups_documents() -> Result<()> {
     //              │         Doc         │
     //              │                     │
     //              └─────────────────────┘
-    //
-    // Scenario:
-    // Alice creates a doc and a group.
-    // Alice gives the group Edit access to the doc.
-    // Alice adds A and B with Edit access to the group.
-    // A encrypts content to the doc, B decrypts it.
-    //
-    // ┌─────────────────────┐
-    // │        Alice        │  (owner)
-    // └─────────────────────┘
-    //            │
-    //            ▼
-    // ┌─────────────────────┐
-    // │        Group        │  ← A and B are Edit members
-    // └─────────────────────┘
-    //            │ Edit
-    //            ▼
-    // ┌─────────────────────┐
-    // │         Doc         │  ← A encrypts, B decrypts
-    // └─────────────────────┘
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -471,11 +453,10 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
     // Scenario:
     // Alice and Bob are separate Keyhive agents
     //
-    // 1. Alice registers Bob
-    // 2. Alice creates a new group that she owns
-    // 3. Alice adds Bob to the group
-    // 4. Alice creates a new document that the group controls
-    // 5. Alice creates a cycle by adding the document to the group
+    // 1. Alice creates a new group that she owns
+    // 2. Alice adds Bob to the group
+    // 3. Alice creates a new document that the group controls
+    // 4. Alice creates a cycle by adding the document to the group
     //
     // Both Alice and Bob should be able to access the document
     //

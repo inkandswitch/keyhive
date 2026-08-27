@@ -12,8 +12,8 @@ associated with.
 
 `TestContext` uses the `Instance` type to represent a `Keyhive` instance for a
 keyhive identity. `Instance` derefs to `Keyhive`, so you can still call the Keyhive
-API directly (e.g., `alice.add_member(..)`). Each instance has an `InstanceId`. A
-single keyhive identity can correspond to multiple `InstanceId`s.
+API directly (e.g., `alice.add_member(..)`). A single keyhive identity can have
+several instances, and they share its signing key and its identifier.
 
 ## Example test
 
@@ -49,8 +49,9 @@ async fn a_reader_reads_what_a_member_wrote() -> Result<()> {
 identity, sharing its signing key. Cloning an `Instance` does not do this.
 * `ctx.group(&creator, name)` creates a named `Group` and returns a `GroupId`.
 * `ctx.doc(&creator, name)` creates a named `Document` and returns a `DocumentId`.
-* `ctx.rebuild_from_archive(&archive, name)` uses the named identity's signing key
-to build a new `Keyhive` instance with a fresh ciphertext store from the `Archive`.
+* `ctx.rebuild_from_archive(&archive, name)` builds a new `Keyhive` instance from the
+`Archive`, with a fresh ciphertext store. The signing key is the one the context
+holds for the archive's own identity.
 * `ctx.adopt(hive, name)` takes a `Hive` the test built itself and treats it as one
 of the cast, for an instance the context would not produce, such as a peer holding a
 particular signing key.
@@ -70,6 +71,11 @@ failing decryption.
 
 Decryption does not benefit from these. Decrypt via the Keyhive API:
 `bob.try_decrypt_content(design_doc, &ct)`.
+
+Causal decryption is the exception, because the walk reads ancestors out of the
+instance's own ciphertext store. So a reader has to be given the content first:
+`ctx.give_content(&bob, &ct)`, once per piece. `ctx.encrypt_in_envelope` does that
+for the writer already.
 
 ## Guidelines for writing tests with `TestContext`
 

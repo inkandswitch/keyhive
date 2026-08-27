@@ -1043,8 +1043,8 @@ pub fn decrypt_with_key(ct: &Ciphertext, key: SymmetricKey) -> TestResult<Vec<u8
 
 /// Reading a [`CausalDecryptionState`] the way a test wants to.
 ///
-/// The state is three collections keyed by content ref. These are the four questions the
-/// tests ask of it.
+/// The state is what the walk recovered, as a `Vec` in the order it read them, beside two
+/// maps of keys by content ref.
 pub trait CausalDecryptionExt {
     /// The content the walk recovered, in no order.
     fn recovered(&self) -> BTreeSet<Vec<u8>>;

@@ -487,6 +487,9 @@ impl<
         }
     }
 
+    /// Delegate `to_add` `can` access to `resource`.
+    ///
+    /// Returns an error if we have never heard of `to_add` or `resource`.
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,

@@ -1,4 +1,0 @@
-# The causal decryption types carry a HashMap plus a CausalDecryptionState
-# (a Vec and two HashMaps), which puts their error variants at 168 bytes.
-# The Ok variant is already 120 bytes, so boxing the error buys little here.
-large-error-threshold = 192

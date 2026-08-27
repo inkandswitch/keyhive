@@ -24,7 +24,7 @@ pub struct Stats {
 }
 
 impl Stats {
-    /// Every event this instance holds but cannot yet apply.
+    /// How many events this instance holds but cannot yet apply.
     pub fn pending_total(&self) -> u64 {
         self.pending_prekeys_expanded
             + self.pending_prekey_rotated
