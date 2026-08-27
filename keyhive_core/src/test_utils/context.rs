@@ -75,9 +75,6 @@ pub enum TestError {
     NoAuthority,
 
     /// The instance has not received the events that would tell it this exists.
-    ///
-    /// Boxed because an [`Identifier`] holds a decompressed curve point and is 192 bytes,
-    /// which would make every `TestResult` in the suite carry that much on the error path.
     #[error("{0} has not been received. Sync first, or check access.")]
     NotSynced(Box<Identifier>),
 
@@ -231,7 +228,7 @@ impl From<&str> for TestError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct InstanceId(u32);
 
-/// One running [`Hive`], with the name the test gave it.
+/// One running [`Hive`] instance with the name it was created with.
 ///
 /// Derefs to the keyhive, so `alice.add_member(..)` and `alice.id()` are the `Hive`s own
 /// methods.
@@ -442,6 +439,22 @@ impl TestContext {
         Ok(handle)
     }
 
+    pub async fn group(&mut self, owner: &Instance, name: &str) -> TestResult<GroupId> {
+        self.claim_name(name)?;
+        let g = owner.generate_group(vec![]).await?;
+        let id = { g.lock().await.group_id() };
+        self.names.insert(id.into(), name.into());
+        Ok(id)
+    }
+
+    pub async fn doc(&mut self, owner: &Instance, name: &str) -> TestResult<DocumentId> {
+        self.claim_name(name)?;
+        let d = owner.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        let id = { d.lock().await.doc_id() };
+        self.names.insert(id.into(), name.into());
+        Ok(id)
+    }
+
     /// Give one instance's prekey secrets to another instance of the same identity.
     ///
     /// An invitation is addressed to one specific prekey, so an instance cannot open one
@@ -530,22 +543,6 @@ impl TestContext {
             .collect())
     }
 
-    pub async fn group(&mut self, owner: &Instance, name: &str) -> TestResult<GroupId> {
-        self.claim_name(name)?;
-        let g = owner.generate_group(vec![]).await?;
-        let id = { g.lock().await.group_id() };
-        self.names.insert(id.into(), name.into());
-        Ok(id)
-    }
-
-    pub async fn doc(&mut self, owner: &Instance, name: &str) -> TestResult<DocumentId> {
-        self.claim_name(name)?;
-        let d = owner.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let id = { d.lock().await.doc_id() };
-        self.names.insert(id.into(), name.into());
-        Ok(id)
-    }
-
     /// Rename the keys of a query result, so assertions can say "bob" rather than an id.
     ///
     /// The library's queries are keyed by [`Identifier`]. Only the context knows the names.
@@ -559,9 +556,6 @@ impl TestContext {
     }
 
     /// [`TestContext::named`] over a member map, keeping only what each member may do.
-    ///
-    /// [`Hive::reachable_members`] says what kind of principal each member is as well as its
-    /// access. A test that only asks about access says so with this.
     pub fn named_access<K: Into<Identifier>>(
         &self,
         raw: impl IntoIterator<Item = (K, Member)>,
@@ -678,7 +672,7 @@ impl TestContext {
         }
     }
 
-    /// Rebuild an archive as a new instance of the same identity, with a fresh ciphertext
+    /// Rebuild an archive as a new instance of the same identity with a fresh ciphertext
     /// store.
     pub async fn rebuild_from_archive(
         &mut self,
