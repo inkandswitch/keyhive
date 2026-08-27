@@ -62,6 +62,8 @@ pub type TestResult<T> = Result<T, TestError>;
 ///
 /// The library spreads one conclusion across several enums. This flattens the ones a test
 /// asserts on into a single vocabulary, and wraps everything else as `Other`.
+///
+/// These variants exist to be matched on in tests to check specific reasons for refusal.
 #[derive(Debug, Error)]
 pub enum TestError {
     /// The issuer holds some access over the resource, but less than they tried to delegate.
@@ -840,12 +842,21 @@ impl TestContext {
     /// Sends every instance what every other has not yet sent it, repeating until a round
     /// changes nothing.
     ///
-    /// Returns an error if the state has not settled after eight rounds.
+    /// Eight rounds is the bound to provide some headroom in the tests.
     pub async fn sync_all_unsent(&mut self) -> TestResult<()> {
         const MAX_ROUNDS: usize = 8;
+        self.sync_all_unsent_within(MAX_ROUNDS).await
+    }
+
+    /// [`TestContext::sync_all_unsent`] with the round limit specified.
+    ///
+    /// Returns an error if the state has not settled within `rounds`. One round is spent
+    /// confirming, since settling is detected by a round that changes nothing, so `rounds` has
+    /// to be at least one more than the number of rounds that actually change anything.
+    pub async fn sync_all_unsent_within(&mut self, rounds: usize) -> TestResult<()> {
         let everyone: Vec<Instance> = self.hives.values().cloned().collect();
         let mut before = self.state_signature().await;
-        for _ in 0..MAX_ROUNDS {
+        for _ in 0..rounds {
             for from in &everyone {
                 for to in &everyone {
                     if from.instance != to.instance {
@@ -859,7 +870,7 @@ impl TestContext {
             }
             before = after;
         }
-        Err(format!("sync_all_unsent did not settle in {MAX_ROUNDS} rounds").into())
+        Err(format!("sync_all_unsent did not settle in {rounds} rounds").into())
     }
 
     /// What every instance holds and what it is still waiting on. Two rounds of syncing that
