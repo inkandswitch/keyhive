@@ -547,7 +547,6 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
 /// membership in that group hands her a second, weaker route to it. Her own access must not
 /// drop because of a route she gained.
 #[tokio::test]
-#[ignore = "a member's level comes from the last route explored, not the best one"]
 async fn an_attenuated_second_route_does_not_lower_reported_access() -> Result<()> {
     // Five separate runs. In the presence of a bug the answer differs between them.
     for _ in 0..5 {
