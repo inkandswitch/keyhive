@@ -454,8 +454,7 @@ impl TestContext {
 
     pub async fn doc(&mut self, owner: &Instance, name: &str) -> TestResult<DocumentId> {
         self.claim_name(name)?;
-        let d = owner.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let id = { d.lock().await.doc_id() };
+        let id = owner.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         self.names.insert(id.into(), name.into());
         Ok(id)
     }

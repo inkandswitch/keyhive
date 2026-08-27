@@ -5,14 +5,10 @@
 //!
 //! cargo bench --bench bench_reverse_topsort --features test_utils
 
-use dupe::Dupe;
 use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_core::{
-    access::Access,
-    keyhive::Keyhive,
-    listener::no_listener::NoListener,
-    principal::{membered::Membered, public::Public},
+    access::Access, keyhive::Keyhive, listener::no_listener::NoListener, principal::public::Public,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -47,16 +43,15 @@ fn reverse_topsort_via_toggle(bencher: divan::Bencher, prior_toggles: usize) {
             .await
             .expect("doc generation should succeed");
 
-        let doc_id = doc.lock().await.doc_id();
-        let membered_doc = Membered::Document(doc_id, doc.dupe());
+        let membered_doc = doc;
         let public_id = Public.id();
 
         // Build up history of prior toggles
         for _ in 0..prior_toggles {
-            kh.add_member(public_id, membered_doc.membered_id(), Access::Edit, &[])
+            kh.add_member(public_id, membered_doc, Access::Edit, &[])
                 .await
                 .expect("add_member should succeed");
-            kh.revoke_member(public_id, true, membered_doc.membered_id())
+            kh.revoke_member(public_id, true, membered_doc)
                 .await
                 .expect("revoke_member should succeed");
         }
@@ -66,10 +61,10 @@ fn reverse_topsort_via_toggle(bencher: divan::Bencher, prior_toggles: usize) {
 
     bencher.bench_local(|| {
         rt.block_on(async {
-            kh.add_member(public_id, membered_doc.membered_id(), Access::Edit, &[])
+            kh.add_member(public_id, membered_doc, Access::Edit, &[])
                 .await
                 .expect("add_member should succeed");
-            kh.revoke_member(public_id, true, membered_doc.membered_id())
+            kh.revoke_member(public_id, true, membered_doc)
                 .await
                 .expect("revoke_member should succeed");
         });

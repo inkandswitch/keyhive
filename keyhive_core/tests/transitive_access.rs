@@ -58,13 +58,12 @@ async fn test_group_members_have_access_to_group_docs() -> TestResult {
         .add_member(bob_id, group_id, Access::Read, &[])
         .await?;
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(
             vec![Peer::Group(group_id, group.dupe())],
             nonempty![[0u8; 32]],
         )
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     let reachable = alice.docs_reachable_by_agent(bob_id).await?;
     assert_eq!(reachable.len(), 1);
@@ -111,12 +110,10 @@ async fn test_individual_admin_on_doc_transitively_reaches_child_doc() -> TestRe
     let bob_id = alice.receive_contact_card(&bob_contact).await?;
 
     // Alice creates Doc A (she is the owner/admin)
-    let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_a_id = { doc_a.lock().await.doc_id() };
+    let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
     // Alice creates Doc B (she is the owner/admin)
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
     // Alice grants Bob Admin access on Doc A
     alice
@@ -197,13 +194,12 @@ async fn test_group_members_cycle() -> TestResult {
         .add_member(bob_id, group_id, Access::Read, &[])
         .await?;
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(
             vec![Peer::Group(group_id, group.dupe())],
             nonempty![[0u8; 32]],
         )
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     alice
         .add_member(group_id, doc_id, Access::Read, &[])
@@ -265,11 +261,10 @@ async fn test_transitive_admin_can_delegate() -> TestResult {
     let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
     // Alice creates Account Doc A and Doc B
-    let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_a_id = { doc_a.lock().await.doc_id() };
+    let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+    let doc_b = alice.get_document(doc_b_id).await.expect("just created");
 
     // Alice adds Account Doc A as Admin member of Doc B
     alice
@@ -361,11 +356,10 @@ async fn test_transitive_read_cannot_delegate_admin() -> TestResult {
     let carol_id = alice.receive_contact_card(&carol_contact).await?;
     let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
-    let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_a_id = { doc_a.lock().await.doc_id() };
+    let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+    let doc_b = alice.get_document(doc_b_id).await.expect("just created");
 
     // Doc A as Admin of Doc B
     alice
@@ -472,8 +466,8 @@ async fn test_transitive_admin_can_delegate_via_group() -> TestResult {
     let group = alice.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
 
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+    let doc_b = alice.get_document(doc_b_id).await.expect("just created");
 
     // Alice adds Group G as Admin member of Doc B
     alice
@@ -539,11 +533,10 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     let carol_id = alice.receive_contact_card(&carol_contact).await?;
     let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
-    let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_a_id = { doc_a.lock().await.doc_id() };
+    let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+    let doc_b = alice.get_document(doc_b_id).await.expect("just created");
 
     // Alice adds Doc A as Admin of Doc B, Bob as Admin of Doc A
     alice
@@ -626,8 +619,8 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
     let group = alice.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
 
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+    let doc_b = alice.get_document(doc_b_id).await.expect("just created");
 
     // Alice adds Group G as Admin of Doc B, Bob as Admin of Group G
     alice
@@ -860,11 +853,9 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
     assert!(bob.register_individual(alice_on_bob.dupe()).await);
 
     // Alice creates Account Doc A and Doc B
-    let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_a_id = { doc_a.lock().await.doc_id() };
+    let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
     // Set up transitive admin: Bob -> Doc A -> Doc B
     alice
@@ -964,11 +955,9 @@ async fn test_transitive_admin_make_public_fails_without_cgka_ops() -> TestResul
     assert!(bob.register_individual(alice_on_bob.dupe()).await);
 
     // Alice creates hierarchy
-    let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_a_id = { doc_a.lock().await.doc_id() };
+    let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
     alice
         .add_member(doc_a_id, doc_b_id, Access::Admin, &[])
@@ -1086,8 +1075,7 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
     assert!(bob.register_individual(alice_on_bob.dupe()).await);
 
     // Alice creates doc, adds Bob as Admin
-    let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
     alice
         .add_member(bob_on_alice_id, doc_id, Access::Admin, &[])
@@ -1207,8 +1195,7 @@ async fn test_competing_cgka_init_adds() -> TestResult {
     assert!(bob.register_individual(alice_on_bob.dupe()).await);
 
     // Alice creates doc with Bob as Admin
-    let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
     alice
         .add_member(bob_on_alice_id, doc_id, Access::Admin, &[])
@@ -1368,11 +1355,9 @@ async fn test_stuck_pending_events_dont_poison_new_events() -> TestResult {
 
     // --- Step 1: Alice creates transitive hierarchy ---
 
-    let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_a_id = { doc_a.lock().await.doc_id() };
+    let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
     // Server as relay on both docs
     alice
@@ -1487,8 +1472,7 @@ async fn test_stuck_pending_events_dont_poison_new_events() -> TestResult {
         ));
         let si_id = si.lock().await.id();
         s.register_individual(si.dupe()).await;
-        let sd = s.generate_doc(vec![], nonempty![[i as u8; 32]]).await?;
-        let sd_id = { sd.lock().await.doc_id() };
+        let sd_id = s.generate_doc(vec![], nonempty![[i as u8; 32]]).await?;
         s.add_member(si_id, sd_id, Access::Read, &[]).await?;
         let sevents: Vec<_> = s
             .static_events_for_agent(&Agent::Individual(si_id, si.dupe()))
@@ -1565,10 +1549,8 @@ async fn test_document_delegate_before_defining_event_reified_as_document() -> T
     let alice = make_simple_keyhive().await?;
 
     // Alice owns Doc A and Doc B, and adds Doc A as a Read member of Doc B.
-    let doc_a = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc_a_id = { doc_a.lock().await.doc_id() };
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
     alice
         .add_member(doc_a_id, doc_b_id, Access::Read, &[])
@@ -1649,8 +1631,7 @@ async fn test_group_delegate_before_defining_event_reified_as_group() -> TestRes
     // Alice owns Group G and Doc B, and adds Group G as a Read member of Doc B.
     let group = alice.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
-    let doc_b = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b_id = { doc_b.lock().await.doc_id() };
+    let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
     alice
         .add_member(group_id, doc_b_id, Access::Read, &[])

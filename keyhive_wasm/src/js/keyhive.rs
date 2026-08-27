@@ -152,7 +152,7 @@ impl JsKeyhive {
         more_initial_content_refs: Vec<JsChangeIdRef>,
     ) -> Result<JsDocument, JsGenerateDocError> {
         init_span!("JsKeyhive::generate_doc");
-        let doc = self
+        let doc_id = self
             .0
             .generate_doc(
                 coparents
@@ -168,12 +168,13 @@ impl JsKeyhive {
                 },
             )
             .await?;
+        let inner = self
+            .0
+            .get_document(doc_id)
+            .await
+            .expect("generate_doc to have registered the document");
 
-        let doc_id = { doc.lock().await.doc_id() };
-        Ok(JsDocument {
-            doc_id,
-            inner: doc.dupe(),
-        })
+        Ok(JsDocument { doc_id, inner })
     }
 
     #[wasm_bindgen(js_name = trySign)]

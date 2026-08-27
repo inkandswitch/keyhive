@@ -277,7 +277,7 @@ impl<
         &self,
         coparents: Vec<Peer<F, S, T, L>>,
         initial_content_heads: NonEmpty<T>,
-    ) -> Result<Arc<Mutex<Document<F, S, T, L>>>, GenerateDocError> {
+    ) -> Result<DocumentId, GenerateDocError> {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).await.is_none() {
                 self.register_peer(peer.dupe()).await;
@@ -313,10 +313,12 @@ impl<
         }
 
         let doc_id = new_doc.doc_id();
-        let doc = Arc::new(Mutex::new(new_doc));
-        self.docs.lock().await.insert(doc_id, doc.dupe());
+        self.docs
+            .lock()
+            .await
+            .insert(doc_id, Arc::new(Mutex::new(new_doc)));
 
-        Ok(doc)
+        Ok(doc_id)
     }
 
     /// Generate a new contact card, rotating a prekey in the process.
@@ -3221,15 +3223,12 @@ mod tests {
             Individual::generate::<Sendable, _, _>(&indie_sk, &mut csprng).await?,
         ));
         kh.register_individual(indie.dupe()).await;
-        let doc = kh.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let doc_id = DocumentId(doc.lock().await.id());
-        let membered_doc = Membered::Document(doc_id, doc.dupe());
+        let doc_id = kh.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
         // Delegate to an individual and then revoke
         let indie_id = indie.lock().await.id();
         kh.add_member(indie_id, doc_id, Access::Edit, &[]).await?;
-        kh.revoke_member(indie_id, true, membered_doc.membered_id())
-            .await?;
+        kh.revoke_member(indie_id, true, doc_id).await?;
 
         // Create an archive and try to load it into a fresh Keyhive
         let archive = kh.into_archive().await;
@@ -3346,11 +3345,7 @@ mod tests {
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
 
-        assert!(left
-            .docs
-            .lock()
-            .await
-            .contains_key(&left_doc.lock().await.doc_id()));
+        assert!(left.docs.lock().await.contains_key(&left_doc));
         assert!(left
             .groups
             .lock()
@@ -3361,7 +3356,7 @@ mod tests {
         let left_membered = left.membered_reachable_by_agent(Public.id()).await.unwrap();
 
         assert_eq!(left_membered.len(), 1);
-        assert!(left_membered.contains_key(&left_doc.lock().await.doc_id().into()));
+        assert!(left_membered.contains_key(&left_doc.into()));
         assert!(!left_membered.contains_key(&left_group.lock().await.group_id().into())); // NOTE *not* included because Public is not a member
 
         let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).await;
@@ -3376,11 +3371,7 @@ mod tests {
         assert_eq!(left.revocations.lock().await.len(), 0);
 
         // Middle should now look the same
-        assert!(middle
-            .docs
-            .lock()
-            .await
-            .contains_key(&left_doc.lock().await.doc_id()));
+        assert!(middle.docs.lock().await.contains_key(&left_doc));
         assert!(!middle
             .groups
             .lock()
@@ -3393,7 +3384,7 @@ mod tests {
 
         assert_eq!(middle.revocations.lock().await.len(), 0);
         assert_eq!(middle.delegations.lock().await.len(), 2);
-        let left_doc_id = left_doc.lock().await.doc_id();
+        let left_doc_id = left_doc;
         assert_eq!(
             middle
                 .docs
@@ -3432,11 +3423,7 @@ mod tests {
         assert_eq!(right.delegations.lock().await.len(), 2);
 
         assert!(right.groups.lock().await.len() == 1 || right.docs.lock().await.len() == 1);
-        assert!(right
-            .docs
-            .lock()
-            .await
-            .contains_key(&DocumentId(left_doc.lock().await.id())));
+        assert!(right.docs.lock().await.contains_key(&left_doc));
         assert!(!right
             .groups
             .lock()
@@ -3462,11 +3449,9 @@ mod tests {
                 .sort_by_key(|(k, _v)| **k),
         );
 
+        let left_doc_handle = left.get_document(left_doc).await.expect("just created");
         right
-            .generate_group(vec![Peer::Document(
-                left_doc.lock().await.doc_id(),
-                left_doc.dupe(),
-            )])
+            .generate_group(vec![Peer::Document(left_doc, left_doc_handle)])
             .await
             .unwrap();
 
@@ -3500,16 +3485,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let doc_id = { doc.lock().await.doc_id() };
+        let doc_id = { doc };
         let dlg = keyhive
             .add_member(Public.id(), doc_id, Access::Read, &[])
             .await
             .unwrap();
 
-        assert_eq!(
-            dlg.delegation.subject_id(),
-            doc.lock().await.doc_id().into()
-        );
+        assert_eq!(dlg.delegation.subject_id(), doc.into());
     }
 
     #[tokio::test]
@@ -3527,7 +3509,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = doc;
 
         // Create two more keyhives
         let hive2 = make_keyhive().await;
@@ -3599,7 +3581,7 @@ mod tests {
         let bob_on_alice = Arc::new(Mutex::new(Individual::new(add_op.dupe())));
         assert!(alice.register_individual(bob_on_alice.clone()).await);
         let bob_on_alice_id = { bob_on_alice.lock().await.id() };
-        let doc_id = { doc.lock().await.doc_id() };
+        let doc_id = { doc };
         alice
             .add_member(bob_on_alice_id, doc_id, Access::Read, &[])
             .await
@@ -3625,7 +3607,7 @@ mod tests {
         let bob_on_charlie = Arc::new(Mutex::new(Individual::new(KeyOp::Rotate(rotate_op))));
         assert!(charlie.register_individual(bob_on_charlie.clone()).await);
         let bob_on_charlie_id = { bob_on_charlie.lock().await.id() };
-        let doc2_id = { doc2.lock().await.doc_id() };
+        let doc2_id = { doc2 };
         charlie
             .add_member(bob_on_charlie_id, doc2_id, Access::Read, &[])
             .await
@@ -3663,11 +3645,10 @@ mod tests {
         );
         let bob_id = bob_on_alice_for_delegation.lock().await.id();
 
-        let doc = alice
+        let doc_id = alice
             .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let doc_id = doc.lock().await.doc_id();
         alice
             .add_member(bob_id, doc_id, Access::Read, &[])
             .await
@@ -3777,16 +3758,14 @@ mod tests {
         alice.receive_prekey_op(&KeyOp::Rotate(frank_rot2)).await?;
 
         // Create doc1 with bob (3 ops) and carol (2 ops)
-        let doc1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc1_id = doc1.lock().await.doc_id();
+        let doc1_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(bob_id, doc1_id, Access::Read, &[]).await?;
         alice
             .add_member(carol_id, doc1_id, Access::Edit, &[])
             .await?;
 
         // Create doc2 with dan (1 op)
-        let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let doc2_id = doc2.lock().await.doc_id();
+        let doc2_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         alice.add_member(dan_id, doc2_id, Access::Read, &[]).await?;
 
         // Create a group with carol (2 ops) and eve (4 ops), then add group to doc2
@@ -3923,8 +3902,7 @@ mod tests {
         let (eve_id, _eve_indie) = register_peer(&alice, &eve).await;
 
         // doc1: bob and carol are direct members
-        let doc1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc1_id = doc1.lock().await.doc_id();
+        let doc1_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(bob_id, doc1_id, Access::Read, &[]).await?;
         alice
             .add_member(carol_id, doc1_id, Access::Edit, &[])
@@ -3941,8 +3919,7 @@ mod tests {
             .await?;
 
         // doc2: group is a member (so bob and carol are transitive members)
-        let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let doc2_id = doc2.lock().await.doc_id();
+        let doc2_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         alice
             .add_member(group_id, doc2_id, Access::Read, &[])
             .await?;
@@ -4017,11 +3994,10 @@ mod tests {
 
         // doc1: bob and carol are direct members
         // generate_doc creates initial CGKA ops; each add_member creates a CGKA Add op
-        let doc1 = alice
+        let doc1_id = alice
             .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let doc1_id = doc1.lock().await.doc_id();
         alice
             .add_member(bob_id, doc1_id, Access::Read, &[])
             .await
@@ -4052,11 +4028,10 @@ mod tests {
             .unwrap();
 
         // doc2: group is a member (so carol and dave reach doc2 transitively)
-        let doc2 = alice
+        let doc2_id = alice
             .generate_doc(vec![], nonempty![[1u8; 32]])
             .await
             .unwrap();
-        let doc2_id = doc2.lock().await.doc_id();
         alice
             .add_member(group_id, doc2_id, Access::Read, &[])
             .await
@@ -4205,8 +4180,7 @@ mod tests {
         alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
         // Create Doc D: Bob (direct), G1, and Frank (direct)
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(bob_id, doc_id, Access::Read, &[]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         alice
@@ -4329,8 +4303,7 @@ mod tests {
         alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
         // Create Doc D: Bob (direct), G1, and Frank (direct)
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(bob_id, doc_id, Access::Read, &[]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         alice
@@ -4420,8 +4393,7 @@ mod tests {
         let (dave_id, _dave_indie) = register_peer(&alice, &dave_kh).await;
 
         // Doc D with Bob as a direct member
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(bob_id, doc_id, Access::Read, &[]).await?;
 
         // Group G2 with Dave
@@ -4488,8 +4460,7 @@ mod tests {
         let g_id = g.lock().await.group_id();
 
         // Doc D with G as a member
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = alice
@@ -4542,8 +4513,7 @@ mod tests {
         alice.add_member(g3_id, g2_id, Access::Read, &[]).await?;
         alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = alice
@@ -4584,12 +4554,10 @@ mod tests {
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
 
-        let d1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let d1_id = d1.lock().await.doc_id();
+        let d1_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, d1_id, Access::Read, &[]).await?;
 
-        let d2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let d2_id = d2.lock().await.doc_id();
+        let d2_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         alice.add_member(g1_id, d2_id, Access::Read, &[]).await?;
 
         let size_d1_before = alice
@@ -4653,8 +4621,7 @@ mod tests {
         alice.add_member(g_id, g2_id, Access::Read, &[]).await?;
 
         // Doc D with both G1 and G2
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         alice.add_member(g2_id, doc_id, Access::Read, &[]).await?;
 
@@ -4701,16 +4668,14 @@ mod tests {
         let g1 = alice.generate_group(vec![]).await?;
         let g1_id = g1.lock().await.group_id();
         alice.add_member(g_id, g1_id, Access::Read, &[]).await?;
-        let d1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let d1_id = d1.lock().await.doc_id();
+        let d1_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, d1_id, Access::Read, &[]).await?;
 
         // G2 with G, in D2
         let g2 = alice.generate_group(vec![]).await?;
         let g2_id = g2.lock().await.group_id();
         alice.add_member(g_id, g2_id, Access::Read, &[]).await?;
-        let d2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let d2_id = d2.lock().await.doc_id();
+        let d2_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         alice.add_member(g2_id, d2_id, Access::Read, &[]).await?;
 
         let size_d1_before = alice
@@ -4768,12 +4733,10 @@ mod tests {
         let g1_id = g1.lock().await.group_id();
         alice.add_member(bob_id, g1_id, Access::Read, &[]).await?;
 
-        let d1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let d1_id = d1.lock().await.doc_id();
+        let d1_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, d1_id, Access::Read, &[]).await?;
 
-        let d2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let d2_id = d2.lock().await.doc_id();
+        let d2_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         alice.add_member(g1_id, d2_id, Access::Read, &[]).await?;
 
         let size_d1_before = alice
@@ -4835,8 +4798,7 @@ mod tests {
         let g1_id = g1.lock().await.group_id();
         alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         // G1 in D (so G2 reaches D via G1)
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         // G2 also directly in D
@@ -4891,8 +4853,7 @@ mod tests {
         let g1_id = g1.lock().await.group_id();
         alice.add_member(g2_id, g1_id, Access::Read, &[]).await?;
 
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = alice
@@ -4942,8 +4903,7 @@ mod tests {
         alice.add_member(g1_id, g2_id, Access::Read, &[]).await?;
 
         // G1 in Doc D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = alice
@@ -4996,8 +4956,7 @@ mod tests {
         alice.add_member(bob_id, g2_id, Access::Read, &[]).await?;
 
         // G1 in D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = alice
@@ -5055,8 +5014,7 @@ mod tests {
         alice.add_member(bob_id, g3_id, Access::Read, &[]).await?;
 
         // G1 in D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = alice
@@ -5113,8 +5071,7 @@ mod tests {
         alice.add_member(bob_id, g3_id, Access::Read, &[]).await?;
 
         // G1 in D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
         let size_before = alice
@@ -5167,8 +5124,7 @@ mod tests {
         alice.add_member(bob_id, g1_id, Access::Read, &[]).await?;
 
         // Both G1 and G2 are direct members of D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         alice.add_member(g2_id, doc_id, Access::Read, &[]).await?;
 
@@ -5216,8 +5172,7 @@ mod tests {
             .add_member(frank_id, group_id, Access::Read, &[])
             .await?;
 
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice
             .add_member(group_id, doc_id, Access::Read, &[])
             .await?;
@@ -5263,10 +5218,8 @@ mod tests {
         let (bob_id, bob_indie) = register_peer(&alice, &bob).await;
         register_peer(&bob, &alice).await;
 
-        let account = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let account_id = account.lock().await.doc_id();
-        let project = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let project_id = project.lock().await.doc_id();
+        let account_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        let project_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
         alice
             .add_member(account_id, project_id, Access::Admin, &[])

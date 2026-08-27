@@ -73,11 +73,10 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
     }
 
     // doc1: all peers are direct members
-    let doc1 = alice
+    let doc1_id = alice
         .generate_doc(vec![public_peer.dupe()], nonempty![[0u8; 32]])
         .await
         .unwrap();
-    let doc1_id = doc1.lock().await.doc_id();
     for (peer_id, _peer_on_alice) in &peers_on_alice {
         alice
             .add_member(*peer_id, doc1_id, Access::Edit, &[])
@@ -86,11 +85,10 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
     }
 
     // doc2: first half are direct members
-    let doc2 = alice
+    let doc2_id = alice
         .generate_doc(vec![public_peer.dupe()], nonempty![[1u8; 32]])
         .await
         .unwrap();
-    let doc2_id = doc2.lock().await.doc_id();
     let half = n_peers / 2;
     for (peer_id, _peer_on_alice) in &peers_on_alice[..half] {
         alice

@@ -79,13 +79,12 @@ async fn setup_many_docs_nested(
     for i in 0..n_docs {
         let mut content = [0u8; 32];
         content[..8].copy_from_slice(&(i as u64).to_le_bytes());
-        let doc = alice
+        let doc_id = alice
             .generate_doc(vec![public_peer.dupe()], nonempty![content])
             .await
             .unwrap();
         // Only the first and last docs contain the group chain
         if i == 0 || i == n_docs - 1 {
-            let doc_id = doc.lock().await.doc_id();
             alice
                 .add_member(g_top_id, doc_id, Access::Read, &[])
                 .await

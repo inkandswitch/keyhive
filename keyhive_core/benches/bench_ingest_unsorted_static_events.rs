@@ -40,10 +40,9 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
         let peer_contact = peer.generate_contact_card().await.unwrap();
         let peer_id = alice.receive_contact_card(&peer_contact).await.unwrap();
 
-        for doc in &docs {
-            let doc_id = { doc.lock().await.doc_id() };
+        for doc_id in &docs {
             alice
-                .add_member(peer_id, doc_id, Access::Edit, &[])
+                .add_member(peer_id, *doc_id, Access::Edit, &[])
                 .await
                 .unwrap();
         }

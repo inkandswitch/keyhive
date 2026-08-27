@@ -79,10 +79,9 @@ fn reachable_prekey_ops_for_agent(
                     .unwrap();
             }
 
-            for doc in &docs {
-                let doc_id = { doc.lock().await.doc_id() };
+            for doc_id in &docs {
                 alice
-                    .add_member(peer_id, doc_id, Access::Edit, &[])
+                    .add_member(peer_id, *doc_id, Access::Edit, &[])
                     .await
                     .unwrap();
             }

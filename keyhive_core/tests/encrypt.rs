@@ -74,10 +74,9 @@ async fn test_encrypt_to_added_member() -> TestResult {
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(vec![], nonempty![init_hash.into()])
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
 
@@ -101,7 +100,6 @@ async fn test_encrypt_to_added_member() -> TestResult {
         .await;
 
     // Attempt to decrypt on bob
-    let doc_id = { doc.lock().await.doc_id() };
     let decrypted = bob
         .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await?;
@@ -121,10 +119,9 @@ async fn test_application_secret_key_round_trips() -> TestResult {
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(vec![], nonempty![init_hash.into()])
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
     {
@@ -185,10 +182,9 @@ async fn test_cannot_decrypt_content_from_before_joining() -> TestResult {
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(vec![], nonempty![init_hash.into()])
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     // Encrypt first (before adding Bob)
     let encrypted = alice
@@ -251,12 +247,11 @@ async fn test_decrypt_after_to_from_archive() {
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(vec![], nonempty![init_hash.into()])
         .await
         .unwrap();
 
-    let doc_id = { doc.lock().await.doc_id() };
     let encrypted = alice
         .try_encrypt_content(doc_id, &init_hash.into(), &vec![], &init_content)
         .await
@@ -276,8 +271,6 @@ async fn test_decrypt_after_to_from_archive() {
         events.push(StaticEvent::from(evt));
     }
     alice.ingest_unsorted_static_events(events).await;
-
-    let doc_id = { doc.lock().await.doc_id() };
 
     let decrypted = alice
         .try_decrypt_content(doc_id, encrypted.encrypted_content())
@@ -301,12 +294,11 @@ async fn test_decrypt_after_fork_and_merge() {
     let init_content = "hello world".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(vec![], nonempty![init_hash.into()])
         .await
         .unwrap();
 
-    let doc_id = { doc.lock().await.doc_id() };
     let encrypted = alice
         .try_encrypt_content(doc_id, &init_hash.into(), &vec![], &init_content)
         .await
@@ -356,8 +348,6 @@ async fn test_decrypt_after_fork_and_merge() {
         keyhive
     };
 
-    let doc_id = { doc.lock().await.doc_id() };
-
     let decrypted = reloaded
         .try_decrypt_content(doc_id, encrypted.encrypted_content())
         .await
@@ -404,13 +394,12 @@ async fn test_encrypt_decrypt_via_group_transitive_access() -> TestResult {
     let group = alice.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(
             vec![Peer::Group(group_id, group.dupe())],
             nonempty![init_hash.into()],
         )
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     // Register A and B on Alice, add both to the group with Edit access
     {
@@ -514,10 +503,9 @@ async fn test_encrypt_decrypt_as_public() -> TestResult {
     let init_content = "public message from A".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(vec![], nonempty![init_hash.into()])
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     // Add Public as a Read member
     let public_agent: Agent<_, _, _, _> = public_agent();
@@ -567,10 +555,9 @@ async fn test_member_encrypt_public_reader_decrypt() -> TestResult {
     let init_content = "init".as_bytes().to_vec();
     let init_hash = blake3::hash(&init_content);
 
-    let doc = alice
+    let doc_id = alice
         .generate_doc(vec![], nonempty![init_hash.into()])
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     let public_agent: Agent<_, _, _, _> = public_agent();
     alice
@@ -644,13 +631,12 @@ async fn test_dual_instance_with_added_member_decrypt() -> TestResult {
     // No Public in the CGKA tree. CGKA has: doc identity + Alice's individual.
     let group = tab.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
-    let doc = tab
+    let doc_id = tab
         .generate_doc(
             vec![Peer::Group(group_id, group.dupe())],
             nonempty![init_hash],
         )
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     // Tab adds Bob to the doc. This creates a CGKA Add(Bob) op which
     // blanks the root key in the CGKA tree.
@@ -725,13 +711,12 @@ async fn test_dual_instance_with_added_member_two_round_sync() -> TestResult {
     // Fresh group coparent, no Public, no force_pcs_update.
     let group = tab.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
-    let doc = tab
+    let doc_id = tab
         .generate_doc(
             vec![Peer::Group(group_id, group.dupe())],
             nonempty![init_hash],
         )
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     {
         let indie = bob.active().lock().await.individual().lock().await.clone();
@@ -821,8 +806,7 @@ async fn test_dual_instance_encrypt_decrypt() -> TestResult {
     let init_hash: [u8; 32] = *blake3::hash(&init_content).as_bytes();
 
     // --- Tab creates a doc with Public as a member ---
-    let doc = tab.generate_doc(vec![], nonempty![init_hash]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
+    let doc_id = tab.generate_doc(vec![], nonempty![init_hash]).await?;
 
     let public_agent: Agent<_, _, _, _> = public_agent();
     tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
@@ -896,8 +880,7 @@ async fn test_dual_instance_without_prekey_secrets() -> TestResult {
     let init_content = b"no prekey secrets test".to_vec();
     let init_hash: [u8; 32] = *blake3::hash(&init_content).as_bytes();
 
-    let doc = tab.generate_doc(vec![], nonempty![init_hash]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
+    let doc_id = tab.generate_doc(vec![], nonempty![init_hash]).await?;
 
     let public_agent: Agent<_, _, _, _> = public_agent();
     tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
@@ -988,16 +971,14 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
     // Tab creates 2 docs
     let tab_content1 = b"tab doc 1".to_vec();
     let tab_hash1: [u8; 32] = *blake3::hash(&tab_content1).as_bytes();
-    let tab_doc1 = tab.generate_doc(vec![], nonempty![tab_hash1]).await?;
-    let tab_doc1_id = { tab_doc1.lock().await.doc_id() };
+    let tab_doc1_id = tab.generate_doc(vec![], nonempty![tab_hash1]).await?;
     tab.add_member(public_agent.dupe().id(), tab_doc1_id, Access::Read, &[])
         .await?;
     tab.force_pcs_update(tab_doc1_id).await?;
 
     let tab_content2 = b"tab doc 2".to_vec();
     let tab_hash2: [u8; 32] = *blake3::hash(&tab_content2).as_bytes();
-    let tab_doc2 = tab.generate_doc(vec![], nonempty![tab_hash2]).await?;
-    let tab_doc2_id = { tab_doc2.lock().await.doc_id() };
+    let tab_doc2_id = tab.generate_doc(vec![], nonempty![tab_hash2]).await?;
     tab.add_member(public_agent.dupe().id(), tab_doc2_id, Access::Read, &[])
         .await?;
     tab.force_pcs_update(tab_doc2_id).await?;
@@ -1005,16 +986,14 @@ async fn test_dual_instance_both_create_docs() -> TestResult {
     // SW independently creates 2 docs (before syncing with Tab)
     let sw_content1 = b"sw doc 1".to_vec();
     let sw_hash1: [u8; 32] = *blake3::hash(&sw_content1).as_bytes();
-    let sw_doc1 = sw.generate_doc(vec![], nonempty![sw_hash1]).await?;
-    let sw_doc1_id = { sw_doc1.lock().await.doc_id() };
+    let sw_doc1_id = sw.generate_doc(vec![], nonempty![sw_hash1]).await?;
     sw.add_member(public_agent.dupe().id(), sw_doc1_id, Access::Read, &[])
         .await?;
     sw.force_pcs_update(sw_doc1_id).await?;
 
     let sw_content2 = b"sw doc 2".to_vec();
     let sw_hash2: [u8; 32] = *blake3::hash(&sw_content2).as_bytes();
-    let sw_doc2 = sw.generate_doc(vec![], nonempty![sw_hash2]).await?;
-    let sw_doc2_id = { sw_doc2.lock().await.doc_id() };
+    let sw_doc2_id = sw.generate_doc(vec![], nonempty![sw_hash2]).await?;
     sw.add_member(public_agent.dupe().id(), sw_doc2_id, Access::Read, &[])
         .await?;
     sw.force_pcs_update(sw_doc2_id).await?;
@@ -1126,8 +1105,7 @@ async fn test_dual_instance_with_revocations() -> TestResult {
     let init_hash: [u8; 32] = *blake3::hash(&init_content).as_bytes();
 
     // Tab creates doc, adds Public, then revokes and re-adds
-    let doc = tab.generate_doc(vec![], nonempty![init_hash]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
+    let doc_id = tab.generate_doc(vec![], nonempty![init_hash]).await?;
 
     tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
@@ -1223,8 +1201,7 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
     let public_agent: Agent<_, _, _, _> = public_agent();
 
     // Tab creates doc with Public, revokes and re-adds (generates revocations)
-    let doc = tab.generate_doc(vec![], nonempty![init_hash]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
+    let doc_id = tab.generate_doc(vec![], nonempty![init_hash]).await?;
 
     tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
         .await?;
@@ -1318,8 +1295,8 @@ async fn test_dual_instance_multiple_docs() -> TestResult {
         let content = format!("doc {} content", i).into_bytes();
         let hash: [u8; 32] = *blake3::hash(&content).as_bytes();
 
-        let doc = tab.generate_doc(vec![], nonempty![hash]).await?;
-        let doc_id = { doc.lock().await.doc_id() };
+        let doc_id = tab.generate_doc(vec![], nonempty![hash]).await?;
+        let doc = tab.get_document(doc_id).await.expect("just created");
 
         tab.add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
             .await?;
@@ -1435,8 +1412,7 @@ async fn test_dual_instance_receiver_unknown_invite_prekey() -> TestResult {
     let init_content = b"individual delegation test content".to_vec();
     let init_hash: [u8; 32] = *blake3::hash(&init_content).as_bytes();
 
-    let doc = alice.generate_doc(vec![], nonempty![init_hash]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
+    let doc_id = alice.generate_doc(vec![], nonempty![init_hash]).await?;
 
     alice
         .add_member(bob_tab.id(), doc_id, Access::Read, &[])
@@ -1513,8 +1489,7 @@ async fn test_public_delegation_with_server_relay_decrypt() -> TestResult {
     let init_content = b"public doc with server relay".to_vec();
     let init_hash: [u8; 32] = *blake3::hash(&init_content).as_bytes();
 
-    let doc = alice.generate_doc(vec![], nonempty![init_hash]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
+    let doc_id = alice.generate_doc(vec![], nonempty![init_hash]).await?;
 
     // Add server relay to the doc
     {
@@ -1584,8 +1559,7 @@ async fn test_public_doc_reachable_via_public_agent_query() -> TestResult {
     let init_content = b"public doc reachable test".to_vec();
     let init_hash: [u8; 32] = *blake3::hash(&init_content).as_bytes();
 
-    let doc = alice.generate_doc(vec![], nonempty![init_hash]).await?;
-    let doc_id = { doc.lock().await.doc_id() };
+    let doc_id = alice.generate_doc(vec![], nonempty![init_hash]).await?;
 
     // Add server relay
     {
@@ -1706,13 +1680,12 @@ async fn test_dual_instance_public_via_server_relay_decrypt() -> TestResult {
     // Tab creates doc with group coparent
     let group = tab.generate_group(vec![]).await?;
     let group_id = { group.lock().await.group_id() };
-    let doc = tab
+    let doc_id = tab
         .generate_doc(
             vec![Peer::Group(group_id, group.dupe())],
             nonempty![init_hash],
         )
         .await?;
-    let doc_id = { doc.lock().await.doc_id() };
 
     // Tab adds server relay
     {
