@@ -815,3 +815,171 @@ async fn an_identifier_that_was_never_received_says_so() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_relay_member_of_a_document_gets_no_key() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    alice.add_member(bob.id(), design_doc, Relay, &[]).await?;
+
+    assert!(
+        !ctx.cgka_members_of(&alice, design_doc)
+            .await?
+            .contains(&bob.id()),
+        "bob may only relay design_doc, so he should hold no key for it"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_relay_member_of_a_group_gets_no_key_for_a_document_it_edits() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    alice.add_member(bob.id(), engineering, Relay, &[]).await?;
+    alice.add_member(engineering, design_doc, Edit, &[]).await?;
+
+    assert!(
+        !ctx.cgka_members_of(&alice, design_doc)
+            .await?
+            .contains(&bob.id()),
+        "bob only relays engineering, so editing through it should give him no key"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_relay_member_added_to_a_group_that_already_holds_a_document_gets_no_key() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    // The other order from the test above. The group holds the document first.
+    alice.add_member(engineering, design_doc, Edit, &[]).await?;
+    alice.add_member(bob.id(), engineering, Relay, &[]).await?;
+
+    assert!(
+        !ctx.cgka_members_of(&alice, design_doc)
+            .await?
+            .contains(&bob.id()),
+        "joining an editing group as a relay member should give bob no key"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn promoting_a_relay_member_to_read_within_a_group_grants_a_key() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    alice.add_member(engineering, design_doc, Edit, &[]).await?;
+    alice.add_member(bob.id(), engineering, Relay, &[]).await?;
+
+    assert!(
+        !ctx.cgka_members_of(&alice, design_doc)
+            .await?
+            .contains(&bob.id()),
+        "bob holds no key while he only relays engineering"
+    );
+
+    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+
+    assert!(
+        ctx.cgka_members_of(&alice, design_doc)
+            .await?
+            .contains(&bob.id()),
+        "bob reads engineering now, so he should hold a key for design_doc"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reader_in_a_group_that_only_relays_a_document_gets_no_key() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    alice
+        .add_member(engineering, design_doc, Relay, &[])
+        .await?;
+    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+
+    assert!(
+        !ctx.cgka_members_of(&alice, design_doc)
+            .await?
+            .contains(&bob.id()),
+        "engineering may only relay design_doc, so reading engineering gives bob no key"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn relaying_a_group_relays_its_documents_without_a_key() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let carol = ctx.individual("carol").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    alice
+        .add_member(carol.id(), engineering, Relay, &[])
+        .await?;
+    alice.add_member(engineering, design_doc, Edit, &[]).await?;
+
+    assert_eq!(
+        alice.access_for_doc(carol.id(), design_doc).await?,
+        Some(Relay),
+        "carol relays engineering, so she relays design_doc"
+    );
+    assert!(
+        !ctx.cgka_members_of(&alice, design_doc)
+            .await?
+            .contains(&carol.id()),
+        "carol cannot read design_doc, so she should hold no key for it"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn revoking_a_group_takes_the_key_from_a_member_who_only_relays_directly() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    // Bob reads design_doc through engineering, and separately relays it in his own right.
+    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+    alice.add_member(engineering, design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Relay, &[]).await?;
+
+    assert!(
+        ctx.cgka_members_of(&alice, design_doc)
+            .await?
+            .contains(&bob.id()),
+        "bob should hold a key while he reads design_doc through engineering"
+    );
+
+    alice.revoke_member(engineering, true, design_doc).await?;
+
+    assert!(
+        !ctx.cgka_members_of(&alice, design_doc)
+            .await?
+            .contains(&bob.id()),
+        "bob kept his key on a document he may now only relay"
+    );
+    Ok(())
+}

@@ -29,7 +29,7 @@ use crate::{
         memory::MemoryCiphertextStore, CausalDecryptionError, CausalDecryptionState,
     },
 };
-use beekem::encrypted::EncryptedContent;
+use beekem::{encrypted::EncryptedContent, error::CgkaError};
 use dupe::Dupe;
 use future_form::Sendable;
 use futures::lock::Mutex;
@@ -176,6 +176,7 @@ macro_rules! other_from {
 }
 
 other_from!(
+    CgkaError,
     SigningError,
     GenerateDocError,
     EncryptError,
@@ -487,10 +488,23 @@ impl TestContext {
             .ok_or_else(|| TestError::NotSynced(Box::new(who.into())))
     }
 
+    // The CGKA members of `doc` as seen by `observer`.
+    pub async fn cgka_members_of(
+        &self,
+        observer: &Instance,
+        doc: DocumentId,
+    ) -> TestResult<BTreeSet<IndividualId>> {
+        let handle = observer
+            .get_document(doc)
+            .await
+            .ok_or_else(|| TestError::NotSynced(Box::new(doc.into())))?;
+        let locked = handle.lock().await;
+        let members: BTreeSet<IndividualId> = locked.cgka_members()?.collect();
+        drop(locked);
+        Ok(members)
+    }
+
     /// The prekeys `observer` holds for `who`.
-    ///
-    /// Reaching into another identity's key material, which is why it is here rather than on
-    /// [`Hive`]. A test uses it to check that a rotation reached `observer`.
     pub async fn prekeys_of(
         &self,
         observer: &Instance,
