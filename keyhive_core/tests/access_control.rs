@@ -102,7 +102,6 @@ async fn members_are_listed_with_their_effective_level() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "fails on main; fixed by jtfm/cgka-authority; un-ignore when that lands"]
 async fn attenuation_is_the_minimum_along_the_route() -> Result<()> {
     for a in [Relay, Read, Edit, Admin] {
         for b in [Relay, Read, Edit, Admin] {
@@ -130,7 +129,6 @@ async fn attenuation_is_the_minimum_along_the_route() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "fails on main; fixed by jtfm/cgka-authority; un-ignore when that lands"]
 async fn relay_never_permits_decryption() -> Result<()> {
     for (doc_to_group, group_to_bob) in [
         (Relay, Read),
@@ -166,7 +164,6 @@ async fn relay_never_permits_decryption() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "fails on main; fixed by jtfm/cgka-authority; un-ignore when that lands"]
 async fn multi_route_resolution_is_deterministic() -> Result<()> {
     // Eight separate runs. In the presence of a bug the answer differs between them.
     let mut answers: std::collections::BTreeMap<Option<Access>, usize> = Default::default();

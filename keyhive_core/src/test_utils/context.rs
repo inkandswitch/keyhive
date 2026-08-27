@@ -25,6 +25,7 @@ use crate::{
         membered::{id::MemberedId, Member, Membered},
         public::Public,
     },
+    stats::Stats,
     store::ciphertext::{
         memory::MemoryCiphertextStore, CausalDecryptionError, CausalDecryptionState,
     },
@@ -43,8 +44,8 @@ use keyhive_crypto::{
 use nonempty::nonempty;
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use std::{
-    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet},
-    hash::{Hash, Hasher},
+    collections::{BTreeMap, BTreeSet},
+    hash::Hash,
     ops::Deref,
     sync::Arc,
 };
@@ -574,7 +575,7 @@ impl TestContext {
     /// to be at least one more than the number of rounds that actually change anything.
     pub async fn sync_all_unsent_within(&mut self, rounds: usize) -> TestResult<()> {
         let everyone: Vec<Instance> = self.hives.values().cloned().collect();
-        let mut before = self.state_signature().await;
+        let mut before = self.everyone_stats().await;
         for _ in 0..rounds {
             for from in &everyone {
                 for to in &everyone {
@@ -583,7 +584,7 @@ impl TestContext {
                     }
                 }
             }
-            let after = self.state_signature().await;
+            let after = self.everyone_stats().await;
             if after == before {
                 return Ok(());
             }
@@ -888,14 +889,13 @@ impl TestContext {
     // Private methods
     ///////////////////
 
-    /// What every instance holds and what it is still waiting on. Two rounds of syncing that
-    /// leave this unchanged have moved nothing, and no further round can.
-    async fn state_signature(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
+    // Returns the `Stats` for every instance for checking if everyone has converged.
+    async fn everyone_stats(&self) -> Vec<Stats> {
+        let mut stats = Vec::with_capacity(self.hives.len());
         for hive in self.hives.values() {
-            hive.stats().await.hash(&mut hasher);
+            stats.push(hive.stats().await);
         }
-        hasher.finish()
+        stats
     }
 
     /// Sends `from`'s events to `to`, skipping any this context has already delivered.
