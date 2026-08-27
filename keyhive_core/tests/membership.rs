@@ -763,7 +763,7 @@ async fn a_cascading_revocation_removes_the_member_it_names() -> Result<()> {
     alice.revoke_member(carol.id(), false, engineering).await?;
 
     assert_eq!(
-        ctx.named_access(alice.reachable_members(engineering).await?)
+        ctx.named(alice.reachable_members(engineering).await?)
             .get("carol"),
         None,
         "carol is out of the group"
@@ -836,7 +836,7 @@ async fn a_revoked_member_is_listed_with_what_they_lost() -> Result<()> {
         "and carol, who is still a member, is not listed"
     );
     assert_eq!(
-        ctx.named_access(alice.reachable_members(engineering).await?)
+        ctx.named(alice.reachable_members(engineering).await?)
             .get("bob"),
         None,
         "the two lists do not overlap"
@@ -868,7 +868,7 @@ async fn a_member_who_was_revoked_and_admitted_again_is_not_listed() -> Result<(
         "he is a member again, so he is not a revoked member"
     );
     assert_eq!(
-        ctx.named_access(alice.reachable_members(engineering).await?)
+        ctx.named(alice.reachable_members(engineering).await?)
             .get("bob"),
         Some(&Read),
         "at the level he was admitted at the second time"

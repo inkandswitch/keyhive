@@ -22,7 +22,7 @@ use crate::{
         },
         identifier::Identifier,
         individual::{id::IndividualId, op::KeyOp, Individual, ReceivePrekeyOpError},
-        membered::{id::MemberedId, Member, Membered},
+        membered::{id::MemberedId, Membered},
         public::Public,
     },
     stats::Stats,
@@ -851,14 +851,6 @@ impl TestContext {
         raw.into_iter()
             .map(|(id, value)| (self.name_of(id.into()).to_string(), value))
             .collect()
-    }
-
-    /// [`TestContext::named`] over a member map, keeping only what each member may do.
-    pub fn named_access<K: Into<Identifier>>(
-        &self,
-        raw: impl IntoIterator<Item = (K, Member)>,
-    ) -> BTreeMap<String, Access> {
-        self.named(raw.into_iter().map(|(id, member)| (id, member.can)))
     }
 
     /// The name this context knows `id` by, or the id itself if it knows none.

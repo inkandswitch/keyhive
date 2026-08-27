@@ -19,7 +19,7 @@ async fn delegating_to_public_creates_a_public_delegation() -> Result<()> {
 
         assert_eq!(alice.access_for_doc(public, design_doc).await?, Some(level));
         assert_eq!(
-            ctx.named_access(alice.reachable_members(design_doc).await?)
+            ctx.named(alice.reachable_members(design_doc).await?)
                 .get("public"),
             Some(&level),
             "the public delegation should add public as a member"

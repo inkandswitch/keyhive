@@ -39,7 +39,7 @@ use crate::{
             op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, AllReachablePrekeyOps, KeyOp},
             Individual, ReceivePrekeyOpError,
         },
-        membered::{id::MemberedId, Member, MemberKind, Membered},
+        membered::{id::MemberedId, Membered},
         peer::Peer,
         public::Public,
     },
@@ -940,7 +940,7 @@ impl<
     pub async fn reachable_members(
         &self,
         membered: impl Into<MemberedId>,
-    ) -> Result<BTreeMap<Identifier, Member>, NotFound> {
+    ) -> Result<BTreeMap<Identifier, Access>, NotFound> {
         let raw = match self
             .membered_by_id(MemberedId::into(membered.into()))
             .await?
@@ -950,15 +950,7 @@ impl<
         };
         Ok(raw
             .into_iter()
-            .map(|(id, (agent, can))| {
-                (
-                    id,
-                    Member {
-                        kind: MemberKind::from(&agent),
-                        can,
-                    },
-                )
-            })
+            .map(|(id, (_agent, can))| (id, can))
             .collect())
     }
 

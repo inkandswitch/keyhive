@@ -20,12 +20,12 @@ async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Resu
         .await?;
     ctx.sync_all_unsent().await?;
 
-    let members_before = ctx.named_access(alice.reachable_members(design_doc).await?);
+    let members_before = ctx.named(alice.reachable_members(design_doc).await?);
     let archive = alice.into_archive().await;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
 
     assert_eq!(
-        ctx.named_access(alice.reachable_members(design_doc).await?),
+        ctx.named(alice.reachable_members(design_doc).await?),
         members_before,
         "the same people, at the same levels"
     );

@@ -77,7 +77,7 @@ async fn members_are_listed_with_their_effective_level() -> Result<()> {
     alice.add_member(bob.id(), design_doc, Edit, &[]).await?;
     alice.add_member(carol.id(), design_doc, Read, &[]).await?;
 
-    let members = ctx.named_access(alice.reachable_members(design_doc).await?);
+    let members = ctx.named(alice.reachable_members(design_doc).await?);
     assert_eq!(members.get("bob"), Some(&Edit));
     assert_eq!(members.get("carol"), Some(&Read));
     Ok(())
@@ -416,7 +416,7 @@ async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
     alice.add_member(bob.id(), engineering, Admin, &[]).await?;
     ctx.sync_all_unsent().await?;
     assert_eq!(alice.access_for_doc(bob.id(), project).await?, Some(Admin));
-    let members_of_the_group = ctx.named_access(alice.reachable_members(engineering).await?);
+    let members_of_the_group = ctx.named(alice.reachable_members(engineering).await?);
     assert_eq!(members_of_the_group.get("bob"), Some(&Admin));
     assert_eq!(
         members_of_the_group.get("carol"),
@@ -438,7 +438,7 @@ async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
         "bob delegated based on a route (through a group) he does not hold directly"
     );
     assert_eq!(
-        ctx.named_access(alice.reachable_members(engineering).await?)
+        ctx.named(alice.reachable_members(engineering).await?)
             .get("carol"),
         None,
         "and being let into project does not put her in the group that holds it"
@@ -498,7 +498,7 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
         Some(Read)
     );
 
-    let of_the_document = ctx.named_access(alice.reachable_members(design_doc).await?);
+    let of_the_document = ctx.named(alice.reachable_members(design_doc).await?);
     assert_eq!(
         of_the_document.get("bob"),
         Some(&Read),
@@ -510,7 +510,7 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
         "and the group is still a member of the document"
     );
 
-    let of_the_group = ctx.named_access(alice.reachable_members(engineering).await?);
+    let of_the_group = ctx.named(alice.reachable_members(engineering).await?);
     assert_eq!(
         of_the_group.get("bob"),
         Some(&Read),
@@ -537,7 +537,7 @@ async fn an_attenuated_second_route_does_not_lower_reported_access() -> Result<(
         let design_doc = ctx.doc(&alice, "design_doc").await?;
 
         assert_eq!(
-            ctx.named_access(alice.reachable_members(engineering).await?)
+            ctx.named(alice.reachable_members(engineering).await?)
                 .get("alice"),
             Some(&Admin),
             "alice created the group"
@@ -546,7 +546,7 @@ async fn an_attenuated_second_route_does_not_lower_reported_access() -> Result<(
         alice.add_member(design_doc, engineering, Read, &[]).await?;
 
         assert_eq!(
-            ctx.named_access(alice.reachable_members(engineering).await?)
+            ctx.named(alice.reachable_members(engineering).await?)
                 .get("alice"),
             Some(&Admin),
             "the weaker route took precedence over her own"

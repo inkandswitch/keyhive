@@ -57,8 +57,8 @@ impl<
     ) -> Result<Option<Access>, NotFound> {
         let who = self.check_received(who.into()).await?;
         let members = self.reachable_members(doc).await?;
-        let direct = members.get(&who).map(|m| m.can);
-        let public = members.get(&Public.id()).map(|m| m.can);
+        let direct = members.get(&who).copied();
+        let public = members.get(&Public.id()).copied();
         // `None` sorts below `Some`, so this is "the better of the two, if either".
         Ok(direct.max(public))
     }

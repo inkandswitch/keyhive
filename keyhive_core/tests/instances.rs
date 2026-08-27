@@ -26,7 +26,7 @@ async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
         "bob and alice, and no third entry for alice's second instance"
     );
 
-    let members = ctx.named_access(raw);
+    let members = ctx.named(raw);
     assert_eq!(members.get("alice"), Some(&Read));
     assert_eq!(
         bob.access_for_doc(alice_worker.id(), design_doc).await?,
@@ -339,7 +339,7 @@ async fn a_keyhive_built_outside_the_context_can_join_the_cast() -> Result<()> {
         "and it reads what it was given, so it is fully in the sync arrangement"
     );
     assert_eq!(
-        ctx.named_access(alice.reachable_members(design_doc).await?)
+        ctx.named(alice.reachable_members(design_doc).await?)
             .get("outsider"),
         Some(&Read),
         "and it is named in assertions like anyone else"
