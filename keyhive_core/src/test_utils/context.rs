@@ -398,6 +398,10 @@ impl TestContext {
         }
     }
 
+    /////////////////
+    // Test entities
+    /////////////////
+
     /// Create an identity, with one instance running.
     ///
     /// Every instance learns every other instance's contact card, so `NotSynced` is about
@@ -455,6 +459,164 @@ impl TestContext {
         Ok(id)
     }
 
+    /// Rebuild an archive as a new instance of the same identity with a fresh ciphertext
+    /// store.
+    pub async fn rebuild_from_archive(
+        &mut self,
+        archive: &Archive<[u8; 32]>,
+        name: &str,
+    ) -> TestResult<Instance> {
+        let identity = archive.id();
+        let signer = self
+            .signers
+            .get(&identity)
+            .ok_or("that archive's identity was not created by this TestContext")?
+            .clone();
+        let store = Store::new();
+        let hive = Keyhive::<Sendable, _, _, _, _, _, _>::try_from_archive(
+            archive,
+            signer,
+            store.clone(),
+            NoListener,
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await
+        .map_err(|e| TestError::Other(e.to_string()))?;
+
+        self.register_instance(hive, name).await
+    }
+
+    //////////////////////////////////
+    // Sync between keyhive instances
+    //////////////////////////////////
+
+    /// Sends `from`'s events to `to`. Returns how many events `to` could not yet apply.
+    ///
+    /// Everything `to` is entitled to, including events it already holds. `sync_all_unsent`
+    /// is the one that sends only a delta.
+    pub async fn sync(&mut self, from: &Instance, to: &Instance) -> TestResult<usize> {
+        let events = self.static_events_for_instance(from, to).await?;
+        self.deliver(to, events).await
+    }
+
+    /// Sends `to` everything the public agent may see, like a sync server.
+    pub async fn sync_as_public(&mut self, from: &Instance, to: &Instance) -> TestResult<usize> {
+        let individual = Public.individual();
+        let public = Agent::Individual(individual.id(), Arc::new(Mutex::new(individual)));
+        let events = self.events_for(from, &public).await?;
+        self.deliver(to, events).await
+    }
+
+    /// Sends everything except one kind of event, to make a dependency visible.
+    pub async fn sync_without(
+        &mut self,
+        from: &Instance,
+        to: &Instance,
+        kind: EventKind,
+    ) -> TestResult<usize> {
+        let events: Vec<_> = self
+            .static_events_for_instance(from, to)
+            .await?
+            .into_iter()
+            .filter(|(_, event)| EventKind::from(event) != kind)
+            .collect();
+        self.deliver(to, events).await
+    }
+
+    /// Sends everything `batch` events at a time, ingesting each batch before the next.
+    pub async fn sync_in_batches(
+        &mut self,
+        from: &Instance,
+        to: &Instance,
+        batch: usize,
+    ) -> TestResult<usize> {
+        assert!(batch > 0, "batch must be at least 1");
+        let events = self.static_events_for_instance(from, to).await?;
+        let mut pending = 0;
+        for chunk in events.chunks(batch) {
+            pending = self.deliver(to, chunk.to_vec()).await?;
+        }
+        Ok(pending)
+    }
+
+    /// Sends everything in an order decided by `seed`.
+    ///
+    /// The same seed permutes the same set of events the same way. It does not reproduce an
+    /// order across runs: instances are generated from `OsRng`, so the identities, and
+    /// therefore the digests sorted on here, differ every run.
+    pub async fn sync_shuffled(
+        &mut self,
+        from: &Instance,
+        to: &Instance,
+        seed: u64,
+    ) -> TestResult<usize> {
+        let mut events = self.static_events_for_instance(from, to).await?;
+        // `static_events_for_agent` comes out of a `HashMap`, whose order varies per process.
+        // Without this the seed would permute a different starting order every run.
+        events.sort_unstable_by_key(|(digest, _)| *digest);
+        events.shuffle(&mut StdRng::seed_from_u64(seed));
+        self.deliver(to, events).await
+    }
+
+    /// Sends every instance what every other has not yet sent it, repeating until a round
+    /// changes nothing.
+    ///
+    /// Eight rounds is the bound to provide some headroom in the tests.
+    pub async fn sync_all_unsent(&mut self) -> TestResult<()> {
+        const MAX_ROUNDS: usize = 8;
+        self.sync_all_unsent_within(MAX_ROUNDS).await
+    }
+
+    /// [`TestContext::sync_all_unsent`] with the round limit specified.
+    ///
+    /// Returns an error if the state has not settled within `rounds`. One round is spent
+    /// confirming, since settling is detected by a round that changes nothing, so `rounds` has
+    /// to be at least one more than the number of rounds that actually change anything.
+    pub async fn sync_all_unsent_within(&mut self, rounds: usize) -> TestResult<()> {
+        let everyone: Vec<Instance> = self.hives.values().cloned().collect();
+        let mut before = self.state_signature().await;
+        for _ in 0..rounds {
+            for from in &everyone {
+                for to in &everyone {
+                    if from.instance != to.instance {
+                        self.sync_unsent(from, to).await?;
+                    }
+                }
+            }
+            let after = self.state_signature().await;
+            if after == before {
+                return Ok(());
+            }
+            before = after;
+        }
+        Err(format!("sync_all_unsent did not settle in {rounds} rounds").into())
+    }
+
+    /// How many events the last delivery carried.
+    ///
+    /// `sync_in_batches` and `sync_all_unsent` deliver more than once, so after those this
+    /// is the final batch or the final pair's delta rather than the call's total.
+    pub fn events_last_delivered(&self) -> usize {
+        self.last_delivery
+    }
+
+    /// Give `to` a copy of the content, which is what an application would do with what it
+    /// receives. Content does not travel with the events.
+    pub async fn give_content(&self, to: &Instance, ct: &Ciphertext) -> TestResult<()> {
+        self.stores
+            .get(&to.instance)
+            .ok_or_else(|| {
+                TestError::Other(format!("{:?} was not built by this TestContext", to.name))
+            })?
+            .insert(Arc::new(ct.clone()))
+            .await;
+        Ok(())
+    }
+
+    //////////////////////////////
+    // Keys/Encryption/Decryption
+    //////////////////////////////
+
     /// Give one instance's prekey secrets to another instance of the same identity.
     ///
     /// An invitation is addressed to one specific prekey, so an instance cannot open one
@@ -480,17 +642,6 @@ impl TestContext {
             .await
             .map_err(|e| TestError::Other(e.to_string()))?;
         Ok(before.saturating_sub(to.stats().await.pending_total()))
-    }
-
-    /// The [`Individual`] `observer` holds for `who`.
-    async fn individual_seen_by(
-        observer: &Instance,
-        who: IndividualId,
-    ) -> TestResult<Arc<Mutex<Individual>>> {
-        observer
-            .get_individual(who)
-            .await
-            .ok_or_else(|| TestError::NotSynced(Box::new(who.into())))
     }
 
     // The CGKA members of `doc` as seen by `observer`.
@@ -541,34 +692,6 @@ impl TestContext {
                 },
             })
             .collect())
-    }
-
-    /// Rename the keys of a query result, so assertions can say "bob" rather than an id.
-    ///
-    /// The library's queries are keyed by [`Identifier`]. Only the context knows the names.
-    pub fn named<K: Into<Identifier>, V>(
-        &self,
-        raw: impl IntoIterator<Item = (K, V)>,
-    ) -> BTreeMap<String, V> {
-        raw.into_iter()
-            .map(|(id, value)| (self.name_of(id.into()).to_string(), value))
-            .collect()
-    }
-
-    /// [`TestContext::named`] over a member map, keeping only what each member may do.
-    pub fn named_access<K: Into<Identifier>>(
-        &self,
-        raw: impl IntoIterator<Item = (K, Member)>,
-    ) -> BTreeMap<String, Access> {
-        self.named(raw.into_iter().map(|(id, member)| (id, member.can)))
-    }
-
-    /// The name this context knows `id` by, or the id itself if it knows none.
-    pub fn name_of(&self, id: Identifier) -> Arc<str> {
-        self.names
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| id.to_string().into())
     }
 
     /// Encrypt `content` into `doc`, choosing a content ref for it.
@@ -644,17 +767,6 @@ impl TestContext {
         Ok(ct)
     }
 
-    /// Refuse a predecessor written into a different document.
-    fn check_same_document(&self, pred: &Ciphertext, doc: DocumentId) -> TestResult<()> {
-        match self.written.get(&pred.content_ref) {
-            Some(held) if *held != doc => Err(TestError::WrongDocument {
-                holds: self.name_of((*held).into()).to_string(),
-                doc: self.name_of(doc.into()).to_string(),
-            }),
-            _ => Ok(()),
-        }
-    }
-
     /// The application secret `who` derives for `encrypted`, `None` if it cannot derive one,
     /// and an error if `who` has never received `doc`.
     pub async fn derived_key(
@@ -672,107 +784,41 @@ impl TestContext {
         }
     }
 
-    /// Rebuild an archive as a new instance of the same identity with a fresh ciphertext
-    /// store.
-    pub async fn rebuild_from_archive(
-        &mut self,
-        archive: &Archive<[u8; 32]>,
-        name: &str,
-    ) -> TestResult<Instance> {
-        let identity = archive.id();
-        let signer = self
-            .signers
-            .get(&identity)
-            .ok_or("that archive's identity was not created by this TestContext")?
-            .clone();
-        let store = Store::new();
-        let hive = Keyhive::<Sendable, _, _, _, _, _, _>::try_from_archive(
-            archive,
-            signer,
-            store.clone(),
-            NoListener,
-            Arc::new(Mutex::new(rand::rngs::OsRng)),
-        )
-        .await
-        .map_err(|e| TestError::Other(e.to_string()))?;
+    ///////////////////
+    // Property checks
+    ///////////////////
 
-        self.register_instance(hive, name).await
-    }
-
-    /// Sends `from`'s events to `to`. Returns how many events `to` could not yet apply.
-    ///
-    /// Everything `to` is entitled to, including events it already holds. `sync_all_unsent`
-    /// is the one that sends only a delta.
-    pub async fn sync(&mut self, from: &Instance, to: &Instance) -> TestResult<usize> {
-        let events = self.static_events_for_instance(from, to).await?;
-        self.deliver(to, events).await
-    }
-
-    /// Sends `to` everything the public agent may see, like a sync server.
-    pub async fn sync_as_public(&mut self, from: &Instance, to: &Instance) -> TestResult<usize> {
-        let individual = Public.individual();
-        let public = Agent::Individual(individual.id(), Arc::new(Mutex::new(individual)));
-        let events = self.events_for(from, &public).await?;
-        self.deliver(to, events).await
-    }
-
-    /// Sends everything except one kind of event, to make a dependency visible.
-    pub async fn sync_without(
-        &mut self,
-        from: &Instance,
-        to: &Instance,
-        kind: EventKind,
-    ) -> TestResult<usize> {
-        let events: Vec<_> = self
-            .static_events_for_instance(from, to)
-            .await?
+    /// Everyone whose membership in `subject` was revoked and not replaced, with the access
+    /// their revoked delegation had conveyed.
+    pub async fn revoked_members_of(
+        &self,
+        observer: &Instance,
+        subject: impl Into<MemberedId>,
+    ) -> TestResult<BTreeMap<Identifier, Access>> {
+        let raw = match self.membered_handle(observer, subject.into()).await? {
+            Membered::Group(_, group) => group.lock().await.revoked_members(),
+            Membered::Document(_, doc) => doc.lock().await.revoked_members(),
+        };
+        Ok(raw
             .into_iter()
-            .filter(|(_, event)| EventKind::from(event) != kind)
-            .collect();
-        self.deliver(to, events).await
+            .map(|(id, (_, access))| (id, access))
+            .collect())
     }
 
-    /// Sends everything `batch` events at a time, ingesting each batch before the next.
-    pub async fn sync_in_batches(
-        &mut self,
-        from: &Instance,
-        to: &Instance,
-        batch: usize,
-    ) -> TestResult<usize> {
-        assert!(batch > 0, "batch must be at least 1");
-        let events = self.static_events_for_instance(from, to).await?;
-        let mut pending = 0;
-        for chunk in events.chunks(batch) {
-            pending = self.deliver(to, chunk.to_vec()).await?;
-        }
-        Ok(pending)
-    }
-
-    /// Sends everything in an order decided by `seed`.
-    ///
-    /// The same seed permutes the same set of events the same way. It does not reproduce an
-    /// order across runs: instances are generated from `OsRng`, so the identities, and
-    /// therefore the digests sorted on here, differ every run.
-    pub async fn sync_shuffled(
-        &mut self,
-        from: &Instance,
-        to: &Instance,
-        seed: u64,
-    ) -> TestResult<usize> {
-        let mut events = self.static_events_for_instance(from, to).await?;
-        // `static_events_for_agent` comes out of a `HashMap`, whose order varies per process.
-        // Without this the seed would permute a different starting order every run.
-        events.sort_unstable_by_key(|(digest, _)| *digest);
-        events.shuffle(&mut StdRng::seed_from_u64(seed));
-        self.deliver(to, events).await
-    }
-
-    /// How many events the last delivery carried.
-    ///
-    /// `sync_in_batches` and `sync_all_unsent` deliver more than once, so after those this
-    /// is the final batch or the final pair's delta rather than the call's total.
-    pub fn events_last_delivered(&self) -> usize {
-        self.last_delivery
+    /// Every delegation `observer` holds for `subject`.
+    pub async fn delegations_for(
+        &self,
+        observer: &Instance,
+        subject: impl Into<MemberedId>,
+    ) -> TestResult<Vec<DelegationSummary>> {
+        let handle = self.membered_handle(observer, subject.into()).await?;
+        Ok(handle
+            .members()
+            .await
+            .into_values()
+            .flatten()
+            .map(|signed| DelegationSummary::from(signed.as_ref()))
+            .collect())
     }
 
     /// How many events of one kind `who` holds that it cannot yet apply.
@@ -805,39 +851,42 @@ impl TestContext {
             .collect())
     }
 
-    /// Sends every instance what every other has not yet sent it, repeating until a round
-    /// changes nothing.
+    ////////////////
+    // Name helpers
+    ////////////////
+
+    /// Rename the keys of a query result, so assertions can say "bob" rather than an id.
     ///
-    /// Eight rounds is the bound to provide some headroom in the tests.
-    pub async fn sync_all_unsent(&mut self) -> TestResult<()> {
-        const MAX_ROUNDS: usize = 8;
-        self.sync_all_unsent_within(MAX_ROUNDS).await
+    /// The library's queries are keyed by [`Identifier`]. Only the context knows the names.
+    pub fn named<K: Into<Identifier>, V>(
+        &self,
+        raw: impl IntoIterator<Item = (K, V)>,
+    ) -> BTreeMap<String, V> {
+        raw.into_iter()
+            .map(|(id, value)| (self.name_of(id.into()).to_string(), value))
+            .collect()
     }
 
-    /// [`TestContext::sync_all_unsent`] with the round limit specified.
-    ///
-    /// Returns an error if the state has not settled within `rounds`. One round is spent
-    /// confirming, since settling is detected by a round that changes nothing, so `rounds` has
-    /// to be at least one more than the number of rounds that actually change anything.
-    pub async fn sync_all_unsent_within(&mut self, rounds: usize) -> TestResult<()> {
-        let everyone: Vec<Instance> = self.hives.values().cloned().collect();
-        let mut before = self.state_signature().await;
-        for _ in 0..rounds {
-            for from in &everyone {
-                for to in &everyone {
-                    if from.instance != to.instance {
-                        self.sync_unsent(from, to).await?;
-                    }
-                }
-            }
-            let after = self.state_signature().await;
-            if after == before {
-                return Ok(());
-            }
-            before = after;
-        }
-        Err(format!("sync_all_unsent did not settle in {rounds} rounds").into())
+    /// [`TestContext::named`] over a member map, keeping only what each member may do.
+    pub fn named_access<K: Into<Identifier>>(
+        &self,
+        raw: impl IntoIterator<Item = (K, Member)>,
+    ) -> BTreeMap<String, Access> {
+        self.named(raw.into_iter().map(|(id, member)| (id, member.can)))
     }
+
+    /// The name this context knows `id` by, or the id itself if it knows none.
+    pub fn name_of(&self, id: Identifier) -> Arc<str> {
+        self.names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| id.to_string().into())
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    ///////////////////
+    // Private methods
+    ///////////////////
 
     /// What every instance holds and what it is still waiting on. Two rounds of syncing that
     /// leave this unchanged have moved nothing, and no further round can.
@@ -947,50 +996,26 @@ impl TestContext {
         }
     }
 
-    /// Everyone whose membership in `subject` was revoked and not replaced, with the access
-    /// their revoked delegation had conveyed.
-    pub async fn revoked_members_of(
-        &self,
-        observer: &Instance,
-        subject: impl Into<MemberedId>,
-    ) -> TestResult<BTreeMap<Identifier, Access>> {
-        let raw = match self.membered_handle(observer, subject.into()).await? {
-            Membered::Group(_, group) => group.lock().await.revoked_members(),
-            Membered::Document(_, doc) => doc.lock().await.revoked_members(),
-        };
-        Ok(raw
-            .into_iter()
-            .map(|(id, (_, access))| (id, access))
-            .collect())
+    /// Refuse a predecessor written into a different document.
+    fn check_same_document(&self, pred: &Ciphertext, doc: DocumentId) -> TestResult<()> {
+        match self.written.get(&pred.content_ref) {
+            Some(held) if *held != doc => Err(TestError::WrongDocument {
+                holds: self.name_of((*held).into()).to_string(),
+                doc: self.name_of(doc.into()).to_string(),
+            }),
+            _ => Ok(()),
+        }
     }
 
-    /// Every delegation `observer` holds for `subject`.
-    pub async fn delegations_for(
-        &self,
+    /// The [`Individual`] `observer` holds for `who`.
+    async fn individual_seen_by(
         observer: &Instance,
-        subject: impl Into<MemberedId>,
-    ) -> TestResult<Vec<DelegationSummary>> {
-        let handle = self.membered_handle(observer, subject.into()).await?;
-        Ok(handle
-            .members()
+        who: IndividualId,
+    ) -> TestResult<Arc<Mutex<Individual>>> {
+        observer
+            .get_individual(who)
             .await
-            .into_values()
-            .flatten()
-            .map(|signed| DelegationSummary::from(signed.as_ref()))
-            .collect())
-    }
-
-    /// Give `to` a copy of the content, which is what an application would do with what it
-    /// receives. Content does not travel with the events.
-    pub async fn give_content(&self, to: &Instance, ct: &Ciphertext) -> TestResult<()> {
-        self.stores
-            .get(&to.instance)
-            .ok_or_else(|| {
-                TestError::Other(format!("{:?} was not built by this TestContext", to.name))
-            })?
-            .insert(Arc::new(ct.clone()))
-            .await;
-        Ok(())
+            .ok_or_else(|| TestError::NotSynced(Box::new(who.into())))
     }
 
     /// Register a new instance and swap contact cards with every other instance.
