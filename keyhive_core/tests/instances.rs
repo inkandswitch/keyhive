@@ -19,13 +19,15 @@ async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
 
     bob.add_member(alice.id(), design_doc, Read, &[]).await?;
 
-    let members = ctx.named_access(bob.reachable_members(design_doc).await?);
-    assert_eq!(members.get("alice"), Some(&Read));
+    let raw = bob.reachable_members(design_doc).await?;
     assert_eq!(
-        members.get("alice-worker"),
-        None,
-        "the graph knows the identity, not the device"
+        raw.len(),
+        2,
+        "bob and alice, and no third entry for alice's second instance"
     );
+
+    let members = ctx.named_access(raw);
+    assert_eq!(members.get("alice"), Some(&Read));
     assert_eq!(
         bob.access_for_doc(alice_worker.id(), design_doc).await?,
         Some(Read),
