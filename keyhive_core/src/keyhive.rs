@@ -77,7 +77,7 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
@@ -755,6 +755,21 @@ impl<
             self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
         }
         Ok((result, application_secret_key))
+    }
+
+    /// The identities in `doc`'s encryption tree. Returns `None` if it has no tree yet.
+    ///
+    /// Returns an error if `doc` is not known.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub async fn cgka_members_for(
+        &self,
+        doc: DocumentId,
+    ) -> Result<Option<BTreeSet<IndividualId>>, NotFound> {
+        let handle = self.document_by_id(doc).await?;
+        let locked = handle.lock().await;
+        let members = locked.cgka_members().ok().map(|ids| ids.collect());
+        drop(locked);
+        Ok(members)
     }
 
     /// The hash of `doc`'s current PCS key, and `None` if it has no key to hash.
@@ -4199,7 +4214,11 @@ mod tests {
             .await?;
 
         // Sanity: check CGKA group size before revocation.
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
         assert_eq!(
             size_before, 7,
             "CGKA should have 7 members: alice + bob + carol + dave + eve + frank(via G2) + frank(direct, no-op add) = 7"
@@ -4318,7 +4337,11 @@ mod tests {
             .add_member(frank_id, doc_id, Access::Read, &[])
             .await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G2 from G1 (group-level revocation, not doc-level)
         let update = alice
@@ -4367,7 +4390,11 @@ mod tests {
         );
 
         // CGKA should have shrunk by exactly 2 (dave + eve)
-        let size_after = doc.lock().await.cgka()?.group_size();
+        let size_after = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
         assert_eq!(
             size_after,
             size_before - 2,
@@ -4408,7 +4435,11 @@ mod tests {
         alice.add_member(doc_id, g_id, Access::Read, &[]).await?;
         alice.add_member(g2_id, g_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G2 from G. D is a member of G (D has access to G), so
         // D's CGKA should be unaffected by changes to G's other members.
@@ -4430,7 +4461,11 @@ mod tests {
             "Revoking from a group should not produce CGKA removals on a doc that is a member of that group"
         );
 
-        let size_after = doc.lock().await.cgka()?.group_size();
+        let size_after = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
         assert_eq!(size_after, size_before, "Doc D's CGKA should be unchanged");
 
         Ok(())
@@ -4457,7 +4492,11 @@ mod tests {
         let doc_id = doc.lock().await.doc_id();
         alice.add_member(g_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Add Bob to G. Since G is a member of D, Bob should be added to D's CGKA.
         let update = alice.add_member(bob_id, g_id, Access::Read, &[]).await?;
@@ -4469,7 +4508,11 @@ mod tests {
             "Bob should be added to D's CGKA after being added to G"
         );
 
-        let size_after = doc.lock().await.cgka()?.group_size();
+        let size_after = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
         assert_eq!(
             size_after,
             size_before + 1,
@@ -4503,7 +4546,11 @@ mod tests {
         let doc_id = doc.lock().await.doc_id();
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Add Bob to G3 — should propagate to D via G3→G2→G1→D
         let update = alice.add_member(bob_id, g3_id, Access::Read, &[]).await?;
@@ -4514,7 +4561,11 @@ mod tests {
             added_vks.contains(&bob_id.verifying_key()),
             "Bob should be added to D's CGKA through G3→G2→G1→D chain"
         );
-        let size_after = doc.lock().await.cgka()?.group_size();
+        let size_after = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
         assert_eq!(size_after, size_before + 1);
 
         Ok(())
@@ -4541,16 +4592,38 @@ mod tests {
         let d2_id = d2.lock().await.doc_id();
         alice.add_member(g1_id, d2_id, Access::Read, &[]).await?;
 
-        let size_d1_before = d1.lock().await.cgka()?.group_size();
-        let size_d2_before = d2.lock().await.cgka()?.group_size();
+        let size_d1_before = alice
+            .cgka_members_for(d1_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
+        let size_d2_before = alice
+            .cgka_members_for(d2_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         let update = alice.add_member(bob_id, g1_id, Access::Read, &[]).await?;
 
         let added_vks = extract_added_vks(&update);
 
         assert!(added_vks.contains(&bob_id.verifying_key()));
-        assert_eq!(d1.lock().await.cgka()?.group_size(), size_d1_before + 1);
-        assert_eq!(d2.lock().await.cgka()?.group_size(), size_d2_before + 1);
+        assert_eq!(
+            alice
+                .cgka_members_for(d1_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
+            size_d1_before + 1
+        );
+        assert_eq!(
+            alice
+                .cgka_members_for(d2_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
+            size_d2_before + 1
+        );
 
         Ok(())
     }
@@ -4585,7 +4658,11 @@ mod tests {
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         alice.add_member(g2_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G from G1 — Bob still reachable via G2
         let update = alice.revoke_member(g_id, true, g1_id).await?;
@@ -4596,7 +4673,11 @@ mod tests {
             !removed_vks.contains(&bob_id.verifying_key()),
             "Bob should NOT be removed — still reachable via G→G2→D"
         );
-        let size_after = doc.lock().await.cgka()?.group_size();
+        let size_after = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
         assert_eq!(size_after, size_before, "CGKA size should be unchanged");
 
         Ok(())
@@ -4632,8 +4713,16 @@ mod tests {
         let d2_id = d2.lock().await.doc_id();
         alice.add_member(g2_id, d2_id, Access::Read, &[]).await?;
 
-        let size_d1_before = d1.lock().await.cgka()?.group_size();
-        let size_d2_before = d2.lock().await.cgka()?.group_size();
+        let size_d1_before = alice
+            .cgka_members_for(d1_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
+        let size_d2_before = alice
+            .cgka_members_for(d2_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G from G1 → Bob removed from D1, not D2
         let update = alice.revoke_member(g_id, true, g1_id).await?;
@@ -4645,12 +4734,20 @@ mod tests {
             "Bob should be removed from D1's CGKA"
         );
         assert_eq!(
-            d1.lock().await.cgka()?.group_size(),
+            alice
+                .cgka_members_for(d1_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
             size_d1_before - 1,
             "D1 should have one fewer member"
         );
         assert_eq!(
-            d2.lock().await.cgka()?.group_size(),
+            alice
+                .cgka_members_for(d2_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
             size_d2_before,
             "D2 should be unchanged"
         );
@@ -4679,8 +4776,16 @@ mod tests {
         let d2_id = d2.lock().await.doc_id();
         alice.add_member(g1_id, d2_id, Access::Read, &[]).await?;
 
-        let size_d1_before = d1.lock().await.cgka()?.group_size();
-        let size_d2_before = d2.lock().await.cgka()?.group_size();
+        let size_d1_before = alice
+            .cgka_members_for(d1_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
+        let size_d2_before = alice
+            .cgka_members_for(d2_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G1 from D1 (doc-level revocation)
         let update = alice.revoke_member(g1_id, true, d1_id).await?;
@@ -4691,9 +4796,20 @@ mod tests {
             removed_vks.contains(&bob_id.verifying_key()),
             "Bob should be removed from D1"
         );
-        assert_eq!(d1.lock().await.cgka()?.group_size(), size_d1_before - 1);
         assert_eq!(
-            d2.lock().await.cgka()?.group_size(),
+            alice
+                .cgka_members_for(d1_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
+            size_d1_before - 1
+        );
+        assert_eq!(
+            alice
+                .cgka_members_for(d2_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
             size_d2_before,
             "D2 should be unchanged"
         );
@@ -4726,7 +4842,11 @@ mod tests {
         // G2 also directly in D
         alice.add_member(g2_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G2 from G1 — Bob still reachable via G2 directly in D
         let update = alice.revoke_member(g2_id, true, g1_id).await?;
@@ -4737,7 +4857,14 @@ mod tests {
             !removed_vks.contains(&bob_id.verifying_key()),
             "Bob should NOT be removed — G2 is still a direct member of D"
         );
-        assert_eq!(doc.lock().await.cgka()?.group_size(), size_before);
+        assert_eq!(
+            alice
+                .cgka_members_for(doc_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
+            size_before
+        );
 
         Ok(())
     }
@@ -4768,7 +4895,11 @@ mod tests {
         let doc_id = doc.lock().await.doc_id();
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G2 from G1 — Bob (in G3 in G2) should be removed
         let update = alice.revoke_member(g2_id, true, g1_id).await?;
@@ -4779,7 +4910,14 @@ mod tests {
             removed_vks.contains(&bob_id.verifying_key()),
             "Bob should be removed — G2 (and G3 below it) disconnected from D"
         );
-        assert!(doc.lock().await.cgka()?.group_size() < size_before);
+        assert!(
+            alice
+                .cgka_members_for(doc_id)
+                .await?
+                .expect("the document has a tree")
+                .len()
+                < size_before
+        );
 
         Ok(())
     }
@@ -4808,7 +4946,11 @@ mod tests {
         let doc_id = doc.lock().await.doc_id();
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Add Bob to G2 — should reach D via G2→G1→D (cycle doesn't block)
         let update = alice.add_member(bob_id, g2_id, Access::Read, &[]).await?;
@@ -4819,7 +4961,14 @@ mod tests {
             added_vks.contains(&bob_id.verifying_key()),
             "Bob should be added to D's CGKA despite cycle"
         );
-        assert_eq!(doc.lock().await.cgka()?.group_size(), size_before + 1);
+        assert_eq!(
+            alice
+                .cgka_members_for(doc_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
+            size_before + 1
+        );
 
         Ok(())
     }
@@ -4851,7 +5000,11 @@ mod tests {
         let doc_id = doc.lock().await.doc_id();
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G2 from G1 — G2 still has G1 as its member, so G2→G1→D still works
         let update = alice.revoke_member(g2_id, true, g1_id).await?;
@@ -4862,7 +5015,14 @@ mod tests {
             removed_vks.contains(&bob_id.verifying_key()),
             "Bob should be removed — G1 no longer contains G2 after revocation"
         );
-        assert!(doc.lock().await.cgka()?.group_size() < size_before);
+        assert!(
+            alice
+                .cgka_members_for(doc_id)
+                .await?
+                .expect("the document has a tree")
+                .len()
+                < size_before
+        );
 
         Ok(())
     }
@@ -4899,7 +5059,11 @@ mod tests {
         let doc_id = doc.lock().await.doc_id();
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G2 from G1 — G2 still reaches D via G2→G3→G1→D
         let update = alice.revoke_member(g2_id, true, g1_id).await?;
@@ -4910,7 +5074,14 @@ mod tests {
             removed_vks.contains(&bob_id.verifying_key()),
             "Bob should be removed — G1 no longer contains G2 after revocation"
         );
-        assert!(doc.lock().await.cgka()?.group_size() < size_before);
+        assert!(
+            alice
+                .cgka_members_for(doc_id)
+                .await?
+                .expect("the document has a tree")
+                .len()
+                < size_before
+        );
 
         Ok(())
     }
@@ -4946,7 +5117,11 @@ mod tests {
         let doc_id = doc.lock().await.doc_id();
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G2 from G1 — severs the path from D to G2/G3
         alice.revoke_member(g2_id, true, g1_id).await?;
@@ -4955,7 +5130,11 @@ mod tests {
         alice.revoke_member(g1_id, true, g3_id).await?;
 
         // After both revocations, Bob should not be in D's CGKA
-        let size_after = doc.lock().await.cgka()?.group_size();
+        let size_after = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
         assert!(
             size_after < size_before,
             "Bob should have been removed from D's CGKA after cycle was broken"
@@ -4993,7 +5172,11 @@ mod tests {
         alice.add_member(g1_id, doc_id, Access::Read, &[]).await?;
         alice.add_member(g2_id, doc_id, Access::Read, &[]).await?;
 
-        let size_before = doc.lock().await.cgka()?.group_size();
+        let size_before = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
 
         // Revoke G1 from D — G2 is still in D, and G2 contains G1,
         // so Bob (in G1) is still reachable via D→G2→G1
@@ -5006,7 +5189,11 @@ mod tests {
             "Bob should NOT be removed — still reachable via D→G2→G1"
         );
         assert_eq!(
-            doc.lock().await.cgka()?.group_size(),
+            alice
+                .cgka_members_for(doc_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
             size_before,
             "CGKA size should be unchanged"
         );
@@ -5035,7 +5222,11 @@ mod tests {
             .add_member(group_id, doc_id, Access::Read, &[])
             .await?;
 
-        let with_one_route = doc.lock().await.cgka()?.group_size();
+        let with_one_route = alice
+            .cgka_members_for(doc_id)
+            .await?
+            .expect("the document has a tree")
+            .len();
         assert_eq!(
             with_one_route, 3,
             "the document's own key, alice and frank, so frank really is in the tree \
@@ -5049,7 +5240,11 @@ mod tests {
             .await?;
 
         assert_eq!(
-            doc.lock().await.cgka()?.group_size(),
+            alice
+                .cgka_members_for(doc_id)
+                .await?
+                .expect("the document has a tree")
+                .len(),
             with_one_route,
             "a second route to frank should not put him in the tree a second time"
         );

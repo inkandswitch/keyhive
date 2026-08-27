@@ -645,22 +645,6 @@ impl TestContext {
         Ok(before.saturating_sub(to.stats().await.pending_total()))
     }
 
-    // The CGKA members of `doc` as seen by `observer`.
-    pub async fn cgka_members_of(
-        &self,
-        observer: &Instance,
-        doc: DocumentId,
-    ) -> TestResult<BTreeSet<IndividualId>> {
-        let handle = observer
-            .get_document(doc)
-            .await
-            .ok_or_else(|| TestError::NotSynced(Box::new(doc.into())))?;
-        let locked = handle.lock().await;
-        let members: BTreeSet<IndividualId> = locked.cgka_members()?.collect();
-        drop(locked);
-        Ok(members)
-    }
-
     /// The prekeys `observer` holds for `who`.
     pub async fn prekeys_of(
         &self,
