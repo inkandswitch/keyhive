@@ -194,7 +194,7 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
     // The events reach bob through the server.
     ctx.sync(&alice, &server).await?;
     assert_eq!(
-        ctx.pending_event_count(&server).await,
+        server.stats().await.pending_total(),
         0,
         "the server applied everything alice sent it"
     );

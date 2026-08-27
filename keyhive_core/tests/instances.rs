@@ -100,7 +100,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
         (&alice_worker, &alice)
     };
 
-    let stuck = ctx.pending_event_count(sibling).await;
+    let stuck = sibling.stats().await.pending_total();
     assert!(
         stuck > 0,
         "the sibling's key-agreement events should be waiting, not discarded"
@@ -112,7 +112,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
         "everything waiting on the sibling is key agreement, not something else"
     );
     assert_eq!(
-        ctx.pending_event_count(invited).await,
+        invited.stats().await.pending_total(),
         0,
         "the invited instance has nothing waiting"
     );
@@ -123,7 +123,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
         drained, stuck,
         "importing the secrets drained exactly those"
     );
-    assert_eq!(ctx.pending_event_count(sibling).await, 0);
+    assert_eq!(sibling.stats().await.pending_total(), 0);
     assert!(
         sibling.can_decrypt_content(design_doc, &ct).await?,
         "and now the sibling can read it"
@@ -164,9 +164,9 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
         alice_worker.has_received(from_alice).await,
         "and the worker about alice's"
     );
-    assert_eq!(ctx.pending_event_count(&alice).await, 0);
+    assert_eq!(alice.stats().await.pending_total(), 0);
     assert_eq!(
-        ctx.pending_event_count(&alice_worker).await,
+        alice_worker.stats().await.pending_total(),
         0,
         "neither instance was left holding an event it could not place"
     );
@@ -191,7 +191,7 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
         "one reader, two instances, both documents"
     );
     assert_eq!(
-        ctx.pending_event_count(&reader).await,
+        reader.stats().await.pending_total(),
         0,
         "and nothing it was sent is stuck"
     );
@@ -217,7 +217,7 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
 
     ctx.sync(&alice, &alice_worker).await?;
     assert_eq!(
-        ctx.pending_event_count(&alice_worker).await,
+        alice_worker.stats().await.pending_total(),
         0,
         "the worker applied the revocation and the delegation that followed it"
     );
@@ -241,7 +241,7 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
         "the document is public again, so the reader reads what the worker wrote"
     );
     assert_eq!(
-        ctx.pending_event_count(&reader).await,
+        reader.stats().await.pending_total(),
         0,
         "and nothing it was sent is stuck"
     );
@@ -282,7 +282,7 @@ async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
         "the second round completes it"
     );
     assert_eq!(
-        ctx.pending_event_count(&bob).await,
+        bob.stats().await.pending_total(),
         0,
         "with nothing left over from the first round"
     );

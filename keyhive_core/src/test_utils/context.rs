@@ -451,7 +451,7 @@ impl TestContext {
         &mut self,
         from: &Instance,
         to: &Instance,
-    ) -> TestResult<usize> {
+    ) -> TestResult<u64> {
         if from.id() != to.id() {
             return Err(TestError::DifferentIdentity {
                 from: from.name.to_string(),
@@ -462,11 +462,11 @@ impl TestContext {
             .export_prekey_secrets()
             .await
             .map_err(|e| TestError::Other(e.to_string()))?;
-        let before = self.pending_event_count(to).await;
+        let before = to.stats().await.pending_total();
         to.import_prekey_secrets(&blob)
             .await
             .map_err(|e| TestError::Other(e.to_string()))?;
-        Ok(before.saturating_sub(self.pending_event_count(to).await))
+        Ok(before.saturating_sub(to.stats().await.pending_total()))
     }
 
     /// The [`Individual`] `observer` holds for `who`.
@@ -781,28 +781,16 @@ impl TestContext {
         self.last_delivery
     }
 
-    /// How many events `who` holds that it cannot yet apply.
-    ///
-    /// A sum over [`Hive::stats`], which is what a client would read.
-    pub async fn pending_event_count(&self, who: &Instance) -> usize {
-        let s = who.stats().await;
-        (s.pending_prekeys_expanded
-            + s.pending_prekey_rotated
-            + s.pending_cgka_operation
-            + s.pending_delegated
-            + s.pending_revoked) as usize
-    }
-
     /// How many events of one kind `who` holds that it cannot yet apply.
-    pub async fn pending_events_of_kind(&self, who: &Instance, kind: EventKind) -> usize {
+    pub async fn pending_events_of_kind(&self, who: &Instance, kind: EventKind) -> u64 {
         let s = who.stats().await;
-        (match kind {
+        match kind {
             EventKind::PrekeysExpanded => s.pending_prekeys_expanded,
             EventKind::PrekeyRotated => s.pending_prekey_rotated,
             EventKind::CgkaOperation => s.pending_cgka_operation,
             EventKind::Delegated => s.pending_delegated,
             EventKind::Revoked => s.pending_revoked,
-        }) as usize
+        }
     }
 
     /// What `from` would send `to`, by kind, without sending it.

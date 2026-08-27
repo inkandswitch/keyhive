@@ -112,7 +112,7 @@ async fn partial_delivery_leaves_events_pending_and_they_apply_later() -> Result
         pending_at_the_end, 0,
         "every event should have found its place by the last batch"
     );
-    assert_eq!(ctx.pending_event_count(&bob).await, 0);
+    assert_eq!(bob.stats().await.pending_total(), 0);
     assert_eq!(
         bob.access_for_doc(bob.id(), design_doc).await?,
         Some(Edit),
@@ -175,7 +175,7 @@ async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
     ctx.sync_without(&stranger, &server, EventKind::Delegated)
         .await?;
 
-    let backlog = ctx.pending_event_count(&server).await;
+    let backlog = server.stats().await.pending_total();
     assert!(backlog > 0, "the server is holding events it cannot apply");
 
     // Unrelated and entirely valid: alice's own document, which the server may have in full.
@@ -195,7 +195,7 @@ async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
     ctx.sync(&alice, &server).await?;
 
     assert_eq!(
-        ctx.pending_event_count(&server).await,
+        server.stats().await.pending_total(),
         backlog,
         "alice's events applied, and none of them joined the backlog"
     );
@@ -220,7 +220,7 @@ async fn redelivering_known_events_changes_nothing() -> Result<()> {
     let ct = ctx.encrypt(&alice, design_doc, b"written once").await?;
     ctx.sync_all_unsent().await?;
 
-    assert_eq!(ctx.pending_event_count(&bob).await, 0);
+    assert_eq!(bob.stats().await.pending_total(), 0);
     assert!(bob.can_decrypt_content(design_doc, &ct).await?);
 
     // Bob has all of this already. The point of the test is that it is sent to him
@@ -238,7 +238,7 @@ async fn redelivering_known_events_changes_nothing() -> Result<()> {
         pending, 0,
         "an event bob already held would not apply again"
     );
-    assert_eq!(ctx.pending_event_count(&bob).await, 0);
+    assert_eq!(bob.stats().await.pending_total(), 0);
     assert_eq!(
         bob.access_for_doc(bob.id(), design_doc).await?,
         Some(Read),

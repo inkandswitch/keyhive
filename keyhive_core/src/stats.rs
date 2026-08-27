@@ -22,3 +22,14 @@ pub struct Stats {
     pub pending_revoked: u64,
     pub pending_revoked_by_active: u64,
 }
+
+impl Stats {
+    /// Every event this instance holds but cannot yet apply.
+    pub fn pending_total(&self) -> u64 {
+        self.pending_prekeys_expanded
+            + self.pending_prekey_rotated
+            + self.pending_cgka_operation
+            + self.pending_delegated
+            + self.pending_revoked
+    }
+}
