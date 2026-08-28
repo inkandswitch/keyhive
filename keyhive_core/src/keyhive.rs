@@ -722,10 +722,13 @@ impl<
         &self,
         doc: DocumentId,
     ) -> Result<Option<BTreeSet<IndividualId>>, NotFound> {
-        let handle = self.document_by_id(doc).await?;
-        let locked = handle.lock().await;
-        let members = locked.cgka_members().ok().map(|ids| ids.collect());
-        drop(locked);
+        let doc = self.document_by_id(doc).await?;
+        let members = doc
+            .lock()
+            .await
+            .cgka_members()
+            .ok()
+            .map(|ids| ids.collect());
         Ok(members)
     }
 
@@ -909,7 +912,7 @@ impl<
         self.has_received(who)
             .await
             .then_some(who)
-            .ok_or(NotFound(Box::new(who)))
+            .ok_or_else(|| NotFound::new(who))
     }
 
     /// The documents `who` reaches.
@@ -2796,6 +2799,12 @@ where
 #[error("{0} is not known to this keyhive")]
 pub struct NotFound(pub Box<Identifier>);
 
+impl NotFound {
+    pub fn new(id: impl Into<Identifier>) -> Self {
+        NotFound(Box::new(id.into()))
+    }
+}
+
 /// Why a causal decryption named by identifier could not be carried out.
 ///
 /// Separate from the other errors because it carries the store's own error type and
@@ -3250,13 +3259,12 @@ mod tests {
 
         assert_eq!(middle.revocations.lock().await.len(), 0);
         assert_eq!(middle.delegations.lock().await.len(), 2);
-        let left_doc_id = left_doc;
         assert_eq!(
             middle
                 .docs
                 .lock()
                 .await
-                .get(&left_doc_id)
+                .get(&left_doc)
                 .unwrap()
                 .lock()
                 .await
@@ -3367,7 +3375,6 @@ mod tests {
             .generate_doc(vec![Peer::Group(group_id, group)], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let doc_id = doc;
 
         // Create two more keyhives
         let hive2 = make_keyhive().await;
@@ -3378,7 +3385,7 @@ mod tests {
 
         // Add hive2 as a member of the doc
         hive1
-            .add_member(hive2_on_hive1_id, doc_id, Access::Edit, &[])
+            .add_member(hive2_on_hive1_id, doc, Access::Edit, &[])
             .await
             .unwrap();
 
@@ -3389,7 +3396,7 @@ mod tests {
             .unwrap();
 
         // Verify hive1 can see hive3's access to the doc
-        let doc_on_hive1 = hive1.get_document(doc_id).await.unwrap();
+        let doc_on_hive1 = hive1.get_document(doc).await.unwrap();
         let hive1_members = doc_on_hive1.lock().await.transitive_members().await;
         let hive3_on_hive1_access = hive1_members.get(&hive3_on_hive1_id.into());
         assert!(
@@ -3410,7 +3417,7 @@ mod tests {
             .unwrap();
 
         // Now verify hive2 can see hive3's access to the doc
-        let doc_on_hive2 = hive2.get_document(doc_id).await.unwrap();
+        let doc_on_hive2 = hive2.get_document(doc).await.unwrap();
         let members = doc_on_hive2.lock().await.transitive_members().await;
         let hive3_access = members.get(&hive3_on_hive2_id.into());
         assert!(
@@ -3464,9 +3471,8 @@ mod tests {
         let bob_on_charlie = Arc::new(Mutex::new(Individual::new(KeyOp::Rotate(rotate_op))));
         assert!(charlie.register_individual(bob_on_charlie.clone()).await);
         let bob_on_charlie_id = { bob_on_charlie.lock().await.id() };
-        let doc2_id = { doc2 };
         charlie
-            .add_member(bob_on_charlie_id, doc2_id, Access::Read, &[])
+            .add_member(bob_on_charlie_id, doc2, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3502,12 +3508,12 @@ mod tests {
         );
         let bob_id = bob_on_alice_for_delegation.lock().await.id();
 
-        let doc_id = alice
+        let doc = alice
             .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .unwrap();
         alice
-            .add_member(bob_id, doc_id, Access::Read, &[])
+            .add_member(bob_id, doc, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3622,8 +3628,8 @@ mod tests {
             .await?;
 
         // Create doc2 with dan (1 op)
-        let doc2_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        alice.add_member(dan_id, doc2_id, Access::Read, &[]).await?;
+        let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        alice.add_member(dan_id, doc2, Access::Read, &[]).await?;
 
         // Create a group with carol (2 ops) and eve (4 ops), then add group to doc2
         let group_id = alice.generate_group(vec![]).await?;
@@ -3633,9 +3639,7 @@ mod tests {
         alice
             .add_member(eve_id, group_id, Access::Edit, &[])
             .await?;
-        alice
-            .add_member(group_id, doc2_id, Access::Read, &[])
-            .await?;
+        alice.add_member(group_id, doc2, Access::Read, &[]).await?;
 
         // Get the all-agents result
         let all_results = alice.reachable_prekey_ops_for_all_agents().await;
@@ -3774,10 +3778,8 @@ mod tests {
             .await?;
 
         // doc2: group is a member (so bob and carol are transitive members)
-        let doc2_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        alice
-            .add_member(group_id, doc2_id, Access::Read, &[])
-            .await?;
+        let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        alice.add_member(group_id, doc2, Access::Read, &[]).await?;
 
         // dave: only on doc1 directly (not in any group)
         alice
@@ -3882,12 +3884,12 @@ mod tests {
             .unwrap();
 
         // doc2: group is a member (so carol and dave reach doc2 transitively)
-        let doc2_id = alice
+        let doc2 = alice
             .generate_doc(vec![], nonempty![[1u8; 32]])
             .await
             .unwrap();
         alice
-            .add_member(group_id, doc2_id, Access::Read, &[])
+            .add_member(group_id, doc2, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3954,7 +3956,7 @@ mod tests {
         // Carol should have ops from both doc1 and doc2
         let carol_doc_ids = &all_results.index[&carol_identifier];
         assert!(
-            carol_doc_ids.contains(&doc1_id.into()) && carol_doc_ids.contains(&doc2_id.into()),
+            carol_doc_ids.contains(&doc1_id.into()) && carol_doc_ids.contains(&doc2.into()),
             "carol should reach both doc1 and doc2"
         );
 
@@ -3969,7 +3971,7 @@ mod tests {
         let dave_doc_ids = &all_results.index[&dave_identifier];
         assert_eq!(dave_doc_ids.len(), 1, "dave should only reach doc2");
         assert!(
-            dave_doc_ids.contains(&doc2_id.into()),
+            dave_doc_ids.contains(&doc2.into()),
             "dave should reach doc2"
         );
 
@@ -3992,10 +3994,10 @@ mod tests {
         let bob_kh = make_keyhive().await;
         let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
-        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        alice.add_member(bob_id, doc_id, Access::Read, &[]).await?;
+        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice.add_member(bob_id, doc, Access::Read, &[]).await?;
 
-        let update = alice.revoke_member(bob_id, true, doc_id).await?;
+        let update = alice.revoke_member(bob_id, true, doc).await?;
 
         let removed_vks: HashSet<_> = update
             .cgka_ops()
@@ -4035,10 +4037,8 @@ mod tests {
             .add_member(inner_id, outer_id, Access::Read, &[])
             .await?;
 
-        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        alice
-            .add_member(outer_id, doc_id, Access::Read, &[])
-            .await?;
+        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice.add_member(outer_id, doc, Access::Read, &[]).await?;
 
         let update = alice.revoke_member(inner_id, true, outer_id).await?;
 
@@ -4077,13 +4077,11 @@ mod tests {
             .add_member(frank_id, group_id, Access::Read, &[])
             .await?;
 
-        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        alice
-            .add_member(group_id, doc_id, Access::Read, &[])
-            .await?;
+        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice.add_member(group_id, doc, Access::Read, &[]).await?;
 
         let with_one_route = alice
-            .cgka_members_for(doc_id)
+            .cgka_members_for(doc)
             .await?
             .expect("the document has a tree")
             .len();
@@ -4095,13 +4093,11 @@ mod tests {
 
         // Frank is already reachable through the group. Adding him directly is a second
         // route to the same identity, not a second identity.
-        alice
-            .add_member(frank_id, doc_id, Access::Read, &[])
-            .await?;
+        alice.add_member(frank_id, doc, Access::Read, &[]).await?;
 
         assert_eq!(
             alice
-                .cgka_members_for(doc_id)
+                .cgka_members_for(doc)
                 .await?
                 .expect("the document has a tree")
                 .len(),

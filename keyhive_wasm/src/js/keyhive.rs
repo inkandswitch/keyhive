@@ -141,7 +141,7 @@ impl JsKeyhive {
             .0
             .get_group(group_id)
             .await
-            .ok_or_else(|| NotFound(Box::new(group_id.into())))?;
+            .ok_or_else(|| NotFound::new(group_id))?;
 
         Ok(JsGroup { group_id, inner })
     }
@@ -174,7 +174,7 @@ impl JsKeyhive {
             .0
             .get_document(doc_id)
             .await
-            .ok_or_else(|| NotFound(Box::new(doc_id.into())))?;
+            .ok_or_else(|| NotFound::new(doc_id))?;
 
         Ok(JsDocument { doc_id, inner })
     }
@@ -342,7 +342,7 @@ impl JsKeyhive {
                 .0
                 .get_document(doc_id)
                 .await
-                .ok_or(NotFound(Box::new(doc_id.into())))?;
+                .ok_or_else(|| NotFound::new(doc_id))?;
             acc.push(Summary {
                 doc: JsDocument { doc_id, inner },
                 access: JsAccess(can),
@@ -420,7 +420,7 @@ impl JsKeyhive {
                     .0
                     .get_individual(id)
                     .await
-                    .ok_or(NotFound(Box::new(id.into())))?;
+                    .ok_or_else(|| NotFound::new(id))?;
                 Ok(JsIndividual { id, inner })
             }
             Err(err) => Err(err.into()),

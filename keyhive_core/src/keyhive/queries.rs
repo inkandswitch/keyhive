@@ -36,14 +36,7 @@ impl<
         doc: DocumentId,
     ) -> Result<Option<Access>, NotFound> {
         let who = self.check_received(who.into()).await?;
-        let members = self
-            .document_by_id(doc)
-            .await?
-            .lock()
-            .await
-            .transitive_members()
-            .await;
-        Ok(members.get(&who).map(|(_, can)| *can))
+        Ok(self.reachable_members(doc).await?.get(&who).copied())
     }
 
     /// The higher of `who`'s access to `doc` and public's access to `doc`.
@@ -68,16 +61,14 @@ impl<
     }
 
     pub(crate) async fn agent_by_id(&self, id: Identifier) -> Result<Agent<F, S, T, L>, NotFound> {
-        self.get_agent(id).await.ok_or(NotFound(Box::new(id)))
+        self.get_agent(id).await.ok_or_else(|| NotFound::new(id))
     }
 
     pub(crate) async fn document_by_id(
         &self,
         id: DocumentId,
     ) -> Result<Arc<Mutex<Document<F, S, T, L>>>, NotFound> {
-        self.get_document(id)
-            .await
-            .ok_or(NotFound(Box::new(id.into())))
+        self.get_document(id).await.ok_or_else(|| NotFound::new(id))
     }
 
     pub(crate) async fn membered_by_id(
@@ -94,6 +85,6 @@ impl<
                 .await
                 .map(|group| Membered::Group(group_id, group)),
         }
-        .ok_or_else(|| NotFound(Box::new(id.into())))
+        .ok_or_else(|| NotFound::new(id))
     }
 }

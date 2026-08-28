@@ -134,20 +134,19 @@ fn revoke_member_nested_groups(bencher: divan::Bencher, n_docs: usize) {
         .with_inputs(|| {
             rt.block_on(async {
                 let (alice, membered, peer) = setup_many_docs_nested(n_docs).await;
-                let to_revoke = peer;
                 // Add the member first so we can revoke them
                 alice
                     .add_member(peer, membered.membered_id(), Access::Read, &[])
                     .await
                     .unwrap();
-                (alice, membered, to_revoke)
+                (alice, membered, peer)
             })
         })
-        .bench_local_values(|(alice, membered, to_revoke)| {
+        .bench_local_values(|(alice, membered, peer)| {
             rt.block_on(async {
                 let _ = std::hint::black_box(
                     alice
-                        .revoke_member(to_revoke, true, membered.membered_id())
+                        .revoke_member(peer, true, membered.membered_id())
                         .await,
                 );
             });

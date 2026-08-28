@@ -1,9 +1,9 @@
-use derive_more::Display;
+use derive_more::{Display, From};
 use keyhive_core::{keyhive::NotFound, principal::document::GenerateDocError};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-#[derive(Debug, Display, Error)]
+#[derive(Debug, Display, Error, From)]
 pub enum JsGenerateDocError {
     #[display("{_0}")]
     GenerateDoc(GenerateDocError),
@@ -11,18 +11,6 @@ pub enum JsGenerateDocError {
     /// The document was created and could not then be read back.
     #[display("{_0}")]
     NotFound(NotFound),
-}
-
-impl From<GenerateDocError> for JsGenerateDocError {
-    fn from(e: GenerateDocError) -> Self {
-        JsGenerateDocError::GenerateDoc(e)
-    }
-}
-
-impl From<NotFound> for JsGenerateDocError {
-    fn from(e: NotFound) -> Self {
-        JsGenerateDocError::NotFound(e)
-    }
 }
 
 impl From<JsGenerateDocError> for JsValue {

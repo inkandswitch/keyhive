@@ -25,7 +25,7 @@ fn main() {
 fn reverse_topsort_via_toggle(bencher: divan::Bencher, prior_toggles: usize) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let (kh, membered_doc, public_id) = rt.block_on(async {
+    let (kh, doc, public_id) = rt.block_on(async {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new()));
@@ -43,28 +43,27 @@ fn reverse_topsort_via_toggle(bencher: divan::Bencher, prior_toggles: usize) {
             .await
             .expect("doc generation should succeed");
 
-        let membered_doc = doc;
         let public_id = Public.id();
 
         // Build up history of prior toggles
         for _ in 0..prior_toggles {
-            kh.add_member(public_id, membered_doc, Access::Edit, &[])
+            kh.add_member(public_id, doc, Access::Edit, &[])
                 .await
                 .expect("add_member should succeed");
-            kh.revoke_member(public_id, true, membered_doc)
+            kh.revoke_member(public_id, true, doc)
                 .await
                 .expect("revoke_member should succeed");
         }
 
-        (kh, membered_doc, public_id)
+        (kh, doc, public_id)
     });
 
     bencher.bench_local(|| {
         rt.block_on(async {
-            kh.add_member(public_id, membered_doc, Access::Edit, &[])
+            kh.add_member(public_id, doc, Access::Edit, &[])
                 .await
                 .expect("add_member should succeed");
-            kh.revoke_member(public_id, true, membered_doc)
+            kh.revoke_member(public_id, true, doc)
                 .await
                 .expect("revoke_member should succeed");
         });
