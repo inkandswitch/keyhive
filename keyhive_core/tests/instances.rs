@@ -392,6 +392,34 @@ async fn the_second_instance_writes_and_a_member_reads_it() -> Result<()> {
 }
 
 #[tokio::test]
+async fn the_second_instance_writes_to_a_document_owned_through_a_group() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let alice_worker = ctx.new_keyhive_instance_for(&alice, "alice-worker").await?;
+    let bob = ctx.individual("bob").await?;
+    ctx.share_prekey_secrets(&alice, &alice_worker).await?;
+
+    let owners = ctx.group(&alice, "owners").await?;
+    let design_doc = ctx
+        .doc_with_coparents(&alice, "design_doc", &[owners])
+        .await?;
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    ctx.sync_all_unsent().await?;
+
+    let ct = ctx
+        .encrypt(&alice_worker, design_doc, b"written by the worker")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    assert_eq!(
+        bob.try_decrypt_content(design_doc, &ct).await?,
+        b"written by the worker".to_vec(),
+        "bob reads the write even though alice reaches the document through a group"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_public_reader_reads_what_the_second_instance_wrote() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
