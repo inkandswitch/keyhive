@@ -88,13 +88,12 @@ impl<
             MemberedId::DocumentId(doc_id) => self
                 .get_document(doc_id)
                 .await
-                .map(|doc| Membered::Document(doc_id, doc))
-                .ok_or_else(|| NotFound(Box::new(doc_id.into()))),
+                .map(|doc| Membered::Document(doc_id, doc)),
             MemberedId::GroupId(group_id) => self
                 .get_group(group_id)
                 .await
-                .map(|group| Membered::Group(group_id, group))
-                .ok_or_else(|| NotFound(Box::new(group_id.into()))),
+                .map(|group| Membered::Group(group_id, group)),
         }
+        .ok_or_else(|| NotFound(Box::new(id.into())))
     }
 }

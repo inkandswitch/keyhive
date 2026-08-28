@@ -141,7 +141,7 @@ impl JsKeyhive {
             .0
             .get_group(group_id)
             .await
-            .ok_or(NotFound(Box::new(group_id.into())))?;
+            .ok_or_else(|| NotFound(Box::new(group_id.into())))?;
 
         Ok(JsGroup { group_id, inner })
     }
@@ -174,7 +174,7 @@ impl JsKeyhive {
             .0
             .get_document(doc_id)
             .await
-            .ok_or(NotFound(Box::new(doc_id.into())))?;
+            .ok_or_else(|| NotFound(Box::new(doc_id.into())))?;
 
         Ok(JsDocument { doc_id, inner })
     }
