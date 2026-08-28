@@ -5,10 +5,9 @@ use crate::{
     access::Access,
     archive::Archive,
     crypto::signed_ext::SignedSubjectId,
+    error::not_found::NotFound,
     event::static_event::StaticEvent,
-    keyhive::{
-        CausalDecryptError, EncryptContentError, Keyhive, NotFound, ReceiveStaticEventError,
-    },
+    keyhive::{CausalDecryptError, EncryptContentError, Keyhive, ReceiveStaticEventError},
     listener::no_listener::NoListener,
     principal::{
         agent::Agent,

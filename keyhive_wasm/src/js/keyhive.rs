@@ -52,8 +52,9 @@ use from_js_ref::FromJsRef;
 use future_form::Local;
 use keyhive_core::{
     crypto::digest::Digest,
+    error::not_found::NotFound,
     event::{static_event::StaticEvent, Event},
-    keyhive::{EncryptContentError, Keyhive, NotFound, ReceiveStaticEventError},
+    keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{
         agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError, public::Public,
     },

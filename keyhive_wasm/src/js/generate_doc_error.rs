@@ -1,5 +1,5 @@
 use derive_more::{Display, From};
-use keyhive_core::{keyhive::NotFound, principal::document::GenerateDocError};
+use keyhive_core::{error::not_found::NotFound, principal::document::GenerateDocError};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 

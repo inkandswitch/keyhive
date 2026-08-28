@@ -1,5 +1,5 @@
 use derive_more::{Display, From};
-use keyhive_core::keyhive::NotFound;
+use keyhive_core::error::not_found::NotFound;
 use keyhive_crypto::signed::SigningError;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;

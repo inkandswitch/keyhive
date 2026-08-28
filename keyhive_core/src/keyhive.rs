@@ -6,7 +6,7 @@ use crate::{
     cgka::AllCgkaOps,
     contact_card::ContactCard,
     crypto::signed_ext::{SignedId, SignedSubjectId},
-    error::missing_dependency::MissingDependency,
+    error::{missing_dependency::MissingDependency, not_found::NotFound},
     event::{static_event::StaticEvent, Event},
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
@@ -2859,17 +2859,6 @@ where
             Self::UnknownAgent(_) => true,
             Self::VerificationError(_) => false,
         }
-    }
-}
-
-/// An identifier this instance has never received.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{0} is not known to this keyhive")]
-pub struct NotFound(pub Box<Identifier>);
-
-impl NotFound {
-    pub fn new(id: impl Into<Identifier>) -> Self {
-        NotFound(Box::new(id.into()))
     }
 }
 

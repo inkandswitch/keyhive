@@ -2,7 +2,7 @@
 
 use keyhive_core::{
     access::Access::{self, Admin, Edit, Read, Relay},
-    keyhive::NotFound,
+    error::not_found::NotFound,
     principal::document::AddMemberError,
     test_utils::{TestContext, TestError, TestResult as Result},
 };
