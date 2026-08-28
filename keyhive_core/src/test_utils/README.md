@@ -104,11 +104,11 @@ instance's own ciphertext store. So a reader has to be given the content first:
 
 ## Guidelines for writing tests with `TestContext`
 
-* Call `sync_all_unsent()` before checking anything about an instance other than the
-one that did the work, and before an instance delegates to a resource it did not
-create.
+* Call `sync_all_unsent()` before checking anything about an instance other than
+  the one that did the work, and before an instance delegates to a resource it did
+  not create.
 * Check one rule per test. If a test could fail for two unrelated reasons, split it.
 * Name a test after the rule it checks, so `a_reader_cannot_delegate_edit_or_above`
-rather than `test_add_member_3`.
+  rather than `test_add_member_3`.
 * Test the invariants keyhive must respect from the user of the `Keyhive` API's
-perspective. Lower-level details belong in unit tests in the module that owns them.
+  perspective. Lower-level details belong in unit tests in the module that owns them.

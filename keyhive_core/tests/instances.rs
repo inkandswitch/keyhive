@@ -1,3 +1,5 @@
+//! Two keyhive instances sharing one identity, its signing key and its prekey secrets.
+
 use keyhive_core::{
     access::Access::{Admin, Read},
     keyhive::Keyhive,

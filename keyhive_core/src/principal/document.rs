@@ -72,6 +72,8 @@ pub struct Document<
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
+    /// Keys for content this document has written or read, so a later write can carry
+    /// them to a reader in an envelope. Not persisted, and not evicted.
     known_decryption_keys: HashMap<T, SymmetricKey>,
     cgka: Option<Cgka>,
 }
@@ -763,8 +765,6 @@ pub enum EncryptError {
 /// Why content could not be written into an [`Envelope`].
 #[derive(Debug, Error)]
 pub enum EncryptInEnvelopeError<T: ContentRef> {
-    /// A predecessor was named that this document has never held a key for, so the envelope
-    /// could not carry one.
     #[error("no key for ancestor {0:?}")]
     NoKeyForAncestor(T),
 

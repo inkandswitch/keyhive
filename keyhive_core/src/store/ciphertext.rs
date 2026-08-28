@@ -341,7 +341,7 @@ pub trait Isomorphic<T> {
 #[derive(Debug, Error)]
 pub struct CausalDecryptionError<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> {
     pub cannot: HashMap<Cr, ErrorReason<F, Cr, T, S>>,
-    /// Boxed to keep this error small enough to return by value.
+    /// Boxed because `CausalDecryptionState` holds three collections
     pub progress: Box<CausalDecryptionState<Cr, T>>,
 }
 

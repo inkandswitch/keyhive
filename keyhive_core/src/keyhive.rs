@@ -1,6 +1,6 @@
 //! The primary API for the library.
 //!
-//! The submodules hold more `impl Keyhive`, split by topic.
+//! Further `Keyhive` methods are grouped by topic in submodules.
 
 mod queries;
 
@@ -844,7 +844,7 @@ impl<
         Ok((op, new_share_key, new_share_secret_key))
     }
 
-    /// Every document active reaches, and at what access level.
+    /// Every document the active agent reaches and at what access level.
     #[instrument(skip_all)]
     pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Access> {
         let id = { self.active.lock().await.id().into() };
@@ -857,7 +857,7 @@ impl<
 
     /// The documents `who` reaches, and at what access level.
     ///
-    /// Errors if have never heard of `who`.
+    /// Errors if we have never heard of `who`.
     #[instrument(skip_all)]
     pub async fn docs_reachable_by_agent(
         &self,
@@ -2811,7 +2811,6 @@ impl NotFound {
 /// type parameters.
 #[derive(Debug, Error)]
 pub enum CausalDecryptError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>> {
-    /// The identifier was not found.
     #[error(transparent)]
     NotFound(#[from] NotFound),
 
@@ -2822,7 +2821,6 @@ pub enum CausalDecryptError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<
 /// Why content could not be written into an [`Envelope`](crate::crypto::envelope::Envelope).
 #[derive(Debug, Error)]
 pub enum EnvelopeError<T: ContentRef> {
-    /// The identifier was not found.
     #[error(transparent)]
     NotFound(#[from] NotFound),
 
@@ -2929,7 +2927,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
 #[derive(Debug, Error)]
 pub enum EncryptContentError {
-    /// The identifier was not found.
     #[error(transparent)]
     NotFound(#[from] NotFound),
 
@@ -3231,12 +3228,12 @@ mod tests {
         assert!(left.docs.lock().await.contains_key(&left_doc));
         assert!(left.groups.lock().await.contains_key(&left_group_id));
 
-        // NOTE: *NOT* the group
+        // Not the group.
         let left_membered = left.membered_reachable_by_agent(Public.id()).await.unwrap();
 
         assert_eq!(left_membered.len(), 1);
         assert!(left_membered.contains_key(&left_doc.into()));
-        assert!(!left_membered.contains_key(&left_group_id.into())); // NOTE *not* included because Public is not a member
+        assert!(!left_membered.contains_key(&left_group_id.into())); // not included because Public is not a member
 
         let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).await;
         assert_eq!(left_to_mid_ops.len(), 14);
@@ -3251,7 +3248,7 @@ mod tests {
 
         // Middle should now look the same
         assert!(middle.docs.lock().await.contains_key(&left_doc));
-        assert!(!middle.groups.lock().await.contains_key(&left_group_id)); // NOTE: *None*
+        assert!(!middle.groups.lock().await.contains_key(&left_group_id)); // none of them
 
         assert_eq!(middle.individuals.lock().await.len(), 3); // NOTE: includes Left
         assert_eq!(middle.groups.lock().await.len(), 0);
@@ -3298,7 +3295,7 @@ mod tests {
 
         assert!(right.groups.lock().await.len() == 1 || right.docs.lock().await.len() == 1);
         assert!(right.docs.lock().await.contains_key(&left_doc));
-        assert!(!right.groups.lock().await.contains_key(&left_group_id)); // NOTE: *None*
+        assert!(!right.groups.lock().await.contains_key(&left_group_id)); // none of them
 
         assert_eq!(right.individuals.lock().await.len(), 4);
         assert_eq!(right.groups.lock().await.len(), 0);

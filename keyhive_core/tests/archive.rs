@@ -1,3 +1,5 @@
+//! Saving an instance to an archive and rebuilding it.
+
 use keyhive_core::{
     access::Access::{Admin, Edit, Read},
     test_utils::{CausalDecryptionExt, TestContext, TestError, TestResult as Result},

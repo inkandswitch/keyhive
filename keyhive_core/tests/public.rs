@@ -1,3 +1,5 @@
+//! The well-known `Public` principal as a member.
+
 use keyhive_core::{
     access::Access::{Admin, Edit, Read, Relay},
     principal::public::Public,

@@ -1,3 +1,5 @@
+//! Access levels for agents and what they can do with them.
+
 use keyhive_core::{
     access::Access::{self, Admin, Edit, Read, Relay},
     keyhive::NotFound,

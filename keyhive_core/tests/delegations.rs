@@ -1,3 +1,5 @@
+//! The delegation value, its properties, and what distinguishes two of them.
+
 use keyhive_core::{
     access::Access::{Admin, Edit, Read},
     test_utils::{AddMemberUpdateExt, TestContext, TestResult as Result},

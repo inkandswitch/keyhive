@@ -1,9 +1,4 @@
 //! Reading a chain of content by walking back through the ancestors each write lists.
-//!
-//! Content written this way carries, inside its own ciphertext, the keys to the content it
-//! lists. That is how someone who can open one write can open earlier ones they were never
-//! given a key for. Keyhive defines the envelope and walks it. Building one is the
-//! application's job, which `encrypt_in_envelope` stands in for.
 
 use keyhive_core::{
     access::Access::Read,

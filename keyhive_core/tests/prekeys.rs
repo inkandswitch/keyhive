@@ -1,3 +1,5 @@
+//! Expanding and rotating prekeys.
+
 use keyhive_core::{
     access::Access::Read,
     test_utils::{PrekeyOp, TestContext, TestResult as Result},

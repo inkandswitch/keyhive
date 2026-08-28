@@ -1,3 +1,5 @@
+//! Which key a piece of content is encrypted under and who can derive it.
+
 use keyhive_core::{
     access::Access::{Edit, Read},
     test_utils::{

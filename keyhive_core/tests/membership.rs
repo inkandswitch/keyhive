@@ -1,3 +1,5 @@
+//! Adding and revoking members.
+
 use keyhive_core::{
     access::Access::{Admin, Edit, Read},
     principal::document::id::DocumentId,
@@ -7,7 +9,7 @@ use std::collections::BTreeSet;
 
 /// Write new content and report which of `cast` can read it.
 ///
-/// Reading content written after a change is the behaviour behind "is this individual in
+/// Reading content written after a change is the behavior behind "is this individual in
 /// the document's key group?", which is what these tests are about.
 async fn readers_after_writing(
     ctx: &mut TestContext,

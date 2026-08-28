@@ -875,12 +875,11 @@ impl TestContext {
             .unwrap_or_else(|| id.to_string().into())
     }
 
-    ////////////////////////////////////////////////////////////////////////////
     ///////////////////
     // Private methods
     ///////////////////
 
-    // Returns the `Stats` for every instance for checking if everyone has converged.
+    /// The `Stats` for every instance, for checking whether everyone has converged.
     async fn everyone_stats(&self) -> Vec<Stats> {
         let mut stats = Vec::with_capacity(self.hives.len());
         for hive in self.hives.values() {
@@ -1075,7 +1074,7 @@ pub fn decrypt_with_key(ct: &Ciphertext, key: SymmetricKey) -> TestResult<Vec<u8
 /// The state is what the walk recovered, as a `Vec` in the order it read them, beside two
 /// maps of keys by content ref.
 pub trait CausalDecryptionExt {
-    /// The content the walk recovered, in no order.
+    /// The content the walk recovered, as a set.
     fn recovered(&self) -> BTreeSet<Vec<u8>>;
     /// How many pieces the walk decrypted, counting repeats.
     fn recovered_count(&self) -> usize;

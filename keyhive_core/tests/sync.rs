@@ -1,3 +1,5 @@
+//! Syncing events between keyhives.
+
 use keyhive_core::{
     access::Access::{self, Edit, Read},
     test_utils::{EventKind, TestContext, TestResult as Result},
