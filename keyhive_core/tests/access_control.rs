@@ -464,9 +464,9 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
     //             ┌─────────────────────┐
     //         ┌──▶│       Group         │──┐
     //         │   └─────────────────────┘  │ Read
-    //         │                            ▼
-    //         │   ┌─────────────────────┐
-    //         └───│         Doc         │
+    //         │                            │
+    //         │   ┌─────────────────────┐  │
+    //         └───│         Doc         │◀─┘
     //    Read     └─────────────────────┘
     //
     // The document is a member of the group and the group is a member of the document,

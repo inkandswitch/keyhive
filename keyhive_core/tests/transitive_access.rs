@@ -18,17 +18,17 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     // Bob adds Carol to Doc B.
     // ┌─────────┐   ┌─────────┐   ┌─────────┐
     // │  Alice  │   │   Bob   │   │  Carol  │
-    // └────┬────┘   └────┬────┘   └─────────┘
-    //      │             │              ▲
-    //      │ Admin       │ Admin        │ Edit (Bob adds)
-    //      ▼             ▼              │
-    // ┌─────────────────────┐           │
-    // │   Account Doc A     │           │
-    // └─────────┬───────────┘           │
-    //           │ Admin                 │
-    //           ▼                       │
-    // ┌─────────────────────┐           │
-    // │       Doc B         │ ──────────┘
+    // └────┬────┘   └────┬────┘   └────┬────┘
+    //      │             │             │
+    //      │ Admin       │ Admin       │ Edit (Bob adds)
+    //      ▼             ▼             │
+    // ┌─────────────────────┐          │
+    // │   Account Doc A     │          │
+    // └─────────┬───────────┘          │
+    //           │ Admin                │
+    //           ▼                      │
+    // ┌─────────────────────┐          │
+    // │       Doc B         │◀─────────┘
     // └─────────────────────┘
     // Test: After Bob adds Carol, Bob should also be able to revoke Carol.
     test_utils::init_logging();

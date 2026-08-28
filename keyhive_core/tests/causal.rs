@@ -210,11 +210,17 @@ async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Resul
 async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> {
     let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
-    //   first_root      second_root
-    //      |    \           |
-    //    left    \        right
-    //      |      \_______/  |
-    //  left_head   unrelated_head   right_head
+    //   first_root              second_root
+    //      │  └────────┐   ┌──────┘
+    //      ▼           ▼   ▼
+    //    left           right
+    //      │  └────────┐   │  └──────┐
+    //      ▼           ▼   ▼         ▼
+    //  left_head     head_above   right_head
+    //
+    // The walk starts at left_head and right_head, so it never reaches head_above, which
+    // sits above both middles. first_root is reachable through left and through right,
+    // which is what makes it the shared ancestor.
     let first_root = ctx
         .encrypt_in_envelope(&alice, design_doc, &[], b"first root")
         .await?;
@@ -233,8 +239,8 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
     let right_head = ctx
         .encrypt_in_envelope(&alice, design_doc, &[&right], b"right head")
         .await?;
-    let unrelated_head = ctx
-        .encrypt_in_envelope(&alice, design_doc, &[&left, &right], b"unrelated head")
+    let head_above = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&left, &right], b"the head above")
         .await?;
     ctx.sync_all_unsent().await?;
 
@@ -245,7 +251,7 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
         &right,
         &left_head,
         &right_head,
-        &unrelated_head,
+        &head_above,
     ] {
         ctx.give_content(&bob, held).await?;
     }
@@ -288,7 +294,7 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
         "and that key is the one that opens it"
     );
     assert!(
-        walked.key_for_recovered(&unrelated_head).is_none(),
+        walked.key_for_recovered(&head_above).is_none(),
         "no key is reported for content the walk never reached"
     );
 

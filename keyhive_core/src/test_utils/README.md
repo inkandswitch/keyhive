@@ -75,7 +75,7 @@ events rather than introductions.
 ## Checking test errors for failure assertions
 
 The `TestContext` has one unified error vocabulary for failure reasons we want to
-assert on. To match, you can use a `map_error`:
+assert on. To match, you can use `map_err`:
 
 ```text
 match bob.add_member(carol.id(), design_doc, Read, &[]).await.map_err(TestError::from) {

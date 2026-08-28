@@ -191,9 +191,9 @@ async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
         fresh > 0,
         "alice has events for the server, so the assertions below are not on an empty delivery"
     );
-    // The counts have to differ, or the assertion below cannot distingush "none of alice's events
-    // joined the backlog" from "alice's events replaced it". Both are regressions and they
-    // report the same total when the two numbers happen to match.
+    // The counts have to differ, or the assertion below cannot distinguish "none of alice's
+    // events joined the backlog" from "alice's events replaced it". Both are regressions and
+    // they report the same total when the two numbers happen to match.
     assert_ne!(
         fresh, backlog,
         "the delivery and the backlog are the same size, so the check below is ambiguous"

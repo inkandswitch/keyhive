@@ -77,7 +77,7 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
@@ -757,7 +757,7 @@ impl<
     pub async fn cgka_members_for(
         &self,
         doc: DocumentId,
-    ) -> Result<Option<std::collections::BTreeSet<IndividualId>>, NotFound> {
+    ) -> Result<Option<BTreeSet<IndividualId>>, NotFound> {
         let handle = self.document_by_id(doc).await?;
         let locked = handle.lock().await;
         let members = locked.cgka_members().ok().map(|ids| ids.collect());
@@ -4132,7 +4132,7 @@ mod tests {
         for (who, id) in [("dave", dave_id), ("eve", eve_id)] {
             assert!(
                 removed_vks.contains(&id.verifying_key()),
-                "{who} came in through the revoked subgroup and his removal was not reported"
+                "{who} came in through the revoked subgroup and their removal was not reported"
             );
         }
 
