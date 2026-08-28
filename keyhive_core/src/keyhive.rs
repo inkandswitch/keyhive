@@ -2,6 +2,7 @@
 
 use crate::{
     access::Access,
+    all_agent_events::AllAgentEvents,
     archive::Archive,
     cgka::AllCgkaOps,
     contact_card::ContactCard,
@@ -1504,6 +1505,60 @@ impl<
         }
 
         AllCgkaOps { ops, index }
+    }
+
+    /// Every event each agent can reach, gathered once and deduplicated.
+    pub async fn all_agent_events(&self) -> AllAgentEvents<F, S, T, L> {
+        let all_membership = self.membership_ops_for_all_agents().await;
+        let all_prekey = self.reachable_prekey_ops_for_all_agents().await;
+        let all_cgka = self.cgka_ops_for_all_agents().await;
+
+        let mut events = HashMap::new();
+
+        let mut membership_sources = HashMap::new();
+        for (source_id, source_ops) in all_membership.ops {
+            let mut digests = Vec::with_capacity(source_ops.len());
+            for (digest, op) in source_ops {
+                let digest = digest.coerce();
+                digests.push(digest);
+                events.entry(digest).or_insert_with(|| op.into());
+            }
+            membership_sources.insert(source_id, digests);
+        }
+
+        let mut prekey_sources = HashMap::new();
+        for (source_id, key_ops) in all_prekey.ops {
+            let mut digests = Vec::with_capacity(key_ops.len());
+            for key_op in key_ops {
+                let event: Event<F, S, T, L> = Event::from(key_op.as_ref().clone());
+                let digest = Digest::hash(&event);
+                digests.push(digest);
+                events.entry(digest).or_insert(event);
+            }
+            prekey_sources.insert(source_id, digests);
+        }
+
+        let mut cgka_sources = HashMap::new();
+        for (source_id, cgka_ops) in all_cgka.ops {
+            let mut digests = Vec::with_capacity(cgka_ops.len());
+            for cgka_op in cgka_ops {
+                let event: Event<F, S, T, L> = Event::from(cgka_op);
+                let digest = Digest::hash(&event);
+                digests.push(digest);
+                events.entry(digest).or_insert(event);
+            }
+            cgka_sources.insert(source_id, digests);
+        }
+
+        AllAgentEvents {
+            events,
+            membership_sources,
+            prekey_sources,
+            cgka_sources,
+            membership_index: all_membership.index,
+            prekey_index: all_prekey.index,
+            cgka_index: all_cgka.index,
+        }
     }
 
     #[instrument(skip_all)]

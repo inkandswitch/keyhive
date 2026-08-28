@@ -11,6 +11,7 @@
 #![allow(clippy::type_complexity)]
 
 pub mod access;
+pub mod all_agent_events;
 pub mod archive;
 pub mod cgka;
 pub mod contact_card;

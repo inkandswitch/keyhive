@@ -2,8 +2,14 @@
 
 use keyhive_core::{
     access::Access::{self, Edit, Read},
+    event::Event,
     test_utils::{EventKind, TestContext, TestResult as Result},
 };
+use keyhive_crypto::{digest::Digest, signer::memory::MemorySigner};
+use std::collections::BTreeSet;
+
+/// The event type the harness's keyhives emit.
+type Ev = Event<future_form::Sendable, MemorySigner>;
 
 #[tokio::test]
 async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
@@ -349,5 +355,58 @@ async fn stats_counts_key_agreement_only_once_the_operations_arrive() -> Result<
         bob.stats().await.cgka_operations > 0,
         "which arrive with the rest of the events"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn all_agent_events_agrees_with_the_per_agent_walk() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(engineering, design_doc, Edit, &[]).await?;
+    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+    ctx.encrypt(&alice, design_doc, b"something to rotate for")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    let all = alice.all_agent_events().await;
+    assert!(all.event_count() > 0, "there is something to send");
+
+    for who in [&alice, &bob] {
+        let agent = alice
+            .get_agent(who.id().into())
+            .await
+            .ok_or("alice knows this agent")?;
+
+        let mut per_agent: BTreeSet<[u8; 32]> = BTreeSet::new();
+        for (digest, _) in alice.membership_ops_for_agent(&agent).await {
+            per_agent.insert(*digest.raw.as_bytes());
+        }
+        for key_ops in alice.reachable_prekey_ops_for_agent(&agent).await.values() {
+            for key_op in key_ops.iter() {
+                let event: Ev = Event::from(key_op.as_ref().clone());
+                per_agent.insert(*Digest::hash(&event).raw.as_bytes());
+            }
+        }
+        for cgka_op in alice.cgka_ops_reachable_by_agent(&agent).await {
+            let event: Ev = Event::from(cgka_op);
+            per_agent.insert(*Digest::hash(&event).raw.as_bytes());
+        }
+
+        let bulk: BTreeSet<[u8; 32]> = all
+            .digests_for(who.id().into())
+            .into_iter()
+            .map(|d| *d.raw.as_bytes())
+            .collect();
+
+        assert_eq!(
+            bulk,
+            per_agent,
+            "the bulk walk and the per-agent walk disagree for {}",
+            who.name()
+        );
+    }
     Ok(())
 }

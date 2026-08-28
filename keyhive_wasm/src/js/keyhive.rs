@@ -51,6 +51,7 @@ use dupe::{Dupe, IterDupedExt};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use keyhive_core::{
+    all_agent_events::EventDigest,
     crypto::digest::Digest,
     error::not_found::NotFound,
     event::{static_event::StaticEvent, Event},
@@ -541,119 +542,67 @@ impl JsKeyhive {
         arr
     }
 
-    /// Returns all agent events with deduplicated storage and two-tier indirection
-    /// for membership, prekey, and CGKA ops.
+    /// Every event each agent can reach, deduplicated, with a source layer so one digest
+    /// list is shared by every agent that reaches it.
+    ///
+    /// The consumer follows: agent -> source IDs -> hashes -> event bytes.
     #[wasm_bindgen(js_name = allAgentEvents)]
     pub async fn all_agent_events(&self) -> Result<JsAllAgentEvents, JsSerializationError> {
         init_span!("JsKeyhive::all_agent_events");
+        let all = self.0.all_agent_events().await;
 
-        let all_membership = self.0.membership_ops_for_all_agents().await;
-        let all_prekey = self.0.reachable_prekey_ops_for_all_agents().await;
-        let all_cgka = self.0.cgka_ops_for_all_agents().await;
-
-        // Deduplicated events map: hash bytes -> serialized event bytes.
-        // Tracks which digests have already been serialized to avoid redundant
-        // serialization when the same op appears in multiple sources.
-        let events_map = js_sys::Map::new();
-        let mut serialized_hashes: HashSet<Vec<u8>> = HashSet::new();
-
-        // Build membershipSources: one per source (group/doc/agent), shared across agents.
-        // Also serialize membership events into the deduplicated events map.
-        let membership_sources_map = js_sys::Map::new();
-        for (source_id, source_ops) in &all_membership.ops {
-            let source_hashes = js_sys::Array::new();
-            for (digest, op) in source_ops {
-                let hash_bytes = digest.as_slice().to_vec();
-                let hash = js_sys::Uint8Array::from(digest.as_slice());
-                if serialized_hashes.insert(hash_bytes) {
-                    let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                        op.clone().into();
-                    let static_event = StaticEvent::from(event);
-                    let bytes = bincode::serialize(&static_event)?;
-                    let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-                    events_map.set(&hash.clone().into(), &js_bytes.into());
-                }
-                source_hashes.push(&hash.into());
-            }
-            let id_bytes = js_sys::Uint8Array::from(source_id.as_bytes().as_slice());
-            membership_sources_map.set(&id_bytes.into(), &source_hashes.into());
+        let events = js_sys::Map::new();
+        for (digest, event) in &all.events {
+            let bytes = bincode::serialize(&StaticEvent::from(event.clone()))?;
+            events.set(
+                &js_sys::Uint8Array::from(digest.as_slice()).into(),
+                &js_sys::Uint8Array::from(bytes.as_slice()).into(),
+            );
         }
 
-        fn build_agent_index(index: &HashMap<Identifier, HashSet<Identifier>>) -> js_sys::Map {
+        fn hashes_per_source(
+            sources: &HashMap<
+                Identifier,
+                Vec<EventDigest<Local, JsSigner, JsChangeId, JsEventHandler>>,
+            >,
+        ) -> js_sys::Map {
             let map = js_sys::Map::new();
-            for (agent_id, source_ids) in index {
-                let sources = js_sys::Array::new();
-                for id in source_ids {
-                    sources.push(&js_sys::Uint8Array::from(id.as_bytes().as_slice()).into());
+            for (source_id, digests) in sources {
+                let arr = js_sys::Array::new();
+                for digest in digests {
+                    arr.push(&js_sys::Uint8Array::from(digest.as_slice()).into());
                 }
                 map.set(
-                    &js_sys::Uint8Array::from(agent_id.as_bytes().as_slice()).into(),
-                    &sources.into(),
+                    &js_sys::Uint8Array::from(source_id.as_bytes().as_slice()).into(),
+                    &arr.into(),
                 );
             }
             map
         }
 
-        let agent_membership_sources_map = build_agent_index(&all_membership.index);
-
-        // Build prekey sources: one per identifier, shared across agents.
-        // Also serialize prekey events into the deduplicated events map.
-        let prekey_sources_map = js_sys::Map::new();
-        for (identifier, ops_vec) in &all_prekey.ops {
-            let source_hashes = js_sys::Array::new();
-            for key_op in ops_vec {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                    Event::from(key_op.as_ref().dupe());
-                let digest = Digest::hash(&event);
-                let hash_bytes = digest.as_slice().to_vec();
-                let hash = js_sys::Uint8Array::from(digest.as_slice());
-                if serialized_hashes.insert(hash_bytes) {
-                    let static_event = StaticEvent::from(event);
-                    let bytes = bincode::serialize(&static_event)?;
-                    let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-                    events_map.set(&hash.clone().into(), &js_bytes.into());
+        fn sources_per_agent(index: &HashMap<Identifier, HashSet<Identifier>>) -> js_sys::Map {
+            let map = js_sys::Map::new();
+            for (agent_id, source_ids) in index {
+                let arr = js_sys::Array::new();
+                for id in source_ids {
+                    arr.push(&js_sys::Uint8Array::from(id.as_bytes().as_slice()).into());
                 }
-                source_hashes.push(&hash.into());
+                map.set(
+                    &js_sys::Uint8Array::from(agent_id.as_bytes().as_slice()).into(),
+                    &arr.into(),
+                );
             }
-            let id_bytes = js_sys::Uint8Array::from(identifier.as_bytes().as_slice());
-            prekey_sources_map.set(&id_bytes.into(), &source_hashes.into());
+            map
         }
-
-        let agent_prekey_sources_map = build_agent_index(&all_prekey.index);
-
-        // Build CGKA sources: one per document, shared across agents.
-        // Also serialize CGKA events into the deduplicated events map.
-        let cgka_sources_map = js_sys::Map::new();
-        for (doc_id, cgka_ops) in &all_cgka.ops {
-            let source_hashes = js_sys::Array::new();
-            for cgka_op in cgka_ops {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                    Event::from(cgka_op.dupe());
-                let digest = Digest::hash(&event);
-                let hash_bytes = digest.as_slice().to_vec();
-                let hash = js_sys::Uint8Array::from(digest.as_slice());
-                if serialized_hashes.insert(hash_bytes) {
-                    let static_event = StaticEvent::from(event);
-                    let bytes = bincode::serialize(&static_event)?;
-                    let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-                    events_map.set(&hash.clone().into(), &js_bytes.into());
-                }
-                source_hashes.push(&hash.into());
-            }
-            let id_bytes = js_sys::Uint8Array::from(doc_id.as_bytes().as_slice());
-            cgka_sources_map.set(&id_bytes.into(), &source_hashes.into());
-        }
-
-        let agent_cgka_sources_map = build_agent_index(&all_cgka.index);
 
         Ok(JsAllAgentEvents::new(
-            events_map,
-            membership_sources_map,
-            agent_membership_sources_map,
-            prekey_sources_map,
-            agent_prekey_sources_map,
-            cgka_sources_map,
-            agent_cgka_sources_map,
+            events,
+            hashes_per_source(&all.membership_sources),
+            sources_per_agent(&all.membership_index),
+            hashes_per_source(&all.prekey_sources),
+            sources_per_agent(&all.prekey_index),
+            hashes_per_source(&all.cgka_sources),
+            sources_per_agent(&all.cgka_index),
         ))
     }
 
