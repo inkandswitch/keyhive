@@ -334,21 +334,17 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]
-    pub async fn reachable_docs(&self) -> Result<Vec<Summary>, JsNotFound> {
+    pub async fn reachable_docs(&self) -> Vec<Summary> {
         init_span!("JsKeyhive::reachable_docs");
-        let mut acc = Vec::new();
-        for (doc_id, can) in self.0.reachable_docs().await {
-            let inner = self
-                .0
-                .get_document(doc_id)
-                .await
-                .ok_or_else(|| NotFound::new(doc_id))?;
-            acc.push(Summary {
+        self.0
+            .reachable_doc_handles()
+            .await
+            .into_iter()
+            .map(|(doc_id, (inner, can))| Summary {
                 doc: JsDocument { doc_id, inner },
                 access: JsAccess(can),
-            });
-        }
-        Ok(acc)
+            })
+            .collect()
     }
 
     /// Force a PCS key rotation and return the new leaf secret, serialized as a

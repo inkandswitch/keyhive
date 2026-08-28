@@ -779,6 +779,7 @@ impl<
     ///
     /// `Ok(false)` means this instance holds no key for the content, or holds one that does
     /// not authenticate it. Not knowing about `doc` at all is an error.
+    #[cfg(any(test, feature = "test_utils"))]
     pub async fn can_decrypt_content(
         &self,
         doc: DocumentId,
@@ -847,12 +848,22 @@ impl<
     /// Every document the active agent reaches and at what access level.
     #[instrument(skip_all)]
     pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Access> {
-        let id = { self.active.lock().await.id().into() };
-        self.doc_handles_reachable_by(id)
+        self.reachable_doc_handles()
             .await
             .into_iter()
             .map(|(doc_id, (_, can))| (doc_id, can))
             .collect()
+    }
+
+    /// Like [`Keyhive::reachable_docs`] but returning each document's handle instead
+    /// of id.
+    #[allow(clippy::type_complexity)]
+    #[instrument(skip_all)]
+    pub async fn reachable_doc_handles(
+        &self,
+    ) -> BTreeMap<DocumentId, (Arc<Mutex<Document<F, S, T, L>>>, Access)> {
+        let id = { self.active.lock().await.id().into() };
+        self.doc_handles_reachable_by(id).await
     }
 
     /// The documents `who` reaches, and at what access level.
