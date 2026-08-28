@@ -241,7 +241,7 @@ async fn admin_on_a_parent_doc_reaches_the_child_doc() -> Result<()> {
     // Alice grants Bob Admin access on Doc A.
     // Alice adds Doc A as an Admin member of Doc B.
     //
-    // Question: Does Bob have Admin access to Doc B transitively?
+    // Bob holds Admin over Doc B transitively, through Doc A.
     //
     // ┌─────────────────────┐
     // │                     │
@@ -459,9 +459,8 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
     // 3. Alice creates a new document that the group controls
     // 4. Alice creates a cycle by adding the document to the group
     //
-    // Both Alice and Bob should be able to access the document
-    //
-    //
+    // Bob should reach the document through the group, and the walk should terminate from
+    // either end of the cycle.
     //
     // ┌─────────────────────┐   ┌─────────────────────┐
     // │                     │   │                     │

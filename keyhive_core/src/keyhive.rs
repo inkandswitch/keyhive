@@ -77,7 +77,7 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
@@ -769,7 +769,7 @@ impl<
     pub async fn cgka_members_for(
         &self,
         doc: DocumentId,
-    ) -> Result<Option<BTreeSet<IndividualId>>, NotFound> {
+    ) -> Result<Option<std::collections::BTreeSet<IndividualId>>, NotFound> {
         let handle = self.document_by_id(doc).await?;
         let locked = handle.lock().await;
         let members = locked.cgka_members().ok().map(|ids| ids.collect());
@@ -777,7 +777,7 @@ impl<
         Ok(members)
     }
 
-    /// The hash of `doc`'s current PCS key, and `None` if it has no key to hash.
+    /// The hash of `doc`'s current PCS key. Returns `None` if it has no key to hash.
     ///
     /// Returns an error if we have never heard of `doc`.
     pub async fn try_pcs_key_hash(

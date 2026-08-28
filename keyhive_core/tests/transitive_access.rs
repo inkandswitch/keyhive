@@ -11,8 +11,26 @@ use testresult::TestResult;
 
 #[tokio::test]
 async fn test_transitive_admin_can_revoke() -> TestResult {
-    // Same hierarchy as test_transitive_admin_can_delegate.
-    // After Bob adds Carol, Bob should also be able to revoke Carol.
+    // Scenario:
+    // Alice owns Account Doc A and Doc B.
+    // Alice adds Account Doc A as Admin member of Doc B.
+    // Alice adds Bob as Admin member of Account Doc A.
+    // Bob adds Carol to Doc B.
+    // ┌─────────┐   ┌─────────┐   ┌─────────┐
+    // │  Alice  │   │   Bob   │   │  Carol  │
+    // └────┬────┘   └────┬────┘   └─────────┘
+    //      │             │              ▲
+    //      │ Admin       │ Admin        │ Edit (Bob adds)
+    //      ▼             ▼              │
+    // ┌─────────────────────┐           │
+    // │   Account Doc A     │           │
+    // └─────────┬───────────┘           │
+    //           │ Admin                 │
+    //           ▼                       │
+    // ┌─────────────────────┐           │
+    // │       Doc B         │ ──────────┘
+    // └─────────────────────┘
+    // Test: After Bob adds Carol, Bob should also be able to revoke Carol.
     test_utils::init_logging();
 
     let bob_signer = MemorySigner::generate(&mut rand::rngs::OsRng);

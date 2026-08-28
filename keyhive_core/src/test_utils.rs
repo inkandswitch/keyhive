@@ -1,4 +1,5 @@
 //! Helpers for tests and benchmarks, in this crate and in the integration suite.
+#![doc = include_str!("test_utils/README.md")]
 
 pub mod context;
 

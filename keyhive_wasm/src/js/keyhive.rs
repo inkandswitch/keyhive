@@ -852,7 +852,6 @@ impl JsKeyhive {
     }
 }
 
-/// Something the core named and then could not produce, which means the two disagree.
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct JsNotFound(#[from] NotFound);

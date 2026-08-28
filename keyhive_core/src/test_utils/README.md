@@ -59,23 +59,48 @@ particular signing key.
 Every instance learns every other instance's contact card, so a `NotSynced` is about
 events rather than introductions.
 
+## Simulating syncing events
+
+* `sync_all_unsent()` delivers every outstanding event to every keyhive instance.
+  This will be the most common way to sync events in tests.
+* `ctx.sync(&from, &to)` sends everything `to` is entitled to in one direction.
+* `ctx.sync_as_public(&from, &to)` sends what a public reader may see.
+* `ctx.sync_without(&from, &to, kind)` withholds one `EventKind` from what it
+  delivers (e.g., to simulate a case where no CGKA ops were received yet).
+* `ctx.sync_in_batches(..)` delivers in partial batches.
+* `ctx.sync_shuffled(..)` delivers in a random order (replicable via a seed).
+* `sync_all_unsent_within(rounds)` is like `sync_all_unsent` but puts the specified
+  limit on how many times to run the settling loop.
+
+## Checking test errors for failure assertions
+
+The `TestContext` has one unified error vocabulary for failure reasons we want to
+assert on. To match, you can use a `map_error`:
+
+```rust
+match bob.add_member(carol.id(), design_doc, Read, &[]).await.map_err(TestError::from) {
+    Err(TestError::NoAuthority) => {}
+    other => panic!("expected no authority, got {other:?}"),
+}
+```
+
 ## Writing content
 
 `ctx.encrypt` and its siblings are here for two reasons:
 
 * They choose the content ref so tests do not need to invent one and risk reusing
-one.
-* They record which document each piece went into. `ctx.encrypt_after(&alice, design_doc, ..)` can therefore refuse a predecessor belonging to a different
-document, with `WrongDocument`, rather than leaving it to surface later as a
-failing decryption.
+  one.
+* They record which document each piece of content went into.
+  `ctx.encrypt_after(&alice, design_doc, ..)` can therefore refuse a predecessor
+  belonging to a different document with the `WrongDocument` test error, rather than
+  leaving it to surface later as a failing decryption.
 
-Decryption does not benefit from these. Decrypt via the Keyhive API:
+Decryption does not benefit in this way. Decrypt via the Keyhive API:
 `bob.try_decrypt_content(design_doc, &ct)`.
 
 Causal decryption is the exception, because the walk reads ancestors out of the
 instance's own ciphertext store. So a reader has to be given the content first:
-`ctx.give_content(&bob, &ct)`, once per piece. `ctx.encrypt_in_envelope` does that
-for the writer already.
+`ctx.give_content(&bob, &ct)`, once per piece of content.
 
 ## Guidelines for writing tests with `TestContext`
 

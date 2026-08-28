@@ -444,8 +444,8 @@ async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<(
 /// removing it or by tracking what has been read.
 ///
 /// The second walk does not report the consumed content as outstanding, because the
-/// entrypoint lists it directly.
-/// `an_ancestor_the_entrypoint_lists_is_reported_when_missing` covers that case.
+/// entrypoint lists it directly. `an_ancestor_the_entrypoint_lists_is_reported_when_missing`
+/// covers that case.
 #[tokio::test]
 async fn a_walk_consumes_the_content_it_reads() -> Result<()> {
     let mut ctx = TestContext::new().await;
