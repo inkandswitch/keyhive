@@ -330,3 +330,22 @@ async fn a_reader_can_read_what_an_editor_wrote() -> Result<()> {
     assert_eq!(decrypt_with_key(&ct, key)?, msg.to_vec());
     Ok(())
 }
+
+#[tokio::test]
+async fn writing_again_does_not_rotate_the_key_each_time() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    let settled = alice.stats().await.cgka_operations;
+    for content in [b"first".as_slice(), b"second", b"third"] {
+        ctx.encrypt(&alice, design_doc, content).await?;
+    }
+
+    assert_eq!(
+        alice.stats().await.cgka_operations,
+        settled,
+        "each write found a key already in the tree, so none of them rotated"
+    );
+    Ok(())
+}
