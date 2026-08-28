@@ -179,9 +179,17 @@ other_from!(
     CgkaError,
     SigningError,
     GenerateDocError,
-    EncryptError,
     ReceivePrekeyOpError,
 );
+
+impl From<EncryptError> for TestError {
+    fn from(e: EncryptError) -> Self {
+        match e {
+            EncryptError::NotFound(inner) => inner.into(),
+            other => TestError::Other(other.to_string()),
+        }
+    }
+}
 
 impl From<EncryptContentError> for TestError {
     fn from(e: EncryptContentError) -> Self {
