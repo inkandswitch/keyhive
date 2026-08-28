@@ -154,10 +154,6 @@ impl Cgka {
         self.0.decryption_key_for(encrypted)
     }
 
-    pub fn has_pcs_key(&self) -> bool {
-        self.0.has_pcs_key()
-    }
-
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,

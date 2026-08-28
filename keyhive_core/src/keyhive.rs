@@ -1,13 +1,13 @@
 //! The primary API for the library.
 
 use crate::{
-    ability::Ability,
     access::Access,
+    all_agent_events::{AllAgentEvents, EventDigest},
     archive::Archive,
     cgka::AllCgkaOps,
     contact_card::ContactCard,
     crypto::signed_ext::{SignedId, SignedSubjectId},
-    error::missing_dependency::MissingDependency,
+    error::{missing_dependency::MissingDependency, not_found::NotFound},
     event::{static_event::StaticEvent, Event},
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
@@ -79,6 +79,7 @@ use std::{
     mem,
     sync::Arc,
 };
+
 use thiserror::Error;
 use tracing::instrument;
 
@@ -211,15 +212,6 @@ impl<
         &self.active
     }
 
-    /// Inject events into the pending set. For testing only.
-    #[cfg(any(test, feature = "test_utils"))]
-    pub async fn inject_pending_events(&self, events: Vec<StaticEvent<T>>) {
-        let mut pending = self.pending_events.lock().await;
-        for event in events {
-            pending.push(Arc::new(event));
-        }
-    }
-
     /// Get the [`Individual`] for the current Keyhive user.
     ///
     /// This is what you would share with a peer for them to
@@ -248,7 +240,7 @@ impl<
     pub async fn generate_group(
         &self,
         coparents: Vec<Peer<F, S, T, L>>,
-    ) -> Result<Arc<Mutex<Group<F, S, T, L>>>, SigningError> {
+    ) -> Result<GroupId, SigningError> {
         let group = Group::generate(
             NonEmpty {
                 head: Agent::Active(self.active.lock().await.id(), self.active.dupe()),
@@ -261,9 +253,11 @@ impl<
         )
         .await?;
         let group_id = group.group_id();
-        let g = Arc::new(Mutex::new(group));
-        self.groups.lock().await.insert(group_id, g.dupe());
-        Ok(g)
+        self.groups
+            .lock()
+            .await
+            .insert(group_id, Arc::new(Mutex::new(group)));
+        Ok(group_id)
     }
 
     /// Generate a document.
@@ -273,7 +267,7 @@ impl<
         &self,
         coparents: Vec<Peer<F, S, T, L>>,
         initial_content_heads: NonEmpty<T>,
-    ) -> Result<Arc<Mutex<Document<F, S, T, L>>>, GenerateDocError> {
+    ) -> Result<DocumentId, GenerateDocError> {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).await.is_none() {
                 self.register_peer(peer.dupe()).await;
@@ -309,14 +303,20 @@ impl<
         }
 
         let doc_id = new_doc.doc_id();
-        let doc = Arc::new(Mutex::new(new_doc));
-        self.docs.lock().await.insert(doc_id, doc.dupe());
+        self.docs
+            .lock()
+            .await
+            .insert(doc_id, Arc::new(Mutex::new(new_doc)));
 
-        Ok(doc)
+        Ok(doc_id)
     }
 
+    /// Generate a new contact card, rotating a prekey in the process.
+    ///
+    /// Use [`Keyhive::get_existing_contact_card`] to read a current contact card without
+    /// generating one.
     #[instrument(skip_all)]
-    pub async fn contact_card(&self) -> Result<ContactCard, SigningError> {
+    pub async fn generate_contact_card(&self) -> Result<ContactCard, SigningError> {
         let rot_key_op = self
             .active
             .lock()
@@ -338,21 +338,20 @@ impl<
             .contact_card()
     }
 
+    /// Receive `contact_card`, and report who it belongs to.
     #[instrument(skip_all)]
     pub async fn receive_contact_card(
         &self,
         contact_card: &ContactCard,
-    ) -> Result<Arc<Mutex<Individual>>, ReceivePrekeyOpError> {
-        let result = if let Some(indie) = self.get_individual(contact_card.id()).await {
+    ) -> Result<IndividualId, ReceivePrekeyOpError> {
+        if let Some(indie) = self.get_individual(contact_card.id()).await {
             indie
                 .lock()
                 .await
                 .receive_prekey_op(contact_card.op().dupe())?;
-            indie.dupe()
         } else {
             let new_user = Arc::new(Mutex::new(Individual::from(contact_card)));
-            self.register_individual(new_user.dupe()).await;
-            new_user
+            self.register_individual(new_user).await;
         };
 
         match contact_card.op() {
@@ -364,7 +363,7 @@ impl<
             }
         }
 
-        Ok(result)
+        Ok(contact_card.id())
     }
 
     #[instrument(skip_all)]
@@ -430,70 +429,29 @@ impl<
         true
     }
 
-    #[instrument(skip_all)]
-    pub async fn register_group(&self, root_delegation: Signed<Delegation<F, S, T, L>>) -> bool {
-        if self
-            .groups
-            .lock()
-            .await
-            .contains_key(&GroupId(root_delegation.subject_id()))
-        {
-            return false;
-        }
-
-        let group = Arc::new(Mutex::new(
-            Group::new(
-                GroupId(root_delegation.issuer.into()),
-                Arc::new(root_delegation),
-                self.delegations.dupe(),
-                self.revocations.dupe(),
-                self.event_listener.clone(),
-            )
-            .await,
-        ));
-
-        {
-            let locked = group.lock().await;
-            self.groups
-                .lock()
-                .await
-                .insert(locked.group_id(), group.dupe());
-        }
-        true
-    }
-
-    #[instrument(skip_all)]
-    pub async fn get_membership_operation(
-        &self,
-        digest: &Digest<MembershipOperation<F, S, T, L>>,
-    ) -> Option<MembershipOperation<F, S, T, L>> {
-        if let Some(d) = self.delegations.lock().await.get(&digest.coerce()) {
-            Some(d.dupe().into())
-        } else {
-            self.revocations
-                .lock()
-                .await
-                .get(&digest.coerce())
-                .map(|r| r.dupe().into())
-        }
-    }
-
+    /// Delegate `to_add` `can` access to `resource`.
+    ///
+    /// Returns an error if we have never heard of `to_add` or `resource`.
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,
-        to_add: Agent<F, S, T, L>,
-        resource: &Membered<F, S, T, L>,
+        to_add: impl Into<Identifier>,
+        resource: impl Into<MemberedId>,
         can: Access,
         other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        let to_add = self.agent_by_id(to_add.into()).await?;
+        let resource = self.membered_by_id(resource.into()).await?;
+
         let signer = { self.active.lock().await.signer.clone() };
-        let update = match resource {
+        let update = match &resource {
             Membered::Group(group_id, group) => {
                 let mut update = group
                     .lock()
                     .await
                     .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await?;
+                    .await
+                    .map_err(AddMemberError::from)?;
 
                 // Propagate CGKA adds to docs that contain this group.
                 // TODO: O(# of docs x `transitive_members()`). We should replace this approach
@@ -533,7 +491,8 @@ impl<
                         let mut locked_doc = doc.lock().await;
                         let ops = locked_doc
                             .add_cgka_members_from_prekeys(&prekeys, &signer)
-                            .await?;
+                            .await
+                            .map_err(AddMemberError::from)?;
                         update.cgka_ops.extend(ops);
                     }
                 }
@@ -557,16 +516,26 @@ impl<
         Ok(update)
     }
 
+    /// Revoke `to_revoke`'s membership in `resource`.
+    ///
+    /// With `retain_all_other_members`, the members `to_revoke` had admitted keep their
+    /// access, because their delegations are re-issued under the revoker.
+    ///
+    /// Errors if this instance has never received `resource`.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn revoke_member(
         &self,
-        to_revoke: Identifier,
+        to_revoke: impl Into<Identifier>,
         retain_all_other_members: bool,
-        resource: &Membered<F, S, T, L>,
+        resource: impl Into<MemberedId>,
     ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
+        let to_revoke = to_revoke.into();
+        let resource = self.membered_by_id(resource.into()).await?;
+
+        let active_id = { self.active.lock().await.id().into() };
         let mut relevant_docs = BTreeMap::new();
-        for (doc_id, Ability { doc, .. }) in self.reachable_docs().await {
+        for (doc_id, (doc, _)) in self.doc_handles_reachable_by(active_id).await {
             let locked = doc.lock().await;
             relevant_docs.insert(doc_id, locked.content_heads.iter().cloned().collect());
         }
@@ -575,7 +544,7 @@ impl<
 
         // When revoking from a group, collect the revoked member's individual
         // IDs before the revocation removes them from the members map.
-        let revoked_individual_ids: HashSet<IndividualId> = match resource {
+        let revoked_individual_ids: HashSet<IndividualId> = match &resource {
             Membered::Group(_, group) => {
                 let delegates: Vec<Agent<F, S, T, L>> = {
                     let locked = group.lock().await;
@@ -607,7 +576,7 @@ impl<
         // Propagate CGKA removals to docs that contain this group.
         // TODO: O(# of docs x `transitive_members()`). We should replace this approach
         // (possibly with a reverse index lookup).
-        if let Membered::Group(group_id, _) = resource {
+        if let Membered::Group(group_id, _) = &resource {
             if !revoked_individual_ids.is_empty() {
                 let group_identifier: Identifier = (*group_id).into();
                 let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
@@ -648,11 +617,11 @@ impl<
         Ok(update)
     }
 
-    /// Encrypt content for a document.
+    /// Encrypt `content` into `doc`.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
@@ -663,16 +632,17 @@ impl<
             .0)
     }
 
-    /// Encrypt content, also returning the application secret key it was
+    /// Encrypt `content` into `doc`. Returns the application secret it was
     /// encrypted under.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
+        let doc = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
         let (result, application_secret_key) = {
             let mut locked_csprng = self.csprng.lock().await;
@@ -685,7 +655,8 @@ impl<
                     &signer,
                     &mut *locked_csprng,
                 )
-                .await?
+                .await
+                .map_err(EncryptContentError::from)?
         };
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
@@ -693,53 +664,73 @@ impl<
         Ok((result, application_secret_key))
     }
 
+    /// The hash of `doc`'s current PCS key. Returns `None` if it has no key to hash.
+    ///
+    /// Returns an error if we have never heard of `doc`.
     pub async fn try_pcs_key_hash(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
-    ) -> Option<Digest<PcsKey>> {
-        doc.lock().await.cgka_mut().ok()?.try_pcs_key_hash().ok()
+        doc: DocumentId,
+    ) -> Result<Option<Digest<PcsKey>>, NotFound> {
+        let handle = self.document_by_id(doc).await?;
+        let hash = handle
+            .lock()
+            .await
+            .cgka_mut()
+            .ok()
+            .and_then(|cgka| cgka.try_pcs_key_hash().ok());
+        Ok(hash)
     }
 
+    /// Decrypt `encrypted` out of `doc`.
     pub async fn try_decrypt_content(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
-        doc.lock().await.try_decrypt_content(encrypted)
+        Ok(self.try_decrypt_content_keyed(doc, encrypted).await?.0)
     }
 
-    /// Decrypt content and also return the application secret key that was used.
+    /// Decrypt `encrypted` out of `doc`. Returns the application secret that was
+    /// used.
     pub async fn try_decrypt_content_keyed(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
-        doc.lock().await.try_decrypt_content_keyed(encrypted)
+        let doc = self.document_by_id(doc).await?;
+        let out = doc.lock().await.try_decrypt_content_keyed(encrypted);
+        out
     }
 
+    /// Walk back from `encrypted` through the ancestors it lists.
     pub async fn try_causal_decrypt_content(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
-    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<F, T, P, C>>
+    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptError<F, T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,
     {
-        doc.lock()
-            .await
-            .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
-            .await
+        let doc = self.document_by_id(doc).await?;
+        let out = {
+            let mut locked = doc.lock().await;
+            locked
+                .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
+                .await
+        };
+        Ok(out?)
     }
 
     #[instrument(skip_all)]
     pub async fn force_pcs_update(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
     ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
+        let handle = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
-        let (op, new_share_key, new_share_secret_key) = doc
+        let (op, new_share_key, new_share_secret_key) = handle
             .lock()
             .await
             .pcs_update(&signer, &mut *locked_csprng)
@@ -748,56 +739,123 @@ impl<
         Ok((op, new_share_key, new_share_secret_key))
     }
 
+    /// Every document the active agent reaches and at what access level.
     #[instrument(skip_all)]
-    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<F, S, T, L>> {
-        let active = self.active.dupe();
-        let locked_active = self.active.lock().await;
-        self.docs_reachable_by_agent(&Agent::Active(locked_active.id(), active))
+    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Access> {
+        self.reachable_doc_handles()
             .await
+            .into_iter()
+            .map(|(doc_id, (_, can))| (doc_id, can))
+            .collect()
     }
 
-    #[instrument(skip_all)]
+    /// Like [`Keyhive::reachable_docs`] but returning each document's handle instead
+    /// of id.
     #[allow(clippy::type_complexity)]
-    pub async fn reachable_members(
+    #[instrument(skip_all)]
+    pub async fn reachable_doc_handles(
         &self,
-        membered: Membered<F, S, T, L>,
-    ) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        match membered {
-            Membered::Group(_, group) => group.lock().await.transitive_members().await,
-            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
-        }
+    ) -> BTreeMap<DocumentId, (Arc<Mutex<Document<F, S, T, L>>>, Access)> {
+        let id = { self.active.lock().await.id().into() };
+        self.doc_handles_reachable_by(id).await
     }
 
+    /// The documents `who` reaches and at what access level.
+    ///
+    /// Errors if we have never heard of `who`.
     #[instrument(skip_all)]
     pub async fn docs_reachable_by_agent(
         &self,
-        agent: &Agent<F, S, T, L>,
-    ) -> BTreeMap<DocumentId, Ability<F, S, T, L>> {
-        let mut caps: BTreeMap<DocumentId, Ability<F, S, T, L>> = BTreeMap::new();
+        who: impl Into<Identifier>,
+    ) -> Result<BTreeMap<DocumentId, Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        Ok(self
+            .doc_handles_reachable_by(who)
+            .await
+            .into_iter()
+            .map(|(doc_id, (_, can))| (doc_id, can))
+            .collect())
+    }
+
+    /// The groups and documents `who` reaches and at what access level.
+    ///
+    /// Errors if we have never heard of `who`.
+    #[instrument(skip_all)]
+    pub async fn membered_reachable_by_agent(
+        &self,
+        who: impl Into<Identifier>,
+    ) -> Result<BTreeMap<MemberedId, Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        Ok(self
+            .membered_handles_reachable_by(who)
+            .await
+            .into_iter()
+            .map(|(id, (_, can))| (id, can))
+            .collect())
+    }
+
+    /// Everyone who reaches `membered`, including through nested groups.
+    ///
+    /// Errors if we have never heard of `membered`.
+    #[instrument(skip_all)]
+    pub async fn reachable_members(
+        &self,
+        membered: impl Into<MemberedId>,
+    ) -> Result<BTreeMap<Identifier, Access>, NotFound> {
+        Ok(self
+            .transitive_members_of(membered.into())
+            .await?
+            .into_iter()
+            .map(|(id, (_agent, can))| (id, can))
+            .collect())
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn transitive_members_of(
+        &self,
+        membered: MemberedId,
+    ) -> Result<HashMap<Identifier, (Agent<F, S, T, L>, Access)>, NotFound> {
+        Ok(match self.membered_by_id(membered).await? {
+            Membered::Group(_, group) => group.lock().await.transitive_members().await,
+            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
+        })
+    }
+
+    /// Returns `who` if we have heard of it. Otherwise returns an error.
+    async fn check_received(&self, who: Identifier) -> Result<Identifier, NotFound> {
+        self.has_received(who)
+            .await
+            .then_some(who)
+            .ok_or_else(|| NotFound::new(who))
+    }
+
+    /// The documents `who` reaches.
+    #[allow(clippy::type_complexity)]
+    #[instrument(skip_all)]
+    pub(crate) async fn doc_handles_reachable_by(
+        &self,
+        who: Identifier,
+    ) -> BTreeMap<DocumentId, (Arc<Mutex<Document<F, S, T, L>>>, Access)> {
+        let mut caps = BTreeMap::new();
 
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
             let locked = doc.lock().await;
-            if let Some((_, cap)) = locked.transitive_members().await.get(&agent.id()) {
-                caps.insert(
-                    locked.doc_id(),
-                    Ability {
-                        doc: doc.dupe(),
-                        can: *cap,
-                    },
-                );
+            if let Some((_, can)) = locked.transitive_members().await.get(&who) {
+                caps.insert(locked.doc_id(), (doc.dupe(), *can));
             }
         }
 
         caps
     }
 
+    /// The groups and documents reachable by `who`.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub async fn membered_reachable_by_agent(
+    pub(crate) async fn membered_handles_reachable_by(
         &self,
-        agent: &Agent<F, S, T, L>,
+        who: Identifier,
     ) -> HashMap<MemberedId, (Membered<F, S, T, L>, Access)> {
         let mut caps = HashMap::new();
 
@@ -811,7 +869,7 @@ impl<
         };
         for group in groups {
             let locked = group.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
+            if let Some((_, can)) = locked.transitive_members().await.get(&who) {
                 let membered = Membered::Group(locked.group_id(), group.dupe());
                 caps.insert(locked.group_id().into(), (membered, *can));
             }
@@ -820,7 +878,7 @@ impl<
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
             let locked = doc.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
+            if let Some((_, can)) = locked.transitive_members().await.get(&who) {
                 let membered = Membered::Document(locked.doc_id(), doc.dupe());
                 caps.insert(locked.doc_id().into(), (membered, *can));
             }
@@ -885,9 +943,9 @@ impl<
         agent: &Agent<F, S, T, L>,
     ) -> Vec<Arc<Signed<CgkaOperation>>> {
         let mut ops = Vec::new();
-        let reachable = self.docs_reachable_by_agent(agent).await;
-        for (doc_id, ability) in reachable {
-            let epochs = match ability.doc.lock().await.cgka_ops() {
+        let reachable = self.doc_handles_reachable_by(agent.id()).await;
+        for (doc_id, (doc, _)) in reachable {
+            let epochs = match doc.lock().await.cgka_ops() {
                 Ok(epochs) => epochs,
                 Err(CgkaError::NotInitialized) => continue,
                 Err(e) => {
@@ -935,7 +993,11 @@ impl<
             MembershipOperation<F, S, T, L>,
         )> = Vec::new();
 
-        for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).await.values() {
+        for (mem_rc, _) in self
+            .membered_handles_reachable_by(agent.id())
+            .await
+            .values()
+        {
             for (hash, dlg_head) in mem_rc.delegation_heads().await.iter() {
                 heads.push((hash.coerce(), dlg_head.dupe().into()));
             }
@@ -1351,6 +1413,84 @@ impl<
         AllCgkaOps { ops, index }
     }
 
+    /// Every event `agent` can reach, under the digests they are sent by.
+    pub async fn event_digests_for_agent(
+        &self,
+        agent: &Agent<F, S, T, L>,
+    ) -> HashSet<EventDigest<F, S, T, L>> {
+        let mut digests = HashSet::new();
+
+        for (digest, _) in self.membership_ops_for_agent(agent).await {
+            digests.insert(digest.coerce());
+        }
+        for key_ops in self.reachable_prekey_ops_for_agent(agent).await.values() {
+            for key_op in key_ops.iter() {
+                let event: Event<F, S, T, L> = Event::from(key_op.as_ref().clone());
+                digests.insert(Digest::hash(&event));
+            }
+        }
+        for cgka_op in self.cgka_ops_reachable_by_agent(agent).await {
+            let event: Event<F, S, T, L> = Event::from(cgka_op);
+            digests.insert(Digest::hash(&event));
+        }
+
+        digests
+    }
+
+    /// Every event each agent can reach, gathered once and deduplicated.
+    pub async fn all_agent_events(&self) -> AllAgentEvents<F, S, T, L> {
+        let all_membership = self.membership_ops_for_all_agents().await;
+        let all_prekey = self.reachable_prekey_ops_for_all_agents().await;
+        let all_cgka = self.cgka_ops_for_all_agents().await;
+
+        let mut events = HashMap::new();
+
+        let mut membership_sources = HashMap::new();
+        for (source_id, source_ops) in all_membership.ops {
+            let mut digests = Vec::with_capacity(source_ops.len());
+            for (digest, op) in source_ops {
+                let digest = digest.coerce();
+                digests.push(digest);
+                events.entry(digest).or_insert_with(|| op.into());
+            }
+            membership_sources.insert(source_id, digests);
+        }
+
+        let mut prekey_sources = HashMap::new();
+        for (source_id, key_ops) in all_prekey.ops {
+            let mut digests = Vec::with_capacity(key_ops.len());
+            for key_op in key_ops {
+                let event: Event<F, S, T, L> = Event::from(key_op.as_ref().clone());
+                let digest = Digest::hash(&event);
+                digests.push(digest);
+                events.entry(digest).or_insert(event);
+            }
+            prekey_sources.insert(source_id, digests);
+        }
+
+        let mut cgka_sources = HashMap::new();
+        for (source_id, cgka_ops) in all_cgka.ops {
+            let mut digests = Vec::with_capacity(cgka_ops.len());
+            for cgka_op in cgka_ops {
+                let event: Event<F, S, T, L> = Event::from(cgka_op);
+                let digest = Digest::hash(&event);
+                digests.push(digest);
+                events.entry(digest).or_insert(event);
+            }
+            cgka_sources.insert(source_id, digests);
+        }
+
+        AllAgentEvents {
+            events,
+            membership_sources,
+            prekey_sources,
+            cgka_sources,
+            membership_index: all_membership.index,
+            prekey_index: all_prekey.index,
+            cgka_index: all_cgka.index,
+        }
+    }
+
     #[instrument(skip_all)]
     pub async fn get_individual(&self, id: IndividualId) -> Option<Arc<Mutex<Individual>>> {
         self.individuals.lock().await.get(&id).duped()
@@ -1427,35 +1567,6 @@ impl<
         }
 
         None
-    }
-
-    #[allow(clippy::type_complexity)]
-    #[instrument(skip_all)]
-    pub async fn static_event_to_event(
-        &self,
-        static_event: StaticEvent<T>,
-    ) -> Result<Event<F, S, T, L>, StaticEventConversionError<F, S, T, L>> {
-        match static_event {
-            StaticEvent::PrekeysExpanded(op) => Ok(Event::PrekeysExpanded(Arc::new(*op))),
-            StaticEvent::PrekeyRotated(op) => Ok(Event::PrekeyRotated(Arc::new(*op))),
-            StaticEvent::CgkaOperation(op) => Ok(Event::CgkaOperation(Arc::new(*op))),
-            StaticEvent::Delegated(static_dlg) => {
-                let delegation = self.static_delegation_to_delegation(&static_dlg).await?;
-                Ok(Event::Delegated(Arc::new(Signed::new(
-                    delegation,
-                    static_dlg.issuer,
-                    static_dlg.signature,
-                ))))
-            }
-            StaticEvent::Revoked(static_rev) => {
-                let revocation = self.static_revocation_to_revocation(&static_rev).await?;
-                Ok(Event::Revoked(Arc::new(Signed::new(
-                    revocation,
-                    static_rev.issuer,
-                    static_rev.signature,
-                ))))
-            }
-        }
     }
 
     #[allow(clippy::type_complexity)]
@@ -1772,18 +1883,6 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn receive_membership_op(
-        &self,
-        static_op: &StaticMembershipOperation<T>,
-    ) -> Result<(), ReceiveStaticDelegationError<F, S, T, L>> {
-        match static_op {
-            StaticMembershipOperation::Delegation(d) => self.receive_delegation(d).await?,
-            StaticMembershipOperation::Revocation(r) => self.receive_revocation(r).await?,
-        }
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
     pub async fn receive_cgka_op(
         &self,
         signed_op: Signed<CgkaOperation>,
@@ -1838,7 +1937,7 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn promote_individual_to_group(
+    async fn promote_individual_to_group(
         &self,
         individual: Arc<Mutex<Individual>>,
         head: Arc<Signed<Delegation<F, S, T, L>>>,
@@ -2485,6 +2584,71 @@ impl<
             pending_revoked_by_active,
         }
     }
+
+    /// What access `who` has for `doc`. Returns `None` for no access.
+    ///
+    /// Errors if we have never heard of `who` or `doc`.
+    pub async fn access_for_doc(
+        &self,
+        who: impl Into<Identifier>,
+        doc: DocumentId,
+    ) -> Result<Option<Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        Ok(self
+            .transitive_members_of(doc.into())
+            .await?
+            .get(&who)
+            .map(|(_agent, can)| *can))
+    }
+
+    /// The higher of `who`'s access to `doc` and public's access to `doc`.
+    ///
+    /// Errors if we have never heard of `who` or `doc`.
+    pub async fn best_access_for_doc(
+        &self,
+        who: impl Into<Identifier>,
+        doc: DocumentId,
+    ) -> Result<Option<Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        let members = self.reachable_members(doc).await?;
+        let direct = members.get(&who).copied();
+        let public = members.get(&Public.id()).copied();
+        // `None` sorts below `Some`, so this is "the better of the two, if either".
+        Ok(direct.max(public))
+    }
+
+    /// Whether this instance has received the events that describe `who`.
+    pub async fn has_received(&self, who: impl Into<Identifier>) -> bool {
+        self.get_agent(who.into()).await.is_some()
+    }
+
+    pub(crate) async fn agent_by_id(&self, id: Identifier) -> Result<Agent<F, S, T, L>, NotFound> {
+        self.get_agent(id).await.ok_or_else(|| NotFound::new(id))
+    }
+
+    pub(crate) async fn document_by_id(
+        &self,
+        id: DocumentId,
+    ) -> Result<Arc<Mutex<Document<F, S, T, L>>>, NotFound> {
+        self.get_document(id).await.ok_or_else(|| NotFound::new(id))
+    }
+
+    pub(crate) async fn membered_by_id(
+        &self,
+        id: MemberedId,
+    ) -> Result<Membered<F, S, T, L>, NotFound> {
+        match id {
+            MemberedId::DocumentId(doc_id) => self
+                .get_document(doc_id)
+                .await
+                .map(|doc| Membered::Document(doc_id, doc)),
+            MemberedId::GroupId(group_id) => self
+                .get_group(group_id)
+                .await
+                .map(|group| Membered::Group(group_id, group)),
+        }
+        .ok_or_else(|| NotFound::new(id))
+    }
 }
 
 impl<
@@ -2687,6 +2851,19 @@ where
     }
 }
 
+/// Why a causal decryption named by identifier could not be carried out.
+///
+/// Separate from the other errors because it carries the store's own error type and
+/// type parameters.
+#[derive(Debug, Error)]
+pub enum CausalDecryptError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>> {
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+
+    #[error(transparent)]
+    Document(#[from] DocCausalDecryptionError<F, T, P, C>),
+}
+
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
 pub enum StaticEventConversionError<
@@ -2786,6 +2963,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
 #[derive(Debug, Error)]
 pub enum EncryptContentError {
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+
     #[error(transparent)]
     EncryptError(#[from] EncryptError),
 

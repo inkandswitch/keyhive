@@ -72,6 +72,8 @@ pub struct Document<
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
+    /// Keys for content this document has written or read, so a later write can carry
+    /// them to a reader in an envelope. Not persisted, and not evicted.
     known_decryption_keys: HashMap<T, SymmetricKey>,
     cgka: Option<Cgka>,
 }
@@ -510,7 +512,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .map(|(plaintext, _key)| plaintext)
     }
 
-    /// Decrypt content and also return the application secret key that was used.
+    /// Decrypt content and return the application secret that was used.
     #[instrument(skip_all)]
     pub fn try_decrypt_content_keyed<P: for<'de> Deserialize<'de>>(
         &mut self,
@@ -526,6 +528,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         decrypt_key
             .try_decrypt(encrypted_content.nonce, &mut plaintext)
             .map_err(DecryptError::DecryptionFailed)?;
+
+        self.known_decryption_keys
+            .insert(encrypted_content.content_ref.clone(), decrypt_key);
 
         // FIXME for some reason this decrypts successfully,
         // but the bytes of the symmetric key are different,
@@ -560,7 +565,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             raw_entrypoint.as_slice(),
         )
         .map_err(|e| CausalDecryptionError::<F, T, P, C> {
-            progress: acc.clone(),
+            progress: Box::new(acc.clone()),
             cannot: HashMap::from_iter([(
                 encrypted_content.content_ref.clone(),
                 ErrorReason::DeserializationFailed(e),
@@ -693,6 +698,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
 #[derive(Debug, Error)]
 pub enum AddMemberError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] crate::error::not_found::NotFound),
+
     #[error(transparent)]
     AddMemberError(#[from] AddGroupMemberError),
 
@@ -702,6 +711,10 @@ pub enum AddMemberError {
 
 #[derive(Debug, Error)]
 pub enum EncryptError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] crate::error::not_found::NotFound),
+
     #[error("Encryption failed: {0}")]
     EncryptionFailed(chacha20poly1305::Error),
 
@@ -763,6 +776,10 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
 
 #[derive(Debug, Error)]
 pub enum DecryptError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] crate::error::not_found::NotFound),
+
     #[error("Key not found")]
     KeyNotFound,
 

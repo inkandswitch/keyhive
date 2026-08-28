@@ -237,7 +237,10 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
             if cannot.is_empty() {
                 Ok(progress)
             } else {
-                Err(CausalDecryptionError { cannot, progress })
+                Err(CausalDecryptionError {
+                    cannot,
+                    progress: Box::new(progress),
+                })
             }
         })
     }
@@ -338,7 +341,8 @@ pub trait Isomorphic<T> {
 #[derive(Debug, Error)]
 pub struct CausalDecryptionError<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> {
     pub cannot: HashMap<Cr, ErrorReason<F, Cr, T, S>>,
-    pub progress: CausalDecryptionState<Cr, T>,
+    /// Boxed because `CausalDecryptionState` holds three collections
+    pub progress: Box<CausalDecryptionState<Cr, T>>,
 }
 
 impl<F: FutureForm, Cr: ContentRef + Debug, T: Debug, S: CiphertextStore<F, Cr, T>> Display
