@@ -20,26 +20,19 @@ async fn a_group_member_reaches_the_groups_documents() -> Result<()> {
     // enough to read one, so this checks both.
     //
     // ┌─────────────────────┐   ┌─────────────────────┐
-    // │                     │   │                     │
     // │        Alice        │   │         Bob         │
-    // │                     │   │                     │
-    // └─────────────────────┘   └─────────────────────┘
-    //            ▲                         ▲
-    //            │                         │
-    //            │                         │
-    //            │ ┌─────────────────────┐ │
-    //            │ │                     │ │
-    //            └─│        Group        │─┘
-    //              │                     │
-    //              └─────────────────────┘
-    //                         ▲
-    //                         │
-    //                         │
-    //              ┌─────────────────────┐
-    //              │                     │
-    //              │         Doc         │
-    //              │                     │
-    //              └─────────────────────┘
+    // └──────────┬──────────┘   └──────────┬──────────┘
+    //            │ Admin (owner)           │ Read
+    //            └───────────┬─────────────┘
+    //                        ▼
+    //             ┌─────────────────────┐
+    //             │       Group         │
+    //             └──────────┬──────────┘
+    //                        │ Edit
+    //                        ▼
+    //             ┌─────────────────────┐
+    //             │         Doc         │
+    //             └─────────────────────┘
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -103,7 +96,7 @@ async fn attenuation_is_the_minimum_along_the_route() -> Result<()> {
                 assert_eq!(
                     alice.access_for_doc(bob.id(), design_doc).await?,
                     Some(a.min(b).min(c)),
-                    "design_doc -{a:?}-> outer -{b:?}-> inner -{c:?}-> bob"
+                    "bob -{c:?}-> inner -{b:?}-> outer -{a:?}-> design_doc"
                 );
             }
         }
@@ -463,26 +456,21 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
     // either end of the cycle.
     //
     // ┌─────────────────────┐   ┌─────────────────────┐
-    // │                     │   │                     │
     // │        Alice        │   │         Bob         │
-    // │                     │   │                     │
-    // └─────────────────────┘   └─────────────────────┘
-    //            ▲                         ▲
-    //            │                         │
-    //            │                         │
-    //            │ ┌─────────────────────┐ │
-    //            │ │                     │ │
-    //            └─│        Group        │─┘
-    //              │                     │
-    //              └─────────────────────┘
-    //                      ▲     │
-    //                      │     │
-    //                      │     ▼
-    //              ┌─────────────────────┐
-    //              │                     │
-    //              │         Doc         │
-    //              │                     │
-    //              └─────────────────────┘
+    // └──────────┬──────────┘   └──────────┬──────────┘
+    //            │ Admin (owner)           │ Read
+    //            └───────────┬─────────────┘
+    //                        ▼
+    //             ┌─────────────────────┐
+    //         ┌──▶│       Group         │──┐
+    //         │   └─────────────────────┘  │ Read
+    //         │                            ▼
+    //         │   ┌─────────────────────┐
+    //         └───│         Doc         │
+    //    Read     └─────────────────────┘
+    //
+    // The document is a member of the group and the group is a member of the document,
+    // which is the cycle.
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
