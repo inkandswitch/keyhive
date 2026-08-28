@@ -54,12 +54,11 @@ fn reachable_prekey_ops_for_agent(
             docs.push(doc);
         }
 
-        let mut last_peer_on_alice = None;
+        let mut last_peer_id = None;
         for _ in 0..n_peers {
             let peer = make_simple_keyhive().await.unwrap();
             let peer_contact = peer.generate_contact_card().await.unwrap();
             let peer_id = alice.receive_contact_card(&peer_contact).await.unwrap();
-            let peer_on_alice = alice.get_individual(peer_id).await.expect("just received");
 
             // Accumulate prekey ops: expand then rotate, propagating each to Alice.
             for _ in 0..PREKEY_ROTATIONS_PER_PEER {
@@ -86,10 +85,11 @@ fn reachable_prekey_ops_for_agent(
                     .unwrap();
             }
 
-            last_peer_on_alice = Some((peer_id, peer_on_alice));
+            last_peer_id = Some(peer_id);
         }
 
-        let (peer_id, peer_on_alice) = last_peer_on_alice.expect("need at least 1 peer");
+        let peer_id = last_peer_id.expect("need at least 1 peer");
+        let peer_on_alice = alice.get_individual(peer_id).await.expect("just received");
         let agent: BenchAgent = Agent::Individual(peer_id, peer_on_alice);
 
         (alice, agent)

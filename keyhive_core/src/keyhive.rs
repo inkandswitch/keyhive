@@ -499,9 +499,7 @@ impl<
         other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
         let to_add = self.agent_by_id(to_add.into()).await?;
-        let resource = self
-            .membered_by_id(MemberedId::into(resource.into()))
-            .await?;
+        let resource = self.membered_by_id(resource.into()).await?;
 
         let signer = { self.active.lock().await.signer.clone() };
         let update = match &resource {
@@ -591,9 +589,7 @@ impl<
         resource: impl Into<MemberedId>,
     ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
         let to_revoke = to_revoke.into();
-        let resource = self
-            .membered_by_id(MemberedId::into(resource.into()))
-            .await?;
+        let resource = self.membered_by_id(resource.into()).await?;
 
         let active_id = { self.active.lock().await.id().into() };
         let mut relevant_docs = BTreeMap::new();
@@ -940,10 +936,7 @@ impl<
         &self,
         membered: impl Into<MemberedId>,
     ) -> Result<BTreeMap<Identifier, Access>, NotFound> {
-        let raw = match self
-            .membered_by_id(MemberedId::into(membered.into()))
-            .await?
-        {
+        let raw = match self.membered_by_id(membered.into()).await? {
             Membered::Group(_, group) => group.lock().await.transitive_members().await,
             Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
         };

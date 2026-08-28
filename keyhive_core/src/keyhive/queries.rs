@@ -5,9 +5,8 @@ use crate::{
     principal::{
         agent::Agent,
         document::{id::DocumentId, Document},
-        group::id::GroupId,
         identifier::Identifier,
-        membered::Membered,
+        membered::{id::MemberedId, Membered},
         public::Public,
     },
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
@@ -83,14 +82,19 @@ impl<
 
     pub(crate) async fn membered_by_id(
         &self,
-        id: Identifier,
+        id: MemberedId,
     ) -> Result<Membered<F, S, T, L>, NotFound> {
-        if let Some(doc) = self.get_document(DocumentId(id)).await {
-            return Ok(Membered::Document(DocumentId(id), doc));
+        match id {
+            MemberedId::DocumentId(doc_id) => self
+                .get_document(doc_id)
+                .await
+                .map(|doc| Membered::Document(doc_id, doc))
+                .ok_or_else(|| NotFound(Box::new(doc_id.into()))),
+            MemberedId::GroupId(group_id) => self
+                .get_group(group_id)
+                .await
+                .map(|group| Membered::Group(group_id, group))
+                .ok_or_else(|| NotFound(Box::new(group_id.into()))),
         }
-        if let Some(group) = self.get_group(GroupId::new(id)).await {
-            return Ok(Membered::Group(GroupId::new(id), group));
-        }
-        Err(NotFound(Box::new(id)))
     }
 }
