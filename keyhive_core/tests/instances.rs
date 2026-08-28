@@ -364,12 +364,6 @@ async fn a_second_instance_takes_its_name_too() -> Result<()> {
     Ok(())
 }
 
-/// The second instance writes, and the member who was just added reads it.
-///
-/// Adding a member blanks the root of the document's key tree, so the instance that writes
-/// next has no key agreed and has to establish one. Here that is not the instance that made
-/// the document or added the member, which is the case that can fail: the second instance has
-/// to have synced the first's events before it can write at all.
 #[tokio::test]
 async fn the_second_instance_writes_and_a_member_reads_it() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -395,8 +389,6 @@ async fn the_second_instance_writes_and_a_member_reads_it() -> Result<()> {
     Ok(())
 }
 
-/// The same rule with the reader arriving through a public delegation rather than a
-/// membership, so nothing in the key tree is addressed to them personally.
 #[tokio::test]
 async fn a_public_reader_reads_what_the_second_instance_wrote() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -428,8 +420,6 @@ async fn a_public_reader_reads_what_the_second_instance_wrote() -> Result<()> {
     Ok(())
 }
 
-/// And with an intermediary in between, so the events reach the reader by being relayed
-/// rather than by coming straight from either instance that produced them.
 #[tokio::test]
 async fn a_relay_carries_the_second_instances_write_to_a_public_reader() -> Result<()> {
     let mut ctx = TestContext::new().await;

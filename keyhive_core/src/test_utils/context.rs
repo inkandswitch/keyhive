@@ -23,6 +23,7 @@ use crate::{
         identifier::Identifier,
         individual::{id::IndividualId, op::KeyOp, Individual, ReceivePrekeyOpError},
         membered::{id::MemberedId, Membered},
+        peer::Peer,
         public::Public,
     },
     stats::Stats,
@@ -464,6 +465,27 @@ impl TestContext {
         Ok(id)
     }
 
+    /// A document owned by `coparents` as well as `owner`.
+    pub async fn doc_with_coparents(
+        &mut self,
+        owner: &Instance,
+        name: &str,
+        coparents: &[GroupId],
+    ) -> TestResult<DocumentId> {
+        self.claim_name(name)?;
+        let mut peers = Vec::with_capacity(coparents.len());
+        for coparent in coparents {
+            let group = owner
+                .get_group(*coparent)
+                .await
+                .ok_or("that coparent is not a group this instance knows")?;
+            peers.push(Peer::Group(*coparent, group));
+        }
+        let id = owner.generate_doc(peers, nonempty![[0u8; 32]]).await?;
+        self.names.insert(id.into(), name.into());
+        Ok(id)
+    }
+
     /// Rebuild an archive as a new instance of the same identity with a fresh ciphertext
     /// store.
     pub async fn rebuild_from_archive(
@@ -705,10 +727,7 @@ impl TestContext {
         let (out, key) = who
             .try_encrypt_content_keyed(doc, &content_ref(content), &vec![], content)
             .await?;
-        Ok((
-            self.record_content_write(out.encrypted_content().clone(), doc),
-            key,
-        ))
+        Ok((self.record_content_write(out.encrypted_content, doc), key))
     }
 
     /// Encrypt content that follows `after` in the document's content DAG.
@@ -723,7 +742,7 @@ impl TestContext {
         let out = who
             .try_encrypt_content(doc, &content_ref(content), &pred_refs, content)
             .await?;
-        Ok(self.record_content_write(out.encrypted_content().clone(), doc))
+        Ok(self.record_content_write(out.encrypted_content, doc))
     }
 
     /// Write `content` in an envelope listing the ancestors and carrying the keys to open
@@ -743,7 +762,7 @@ impl TestContext {
             .try_encrypt_content_in_envelope(doc, &content_ref(content), &pred_refs, content)
             .await
             .map_err(|e| TestError::Other(e.to_string()))?;
-        let ct = self.record_content_write(out.encrypted_content().clone(), doc);
+        let ct = self.record_content_write(out.encrypted_content, doc);
         self.give_content(who, &ct).await?;
         Ok(ct)
     }
@@ -986,19 +1005,20 @@ impl TestContext {
         ct
     }
 
-    /// The content refs of `after`, excluding any predecessor recorded for another
-    /// document.
+    /// The content refs of `after`, or `WrongDocument` if any predecessor was recorded
+    /// against a different document.
     fn predecessor_refs(
         &self,
         after: &[&Ciphertext],
         doc: DocumentId,
     ) -> TestResult<Vec<[u8; 32]>> {
-        let mut refs = Vec::with_capacity(after.len());
-        for pred in after {
-            self.check_same_document(pred, doc)?;
-            refs.push(pred.content_ref);
-        }
-        Ok(refs)
+        after
+            .iter()
+            .map(|pred| {
+                self.check_same_document(pred, doc)?;
+                Ok(pred.content_ref)
+            })
+            .collect()
     }
 
     /// The [`Individual`] `observer` holds for `who`.
