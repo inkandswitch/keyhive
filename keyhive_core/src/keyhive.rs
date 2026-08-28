@@ -15,8 +15,9 @@ use crate::{
         agent::{id::AgentId, Agent},
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
-            DocCausalDecryptionError, Document, EncryptError, EncryptedContentWithUpdate,
-            GenerateDocError, MissingIndividualError, RevokeMemberUpdate,
+            DocCausalDecryptionError, Document, EncryptError, EncryptInEnvelopeError,
+            EncryptedContentWithUpdate, GenerateDocError, MissingIndividualError,
+            RevokeMemberUpdate,
         },
         group::{
             delegation::{Delegation, StaticDelegation},
@@ -82,6 +83,13 @@ use std::{
 
 use thiserror::Error;
 use tracing::instrument;
+
+// Only `cgka_members_for()` uses this.
+#[cfg(any(test, feature = "test_utils"))]
+use std::collections::BTreeSet;
+// Only `try_causal_decrypt_from` uses this.
+#[cfg(any(test, feature = "test_utils"))]
+use crate::store::ciphertext::CausalDecryptionError;
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
@@ -632,6 +640,45 @@ impl<
             .0)
     }
 
+    /// Encrypt `content` into `doc` in an [`Envelope`](crate::crypto::envelope::Envelope),
+    /// listing its ancestors and carrying the keys to open them.
+    ///
+    /// Read it back with [`Keyhive::try_causal_decrypt_content`], which unwraps the envelope.
+    /// [`Keyhive::try_decrypt_content`] returns the serialized envelope instead.
+    #[cfg(any(test, feature = "test_utils"))]
+    #[instrument(skip_all)]
+    pub async fn try_encrypt_content_in_envelope(
+        &self,
+        doc: DocumentId,
+        content_ref: &T,
+        pred_refs: &Vec<T>,
+        content: &[u8],
+    ) -> Result<EncryptedContentWithUpdate<T>, EnvelopeError<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let handle = self.document_by_id(doc).await?;
+        let signer = { self.active.lock().await.signer.clone() };
+        let result = {
+            let mut locked_csprng = self.csprng.lock().await;
+            handle
+                .lock()
+                .await
+                .try_encrypt_content_in_envelope(
+                    content_ref,
+                    content,
+                    pred_refs,
+                    &signer,
+                    &mut *locked_csprng,
+                )
+                .await?
+        };
+        if let Some(op) = &result.update_op {
+            self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
+        }
+        Ok(result)
+    }
+
     /// Encrypt `content` into `doc`. Returns the application secret it was
     /// encrypted under.
     #[instrument(skip_all)]
@@ -664,6 +711,24 @@ impl<
         Ok((result, application_secret_key))
     }
 
+    /// The identities in `doc`'s encryption tree. Returns `None` if it has no tree yet.
+    ///
+    /// Returns an error if `doc` is not known.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub async fn cgka_members_for(
+        &self,
+        doc: DocumentId,
+    ) -> Result<Option<BTreeSet<IndividualId>>, NotFound> {
+        let doc = self.document_by_id(doc).await?;
+        let members = doc
+            .lock()
+            .await
+            .cgka_members()
+            .ok()
+            .map(|ids| ids.collect());
+        Ok(members)
+    }
+
     /// The hash of `doc`'s current PCS key. Returns `None` if it has no key to hash.
     ///
     /// Returns an error if we have never heard of `doc`.
@@ -681,6 +746,23 @@ impl<
         Ok(hash)
     }
 
+    /// Try causal decrypt from more than one entrypoint at once.
+    ///
+    /// [`Keyhive::try_causal_decrypt_content`] takes a single entrypoint.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub async fn try_causal_decrypt_from(
+        &self,
+        entrypoints: &[(Arc<EncryptedContent<P, T>>, SymmetricKey)],
+    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<F, T, P, C>>
+    where
+        T: for<'de> Deserialize<'de>,
+        P: Clone + Serialize + for<'de> Deserialize<'de>,
+    {
+        let mut to_walk = entrypoints.to_vec();
+        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(&self.ciphertext_store, &mut to_walk)
+            .await
+    }
+
     /// Decrypt `encrypted` out of `doc`.
     pub async fn try_decrypt_content(
         &self,
@@ -688,6 +770,27 @@ impl<
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
         Ok(self.try_decrypt_content_keyed(doc, encrypted).await?.0)
+    }
+
+    /// Whether decryption succeeds.
+    ///
+    /// `Ok(false)` means this instance holds no key for the content, or holds one that does
+    /// not authenticate it. Not knowing about `doc` at all is an error.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub async fn can_decrypt_content(
+        &self,
+        doc: DocumentId,
+        encrypted: &EncryptedContent<P, T>,
+    ) -> Result<bool, DecryptError> {
+        match self.try_decrypt_content(doc, encrypted).await {
+            Ok(_) => Ok(true),
+            Err(
+                DecryptError::KeyNotFound
+                | DecryptError::SivMismatch
+                | DecryptError::DecryptionFailed(_),
+            ) => Ok(false),
+            Err(other) => Err(other),
+        }
     }
 
     /// Decrypt `encrypted` out of `doc`. Returns the application secret that was
@@ -2862,6 +2965,16 @@ pub enum CausalDecryptError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<
 
     #[error(transparent)]
     Document(#[from] DocCausalDecryptionError<F, T, P, C>),
+}
+
+/// Why content could not be written into an [`Envelope`](crate::crypto::envelope::Envelope).
+#[derive(Debug, Error)]
+pub enum EnvelopeError<T: ContentRef> {
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+
+    #[error(transparent)]
+    Encrypt(#[from] EncryptInEnvelopeError<T>),
 }
 
 #[derive(Clone, PartialEq, Eq, Error)]

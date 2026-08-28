@@ -470,6 +470,43 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         Ok((op, new_share_key, new_share_secret_key))
     }
 
+    /// Encrypt `content` in an [`Envelope`], listing its ancestors and carrying the keys to
+    /// open them.
+    #[cfg(any(test, feature = "test_utils"))]
+    #[instrument(skip_all)]
+    pub async fn try_encrypt_content_in_envelope<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        content_ref: &T,
+        content: &[u8],
+        pred_refs: &Vec<T>,
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<EncryptedContentWithUpdate<T>, EncryptInEnvelopeError<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let mut ancestors = HashMap::with_capacity(pred_refs.len());
+        for pred in pred_refs {
+            let key = self
+                .known_decryption_keys
+                .get(pred)
+                .copied()
+                .ok_or_else(|| EncryptInEnvelopeError::NoKeyForAncestor(pred.clone()))?;
+            ancestors.insert(pred.clone(), key);
+        }
+
+        let envelope = Envelope {
+            plaintext: content.to_vec(),
+            ancestors,
+        };
+        let bytes = bincode::serialize(&envelope)?;
+
+        let (encrypted, _key) = self
+            .try_encrypt_content_keyed(content_ref, &bytes, pred_refs, signer, csprng)
+            .await?;
+        Ok(encrypted)
+    }
+
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
@@ -723,6 +760,19 @@ pub enum EncryptError {
 
     #[error("Failed to make app secret: {0}")]
     FailedToMakeAppSecret(CgkaError),
+}
+
+/// Why content could not be written into an [`Envelope`].
+#[derive(Debug, Error)]
+pub enum EncryptInEnvelopeError<T: ContentRef> {
+    #[error("no key for ancestor {0:?}")]
+    NoKeyForAncestor(T),
+
+    #[error(transparent)]
+    Serialization(#[from] bincode::Error),
+
+    #[error(transparent)]
+    Encrypt(#[from] EncryptError),
 }
 
 #[derive(Debug, Error)]
