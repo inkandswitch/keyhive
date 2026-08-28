@@ -1,8 +1,4 @@
 //! The primary API for the library.
-//!
-//! Further `Keyhive` methods are grouped by topic in submodules.
-
-mod queries;
 
 use crate::{
     access::Access,
@@ -2602,6 +2598,67 @@ impl<
             pending_revoked,
             pending_revoked_by_active,
         }
+    }
+
+    /// What access `who` has for `doc`. Returns `None` for no access.
+    ///
+    /// Errors if we have never heard of `who` or `doc`.
+    pub async fn access_for_doc(
+        &self,
+        who: impl Into<Identifier>,
+        doc: DocumentId,
+    ) -> Result<Option<Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        Ok(self.reachable_members(doc).await?.get(&who).copied())
+    }
+
+    /// The higher of `who`'s access to `doc` and public's access to `doc`.
+    ///
+    /// Errors if we have never heard of `who` or `doc`.
+    pub async fn best_access_for_doc(
+        &self,
+        who: impl Into<Identifier>,
+        doc: DocumentId,
+    ) -> Result<Option<Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        let members = self.reachable_members(doc).await?;
+        let direct = members.get(&who).copied();
+        let public = members.get(&Public.id()).copied();
+        // `None` sorts below `Some`, so this is "the better of the two, if either".
+        Ok(direct.max(public))
+    }
+
+    /// Whether this instance has received the events that describe `who`.
+    pub async fn has_received(&self, who: impl Into<Identifier>) -> bool {
+        self.get_agent(who.into()).await.is_some()
+    }
+
+    pub(crate) async fn agent_by_id(&self, id: Identifier) -> Result<Agent<F, S, T, L>, NotFound> {
+        self.get_agent(id).await.ok_or_else(|| NotFound::new(id))
+    }
+
+    pub(crate) async fn document_by_id(
+        &self,
+        id: DocumentId,
+    ) -> Result<Arc<Mutex<Document<F, S, T, L>>>, NotFound> {
+        self.get_document(id).await.ok_or_else(|| NotFound::new(id))
+    }
+
+    pub(crate) async fn membered_by_id(
+        &self,
+        id: MemberedId,
+    ) -> Result<Membered<F, S, T, L>, NotFound> {
+        match id {
+            MemberedId::DocumentId(doc_id) => self
+                .get_document(doc_id)
+                .await
+                .map(|doc| Membered::Document(doc_id, doc)),
+            MemberedId::GroupId(group_id) => self
+                .get_group(group_id)
+                .await
+                .map(|group| Membered::Group(group_id, group)),
+        }
+        .ok_or_else(|| NotFound::new(id))
     }
 }
 
