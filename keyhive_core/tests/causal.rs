@@ -7,9 +7,22 @@
 
 use keyhive_core::{
     access::Access::Read,
-    test_utils::{decrypt_with_key, CausalDecryptionExt, TestContext, TestResult as Result},
+    principal::document::id::DocumentId,
+    test_utils::{
+        decrypt_with_key, CausalDecryptionExt, Instance, TestContext, TestResult as Result,
+    },
 };
 use std::{collections::BTreeSet, sync::Arc};
+
+async fn setup_writer_and_reader() -> Result<(TestContext, Instance, Instance, DocumentId)> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    ctx.sync_all_unsent().await?;
+    Ok((ctx, alice, bob, design_doc))
+}
 
 fn contents(of: &[&[u8]]) -> BTreeSet<Vec<u8>> {
     of.iter().map(|c| c.to_vec()).collect()
@@ -17,12 +30,7 @@ fn contents(of: &[&[u8]]) -> BTreeSet<Vec<u8>> {
 
 #[tokio::test]
 async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    ctx.sync_all_unsent().await?;
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
     // genesis, then two writes with it as their predecessor, then one with both of those.
     let genesis = ctx
@@ -159,12 +167,7 @@ async fn a_reader_can_name_an_ancestor_they_decrypted_rather_than_wrote() -> Res
 
 #[tokio::test]
 async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    ctx.sync_all_unsent().await?;
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
     let genesis = ctx
         .encrypt_in_envelope(&alice, design_doc, &[], b"genesis")
@@ -205,12 +208,7 @@ async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Resul
 
 #[tokio::test]
 async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    ctx.sync_all_unsent().await?;
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
     //   first_root      second_root
     //      |    \           |
@@ -299,12 +297,7 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
 
 #[tokio::test]
 async fn content_that_is_not_an_ancestor_is_not_captured_in_the_walk() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    ctx.sync_all_unsent().await?;
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
     let genesis = ctx
         .encrypt_in_envelope(&alice, design_doc, &[], b"genesis")
@@ -335,12 +328,7 @@ async fn content_that_is_not_an_ancestor_is_not_captured_in_the_walk() -> Result
 
 #[tokio::test]
 async fn two_missing_ancestors_are_each_reported_with_their_own_key() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    ctx.sync_all_unsent().await?;
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
     // Two roots, each under its own branch, and a head that joins them.
     let first_root = ctx
@@ -404,12 +392,7 @@ async fn two_missing_ancestors_are_each_reported_with_their_own_key() -> Result<
 #[tokio::test]
 #[ignore = "an ancestor the entrypoint lists is dropped from the report when it is missing"]
 async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    ctx.sync_all_unsent().await?;
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
     let history = ctx
         .encrypt_in_envelope(&alice, design_doc, &[], b"history")
@@ -448,12 +431,7 @@ async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<(
 /// covers that case.
 #[tokio::test]
 async fn a_walk_consumes_the_content_it_reads() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    ctx.sync_all_unsent().await?;
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
     let genesis = ctx
         .encrypt_in_envelope(&alice, design_doc, &[], b"genesis")
