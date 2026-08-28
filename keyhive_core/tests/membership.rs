@@ -916,3 +916,62 @@ async fn a_revoked_member_of_a_document_is_listed_too() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn revoking_a_subgroup_takes_its_members_out_of_the_key_group() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let dave = ctx.individual("dave").await?;
+    let eve = ctx.individual("eve").await?;
+    let frank = ctx.individual("frank").await?;
+
+    let inner = ctx.group(&alice, "inner").await?;
+    for who in [&dave, &eve, &frank] {
+        alice.add_member(who.id(), inner, Read, &[]).await?;
+    }
+    let outer = ctx.group(&alice, "outer").await?;
+    alice.add_member(carol.id(), outer, Read, &[]).await?;
+    alice.add_member(inner, outer, Read, &[]).await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(outer, design_doc, Read, &[]).await?;
+    // frank also holds the document directly, so he keeps his key either way.
+    alice.add_member(frank.id(), design_doc, Read, &[]).await?;
+
+    let before = alice
+        .cgka_members_for(design_doc)
+        .await?
+        .expect("the document has a tree");
+    for who in [&dave, &eve] {
+        assert!(
+            before.contains(&who.id()),
+            "{} holds a key through inner to begin with",
+            who.name()
+        );
+    }
+
+    alice.revoke_member(inner, true, outer).await?;
+
+    let after = alice
+        .cgka_members_for(design_doc)
+        .await?
+        .expect("the document has a tree");
+    for who in [&dave, &eve] {
+        assert!(
+            !after.contains(&who.id()),
+            "{} came in through inner and kept a key for the document after it was revoked",
+            who.name()
+        );
+    }
+    for who in [&alice, &bob, &carol, &frank] {
+        assert!(
+            after.contains(&who.id()),
+            "{} has a route that was not revoked and should keep a key",
+            who.name()
+        );
+    }
+    Ok(())
+}

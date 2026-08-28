@@ -4123,6 +4123,55 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_revoking_a_subgroup_reports_its_members_removals_in_cgka_ops() -> TestResult {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let dave_kh = make_keyhive().await;
+        let eve_kh = make_keyhive().await;
+        let (dave_id, _dave_indie) = register_peer(&alice, &dave_kh).await;
+        let (eve_id, _eve_indie) = register_peer(&alice, &eve_kh).await;
+
+        let inner = alice.generate_group(vec![]).await?;
+        let inner_id = inner.lock().await.group_id();
+        for who in [dave_id, eve_id] {
+            alice.add_member(who, inner_id, Access::Read, &[]).await?;
+        }
+        let outer = alice.generate_group(vec![]).await?;
+        let outer_id = outer.lock().await.group_id();
+        alice
+            .add_member(inner_id, outer_id, Access::Read, &[])
+            .await?;
+
+        let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice
+            .add_member(outer_id, doc_id, Access::Read, &[])
+            .await?;
+
+        let update = alice.revoke_member(inner_id, true, outer_id).await?;
+
+        let removed_vks: HashSet<_> = update
+            .cgka_ops()
+            .iter()
+            .filter_map(|op| match op.payload() {
+                CgkaOperation::Remove {
+                    id: MemberId(vk), ..
+                } => Some(*vk),
+                _ => None,
+            })
+            .collect();
+
+        for (who, id) in [("dave", dave_id), ("eve", eve_id)] {
+            assert!(
+                removed_vks.contains(&id.verifying_key()),
+                "{who} came in through the revoked subgroup and his removal was not reported"
+            );
+        }
+
+        Ok(())
+    }
+
     /// A redundant direct membership must not put someone in the CGKA tree twice.
     #[tokio::test]
     async fn test_a_second_route_does_not_add_a_member_to_the_tree_twice() -> TestResult {
