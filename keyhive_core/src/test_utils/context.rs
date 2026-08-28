@@ -452,8 +452,7 @@ impl TestContext {
 
     pub async fn group(&mut self, owner: &Instance, name: &str) -> TestResult<GroupId> {
         self.claim_name(name)?;
-        let g = owner.generate_group(vec![]).await?;
-        let id = { g.lock().await.group_id() };
+        let id = owner.generate_group(vec![]).await?;
         self.names.insert(id.into(), name.into());
         Ok(id)
     }

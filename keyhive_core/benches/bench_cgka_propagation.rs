@@ -45,14 +45,9 @@ async fn setup_many_docs_nested(
     let public_peer = Peer::Individual(public_indie.id(), Arc::new(Mutex::new(public_indie)));
 
     // Create a chain of 3 nested groups: g_bottom → g_mid → g_top
-    let g_bottom = alice.generate_group(vec![]).await.unwrap();
-    let g_bottom_id = g_bottom.lock().await.group_id();
-
-    let g_mid = alice.generate_group(vec![]).await.unwrap();
-    let g_mid_id = g_mid.lock().await.group_id();
-
-    let g_top = alice.generate_group(vec![]).await.unwrap();
-    let g_top_id = g_top.lock().await.group_id();
+    let g_bottom_id = alice.generate_group(vec![]).await.unwrap();
+    let g_mid_id = alice.generate_group(vec![]).await.unwrap();
+    let g_top_id = alice.generate_group(vec![]).await.unwrap();
 
     // g_bottom is a member of g_mid
     alice
@@ -95,7 +90,8 @@ async fn setup_many_docs_nested(
     // Prepare a fresh peer to add to g_bottom (the benchmark target)
     let peer = make_peer_id(&alice).await;
 
-    let membered = Membered::Group(g_bottom_id, g_bottom.dupe());
+    let g_bottom = alice.get_group(g_bottom_id).await.unwrap();
+    let membered = Membered::Group(g_bottom_id, g_bottom);
 
     (alice, membered, peer)
 }

@@ -135,8 +135,7 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
     let carol_id = alice.receive_contact_card(&carol_contact).await?;
     let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
 
-    let group = alice.generate_group(vec![]).await?;
-    let group_id = { group.lock().await.group_id() };
+    let group_id = alice.generate_group(vec![]).await?;
 
     let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
     let doc_b = alice.get_document(doc_b_id).await.expect("just created");
@@ -270,8 +269,8 @@ async fn test_deep_chain_revocation() -> TestResult {
     let eve_on_alice = alice.get_individual(eve_id).await.expect("just received");
 
     // Alice creates Group G
-    let group = alice.generate_group(vec![]).await?;
-    let group_id = { group.lock().await.group_id() };
+    let group_id = alice.generate_group(vec![]).await?;
+    let group = alice.get_group(group_id).await.expect("just created");
 
     // Build the 5-level chain: Alice → Bob → Carol → Dave → Eve
     alice
@@ -763,8 +762,7 @@ async fn test_group_delegate_before_defining_event_reified_as_group() -> TestRes
     let alice = make_simple_keyhive().await?;
 
     // Alice owns Group G and Doc B, and adds Group G as a Read member of Doc B.
-    let group = alice.generate_group(vec![]).await?;
-    let group_id = { group.lock().await.group_id() };
+    let group_id = alice.generate_group(vec![]).await?;
     let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
     alice

@@ -98,8 +98,7 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
     }
 
     // group: second half of peers, then group added to doc2
-    let group = alice.generate_group(vec![]).await.unwrap();
-    let group_id = group.lock().await.group_id();
+    let group_id = alice.generate_group(vec![]).await.unwrap();
     for (peer_id, _peer_on_alice) in &peers_on_alice[half..] {
         alice
             .add_member(*peer_id, group_id, Access::Edit, &[])

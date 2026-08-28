@@ -31,6 +31,7 @@ use super::{
     encrypted_keyed::JsEncryptedKeyed,
     event_handler::JsEventHandler,
     generate_doc_error::JsGenerateDocError,
+    generate_group_error::JsGenerateGroupError,
     group::JsGroup,
     identifier::JsIdentifier,
     individual_id::JsIndividualId,
@@ -129,19 +130,20 @@ impl JsKeyhive {
     pub async fn generate_group(
         &self,
         js_coparents: Vec<JsPeerRef>,
-    ) -> Result<JsGroup, JsSigningError> {
+    ) -> Result<JsGroup, JsGenerateGroupError> {
         let coparents = js_coparents
             .into_iter()
             .map(|js_peer| JsPeer::from_js_ref(&js_peer).0)
             .collect::<Vec<_>>();
 
-        let group = self.0.generate_group(coparents).await?;
+        let group_id = self.0.generate_group(coparents).await?;
+        let inner = self
+            .0
+            .get_group(group_id)
+            .await
+            .ok_or(NotFound(Box::new(group_id.into())))?;
 
-        let group_id = { group.lock().await.group_id() };
-        Ok(JsGroup {
-            group_id,
-            inner: group.dupe(),
-        })
+        Ok(JsGroup { group_id, inner })
     }
 
     #[wasm_bindgen(js_name = generateDocument)]

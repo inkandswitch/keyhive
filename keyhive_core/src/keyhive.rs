@@ -243,7 +243,7 @@ impl<
     pub async fn generate_group(
         &self,
         coparents: Vec<Peer<F, S, T, L>>,
-    ) -> Result<Arc<Mutex<Group<F, S, T, L>>>, SigningError> {
+    ) -> Result<GroupId, SigningError> {
         let group = Group::generate(
             NonEmpty {
                 head: Agent::Active(self.active.lock().await.id(), self.active.dupe()),
@@ -256,9 +256,11 @@ impl<
         )
         .await?;
         let group_id = group.group_id();
-        let g = Arc::new(Mutex::new(group));
-        self.groups.lock().await.insert(group_id, g.dupe());
-        Ok(g)
+        self.groups
+            .lock()
+            .await
+            .insert(group_id, Arc::new(Mutex::new(group)));
+        Ok(group_id)
     }
 
     /// Generate a document.
@@ -3209,13 +3211,14 @@ mod tests {
             hive1.active.lock().await.individual.lock().await.clone(),
         ));
         hive2.register_individual(hive1_on_hive2.dupe()).await;
-        let group1_on_hive1 = hive1
+        let group1_on_hive1_id = hive1
             .generate_group(vec![Peer::Individual(
                 hive2_on_hive1.lock().await.id(),
                 hive2_on_hive1.dupe(),
             )])
             .await
             .unwrap();
+        let group1_on_hive1 = hive1.get_group(group1_on_hive1_id).await.unwrap();
 
         assert_eq!(hive1.delegations.lock().await.len(), 2);
         assert_eq!(hive1.revocations.lock().await.len(), 0);
@@ -3277,7 +3280,7 @@ mod tests {
             .await
             .unwrap();
         // 1 delegation (you)
-        let left_group = left.generate_group(vec![]).await.unwrap();
+        let left_group_id = left.generate_group(vec![]).await.unwrap();
 
         assert_eq!(left.delegations.lock().await.len(), 3);
         assert_eq!(left.revocations.lock().await.len(), 0);
@@ -3293,18 +3296,14 @@ mod tests {
         assert_eq!(left.docs.lock().await.len(), 1);
 
         assert!(left.docs.lock().await.contains_key(&left_doc));
-        assert!(left
-            .groups
-            .lock()
-            .await
-            .contains_key(&left_group.lock().await.group_id()));
+        assert!(left.groups.lock().await.contains_key(&left_group_id));
 
         // NOTE: *NOT* the group
         let left_membered = left.membered_reachable_by_agent(Public.id()).await.unwrap();
 
         assert_eq!(left_membered.len(), 1);
         assert!(left_membered.contains_key(&left_doc.into()));
-        assert!(!left_membered.contains_key(&left_group.lock().await.group_id().into())); // NOTE *not* included because Public is not a member
+        assert!(!left_membered.contains_key(&left_group_id.into())); // NOTE *not* included because Public is not a member
 
         let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).await;
         assert_eq!(left_to_mid_ops.len(), 14);
@@ -3319,11 +3318,7 @@ mod tests {
 
         // Middle should now look the same
         assert!(middle.docs.lock().await.contains_key(&left_doc));
-        assert!(!middle
-            .groups
-            .lock()
-            .await
-            .contains_key(&left_group.lock().await.group_id())); // NOTE: *None*
+        assert!(!middle.groups.lock().await.contains_key(&left_group_id)); // NOTE: *None*
 
         assert_eq!(middle.individuals.lock().await.len(), 3); // NOTE: includes Left
         assert_eq!(middle.groups.lock().await.len(), 0);
@@ -3371,11 +3366,7 @@ mod tests {
 
         assert!(right.groups.lock().await.len() == 1 || right.docs.lock().await.len() == 1);
         assert!(right.docs.lock().await.contains_key(&left_doc));
-        assert!(!right
-            .groups
-            .lock()
-            .await
-            .contains_key(&left_group.lock().await.group_id())); // NOTE: *None*
+        assert!(!right.groups.lock().await.contains_key(&left_group_id)); // NOTE: *None*
 
         assert_eq!(right.individuals.lock().await.len(), 4);
         assert_eq!(right.groups.lock().await.len(), 0);
@@ -3446,13 +3437,10 @@ mod tests {
 
         // Create a keyhive and a doc
         let hive1 = make_keyhive().await;
-        let group = hive1.generate_group(vec![]).await.unwrap();
-        let group_id = group.lock().await.group_id();
+        let group_id = hive1.generate_group(vec![]).await.unwrap();
+        let group = hive1.get_group(group_id).await.unwrap();
         let doc = hive1
-            .generate_doc(
-                vec![Peer::Group(group_id, group.dupe())],
-                nonempty![[0u8; 32]],
-            )
+            .generate_doc(vec![Peer::Group(group_id, group)], nonempty![[0u8; 32]])
             .await
             .unwrap();
         let doc_id = doc;
@@ -3714,8 +3702,7 @@ mod tests {
         alice.add_member(dan_id, doc2_id, Access::Read, &[]).await?;
 
         // Create a group with carol (2 ops) and eve (4 ops), then add group to doc2
-        let group = alice.generate_group(vec![]).await?;
-        let group_id = group.lock().await.group_id();
+        let group_id = alice.generate_group(vec![]).await?;
         alice
             .add_member(carol_id, group_id, Access::Read, &[])
             .await?;
@@ -3854,8 +3841,7 @@ mod tests {
             .await?;
 
         // group: bob and carol
-        let group = alice.generate_group(vec![]).await?;
-        let group_id = group.lock().await.group_id();
+        let group_id = alice.generate_group(vec![]).await?;
         alice
             .add_member(bob_id, group_id, Access::Read, &[])
             .await?;
@@ -3961,8 +3947,7 @@ mod tests {
         );
 
         // group: carol and dave
-        let group = alice.generate_group(vec![]).await.unwrap();
-        let group_id = group.lock().await.group_id();
+        let group_id = alice.generate_group(vec![]).await.unwrap();
         alice
             .add_member(carol_id, group_id, Access::Read, &[])
             .await
@@ -4117,13 +4102,11 @@ mod tests {
         let (dave_id, _dave_indie) = register_peer(&alice, &dave_kh).await;
         let (eve_id, _eve_indie) = register_peer(&alice, &eve_kh).await;
 
-        let inner = alice.generate_group(vec![]).await?;
-        let inner_id = inner.lock().await.group_id();
+        let inner_id = alice.generate_group(vec![]).await?;
         for who in [dave_id, eve_id] {
             alice.add_member(who, inner_id, Access::Read, &[]).await?;
         }
-        let outer = alice.generate_group(vec![]).await?;
-        let outer_id = outer.lock().await.group_id();
+        let outer_id = alice.generate_group(vec![]).await?;
         alice
             .add_member(inner_id, outer_id, Access::Read, &[])
             .await?;
@@ -4165,8 +4148,7 @@ mod tests {
         let frank_kh = make_keyhive().await;
         let (frank_id, _frank_indie) = register_peer(&alice, &frank_kh).await;
 
-        let group = alice.generate_group(vec![]).await?;
-        let group_id = group.lock().await.group_id();
+        let group_id = alice.generate_group(vec![]).await?;
         alice
             .add_member(frank_id, group_id, Access::Read, &[])
             .await?;
