@@ -77,7 +77,7 @@ events rather than introductions.
 The `TestContext` has one unified error vocabulary for failure reasons we want to
 assert on. To match, you can use a `map_error`:
 
-```rust
+```text
 match bob.add_member(carol.id(), design_doc, Read, &[]).await.map_err(TestError::from) {
     Err(TestError::NoAuthority) => {}
     other => panic!("expected no authority, got {other:?}"),

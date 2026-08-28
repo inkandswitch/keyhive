@@ -706,7 +706,10 @@ impl TestContext {
         let (out, key) = who
             .try_encrypt_content_keyed(doc, &content_ref(content), &vec![], content)
             .await?;
-        Ok((self.record_content_write(out.encrypted_content().clone(), doc), key))
+        Ok((
+            self.record_content_write(out.encrypted_content().clone(), doc),
+            key,
+        ))
     }
 
     /// Encrypt content that follows `after` in the document's content DAG.
