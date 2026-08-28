@@ -2,7 +2,7 @@
 
 use crate::{
     access::Access,
-    all_agent_events::AllAgentEvents,
+    all_agent_events::{AllAgentEvents, EventDigest},
     archive::Archive,
     cgka::AllCgkaOps,
     contact_card::ContactCard,
@@ -1514,6 +1514,30 @@ impl<
         }
 
         AllCgkaOps { ops, index }
+    }
+
+    /// Every event `agent` can reach, under the digests they are sent by.
+    pub async fn event_digests_for_agent(
+        &self,
+        agent: &Agent<F, S, T, L>,
+    ) -> HashSet<EventDigest<F, S, T, L>> {
+        let mut digests = HashSet::new();
+
+        for (digest, _) in self.membership_ops_for_agent(agent).await {
+            digests.insert(digest.coerce());
+        }
+        for key_ops in self.reachable_prekey_ops_for_agent(agent).await.values() {
+            for key_op in key_ops.iter() {
+                let event: Event<F, S, T, L> = Event::from(key_op.as_ref().clone());
+                digests.insert(Digest::hash(&event));
+            }
+        }
+        for cgka_op in self.cgka_ops_reachable_by_agent(agent).await {
+            let event: Event<F, S, T, L> = Event::from(cgka_op);
+            digests.insert(Digest::hash(&event));
+        }
+
+        digests
     }
 
     /// Every event each agent can reach, gathered once and deduplicated.

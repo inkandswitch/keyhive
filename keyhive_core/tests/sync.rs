@@ -395,6 +395,19 @@ async fn all_agent_events_agrees_with_the_per_agent_walk() -> Result<()> {
             per_agent.insert(*Digest::hash(&event).raw.as_bytes());
         }
 
+        let single: BTreeSet<[u8; 32]> = alice
+            .event_digests_for_agent(&agent)
+            .await
+            .into_iter()
+            .map(|d| *d.raw.as_bytes())
+            .collect();
+        assert_eq!(
+            single,
+            per_agent,
+            "event_digests_for_agent disagrees with the three walks it gathers for {}",
+            who.name()
+        );
+
         let bulk: BTreeSet<[u8; 32]> = all
             .digests_for(who.id().into())
             .into_iter()
