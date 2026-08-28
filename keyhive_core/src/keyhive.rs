@@ -46,8 +46,8 @@ use crate::{
     stats::Stats,
     store::{
         ciphertext::{
-            memory::MemoryCiphertextStore, CausalDecryptionError, CausalDecryptionState,
-            CiphertextStore, CiphertextStoreExt,
+            memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore,
+            CiphertextStoreExt,
         },
         delegation::DelegationStore,
         revocation::RevocationStore,
@@ -77,14 +77,22 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
     sync::Arc,
 };
+
 use thiserror::Error;
 use tracing::instrument;
+
+// Only `cgka_members_for()` uses this.
+#[cfg(any(test, feature = "test_utils"))]
+use std::collections::BTreeSet;
+// Only `try_causal_decrypt_from` uses this.
+#[cfg(any(test, feature = "test_utils"))]
+use crate::store::ciphertext::CausalDecryptionError;
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
@@ -637,6 +645,10 @@ impl<
 
     /// Encrypt `content` into `doc` in an [`Envelope`](crate::crypto::envelope::Envelope),
     /// listing its ancestors and carrying the keys to open them.
+    ///
+    /// Read it back with [`Keyhive::try_causal_decrypt_content`], which unwraps the envelope.
+    /// [`Keyhive::try_decrypt_content`] returns the serialized envelope instead.
+    #[cfg(any(test, feature = "test_utils"))]
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_in_envelope(
         &self,
@@ -737,6 +749,7 @@ impl<
     /// Try causal decrypt from more than one entrypoint at once.
     ///
     /// [`Keyhive::try_causal_decrypt_content`] takes a single entrypoint.
+    #[cfg(any(test, feature = "test_utils"))]
     pub async fn try_causal_decrypt_from(
         &self,
         entrypoints: &[(Arc<EncryptedContent<P, T>>, SymmetricKey)],

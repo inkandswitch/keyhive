@@ -470,6 +470,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     /// Encrypt `content` in an [`Envelope`], listing its ancestors and carrying the keys to
     /// open them.
+    #[cfg(any(test, feature = "test_utils"))]
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_in_envelope<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
