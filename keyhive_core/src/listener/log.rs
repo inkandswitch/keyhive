@@ -136,3 +136,48 @@ where
         F::from_future(async move { self.push(Event::CgkaOperation(data.dupe())).await })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{keyhive::Keyhive, store::ciphertext::memory::MemoryCiphertextStore};
+    use keyhive_crypto::signer::memory::MemorySigner;
+    use nonempty::nonempty;
+
+    #[tokio::test]
+    async fn the_log_returns_what_was_emitted() {
+        let log: Log<Sendable, MemorySigner> = Log::new();
+        assert!(log.is_empty().await, "a fresh log is empty");
+
+        let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
+        let hive: Keyhive<
+            Sendable,
+            MemorySigner,
+            [u8; 32],
+            Vec<u8>,
+            Arc<Mutex<MemoryCiphertextStore<[u8; 32], Vec<u8>>>>,
+            Log<Sendable, MemorySigner>,
+        > = Keyhive::generate(
+            MemorySigner::generate(&mut rand::rngs::OsRng),
+            Arc::new(Mutex::new(store)),
+            log.clone(),
+            rand::rngs::OsRng,
+        )
+        .await
+        .expect("keyhive generation should succeed");
+
+        hive.generate_doc(vec![], nonempty![[0u8; 32]])
+            .await
+            .expect("doc generation should succeed");
+
+        let emitted = log.len().await;
+        assert!(emitted > 0, "creating a document emits events");
+
+        let mut drained = 0;
+        while log.pop().await.is_some() {
+            drained += 1;
+        }
+        assert_eq!(drained, emitted, "every event the log held came back out");
+        assert!(log.is_empty().await, "and draining it leaves it empty");
+    }
+}
