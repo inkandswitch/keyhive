@@ -905,14 +905,23 @@ impl<
         &self,
         membered: impl Into<MemberedId>,
     ) -> Result<BTreeMap<Identifier, Access>, NotFound> {
-        let raw = match self.membered_by_id(membered.into()).await? {
-            Membered::Group(_, group) => group.lock().await.transitive_members().await,
-            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
-        };
-        Ok(raw
+        Ok(self
+            .transitive_members_of(membered.into())
+            .await?
             .into_iter()
             .map(|(id, (_agent, can))| (id, can))
             .collect())
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn transitive_members_of(
+        &self,
+        membered: MemberedId,
+    ) -> Result<HashMap<Identifier, (Agent<F, S, T, L>, Access)>, NotFound> {
+        Ok(match self.membered_by_id(membered).await? {
+            Membered::Group(_, group) => group.lock().await.transitive_members().await,
+            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
+        })
     }
 
     /// Returns `who` if we have heard of it. Otherwise returns an error.
@@ -2664,7 +2673,11 @@ impl<
         doc: DocumentId,
     ) -> Result<Option<Access>, NotFound> {
         let who = self.check_received(who.into()).await?;
-        Ok(self.reachable_members(doc).await?.get(&who).copied())
+        Ok(self
+            .transitive_members_of(doc.into())
+            .await?
+            .get(&who)
+            .map(|(_agent, can)| *can))
     }
 
     /// The higher of `who`'s access to `doc` and public's access to `doc`.
