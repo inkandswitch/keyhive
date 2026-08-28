@@ -234,28 +234,6 @@ impl JsKeyhive {
         })
     }
 
-    // NOTE: this is with a fresh doc secret
-    #[wasm_bindgen(js_name = tryEncryptArchive)]
-    pub async fn try_encrypt_archive(
-        &self,
-        doc: &JsDocument,
-        content_ref: &JsChangeId,
-        pred_refs: Vec<JsChangeIdRef>,
-        content: &[u8],
-    ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
-        init_span!("JsKeyhive::try_encrypt_archive");
-        let pred_refs: Vec<JsChangeId> = pred_refs
-            .into_iter()
-            .map(|js_ref| JsChangeId::from_js_ref(&js_ref))
-            .collect();
-
-        Ok(self
-            .0
-            .try_encrypt_content(doc.doc_id, content_ref, &pred_refs, content)
-            .await?
-            .into())
-    }
-
     #[wasm_bindgen(js_name = tryDecrypt)]
     pub async fn try_decrypt(
         &self,
