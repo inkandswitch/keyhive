@@ -594,7 +594,6 @@ impl<
         let resource = self
             .membered_by_id(MemberedId::into(resource.into()))
             .await?;
-        let resource = &resource;
 
         let active_id = { self.active.lock().await.id().into() };
         let mut relevant_docs = BTreeMap::new();
@@ -607,7 +606,7 @@ impl<
 
         // When revoking from a group, collect the revoked member's individual
         // IDs before the revocation removes them from the members map.
-        let revoked_individual_ids: HashSet<IndividualId> = match resource {
+        let revoked_individual_ids: HashSet<IndividualId> = match &resource {
             Membered::Group(_, group) => {
                 let delegates: Vec<Agent<F, S, T, L>> = {
                     let locked = group.lock().await;
@@ -639,7 +638,7 @@ impl<
         // Propagate CGKA removals to docs that contain this group.
         // TODO: O(# of docs x `transitive_members()`). We should replace this approach
         // (possibly with a reverse index lookup).
-        if let Membered::Group(group_id, _) = resource {
+        if let Membered::Group(group_id, _) = &resource {
             if !revoked_individual_ids.is_empty() {
                 let group_identifier: Identifier = (*group_id).into();
                 let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
@@ -3449,9 +3448,8 @@ mod tests {
             )
             .await
             .unwrap();
-        let doc_id = { doc };
         let dlg = keyhive
-            .add_member(Public.id(), doc_id, Access::Read, &[])
+            .add_member(Public.id(), doc, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3545,9 +3543,8 @@ mod tests {
         let bob_on_alice = Arc::new(Mutex::new(Individual::new(add_op.dupe())));
         assert!(alice.register_individual(bob_on_alice.clone()).await);
         let bob_on_alice_id = { bob_on_alice.lock().await.id() };
-        let doc_id = { doc };
         alice
-            .add_member(bob_on_alice_id, doc_id, Access::Read, &[])
+            .add_member(bob_on_alice_id, doc, Access::Read, &[])
             .await
             .unwrap();
 
