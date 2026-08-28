@@ -63,8 +63,6 @@ pub type TestResult<T> = Result<T, TestError>;
 ///
 /// The library spreads one conclusion across several enums. This flattens the ones a test
 /// asserts on into a single vocabulary, and wraps everything else as `Other`.
-///
-/// These variants exist to be matched on in tests to check specific reasons for refusal.
 #[derive(Debug, Error)]
 pub enum TestError {
     /// The issuer holds some access over the resource, but less than they tried to delegate.
@@ -239,7 +237,7 @@ struct InstanceId(u32);
 
 /// One running [`Hive`] instance with the name it was created with.
 ///
-/// Derefs to the keyhive, so `alice.add_member(..)` and `alice.id()` are the `Hive`s own
+/// Derefs to the keyhive, so `alice.add_member(..)` and `alice.id()` are the `Hive`'s own
 /// methods.
 #[derive(Clone)]
 pub struct Instance {
@@ -423,13 +421,13 @@ impl TestContext {
         Ok(handle)
     }
 
-    /// Take a keyhive the test built itself and treat it as one of the cast.
+    /// Take a keyhive the test built itself and register it with this context.
     ///
     /// The signing key stays with whoever made it, so this context cannot later run a second
     /// instance of an adopted identity.
     pub async fn adopt(&mut self, hive: Hive, name: &str) -> TestResult<Instance> {
         let handle = self.register_instance(hive, name).await?;
-        // An identity already in the cast keeps the name it arrived with.
+        // An identity this context already knows keeps the name it arrived with.
         self.names
             .entry(handle.id().into())
             .or_insert_with(|| handle.name.clone());
@@ -571,7 +569,7 @@ impl TestContext {
     /// Sends every instance what every other has not yet sent it, repeating until a round
     /// changes nothing.
     ///
-    /// Eight rounds is the bound to provide some headroom in the tests.
+    /// The limit is eight rounds, which is more than any test is expected to need.
     pub async fn sync_all_unsent(&mut self) -> TestResult<()> {
         const MAX_ROUNDS: usize = 8;
         self.sync_all_unsent_within(MAX_ROUNDS).await
@@ -856,7 +854,7 @@ impl TestContext {
             .unwrap_or_else(|| id.to_string().into())
     }
 
-    ///////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////////
     ///////////////////
     // Private methods
     ///////////////////

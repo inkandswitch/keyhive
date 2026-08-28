@@ -805,7 +805,7 @@ impl<
         Ok(self.try_decrypt_content_keyed(doc, encrypted).await?.0)
     }
 
-    /// Whether decryption actually succeeds.
+    /// Whether decryption succeeds.
     ///
     /// `Ok(false)` means this instance holds no key for the content, or holds one that does
     /// not authenticate it. Not knowing about `doc` at all is an error.

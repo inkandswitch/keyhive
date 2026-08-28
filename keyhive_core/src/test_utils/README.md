@@ -1,12 +1,12 @@
 # Writing tests with the `TestContext` harness
 
-The `TestContext` harness provides the following to assist in writing tests:
+The `TestContext` harness provides the following to help in writing tests:
 
 * Creates keyhives and introduces them to each other.
 * Moves events between them in a controlled order (simulating sync scenarios).
 * Remembers which name goes with which identifier, so assertions can say `"bob"`.
 * Provides helper functions to simplify tests, reduce repetition, and prevent subtle
-bugs in test setup.
+  bugs in test setup.
 * Chooses a content ref for encrypted content, and remembers which document it's
 associated with.
 
@@ -42,19 +42,19 @@ async fn a_reader_reads_what_a_member_wrote() -> Result<()> {
 }
 ```
 
-## The cast
+## Creating identities, groups and documents
 
 * `ctx.individual(name)` creates an identity with one instance running.
 * `ctx.new_keyhive_instance_for(&of, name)` creates a new instance of an existing
-identity, sharing its signing key. Cloning an `Instance` does not do this.
+  identity, sharing its signing key. Cloning an `Instance` does not do this.
 * `ctx.group(&creator, name)` creates a named `Group` and returns a `GroupId`.
 * `ctx.doc(&creator, name)` creates a named `Document` and returns a `DocumentId`.
 * `ctx.rebuild_from_archive(&archive, name)` builds a new `Keyhive` instance from the
-`Archive`, with a fresh ciphertext store. The signing key is the one the context
-holds for the archive's own identity.
-* `ctx.adopt(hive, name)` takes a `Hive` the test built itself and treats it as one
-of the cast, for an instance the context would not produce, such as a peer holding a
-particular signing key.
+  `Archive`, with a fresh ciphertext store. The signing key is the one the context
+  holds for the archive's own identity.
+* `ctx.adopt(hive, name)` takes a `Hive` the test built itself and registers it with
+  the context, for an instance the context would not produce, such as a peer holding
+  a particular signing key.
 
 Every instance learns every other instance's contact card, so a `NotSynced` is about
 events rather than introductions.

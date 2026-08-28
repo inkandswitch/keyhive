@@ -67,8 +67,8 @@ async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
 }
 
 /// A later member reads earlier content by walking back from a write made after they
-/// joined. This is the shape ARK uses to admit someone to a document that already has
-/// history: rotate, then write something that lists what came before.
+/// joined. This is the shape `automerge-repo-keyhive` uses to admit someone to a document
+/// that already has history. Rotate, then write something that lists what came before.
 #[tokio::test]
 async fn a_later_member_recovers_earlier_content_by_walking_back() -> Result<()> {
     let mut ctx = TestContext::new().await;
