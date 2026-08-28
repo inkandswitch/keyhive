@@ -289,3 +289,63 @@ async fn withholding_key_agreement_leaves_a_member_who_cannot_read() -> Result<(
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_member_without_the_key_tree_derives_no_pcs_key() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    ctx.encrypt(&alice, design_doc, b"needs a key").await?;
+
+    ctx.sync_without(&alice, &bob, EventKind::CgkaOperation)
+        .await?;
+
+    assert!(
+        bob.try_pcs_key_hash(design_doc).await?.is_none(),
+        "bob knows the document but holds no key tree to derive from"
+    );
+
+    ctx.sync(&alice, &bob).await?;
+
+    assert!(
+        bob.try_pcs_key_hash(design_doc).await?.is_some(),
+        "the key agreement operations let him derive one"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn stats_counts_key_agreement_only_once_the_operations_arrive() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    ctx.encrypt(&alice, design_doc, b"needs a key").await?;
+
+    ctx.sync_without(&alice, &bob, EventKind::CgkaOperation)
+        .await?;
+
+    assert_eq!(
+        bob.stats().await.docs,
+        1,
+        "bob has the document itself, from the delegation"
+    );
+    assert_eq!(
+        bob.stats().await.cgka_operations,
+        0,
+        "but none of its key agreement operations"
+    );
+
+    ctx.sync(&alice, &bob).await?;
+
+    assert!(
+        bob.stats().await.cgka_operations > 0,
+        "which arrive with the rest of the events"
+    );
+    Ok(())
+}
