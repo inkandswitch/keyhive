@@ -2018,7 +2018,7 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn promote_individual_to_group(
+    async fn promote_individual_to_group(
         &self,
         individual: Arc<Mutex<Individual>>,
         head: Arc<Signed<Delegation<F, S, T, L>>>,
