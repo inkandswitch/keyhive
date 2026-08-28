@@ -432,54 +432,6 @@ impl<
         true
     }
 
-    #[instrument(skip_all)]
-    pub async fn register_group(&self, root_delegation: Signed<Delegation<F, S, T, L>>) -> bool {
-        if self
-            .groups
-            .lock()
-            .await
-            .contains_key(&GroupId(root_delegation.subject_id()))
-        {
-            return false;
-        }
-
-        let group = Arc::new(Mutex::new(
-            Group::new(
-                GroupId(root_delegation.issuer.into()),
-                Arc::new(root_delegation),
-                self.delegations.dupe(),
-                self.revocations.dupe(),
-                self.event_listener.clone(),
-            )
-            .await,
-        ));
-
-        {
-            let locked = group.lock().await;
-            self.groups
-                .lock()
-                .await
-                .insert(locked.group_id(), group.dupe());
-        }
-        true
-    }
-
-    #[instrument(skip_all)]
-    pub async fn get_membership_operation(
-        &self,
-        digest: &Digest<MembershipOperation<F, S, T, L>>,
-    ) -> Option<MembershipOperation<F, S, T, L>> {
-        if let Some(d) = self.delegations.lock().await.get(&digest.coerce()) {
-            Some(d.dupe().into())
-        } else {
-            self.revocations
-                .lock()
-                .await
-                .get(&digest.coerce())
-                .map(|r| r.dupe().into())
-        }
-    }
-
     /// Delegate `to_add` `can` access to `resource`.
     ///
     /// Returns an error if we have never heard of `to_add` or `resource`.
@@ -1611,35 +1563,6 @@ impl<
 
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub async fn static_event_to_event(
-        &self,
-        static_event: StaticEvent<T>,
-    ) -> Result<Event<F, S, T, L>, StaticEventConversionError<F, S, T, L>> {
-        match static_event {
-            StaticEvent::PrekeysExpanded(op) => Ok(Event::PrekeysExpanded(Arc::new(*op))),
-            StaticEvent::PrekeyRotated(op) => Ok(Event::PrekeyRotated(Arc::new(*op))),
-            StaticEvent::CgkaOperation(op) => Ok(Event::CgkaOperation(Arc::new(*op))),
-            StaticEvent::Delegated(static_dlg) => {
-                let delegation = self.static_delegation_to_delegation(&static_dlg).await?;
-                Ok(Event::Delegated(Arc::new(Signed::new(
-                    delegation,
-                    static_dlg.issuer,
-                    static_dlg.signature,
-                ))))
-            }
-            StaticEvent::Revoked(static_rev) => {
-                let revocation = self.static_revocation_to_revocation(&static_rev).await?;
-                Ok(Event::Revoked(Arc::new(Signed::new(
-                    revocation,
-                    static_rev.issuer,
-                    static_rev.signature,
-                ))))
-            }
-        }
-    }
-
-    #[allow(clippy::type_complexity)]
-    #[instrument(skip_all)]
     async fn static_delegation_to_delegation(
         &self,
         static_dlg: &Signed<StaticDelegation<T>>,
@@ -1947,18 +1870,6 @@ impl<
             }
             StaticEvent::Delegated(dlg) => self.receive_delegation(&dlg).await?,
             StaticEvent::Revoked(rev) => self.receive_revocation(&rev).await?,
-        }
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    pub async fn receive_membership_op(
-        &self,
-        static_op: &StaticMembershipOperation<T>,
-    ) -> Result<(), ReceiveStaticDelegationError<F, S, T, L>> {
-        match static_op {
-            StaticMembershipOperation::Delegation(d) => self.receive_delegation(d).await?,
-            StaticMembershipOperation::Revocation(r) => self.receive_revocation(r).await?,
         }
         Ok(())
     }
