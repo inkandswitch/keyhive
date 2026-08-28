@@ -708,9 +708,7 @@ impl TestContext {
         let (out, key) = who
             .try_encrypt_content_keyed(doc, &content_ref(content), &vec![], content)
             .await?;
-        let ct = out.encrypted_content().clone();
-        self.written.insert(ct.content_ref, doc);
-        Ok((ct, key))
+        Ok((self.record_content_write(out.encrypted_content().clone(), doc), key))
     }
 
     /// Encrypt content that follows `after` in the document's content DAG.
@@ -721,17 +719,11 @@ impl TestContext {
         after: &[&Ciphertext],
         content: &[u8],
     ) -> TestResult<Ciphertext> {
-        let mut pred_refs = Vec::with_capacity(after.len());
-        for pred in after {
-            self.check_same_document(pred, doc)?;
-            pred_refs.push(pred.content_ref);
-        }
+        let pred_refs = self.predecessor_refs(after, doc)?;
         let out = who
             .try_encrypt_content(doc, &content_ref(content), &pred_refs, content)
             .await?;
-        let ct = out.encrypted_content().clone();
-        self.written.insert(ct.content_ref, doc);
-        Ok(ct)
+        Ok(self.record_content_write(out.encrypted_content().clone(), doc))
     }
 
     /// Write `content` in an envelope listing the ancestors and carrying the keys to open
@@ -746,17 +738,12 @@ impl TestContext {
         after: &[&Ciphertext],
         content: &[u8],
     ) -> TestResult<Ciphertext> {
-        let mut pred_refs = Vec::with_capacity(after.len());
-        for pred in after {
-            self.check_same_document(pred, doc)?;
-            pred_refs.push(pred.content_ref);
-        }
+        let pred_refs = self.predecessor_refs(after, doc)?;
         let out = who
             .try_encrypt_content_in_envelope(doc, &content_ref(content), &pred_refs, content)
             .await
             .map_err(|e| TestError::Other(e.to_string()))?;
-        let ct = out.encrypted_content().clone();
-        self.written.insert(ct.content_ref, doc);
+        let ct = self.record_content_write(out.encrypted_content().clone(), doc);
         self.give_content(who, &ct).await?;
         Ok(ct)
     }
@@ -990,6 +977,28 @@ impl TestContext {
             }),
             _ => Ok(()),
         }
+    }
+
+    /// Remember which document a piece of content went into, so a later predecessor
+    /// can be checked against this one.
+    fn record_content_write(&mut self, ct: Ciphertext, doc: DocumentId) -> Ciphertext {
+        self.written.insert(ct.content_ref, doc);
+        ct
+    }
+
+    /// The content refs of `after`, excluding any predecessor recorded for another
+    /// document.
+    fn predecessor_refs(
+        &self,
+        after: &[&Ciphertext],
+        doc: DocumentId,
+    ) -> TestResult<Vec<[u8; 32]>> {
+        let mut refs = Vec::with_capacity(after.len());
+        for pred in after {
+            self.check_same_document(pred, doc)?;
+            refs.push(pred.content_ref);
+        }
+        Ok(refs)
     }
 
     /// The [`Individual`] `observer` holds for `who`.
