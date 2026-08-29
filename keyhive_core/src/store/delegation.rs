@@ -11,8 +11,10 @@ use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
 };
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 /// [`Delegation`] storage.
 #[allow(clippy::type_complexity)]

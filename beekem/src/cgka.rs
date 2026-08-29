@@ -721,9 +721,9 @@ mod concurrent_update_conflict_tests {
     use super::Cgka;
     use crate::id::{MemberId, TreeId};
     use future_form::Sendable;
-    use keyhive_crypto::share_key::ShareSecretKey;
-    use keyhive_crypto::signer::memory::MemorySigner;
-    use keyhive_crypto::verifiable::Verifiable;
+    use keyhive_crypto::{
+        share_key::ShareSecretKey, signer::memory::MemorySigner, verifiable::Verifiable,
+    };
     use rand::{rngs::StdRng, SeedableRng};
     use std::sync::Arc;
 
@@ -741,8 +741,9 @@ mod concurrent_update_conflict_tests {
         let doc_id = TreeId(signer_a.verifying_key());
 
         // A founds the group and adds B.
-        let mut cgka_a =
-            Cgka::new::<Sendable, _>(doc_id, id_a, pk_a, &signer_a).await.expect("init cgka a");
+        let mut cgka_a = Cgka::new::<Sendable, _>(doc_id, id_a, pk_a, &signer_a)
+            .await
+            .expect("init cgka a");
         let add_op = cgka_a
             .add::<Sendable, _>(id_b, pk_b, &signer_a)
             .await
@@ -750,8 +751,8 @@ mod concurrent_update_conflict_tests {
             .expect("b was not yet a member");
 
         // B reconstructs the group from the init add + membership op.
-        let mut cgka_b = Cgka::new_from_init_add(doc_id, id_b, pk_b, cgka_a.init_add_op())
-            .expect("init cgka b");
+        let mut cgka_b =
+            Cgka::new_from_init_add(doc_id, id_b, pk_b, cgka_a.init_add_op()).expect("init cgka b");
         cgka_b
             .merge_concurrent_operation(Arc::new(add_op))
             .expect("sequential membership op merges cleanly");

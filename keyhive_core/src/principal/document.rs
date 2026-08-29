@@ -182,16 +182,86 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     revocations,
                     BTreeMap::from_iter([(
                         DocumentId(verifier.into()),
-                        initial_content_heads.clone().into_iter().collect(),
+                        initial_content_heads.iter().cloned().collect::<Vec<_>>(),
                     )]),
                     listener,
                 )
             });
+        Self::finish_generate(
+            group_result,
+            group_vk,
+            initial_content_heads,
+            signer,
+            &mut *locked_csprng,
+        )
+        .await
+    }
 
+    /// Generate a document whose identity key was reserved ahead of time.
+    ///
+    /// The document ID is the verifying key of `reserved_signer`; the caller
+    /// must have durably retained that signing key between reservation and
+    /// this call. Everything else is identical to [`generate`](Self::generate):
+    /// the document is created with real, non-empty content heads and a
+    /// freshly initialized CGKA.
+    #[allow(clippy::type_complexity)]
+    #[instrument(skip_all)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn generate_with_reserved_signer<R: rand::CryptoRng + rand::RngCore>(
+        reserved_signer: ed25519_dalek::SigningKey,
+        parents: NonEmpty<Agent<F, S, T, L>>,
+        initial_content_heads: NonEmpty<T>,
+        delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
+        revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+        listener: L,
+        signer: &S,
+        csprng: Arc<Mutex<R>>,
+    ) -> Result<Self, GenerateDocError> {
+        let mut locked_csprng = csprng.lock().await;
+        let group_vk = reserved_signer.verifying_key();
+        let group_result = EphemeralSigner::with_signer_key(reserved_signer, |verifier, signer| {
+            Group::generate_after_content(
+                signer,
+                verifier,
+                parents,
+                delegations,
+                revocations,
+                BTreeMap::from_iter([(
+                    DocumentId(verifier.into()),
+                    initial_content_heads.iter().cloned().collect::<Vec<_>>(),
+                )]),
+                listener,
+            )
+        });
+        Self::finish_generate(
+            group_result,
+            group_vk,
+            initial_content_heads,
+            signer,
+            &mut *locked_csprng,
+        )
+        .await
+    }
+
+    /// Shared tail of [`generate`](Self::generate) and
+    /// [`generate_with_reserved_signer`](Self::generate_with_reserved_signer):
+    /// build the CGKA and assemble the document from the generated group.
+    #[allow(clippy::type_complexity)]
+    async fn finish_generate<R, Fut>(
+        group_result: Fut,
+        group_vk: VerifyingKey,
+        initial_content_heads: NonEmpty<T>,
+        signer: &S,
+        locked_csprng: &mut R,
+    ) -> Result<Self, GenerateDocError>
+    where
+        R: rand::CryptoRng + rand::RngCore,
+        Fut: std::future::Future<Output = Result<Group<F, S, T, L>, SigningError>>,
+    {
         let group = group_result.await?;
         let owner_id = IndividualId(group_vk.into());
         let doc_id = DocumentId(group.id());
-        let owner_share_secret_key = ShareSecretKey::generate(&mut *locked_csprng);
+        let owner_share_secret_key = ShareSecretKey::generate(locked_csprng);
         let owner_share_key = owner_share_secret_key.share_key();
         let group_members = group.pick_individual_prekeys(doc_id).await;
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
@@ -214,7 +284,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 owner_share_key,
                 owner_share_secret_key,
                 signer,
-                &mut *locked_csprng,
+                locked_csprng,
             )
             .await?;
 

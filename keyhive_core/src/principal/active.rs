@@ -21,6 +21,7 @@ use crate::{
     principal::{
         agent::id::AgentId,
         group::delegation::{Delegation, DelegationError},
+        individual::ReceivePrekeyOpError,
         membered::Membered,
     },
     transact::{
@@ -35,11 +36,11 @@ use futures::{lock::Mutex, prelude::*};
 use keyhive_crypto::{
     content::reference::ContentRef,
     share_key::{ShareKey, ShareSecretKey},
-    signed::{Signed, SigningError},
+    signed::{Signed, SigningError, VerificationError},
     signer::{async_signer, async_signer::AsyncSigner},
     verifiable::Verifiable,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
 use thiserror::Error;
 
@@ -74,6 +75,36 @@ impl LocalPrekeySecret {
     pub fn share_secret_key(&self) -> ShareSecretKey {
         self.share_secret_key
     }
+}
+/// Magic bytes prefixing a [`PrekeyStateDelta`] blob.
+pub const PREKEY_STATE_DELTA_MAGIC: [u8; 4] = *b"PKST";
+
+/// Current serialization version of [`PrekeyStateDelta`].
+pub const PREKEY_STATE_FORMAT_VERSION: u32 = 1;
+
+/// Versioned prekey-state snapshot: published membership ops + secret halves.
+/// See [`Active::export_prekey_state`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrekeyStateDelta {
+    pub magic: [u8; 4],
+    pub format_version: u32,
+    pub prekey_pairs: BTreeMap<ShareKey, ShareSecretKey>,
+    pub ops: Vec<KeyOp>,
+}
+
+/// Errors from [`Active::import_prekey_state`].
+#[derive(Debug, Error)]
+pub enum ImportPrekeyStateError {
+    #[error("prekey state delta magic mismatch")]
+    UnknownFormat,
+    #[error("prekey state delta version {0} not supported")]
+    UnsupportedVersion(u32),
+    #[error("prekey state delta deserialization error: {0}")]
+    Bincode(#[from] bincode::Error),
+    #[error("prekey state delta contains an operation that fails verification: {0}")]
+    Verification(#[from] VerificationError),
+    #[error("prekey state delta contains an operation for a different individual: {0}")]
+    Receive(#[from] ReceivePrekeyOpError),
 }
 
 /// The current user agent (which can sign and encrypt).
@@ -339,6 +370,63 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         let imported: BTreeMap<ShareKey, ShareSecretKey> = bincode::deserialize(bytes)?;
         let mut pairs = self.prekey_pairs.lock().await;
         pairs.extend(imported);
+        Ok(())
+    }
+
+    /// Export the full prekey state — published membership ops and secret
+    /// halves — as a versioned, opaque blob.
+    ///
+    /// The archive is durable only via compaction; this delta makes both
+    /// halves of the prekey state restorable from incremental storage
+    /// without waiting for one. Operations are verified against this
+    /// agent's signing key on import and applied idempotently: replaying
+    /// ops already known to the [`PrekeyState`] is a no-op (the
+    /// content-addressed op set dedupes, and rotation tombstones beat
+    /// stale adds in the two-pass fold).
+    ///
+    /// # Security
+    ///
+    /// Unencrypted secret key material. Protect at rest and in transit.
+    pub async fn export_prekey_state(&self) -> Result<Vec<u8>, bincode::Error> {
+        let pairs = self.prekey_pairs.lock().await;
+        let individual = self.individual.lock().await;
+        let delta = PrekeyStateDelta {
+            magic: PREKEY_STATE_DELTA_MAGIC,
+            format_version: PREKEY_STATE_FORMAT_VERSION,
+            prekey_pairs: (*pairs).clone(),
+            ops: individual
+                .prekey_state
+                .ops()
+                .values()
+                .map(|op| (**op).clone())
+                .collect(),
+        };
+        bincode::serialize(&delta)
+    }
+
+    /// Import a prekey-state delta previously produced by
+    /// [`export_prekey_state`], extending both halves of the state.
+    ///
+    /// Operations are verified (signature + signer identity) before being
+    /// applied; already-known ops are no-ops. Secret halves are merged.
+    pub async fn import_prekey_state(&self, bytes: &[u8]) -> Result<(), ImportPrekeyStateError> {
+        let delta: PrekeyStateDelta = bincode::deserialize(bytes)?;
+        if delta.magic != PREKEY_STATE_DELTA_MAGIC {
+            return Err(ImportPrekeyStateError::UnknownFormat);
+        }
+        if delta.format_version != PREKEY_STATE_FORMAT_VERSION {
+            return Err(ImportPrekeyStateError::UnsupportedVersion(
+                delta.format_version,
+            ));
+        }
+        {
+            let mut individual = self.individual.lock().await;
+            for op in delta.ops {
+                individual.receive_prekey_op(op)?;
+            }
+        }
+        let mut pairs = self.prekey_pairs.lock().await;
+        pairs.extend(delta.prekey_pairs);
         Ok(())
     }
 

@@ -56,6 +56,21 @@ impl EphemeralSigner {
         (f(vk, Box::new(sk)), vk)
     }
 
+    /// Run a closure with a caller-supplied signing key.
+    ///
+    /// Unlike [`with_signer`](Self::with_signer), the key is not generated
+    /// here: the caller holds it (for example a durably reserved document
+    /// identity) and the closure receives its verifying key and a signer
+    /// wrapping the supplied key. The key is consumed and never exposed
+    /// beyond the closure.
+    pub fn with_signer_key<T>(
+        sk: ed25519_dalek::SigningKey,
+        f: impl FnOnce(ed25519_dalek::VerifyingKey, Box<dyn SyncSignerBasic>) -> T,
+    ) -> T {
+        let vk = sk.verifying_key();
+        f(vk, Box::new(sk))
+    }
+
     /// Run an async closure with a randomly generated ephemeral key.
     ///
     /// ```
