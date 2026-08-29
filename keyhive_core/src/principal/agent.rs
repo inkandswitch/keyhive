@@ -13,7 +13,6 @@ use crate::{
     principal::group::delegation::Delegation,
     util::content_addressed_map::CaMap,
 };
-use derivative::Derivative;
 use derive_more::{From, TryInto};
 use derive_where::derive_where;
 use dupe::Dupe;
@@ -35,7 +34,7 @@ use std::{
 ///
 /// This type is very lightweight to clone, since it only contains immutable references to the actual agents.
 #[derive_where(Clone, Debug; T)]
-#[derive(From, TryInto, Derivative)]
+#[derive(From, TryInto)]
 pub enum Agent<
     F: FutureForm,
     S: AsyncSigner<F>,
