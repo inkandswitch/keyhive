@@ -15,8 +15,8 @@ use keyhive_crypto::{
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
 };
 

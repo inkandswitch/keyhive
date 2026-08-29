@@ -336,13 +336,15 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub async fn force_pcs_update(&self, doc: &JsDocument) -> Result<Box<[u8]>, JsValue> {
         init_span!("JsKeyhive::force_pcs_update");
-        let (_op, new_key_pair) = self
+        let (_op, local_secret) = self
             .0
             .force_pcs_update(doc.doc_id)
             .await
             .map_err(EncryptContentError::from)
             .map_err(JsEncryptError::from)?;
-        let map = BTreeMap::from_iter(new_key_pair);
+        let map = BTreeMap::from_iter(
+            local_secret.map(|secret| (secret.share_key(), secret.share_secret_key())),
+        );
         let bytes = bincode::serialize(&map).map_err(JsSerializationError::from)?;
         Ok(bytes.into_boxed_slice())
     }

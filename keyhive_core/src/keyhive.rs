@@ -11,7 +11,7 @@ use crate::{
     event::{Event, static_event::StaticEvent},
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
-        active::Active,
+        active::{Active, ImportPrekeyStateError},
         agent::{id::AgentId, Agent},
         document::{
             AddMemberError, AddMemberUpdate, DecryptError, DocCausalDecryptionError, Document,
@@ -79,8 +79,8 @@ use std::{
     marker::PhantomData,
     mem,
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
 };
 
@@ -351,6 +351,67 @@ impl<
             }
         }
 
+        let doc_id = new_doc.doc_id();
+        self.docs
+            .lock()
+            .await
+            .insert(doc_id, Arc::new(Mutex::new(new_doc)));
+        self.touch();
+
+        Ok(doc_id)
+    }
+
+    /// Generate and register a document whose identity key was reserved
+    /// ahead of time.
+    ///
+    /// The document ID is the verifying key of `reserved_signer`; the caller
+    /// must have durably retained that signing key between reservation and
+    /// this call. Everything else is identical to
+    /// [`generate_doc`](Self::generate_doc): the document is created with
+    /// real, non-empty content heads and registered in this hive.
+    #[allow(clippy::type_complexity)]
+    #[instrument(skip_all)]
+    pub async fn generate_doc_with_reserved_signer(
+        &self,
+        reserved_signer: ed25519_dalek::SigningKey,
+        coparents: Vec<Peer<F, S, T, L>>,
+        initial_content_heads: NonEmpty<T>,
+    ) -> Result<DocumentId, GenerateDocError> {
+        for peer in coparents.iter() {
+            if self.get_agent(peer.id()).await.is_none() {
+                self.register_peer(peer.dupe()).await;
+            }
+        }
+
+        let signer = {
+            let locked = self.active.lock().await;
+            locked.signer.clone()
+        };
+
+        let active_id = { self.active.lock().await.id() };
+        let parents = NonEmpty {
+            head: Agent::Active(active_id, self.active.dupe()),
+            tail: coparents.into_iter().map(Into::into).collect(),
+        };
+        let new_doc = Document::generate_with_reserved_signer(
+            reserved_signer,
+            parents,
+            initial_content_heads,
+            self.delegations.dupe(),
+            self.revocations.dupe(),
+            self.event_listener.clone(),
+            &signer,
+            self.csprng.dupe(),
+        )
+        .await?;
+
+        for head in new_doc.delegation_heads().values() {
+            self.delegations.lock().await.insert(head.dupe());
+
+            for dep in head.payload().proof_lineage() {
+                self.delegations.lock().await.insert(dep);
+            }
+        }
         let doc_id = new_doc.doc_id();
         self.docs
             .lock()
@@ -2462,6 +2523,31 @@ impl<
         Ok(self.ingest_unsorted_static_events(vec![]).await)
     }
 
+    /// Export the full prekey state — published membership ops and secret
+    /// halves — as a versioned snapshot. Unlike the archive (durable only
+    /// via compaction), this makes both halves restorable from incremental
+    /// storage.
+    ///
+    /// # Security
+    ///
+    /// Unencrypted secret key material. Protect at rest and in transit.
+    pub async fn export_prekey_state(&self) -> Result<Vec<u8>, bincode::Error> {
+        self.active.lock().await.export_prekey_state().await
+    }
+
+    /// Import a prekey-state snapshot, extending both the published membership
+    /// set and the secret halves. Operations are verified and applied
+    /// idempotently. After importing, any pending events stuck due to missing
+    /// prekey material are automatically retried.
+    pub async fn import_prekey_state(
+        &self,
+        bytes: &[u8],
+    ) -> Result<Vec<Arc<StaticEvent<T>>>, ImportPrekeyStateError> {
+        let active = self.active.lock().await;
+        active.import_prekey_state(bytes).await?;
+        drop(active);
+        Ok(self.ingest_unsorted_static_events(vec![]).await)
+    }
     #[instrument(skip_all)]
     pub async fn into_archive(&self) -> Archive<T> {
         let topsorted_ops = {
@@ -2532,12 +2618,12 @@ impl<
         let raw_active = Active::from_archive(&archive.active, signer, listener.clone());
 
         let state_generation = Arc::new(AtomicU64::new(0));
-        let delegations = Arc::new(Mutex::new(
-            DelegationStore::with_generation(Arc::clone(&state_generation)),
-        ));
-        let revocations = Arc::new(Mutex::new(
-            RevocationStore::with_generation(Arc::clone(&state_generation)),
-        ));
+        let delegations = Arc::new(Mutex::new(DelegationStore::with_generation(Arc::clone(
+            &state_generation,
+        ))));
+        let revocations = Arc::new(Mutex::new(RevocationStore::with_generation(Arc::clone(
+            &state_generation,
+        ))));
 
         let mut individuals = HashMap::new();
         for (k, v) in archive.individuals.iter() {
@@ -3488,17 +3574,17 @@ mod tests {
     /// pending-set changes) and hold still across pure reads. Derived-cache
     /// consumers rely on this as a complete change signal.
     #[tokio::test]
-    async fn state_generation_tracks_all_projection_mutations() -> Result<(), Box<dyn std::error::Error>> {
+    async fn state_generation_tracks_all_projection_mutations(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
-        let hive =
-            Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
-                sk.clone(),
-                MemoryCiphertextStore::new(),
-                NoListener,
-                csprng,
-            )
-            .await?;
+        let hive = Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
+            sk.clone(),
+            MemoryCiphertextStore::new(),
+            NoListener,
+            csprng,
+        )
+        .await?;
 
         // Local principal mutations.
         let g0 = hive.state_generation();
@@ -3534,6 +3620,38 @@ mod tests {
         // stores (receive_delegation -> Group/Document receive_delegation ->
         // DelegationStore::insert), and applied CGKA ops / pending-set
         // replacement bump explicitly at their call sites above.
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reserved_signer_document_uses_reserved_identity() -> TestResult {
+        let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
+        let hive: TestKeyhive = Keyhive::generate(
+            signer.clone(),
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await?;
+
+        // Reserve an identity key ahead of time; the document ID must be its
+        // verifying key.
+        let reserved = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let expected_id = DocumentId::from(Identifier::from(reserved.verifying_key()));
+        let doc_id = hive
+            .generate_doc_with_reserved_signer(reserved, vec![], nonempty![[7u8; 32]])
+            .await?;
+        assert_eq!(
+            doc_id, expected_id,
+            "reserved identity must become the doc id"
+        );
+
+        // The document is registered and immediately usable for encryption
+        // against its initial content head.
+        assert!(hive.get_document(doc_id).await.is_some());
+        let (_encrypted, _key) = hive
+            .try_encrypt_content_keyed(doc_id, &[7u8; 32], &vec![], b"payload")
+            .await?;
         Ok(())
     }
 
@@ -3636,8 +3754,76 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn prekey_state_delta_restores_membership_without_compaction() {
+        test_utils::init_logging();
+
+        let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
+        let keyhive: TestKeyhive = Keyhive::generate(
+            signer.clone(),
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
+        .unwrap();
+
+        // Snapshot taken BEFORE the pool grows: the restarted keyhive only has
+        // the archived (stale) state, emulating a non-compacted restart.
+        let stale_archive = keyhive.into_archive().await;
+
+        let expand_op = keyhive.expand_prekeys().await.unwrap();
+        // Rotating another key models a consumed prekey: the published set
+        // changes membership while the archive remains stale.
+        keyhive
+            .rotate_prekey(expand_op.payload.share_key)
+            .await
+            .unwrap();
+
+        let delta = keyhive.export_prekey_state().await.unwrap();
+        let prekeys_now: HashSet<_> = keyhive
+            .active
+            .lock()
+            .await
+            .individual
+            .lock()
+            .await
+            .prekeys
+            .clone();
+        assert!(!prekeys_now.contains(&expand_op.payload.share_key));
+
+        let restored: TestKeyhive = Keyhive::try_from_archive(
+            &stale_archive,
+            signer,
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await
+        .unwrap();
+        fn pool_of(kh: &TestKeyhive) -> HashSet<ShareKey> {
+            kh.active
+                .try_lock()
+                .unwrap()
+                .individual
+                .try_lock()
+                .unwrap()
+                .prekeys
+                .clone()
+        }
+        assert_ne!(
+            pool_of(&restored),
+            prekeys_now,
+            "precondition: restored-from-stale-archive pool must differ"
+        );
+
+        restored.import_prekey_state(&delta).await.unwrap();
+        assert_eq!(pool_of(&restored), prekeys_now);
+    }
+
     /// Register a peer keyhive as an individual on `owner` and return its id.
     async fn register_peer(owner: &TestKeyhive, peer: &TestKeyhive) -> IndividualId {
+
         let add_op = peer.expand_prekeys().await.unwrap();
         let indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(add_op))));
         let id = indie.lock().await.id();
