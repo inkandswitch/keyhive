@@ -67,6 +67,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
 
 /// A key used to derive application secrets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct PcsKey(pub ShareSecretKey);
 
 impl PcsKey {

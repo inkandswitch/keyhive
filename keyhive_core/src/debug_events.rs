@@ -82,6 +82,13 @@ pub enum CgkaOperationDetails {
         path_length: usize,
         predecessors: Vec<Hash>,
     },
+    Invite {
+        invitee: Hash,
+        invitee_sharekey: Hash,
+        inviter_sharekey: Hash,
+        pcs_key: Hash,
+        predecessors: Vec<Hash>,
+    },
 }
 
 impl DebugEventTable {
@@ -241,6 +248,29 @@ impl DebugEventRow {
                                 .collect(),
                         };
                         ("Update", op_details)
+                    }
+                    beekem::operation::CgkaOperation::Invite {
+                        invitation,
+                        predecessors,
+                        ..
+                    } => {
+                        let op_details = CgkaOperationDetails::Invite {
+                            invitee: Hash::new(invitation.invitee_id.as_bytes(), nicknames),
+                            invitee_sharekey: Hash::new(
+                                invitation.invitee_pk.as_bytes(),
+                                nicknames,
+                            ),
+                            inviter_sharekey: Hash::new(
+                                invitation.inviter_pk.as_bytes(),
+                                nicknames,
+                            ),
+                            pcs_key: Hash::new(invitation.pcs_key_hash.as_slice(), nicknames),
+                            predecessors: predecessors
+                                .iter()
+                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
+                                .collect(),
+                        };
+                        ("Invite", op_details)
                     }
                 };
 
