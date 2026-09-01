@@ -1482,7 +1482,7 @@ impl<
         let delegate: Agent<F, S, T, L> = self
             .get_agent(delegate_id)
             .await
-            .ok_or(StaticEventConversionError::UnknownAgent(delegate_id))?;
+            .ok_or_else(|| StaticEventConversionError::UnknownAgent(Box::new(delegate_id)))?;
 
         let mut after_revocations = Vec::new();
         for static_rev_hash in static_dlg.payload().after_revocations.iter() {
@@ -1795,7 +1795,7 @@ impl<
             let locked_docs = self.docs.lock().await;
             locked_docs
                 .get(&doc_id)
-                .ok_or(ReceiveCgkaOpError::UnknownDocument(doc_id))?
+                .ok_or_else(|| ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)))?
                 .dupe()
         };
 
@@ -2665,7 +2665,7 @@ pub enum ReceiveStaticDelegationError<
     GroupReceiveError(#[from] AddError),
 
     #[error("Missing agent: {0}")]
-    UnknownAgent(Identifier),
+    UnknownAgent(Box<Identifier>),
 }
 
 impl<F, S, T, L> ReceiveStaticDelegationError<F, S, T, L>
@@ -2702,7 +2702,7 @@ pub enum StaticEventConversionError<
     MissingRevocation(Digest<Signed<Revocation<F, S, T, L>>>),
 
     #[error("Unknown agent: {0}")]
-    UnknownAgent(Identifier),
+    UnknownAgent(Box<Identifier>),
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
@@ -2759,7 +2759,7 @@ pub enum ReceiveCgkaOpError {
     VerificationError(#[from] VerificationError),
 
     #[error("Unknown document recipient for recieved CGKA op: {0}")]
-    UnknownDocument(DocumentId),
+    UnknownDocument(Box<DocumentId>),
 
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
     UnknownInvitePrekey(ShareKey),
