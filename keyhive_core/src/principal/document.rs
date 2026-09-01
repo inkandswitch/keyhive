@@ -726,14 +726,23 @@ pub enum GenerateDocError {
 
 #[derive(Debug, Error)]
 pub enum DocCausalDecryptionError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>> {
+    /// Boxed because it is far larger than the other variants
     #[error(transparent)]
-    CausalDecryptionError(#[from] CausalDecryptionError<F, T, P, C>),
+    CausalDecryptionError(Box<CausalDecryptionError<F, T, P, C>>),
 
     #[error("{0}")]
     GetCiphertextError(C::GetCiphertextError),
 
     #[error("Cannot decrypt entrypoint: {0}")]
     EntrypointDecryptError(#[from] DecryptError),
+}
+
+impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
+    From<CausalDecryptionError<F, T, P, C>> for DocCausalDecryptionError<F, T, P, C>
+{
+    fn from(error: CausalDecryptionError<F, T, P, C>) -> Self {
+        DocCausalDecryptionError::CausalDecryptionError(Box::new(error))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
