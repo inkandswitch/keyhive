@@ -431,7 +431,8 @@ impl Cgka {
                 match self.tree.remove_id(id) {
                     Ok(_) => {}
                     // A concurrent history might have removed the same member.
-                    Err(CgkaError::IdentifierNotFound) | Err(CgkaError::RemoveLastMember) => {}
+                    Err(CgkaError::IdentifierNotFound) => {}
+                    Err(CgkaError::RemoveLastMember) => {}
                     Err(e) => return Err(e),
                 }
             }
