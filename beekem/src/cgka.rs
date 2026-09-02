@@ -428,7 +428,12 @@ impl Cgka {
                 self.tree.push_leaf(added_id, pk.into());
             }
             CgkaOperation::Remove { id, .. } => {
-                self.tree.remove_id(id)?;
+                match self.tree.remove_id(id) {
+                    Ok(_) => {}
+                    // A concurrent history might have removed the same member.
+                    Err(CgkaError::IdentifierNotFound) | Err(CgkaError::RemoveLastMember) => {}
+                    Err(e) => return Err(e),
+                }
             }
             CgkaOperation::Update { ref new_path, .. } => {
                 self.tree.apply_path(new_path);
