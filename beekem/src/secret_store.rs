@@ -10,16 +10,28 @@ use crate::{
 use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
 use core::cmp::Ordering;
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
+use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SecretStore {
     /// Every encrypted secret key (and hence version) corresponds to a single
-    /// public key.
-    /// Invariant: public keys are in lexicographic order.
-    /// Invariant: there should always be at least one version.
-    versions: Vec<SecretStoreVersion>,
+    /// public key. There must be at least one.
+    versions: NonEmpty<SecretStoreVersion>,
+}
+
+/// We implement here since deriving would require turning on a feature of
+/// `NonEmpty` to get its `Arbitrary`.
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a> arbitrary::Arbitrary<'a> for SecretStore {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        Ok(Self {
+            versions: NonEmpty {
+                head: SecretStoreVersion::arbitrary(u)?,
+                tail: Vec::<SecretStoreVersion>::arbitrary(u)?,
+            },
+        })
+    }
 }
 
 impl SecretStore {
@@ -34,7 +46,7 @@ impl SecretStore {
             encrypter_pk,
         };
         Self {
-            versions: vec![version],
+            versions: NonEmpty::new(version),
         }
     }
 
@@ -43,31 +55,20 @@ impl SecretStore {
     }
 
     pub fn node_key(&self) -> NodeKey {
-        if self.versions.len() == 1 {
-            NodeKey::ShareKey(self.versions[0].pk)
-        } else {
-            match self
-                .versions
-                .iter()
-                .map(|s| s.pk)
-                .collect::<Vec<_>>()
-                .as_slice()
-            {
-                [] => unreachable!("There will always be at least one key"),
-                [pk] => NodeKey::ShareKey(*pk),
-                [first, second] => ConflictKeys {
-                    first: *first,
-                    second: *second,
-                    more: vec![],
-                }
-                .into(),
-                [first, second, more @ ..] => ConflictKeys {
-                    first: *first,
-                    second: *second,
-                    more: more.to_vec(),
-                }
-                .into(),
+        match self.versions.tail.as_slice() {
+            [] => NodeKey::ShareKey(self.versions.head.pk),
+            [second] => ConflictKeys {
+                first: self.versions.head.pk,
+                second: second.pk,
+                more: vec![],
             }
+            .into(),
+            [second, more @ ..] => ConflictKeys {
+                first: self.versions.head.pk,
+                second: second.pk,
+                more: more.iter().map(|v| v.pk).collect(),
+            }
+            .into(),
         }
     }
 
@@ -80,25 +81,27 @@ impl SecretStore {
         if self.has_conflict() {
             return Err(CgkaError::UnexpectedKeyConflict);
         }
-        self.versions[0].decrypt_secret(child_node_key, child_sks, seen_idxs)
+        self.versions
+            .head
+            .decrypt_secret(child_node_key, child_sks, seen_idxs)
     }
 
+    /// Drop the versions corresponding to `removed_keys` and then merge `other`.
     pub fn merge(&mut self, other: &SecretStore, removed_keys: &Set<ShareKey>) {
-        self.remove_keys_from(removed_keys);
-        self.versions.append(&mut other.versions.clone());
-    }
+        let kept: Vec<SecretStoreVersion> = self
+            .versions
+            .iter()
+            .filter(|version| !removed_keys.contains(&version.pk))
+            .cloned()
+            .collect();
 
-    fn remove_keys_from(&mut self, removed_keys: &Set<ShareKey>) {
-        if removed_keys.is_empty() {
-            return;
-        }
-        let mut new_versions = Vec::new();
-        for (idx, version) in self.versions.iter().enumerate() {
-            if !removed_keys.contains(&version.pk) {
-                new_versions.push(self.versions[idx].clone());
+        self.versions = match NonEmpty::from_vec(kept) {
+            Some(mut merged) => {
+                merged.extend(other.versions.iter().cloned());
+                merged
             }
-        }
-        self.versions = new_versions;
+            None => other.versions.clone(),
+        };
     }
 }
 
