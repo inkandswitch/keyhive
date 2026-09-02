@@ -432,6 +432,7 @@ impl Cgka {
                     Ok(_) => {}
                     // A concurrent history might have removed the same member.
                     Err(CgkaError::IdentifierNotFound) => {}
+                    // TODO: Support empty trees
                     Err(CgkaError::RemoveLastMember) => {}
                     Err(e) => return Err(e),
                 }
