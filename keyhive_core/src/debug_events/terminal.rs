@@ -174,6 +174,28 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                         preds
                     )
                 }
+                CgkaOperationDetails::Invite {
+                    invitee,
+                    invitee_sharekey,
+                    inviter_sharekey,
+                    pcs_key,
+                    predecessors,
+                } => {
+                    let preds = predecessors
+                        .iter()
+                        .map(|p| p.short_hex())
+                        .collect::<Vec<String>>()
+                        .join(", ");
+                    format!(
+                        "Invitee: {}\nInvitee Sharekey: {}\nInviter Sharekey: {}\nPCS Key: \
+                         {}\nPredecessors: {}",
+                        invitee.short_hex(),
+                        invitee_sharekey.short_hex(),
+                        inviter_sharekey.short_hex(),
+                        pcs_key.short_hex(),
+                        preds
+                    )
+                }
             };
 
             if verbose {

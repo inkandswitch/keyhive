@@ -12,16 +12,20 @@
 use crate::{
     collections::{Map, Set},
     content_addressed_map::CaMap,
-    encrypted::EncryptedContent,
+    encrypted::{encrypt_secret, EncryptedContent},
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{NodeKey, ShareKeyMap},
-    operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph},
+    operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph, Invitation},
     pcs_key::{ApplicationSecret, PcsKey},
     transact::{Fork, Merge},
     tree::BeeKem,
 };
-use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    vec::Vec,
+};
 use core::hash::{Hash, Hasher};
 use future_form::FutureForm;
 use keyhive_crypto::{
@@ -66,6 +70,12 @@ pub struct Cgka {
     /// The update operations for each PCS key.
     pcs_key_ops: Map<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
 
+    /// The most recent PCS key we know encrypted a piece of content.
+    newest_encrypting_pcs_key: Option<Digest<PcsKey>>,
+
+    /// Invitations for new members.
+    invitations: Map<MemberId, Vec<Invitation>>,
+
     original_member: (MemberId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
 }
@@ -83,6 +93,11 @@ impl Hash for Cgka {
             .keys()
             .map(|k| k.as_slice())
             .collect::<BTreeSet<_>>()
+            .hash(state);
+        self.newest_encrypting_pcs_key.hash(state);
+        self.invitations
+            .iter()
+            .collect::<BTreeMap<_, _>>()
             .hash(state);
         self.original_member.hash(state);
         self.init_add_op.hash(state);
@@ -118,6 +133,8 @@ impl Cgka {
             pending_ops_for_structural_change: false,
             pcs_keys: CaMap::new(),
             pcs_key_ops: Map::new(),
+            newest_encrypting_pcs_key: None,
+            invitations: Map::new(),
             original_member: (owner_id, owner_pk),
             init_add_op: init_add_op.clone(),
         };
@@ -175,18 +192,21 @@ impl Cgka {
             let (pcs_key, update_op) = self
                 .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
-            self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
+            self.record_encrypting_pcs_key(&pcs_key, Digest::hash(&update_op));
             op = Some(update_op);
             pcs_key
         } else {
             let pcs_key = self.pcs_key_from_tree_root()?;
             let pcs_hash = Digest::hash(&pcs_key);
-            if !self.pcs_keys.contains_key(&pcs_hash) {
-                // `has_pcs_key()` above guarantees a single head.
-                debug_assert!(self.ops_graph.has_single_head());
-                if let Some(head) = self.ops_graph.cgka_op_heads.iter().next() {
-                    self.insert_pcs_key(&pcs_key, *head);
-                }
+            // `has_pcs_key()` above guarantees a single head.
+            debug_assert!(self.ops_graph.has_single_head());
+            let op_hash = self
+                .pcs_key_ops
+                .get(&pcs_hash)
+                .copied()
+                .or_else(|| self.ops_graph.cgka_op_heads.iter().next().copied());
+            if let Some(op_hash) = op_hash {
+                self.record_encrypting_pcs_key(&pcs_key, op_hash);
             }
             pcs_key
         };
@@ -216,9 +236,8 @@ impl Cgka {
     ) -> Result<SymmetricKey, CgkaError> {
         let pcs_key =
             self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
-        if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
-            self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
-        }
+        // We can only decrypt with a key that was at some point used to encrypt.
+        self.record_encrypting_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
         let app_secret = pcs_key.derive_application_secret(
             &encrypted.nonce,
             &encrypted.content_ref,
@@ -235,19 +254,24 @@ impl Cgka {
     }
 
     /// Add member to group.
+    ///
+    /// Returns the add operation and an [`CgkaOperation::Invite`] (if we have
+    /// access to a root secret used to encrypt content). Empty if the member is
+    /// already in the tree.
     #[instrument(skip_all)]
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: MemberId,
         pk: ShareKey,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         if self.tree.contains_id(&id) {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
+        let invitation = self.invitation_for(id, pk);
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
         let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
@@ -262,7 +286,25 @@ impl Cgka {
 
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
         self.ops_graph.add_local_op(&signed_op);
-        Ok(Some(signed_op))
+        let mut ops = alloc::vec![signed_op];
+
+        if let Some(invitation) = invitation {
+            let op = CgkaOperation::Invite {
+                invitation: alloc::boxed::Box::new(invitation),
+                predecessors: Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned()),
+                doc_id: self.doc_id,
+            };
+            let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
+            self.record_invitation(&signed_op);
+            self.ops_graph.add_local_op(&signed_op);
+            ops.push(signed_op);
+        } else {
+            info!(
+                "no root secret to invite {:?} with; it can only read content written from now on",
+                id
+            );
+        }
+        Ok(ops)
     }
 
     /// Add multiple members to group.
@@ -273,9 +315,98 @@ impl Cgka {
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();
         for m in members {
-            ops.push(self.add::<F, S>(m.0, m.1, signer).await?);
+            ops.extend(self.add::<F, S>(m.0, m.1, signer).await?);
         }
-        Ok(ops.into_iter().flatten().collect())
+        Ok(ops)
+    }
+
+    /// Build an invitation for a member we are adding.
+    ///
+    /// Returns `None` if we don't have access to any root secret that was used
+    /// to encrypt content.
+    #[instrument(skip_all)]
+    fn invitation_for(&self, invitee_id: MemberId, invitee_pk: ShareKey) -> Option<Invitation> {
+        let (root_secret, pcs_key_hash, pcs_update_op_hash) =
+            self.newest_known_encrypting_pcs_key()?;
+        let (inviter_pk, inviter_sk) = self.inviter_key_pair()?;
+        let encrypted = encrypt_secret(
+            self.doc_id.as_bytes(),
+            root_secret.0,
+            &inviter_sk,
+            &invitee_pk,
+        )
+        .ok()?;
+        Some(Invitation {
+            invitee_id,
+            invitee_pk,
+            root_secret: encrypted,
+            inviter_pk,
+            pcs_key_hash,
+            pcs_update_op_hash,
+        })
+    }
+
+    /// The newest root secret we know content is encrypted under, along with
+    /// the two hashes sent with that encrypted content. Returns `None` if we
+    /// don't know of any.
+    fn newest_known_encrypting_pcs_key(
+        &self,
+    ) -> Option<(PcsKey, Digest<PcsKey>, Digest<Signed<CgkaOperation>>)> {
+        if let Some(hash) = self.newest_encrypting_pcs_key {
+            if let (Some(key), Some(op)) = (self.pcs_keys.get(&hash), self.pcs_key_ops.get(&hash)) {
+                return Some((**key, hash, *op));
+            }
+        }
+        self.encrypting_pcs_key_from_our_invitation()
+    }
+
+    /// The root secret from an invitation addressed to us.
+    ///
+    /// If we are inviting another member in turn and do not yet have access
+    /// in the tree to a secret used for encryption, we can encrypt this secret for
+    /// the invitation instead.
+    fn encrypting_pcs_key_from_our_invitation(
+        &self,
+    ) -> Option<(PcsKey, Digest<PcsKey>, Digest<Signed<CgkaOperation>>)> {
+        [self.owner_id, MemberId::public()]
+            .into_iter()
+            .filter_map(|id| self.invitations.get(&id))
+            .flatten()
+            .find_map(|invitation| {
+                let key = self.pcs_key_from_invitation(&invitation.pcs_key_hash)?;
+                Some((key, invitation.pcs_key_hash, invitation.pcs_update_op_hash))
+            })
+    }
+
+    /// A key pair at our own leaf, for the Diffie-Hellman exchange that
+    /// encrypts an invitation.
+    ///
+    /// Falls back to Public's leaf when we are not in the tree ourselves, the
+    /// same way [`Self::update`] does. Returns `None` if neither has access.
+    fn inviter_key_pair(&self) -> Option<(ShareKey, ShareSecretKey)> {
+        let id = if self.tree.contains_id(&self.owner_id) {
+            self.owner_id
+        } else {
+            MemberId::public()
+        };
+        self.tree
+            .node_key_for_id(id)
+            .ok()?
+            .keys()
+            .into_iter()
+            .find_map(|pk| self.owner_sks.get(&pk).map(|sk| (pk, *sk)))
+    }
+
+    /// If there is an invitation, record it for the id it targets.
+    fn record_invitation(&mut self, op: &Signed<CgkaOperation>) {
+        let CgkaOperation::Invite { invitation, .. } = &op.payload else {
+            return;
+        };
+        let invitation = invitation.as_ref();
+        let stored = self.invitations.entry(invitation.invitee_id).or_default();
+        if !stored.contains(invitation) {
+            stored.push(invitation.clone());
+        }
     }
 
     /// Remove member from group.
@@ -387,6 +518,7 @@ impl Cgka {
         if !self.ops_graph.contains_predecessors(&predecessors) {
             return Err(CgkaError::OutOfOrderOperation);
         }
+        self.record_invitation(&op);
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
             if self.pending_ops_for_structural_change {
@@ -433,6 +565,7 @@ impl Cgka {
             CgkaOperation::Update { ref new_path, .. } => {
                 self.tree.apply_path(new_path);
             }
+            CgkaOperation::Invite { .. } => self.record_invitation(&op),
         }
         self.ops_graph.add_op(&op, &op.payload.predecessors());
         Ok(())
@@ -446,12 +579,14 @@ impl Cgka {
             if epoch.len() == 1 {
                 self.apply_operation(epoch[0].clone())?;
             } else {
-                // If all operations in this epoch are updates, we can apply them
-                // directly and move on to the next epoch.
-                if epoch
-                    .iter()
-                    .all(|op| matches!(op.payload, CgkaOperation::Update { .. }))
-                {
+                // If no operation in this epoch changes the tree's structure, we can
+                // apply them directly and move on to the next epoch.
+                if epoch.iter().all(|op| {
+                    matches!(
+                        op.payload,
+                        CgkaOperation::Update { .. } | CgkaOperation::Invite { .. }
+                    )
+                }) {
                     for op in epoch.iter() {
                         self.apply_operation(op.clone())?;
                     }
@@ -525,7 +660,44 @@ impl Cgka {
                 }
             }
         }
+        // An invitation may already contain this key, in which case we don't require
+        // a rebuild.
+        if let Some(pcs_key) = self.pcs_key_from_invitation(pcs_key_hash) {
+            self.insert_pcs_key(&pcs_key, *update_op_hash);
+            return Ok(pcs_key);
+        }
         self.derive_pcs_key_for_op(update_op_hash)
+    }
+
+    /// Return this PCS key if we have it in an invitation and `None` otherwise.
+    #[instrument(skip_all)]
+    fn pcs_key_from_invitation(&self, pcs_key_hash: &Digest<PcsKey>) -> Option<PcsKey> {
+        let addressed_to_us = [self.owner_id, MemberId::public()]
+            .into_iter()
+            .filter_map(|id| self.invitations.get(&id))
+            .flatten();
+        for invitation in addressed_to_us {
+            if invitation.pcs_key_hash != *pcs_key_hash {
+                continue;
+            }
+            let Ok(plaintext) = self
+                .owner_sks
+                .try_decrypt_encryption(invitation.inviter_pk, &invitation.root_secret)
+            else {
+                continue;
+            };
+            let Ok(bytes) = <[u8; 32]>::try_from(plaintext) else {
+                continue;
+            };
+            let pcs_key = PcsKey::new(ShareSecretKey::force_from_bytes(bytes));
+            // Before returning, validate that the invitation key actually
+            // corresponds to the hash that was passed in.
+            if Digest::hash(&pcs_key) == *pcs_key_hash {
+                info!("recovered a root secret from an invitation");
+                return Some(pcs_key);
+            }
+        }
+        None
     }
 
     /// Derive [`PcsKey`] for this operation hash.
@@ -606,6 +778,40 @@ impl Cgka {
         self.pcs_keys.insert((*pcs_key).into());
     }
 
+    /// Record a PCS key that was used to encrypt content. If it's the latest
+    /// such key we know of, record it as `newest_encrypting_pcs_key`.
+    fn record_encrypting_pcs_key(
+        &mut self,
+        pcs_key: &PcsKey,
+        op_hash: Digest<Signed<CgkaOperation>>,
+    ) {
+        let hash = Digest::hash(pcs_key);
+        if !self.pcs_keys.contains_key(&hash) {
+            self.insert_pcs_key(pcs_key, op_hash);
+        }
+        if Some(hash) == self.newest_encrypting_pcs_key {
+            return;
+        }
+        if self.is_later_than_newest_encrypting_key(&op_hash) {
+            self.newest_encrypting_pcs_key = Some(hash);
+        }
+    }
+
+    fn is_later_than_newest_encrypting_key(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> bool {
+        let Some(last) = self.newest_encrypting_pcs_key else {
+            return true;
+        };
+        let Some(last_op) = self.pcs_key_ops.get(&last) else {
+            return true;
+        };
+        let Some(last_lamport_ts) = self.ops_graph.lamport_ts_for(last_op) else {
+            return true;
+        };
+        self.ops_graph
+            .lamport_ts_for(op_hash)
+            .is_some_and(|lamport| lamport > last_lamport_ts)
+    }
+
     /// Extend our state with that of the provided [`Cgka`].
     #[instrument(skip_all)]
     fn update_cgka_from(&mut self, other: &Self) {
@@ -618,7 +824,19 @@ impl Cgka {
                 .map(|(hash, key)| (*hash, key.clone())),
         );
         self.pcs_key_ops.extend(other.pcs_key_ops.iter());
+        self.receive_invitations(&other.invitations);
         self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
+    }
+
+    fn receive_invitations(&mut self, other: &Map<MemberId, Vec<Invitation>>) {
+        for (member, invitations) in other.iter() {
+            let stored = self.invitations.entry(*member).or_default();
+            for invitation in invitations {
+                if !stored.contains(invitation) {
+                    stored.push(invitation.clone());
+                }
+            }
+        }
     }
 }
 
@@ -636,6 +854,16 @@ impl Merge for Cgka {
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
         self.pcs_key_ops.extend(fork.pcs_key_ops.iter());
+        self.receive_invitations(&fork.invitations);
+        // The fork may have reached content we did not, so take its newest encrypting
+        // key only if it comes later than ours.
+        if let Some(hash) = fork.newest_encrypting_pcs_key {
+            if let Some(op_hash) = self.pcs_key_ops.get(&hash).copied() {
+                if self.is_later_than_newest_encrypting_key(&op_hash) {
+                    self.newest_encrypting_pcs_key = Some(hash);
+                }
+            }
+        }
         self.replay_ops_graph()
             .expect("two valid graphs should always merge causal consistency");
     }

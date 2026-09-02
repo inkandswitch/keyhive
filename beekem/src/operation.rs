@@ -3,8 +3,10 @@
 use crate::{
     collections::{Map, Set},
     content_addressed_map::CaMap,
+    encrypted::EncryptedSecret,
     error::CgkaError,
     id::{MemberId, TreeId},
+    pcs_key::PcsKey,
     topsort::TopologicalSort,
     transact::{Fork, Merge},
     tree::PathChange,
@@ -19,7 +21,11 @@ use core::{
     mem,
     ops::Deref,
 };
-use keyhive_crypto::{digest::Digest, share_key::ShareKey, signed::Signed};
+use keyhive_crypto::{
+    digest::Digest,
+    share_key::{ShareKey, ShareSecretKey},
+    signed::Signed,
+};
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +56,36 @@ impl IntoIterator for CgkaEpoch {
     }
 }
 
+/// When a member is initially added, it has no access to the root secret until
+/// the next PCS update. An invitation gives them a way to decrypt content
+/// immediately by wrapping the latest key used for encrypting content and enough
+/// information to associate that key with that content.
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct Invitation {
+    /// The invited member.
+    pub invitee_id: MemberId,
+
+    /// The prekey the invited member was added under.
+    pub invitee_pk: ShareKey,
+
+    /// The root secret, encrypted to [`Self::invitee_pk`].
+    pub root_secret: EncryptedSecret<ShareSecretKey>,
+
+    /// The inviter's share key corresponding to the secret key it used
+    /// to encrypt [`Self::root_secret`] via Diffie-Hellman.
+    pub inviter_pk: ShareKey,
+
+    /// Which root secret this is. Used to identify encrypted content associated
+    /// with that secret.
+    pub pcs_key_hash: Digest<PcsKey>,
+
+    /// The update operation that originally produced the root secret. Used to derive
+    /// an application secret from the root secret for decrypting content associated
+    /// with that secret.
+    pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum CgkaOperation {
@@ -74,6 +110,14 @@ pub enum CgkaOperation {
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
+    /// Wraps an [`Invitation`] for a new member, allowing them to read content
+    /// before the next PCS update. The only [`CgkaOperation`] that does not
+    /// modify the tree.
+    Invite {
+        invitation: alloc::boxed::Box<Invitation>,
+        predecessors: Vec<Digest<Signed<CgkaOperation>>>,
+        doc_id: TreeId,
+    },
 }
 
 impl CgkaOperation {
@@ -91,11 +135,10 @@ impl CgkaOperation {
     /// The zero or more immediate causal predecessors of this operation.
     pub fn predecessors(&self) -> Set<Digest<Signed<CgkaOperation>>> {
         match self {
-            CgkaOperation::Add { predecessors, .. } => Set::from_iter(predecessors.iter().cloned()),
-            CgkaOperation::Remove { predecessors, .. } => {
-                Set::from_iter(predecessors.iter().cloned())
-            }
-            CgkaOperation::Update { predecessors, .. } => {
+            CgkaOperation::Add { predecessors, .. }
+            | CgkaOperation::Remove { predecessors, .. }
+            | CgkaOperation::Update { predecessors, .. }
+            | CgkaOperation::Invite { predecessors, .. } => {
                 Set::from_iter(predecessors.iter().cloned())
             }
         }
@@ -104,9 +147,10 @@ impl CgkaOperation {
     /// Document/tree id.
     pub fn doc_id(&self) -> &TreeId {
         match self {
-            CgkaOperation::Add { doc_id, .. } => doc_id,
-            CgkaOperation::Remove { doc_id, .. } => doc_id,
-            CgkaOperation::Update { doc_id, .. } => doc_id,
+            CgkaOperation::Add { doc_id, .. }
+            | CgkaOperation::Remove { doc_id, .. }
+            | CgkaOperation::Update { doc_id, .. }
+            | CgkaOperation::Invite { doc_id, .. } => doc_id,
         }
     }
 }
@@ -125,6 +169,10 @@ pub struct CgkaOperationGraph {
     pub cgka_op_heads: Set<Digest<Signed<CgkaOperation>>>,
 
     pub add_heads: Set<Digest<Signed<CgkaOperation>>>,
+
+    /// A Lamport timestamp for each op. An op will always have a larger timestamp
+    /// than its ancestors.
+    cgka_op_lamport_timestamps: Map<Digest<Signed<CgkaOperation>>, u32>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -145,6 +193,11 @@ impl Hash for CgkaOperationGraph {
             .hash(state);
 
         self.add_heads.iter().collect::<BTreeSet<_>>().hash(state);
+
+        self.cgka_op_lamport_timestamps
+            .iter()
+            .collect::<BTreeMap<_, _>>()
+            .hash(state);
     }
 }
 
@@ -163,6 +216,8 @@ impl Merge for CgkaOperationGraph {
             .extend(fork.cgka_ops_predecessors);
         self.cgka_op_heads.extend(fork.cgka_op_heads);
         self.add_heads.extend(fork.add_heads);
+        self.cgka_op_lamport_timestamps
+            .extend(fork.cgka_op_lamport_timestamps);
     }
 }
 
@@ -173,6 +228,7 @@ impl CgkaOperationGraph {
             cgka_ops_predecessors: Map::new(),
             cgka_op_heads: Set::new(),
             add_heads: Set::new(),
+            cgka_op_lamport_timestamps: Map::new(),
         }
     }
 
@@ -238,7 +294,26 @@ impl CgkaOperationGraph {
         if self.is_add_op(&op_hash) {
             self.add_heads.insert(op_hash);
         }
+        // Causal delivery should guarantee ops are ordered correctly
+        debug_assert!(
+            op_predecessors
+                .iter()
+                .all(|p| self.cgka_op_lamport_timestamps.contains_key(p)),
+            "predecessors should be in the graph before a descendent op"
+        );
+        // The Lamport timestamp is the greatest timestamp of the immediate causal
+        // predecessors plus 1.
+        let lamport = op_predecessors
+            .iter()
+            .filter_map(|p| self.cgka_op_lamport_timestamps.get(p).copied())
+            .max()
+            .map_or(0, |latest| latest.saturating_add(1));
+        self.cgka_op_lamport_timestamps.insert(op_hash, lamport);
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
+    }
+
+    pub fn lamport_ts_for(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> Option<u32> {
+        self.cgka_op_lamport_timestamps.get(op_hash).copied()
     }
 
     pub fn heads_contained_in(&self, heads: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
@@ -382,5 +457,111 @@ impl CgkaOperationGraph {
         }
 
         Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"))
+    }
+}
+
+#[cfg(test)]
+mod lamport_timestamp_tests {
+    use super::*;
+    use crate::id::TreeId;
+    use keyhive_crypto::{
+        share_key::ShareSecretKey,
+        signer::{async_signer, memory::MemorySigner},
+        verifiable::Verifiable,
+    };
+
+    async fn sign(signer: &MemorySigner, op: CgkaOperation) -> Signed<CgkaOperation> {
+        async_signer::try_sign_async::<future_form::Local, _, _>(signer, op)
+            .await
+            .unwrap()
+    }
+
+    /// A distinct operation each time.
+    fn add_op(doc_id: TreeId, leaf_index: u32) -> CgkaOperation {
+        CgkaOperation::Add {
+            added_id: MemberId::public(),
+            pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
+            leaf_index,
+            predecessors: Vec::new(),
+            add_predecessors: Vec::new(),
+            doc_id,
+        }
+    }
+
+    #[tokio::test]
+    async fn lamport_ts_is_written_once_and_never_revised() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+
+        // The first operation's ts is 0 because it has no predecessors.
+        let root = sign(&signer, add_op(doc_id, 0)).await;
+        let root_hash = Digest::hash(&root);
+        graph.add_local_op(&root);
+        assert_eq!(graph.lamport_ts_for(&root_hash), Some(0));
+
+        // Ten descendants, each following the last.
+        let mut hashes = alloc::vec![root_hash];
+        for expected in 1..=10u32 {
+            let op = sign(&signer, add_op(doc_id, expected)).await;
+            let hash = Digest::hash(&op);
+            graph.add_local_op(&op);
+            assert_eq!(graph.lamport_ts_for(&hash), Some(expected));
+            hashes.push(hash);
+
+            // And nothing already in the graph has moved.
+            for (i, earlier) in hashes.iter().enumerate() {
+                assert_eq!(graph.lamport_ts_for(earlier), Some(i as u32));
+            }
+        }
+
+        // An ancestor is always strictly earlier than its descendant.
+        assert_eq!(graph.lamport_ts_for(&hashes[3]), Some(3));
+        assert_eq!(graph.lamport_ts_for(&hashes[9]), Some(9));
+        assert!(graph.lamport_ts_for(&hashes[3]) < graph.lamport_ts_for(&hashes[9]));
+    }
+
+    #[tokio::test]
+    async fn a_merge_timestamp_is_one_greater_than_its_latest_predecessor() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+
+        let root = sign(&signer, add_op(doc_id, 0)).await;
+        let root_hash = Digest::hash(&root);
+        graph.add_local_op(&root);
+
+        // One branch two operations long. The other only one.
+        let a1 = sign(&signer, add_op(doc_id, 1)).await;
+        let a1_hash = Digest::hash(&a1);
+        graph.add_op(&a1, &Set::from_iter([root_hash]));
+        let a2 = sign(&signer, add_op(doc_id, 2)).await;
+        let a2_hash = Digest::hash(&a2);
+        graph.add_op(&a2, &Set::from_iter([a1_hash]));
+
+        let b1 = sign(&signer, add_op(doc_id, 3)).await;
+        let b1_hash = Digest::hash(&b1);
+        graph.add_op(&b1, &Set::from_iter([root_hash]));
+
+        assert_eq!(graph.lamport_ts_for(&a2_hash), Some(2));
+        assert_eq!(graph.lamport_ts_for(&b1_hash), Some(1));
+
+        // a1 and b1 are concurrent and tie.
+        assert_eq!(
+            graph.lamport_ts_for(&a1_hash),
+            graph.lamport_ts_for(&b1_hash)
+        );
+
+        let merge = sign(&signer, add_op(doc_id, 4)).await;
+        let merge_hash = Digest::hash(&merge);
+        graph.add_op(&merge, &Set::from_iter([a2_hash, b1_hash]));
+
+        // One greater than the longer branch.
+        assert_eq!(graph.lamport_ts_for(&merge_hash), Some(3));
+
+        // Every ancestor is strictly earlier, regardless of branch.
+        for ancestor in [root_hash, a1_hash, a2_hash, b1_hash] {
+            assert!(graph.lamport_ts_for(&ancestor) < graph.lamport_ts_for(&merge_hash));
+        }
     }
 }
