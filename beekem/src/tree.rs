@@ -118,12 +118,18 @@ impl BeeKem {
         let mut leaves_to_sort = Vec::new();
         for (id, idx) in removed_ids {
             added_ids.remove(&id);
-            let leaf_idx = LeafNodeIndex::new(idx);
-            debug_assert!(self.leaf(leaf_idx).is_none());
-            // We should have already removed this id during merge, but concurrent
-            // updates at other leaves with intersecting paths must be overridden by
-            // this remove.
-            self.blank_leaf_and_path(leaf_idx);
+
+            if let Some(leaf_idx) = self.id_to_leaf_idx.remove(&id) {
+                self.blank_leaf_and_path(leaf_idx);
+                continue;
+            }
+
+            // The member is already gone, but a concurrent update along the
+            // recorded path may have left keys it can still decrypt. The leaf
+            // is now either blank or contains a different member.
+            if (idx as usize) < self.leaves.len() {
+                self.blank_path(treemath::parent(LeafNodeIndex::new(idx).into()));
+            }
         }
         while !added_ids.is_empty() && self.next_leaf_idx.u32() > 0 {
             let leaf_idx = self.next_leaf_idx - 1;
@@ -576,8 +582,14 @@ impl BeeKem {
         let leaf_idx = self
             .leaf_index_for_id(new_path.leaf_id)
             .expect("Id should be present");
-        new_path.path.len() == self.path_length_for(LeafNodeIndex::new(new_path.leaf_idx))
-            && leaf_idx.u32() == new_path.leaf_idx
+        leaf_idx.u32() == new_path.leaf_idx
+            && new_path
+                .path
+                .iter()
+                .map(|(idx, _)| *idx)
+                .eq(treemath::direct_path((*leaf_idx).into(), self.tree_size)
+                    .into_iter()
+                    .map(|idx| idx.u32()))
     }
 
     /// Growing the tree will add a new root and a new subtree, all blank.
@@ -600,10 +612,6 @@ impl BeeKem {
         idx == treemath::root(self.tree_size)
     }
 
-    fn path_length_for(&self, idx: LeafNodeIndex) -> usize {
-        treemath::direct_path(idx.into(), self.tree_size).len()
-    }
-
     /// Highest non-blank, non-conflict descendants of a node
     fn append_resolution(&self, idx: TreeNodeIndex, acc: &mut Vec<TreeNodeIndex>) {
         if self.should_skip_for_resolution(idx) {
@@ -623,4 +631,84 @@ impl BeeKem {
 pub struct LeafNode {
     pub id: MemberId,
     pub pk: NodeKey,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+    use rand::{rngs::StdRng, SeedableRng};
+
+    /// A four-leaf tree, its members in leaf order, and a genuine path published
+    /// by the member at leaf 0. The tree is a peer's copy, taken before
+    /// `encrypt_path` wrote that path into the publisher's own.
+    fn seeded() -> (BeeKem, [MemberId; 4], PathChange) {
+        fn member(rng: &mut StdRng) -> (MemberId, ShareKey, ShareSecretKey) {
+            let id = MemberId::from(SigningKey::generate(rng).verifying_key());
+            let sk = ShareSecretKey::generate(rng);
+            (id, sk.share_key(), sk)
+        }
+
+        let mut rng = StdRng::seed_from_u64(0);
+        let doc_id = TreeId::from(SigningKey::generate(&mut rng).verifying_key());
+        let (owner, owner_pk, owner_sk) = member(&mut rng);
+        let mut tree = BeeKem::new(doc_id, owner, owner_pk).expect("a one-member tree");
+        let mut ids = [owner; 4];
+        for id in ids.iter_mut().skip(1) {
+            let (next, pk, _) = member(&mut rng);
+            tree.push_leaf(next, pk.into());
+            *id = next;
+        }
+
+        let peer = tree.clone();
+        let mut sks = ShareKeyMap::new();
+        sks.insert(owner_pk, owner_sk);
+        let (_, path) = tree
+            .encrypt_path(owner, owner_pk, &mut sks, &mut rng)
+            .expect("encrypting a path")
+            .expect("the owner is in the tree");
+        (peer, ids, path)
+    }
+
+    #[test]
+    fn a_removal_blanks_the_leaf_the_removed_member_occupies() {
+        let (mut tree, [_owner, alice, _bob, carol], _) = seeded();
+
+        let removed = BTreeSet::from([(alice, 3)]);
+        tree.sort_leaves_and_blank_paths_for_concurrent_membership_changes(Set::new(), removed);
+
+        assert!(
+            !tree.contains_id(&alice),
+            "alice was removed and is still here"
+        );
+        assert!(
+            tree.node_key_for_id(carol).is_ok(),
+            "carol was not removed and lost her leaf"
+        );
+    }
+
+    #[test]
+    fn a_member_should_not_write_to_other_paths() {
+        let (tree, _, genuine) = seeded();
+        assert_eq!(
+            genuine.path.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+            vec![0, 1],
+            "leaf 0's direct path on four leaves"
+        );
+
+        let mut accepted = tree.clone();
+        accepted.apply_path(&genuine);
+        assert!(accepted.has_root_key(), "a genuine path was not applied");
+
+        // Inner node 2 is the parent of leaves 2 and 3. It should not be
+        // written by leaf 0.
+        let mut forged = genuine;
+        forged.path[0].0 = 2;
+        let mut refused = tree;
+        refused.apply_path(&forged);
+        assert!(
+            refused.inner_node(InnerNodeIndex::new(2)).is_none(),
+            "a secret store was merged into another member's node"
+        );
+    }
 }
