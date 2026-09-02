@@ -9,7 +9,11 @@ use crate::{
     secret_store::SecretStore,
     treemath,
 };
-use alloc::{collections::BTreeMap, vec, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec,
+    vec::Vec,
+};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -113,7 +117,7 @@ impl BeeKem {
     pub fn sort_leaves_and_blank_paths_for_concurrent_membership_changes(
         &mut self,
         mut added_ids: Set<MemberId>,
-        removed_ids: Set<(MemberId, u32)>,
+        removed_ids: BTreeSet<(MemberId, u32)>,
     ) {
         let mut leaves_to_sort = Vec::new();
         for (id, idx) in removed_ids {

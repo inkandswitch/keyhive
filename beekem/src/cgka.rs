@@ -467,7 +467,7 @@ impl Cgka {
                 // An epoch with at least one membership change requires blanking
                 // removed paths and sorting added leaves after all ops are applied.
                 let mut added_ids = Set::new();
-                let mut removed_ids = Set::new();
+                let mut removed_ids = BTreeSet::new();
                 for op in epoch.iter() {
                     match op.payload {
                         CgkaOperation::Add { added_id, .. } => {
