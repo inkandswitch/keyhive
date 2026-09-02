@@ -363,7 +363,13 @@ pub(crate) fn sibling(index: TreeNodeIndex) -> TreeNodeIndex {
 
 /// Direct path from a node to the root.
 /// Does not include the node itself.
+///
+/// Returns an empty path for a node outside a tree of this size.
 pub(crate) fn direct_path(node_index: TreeNodeIndex, size: TreeSize) -> Vec<InnerNodeIndex> {
+    if node_index.u32() >= size.u32() {
+        return vec![];
+    }
+
     let r = root(size).u32();
 
     let mut d = vec![];
@@ -380,6 +386,15 @@ pub(crate) fn direct_path(node_index: TreeNodeIndex, size: TreeSize) -> Vec<Inne
 #[cfg(any(feature = "test_utils", test))]
 pub(crate) fn is_node_in_tree(node_index: TreeNodeIndex, size: TreeSize) -> bool {
     node_index.u32() < size.u32()
+}
+
+#[test]
+fn direct_path_of_a_node_outside_the_tree_is_empty() {
+    assert_eq!(
+        direct_path(TreeNodeIndex::new(2), TreeSize::new(7)).len(),
+        2
+    );
+    assert!(direct_path(TreeNodeIndex::new(7), TreeSize::new(7)).is_empty());
 }
 
 #[test]
