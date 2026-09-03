@@ -199,11 +199,13 @@ async fn scenario(seed: u64) -> Result<Option<String>> {
                     }
                 }
                 CgkaOp::Remove(i) => {
-                    if let Ok(Some(o)) = replica.remove::<Sendable, _>(members[i], &signer).await {
+                    if let Some(o) = replica.remove::<Sendable, _>(members[i], &signer).await? {
                         ops.push(o);
                     }
                 }
                 CgkaOp::Update => {
+                    // Fails when this replica's owner has been removed, or when
+                    // the ops above emptied the group.
                     let sk = ShareSecretKey::generate(&mut rng);
                     if let Ok((_, o)) = replica
                         .update::<Sendable, _, _>(sk.share_key(), sk, &signer, &mut rng)
@@ -381,6 +383,31 @@ async fn a_group_can_be_emptied_and_refilled() -> Result<()> {
         cgka.has_pcs_key(),
         "a refilled group did not recover a PCS key"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn emptying_a_group_converges_across_replicas() -> Result<()> {
+    let (mut left, signer, _) = cgka_with(&mut OsRng, 1).await?;
+    let mut right = left.clone();
+    let members: Vec<MemberId> = left.member_ids().collect();
+
+    let mut ops = Vec::new();
+    for id in &members {
+        ops.push(
+            left.remove::<Sendable, _>(*id, &signer)
+                .await?
+                .expect("removing a member produces an op"),
+        );
+    }
+    assert_eq!(left.group_size(), 0, "the removing replica kept members");
+
+    for op in ops {
+        right.merge_concurrent_operation(Arc::new(op))?;
+    }
+    assert_eq!(right.group_size(), 0, "the receiving replica kept members");
+    assert_eq!(ids(&left), ids(&right), "replicas disagree after emptying");
 
     Ok(())
 }

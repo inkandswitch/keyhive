@@ -646,8 +646,9 @@ mod tests {
     ) -> (MemberId, ShareKey) {
         let id = MemberId::from(SigningKey::generate(rng).verifying_key());
         let sk = ShareSecretKey::generate(rng);
-        sks.insert(sk.share_key(), sk);
-        (id, sk.share_key())
+        let pk = sk.share_key();
+        sks.insert(pk, sk);
+        (id, pk)
     }
 
     fn one_member_tree(rng: &mut StdRng, sks: &mut ShareKeyMap) -> (BeeKem, MemberId) {
@@ -745,8 +746,12 @@ mod tests {
 
         assert_eq!(tree.member_count(), 0, "the tree still has members");
         assert!(
-            !tree.has_root_key(),
-            "emptying the tree left a root key behind"
+            tree.leaves.iter().all(Option::is_none),
+            "emptying the tree left a leaf behind"
+        );
+        assert!(
+            tree.inner_nodes.iter().all(Option::is_none),
+            "emptying the tree left key material in an inner node"
         );
     }
 
@@ -763,7 +768,10 @@ mod tests {
             0,
             "an emptied tree did not free leaf index 0"
         );
-        assert!(!tree.has_root_key(), "a leaf on its own is not a root key");
+        assert!(
+            !tree.has_root_key(),
+            "pushing a leaf into an emptied tree produced a root key"
+        );
 
         tree.encrypt_path(joiner, joiner_pk, &mut sks, &mut rng)
             .expect("encrypting a path")
@@ -779,16 +787,18 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(2);
         let mut sks = ShareKeyMap::new();
         let (mut tree, owner) = one_member_tree(&mut rng, &mut sks);
-        let (outsider, _) = join_new_member_to_share_key_map(&mut rng, &mut sks);
+        let outsider = MemberId::from(SigningKey::generate(&mut rng).verifying_key());
 
+        let absent = tree.remove_id(outsider);
         assert!(
-            matches!(tree.remove_id(outsider), Err(CgkaError::IdentifierNotFound)),
-            "an outsider was not reported as absent from a one-member tree"
+            matches!(absent, Err(CgkaError::IdentifierNotFound)),
+            "an outsider was not reported as absent from a one-member tree: {absent:?}"
         );
         tree.remove_id(owner).expect("removing the last member");
+        let removed_twice = tree.remove_id(owner);
         assert!(
-            matches!(tree.remove_id(owner), Err(CgkaError::IdentifierNotFound)),
-            "a member removed twice was not reported as absent"
+            matches!(removed_twice, Err(CgkaError::IdentifierNotFound)),
+            "a member removed twice was not reported as absent: {removed_twice:?}"
         );
     }
 
