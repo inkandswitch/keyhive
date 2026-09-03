@@ -172,9 +172,6 @@ impl BeeKem {
     /// Remove data for the provided [`MemberId`] and blank its leaf's
     /// path to the root.
     pub fn remove_id(&mut self, id: MemberId) -> Result<(u32, Vec<ShareKey>), CgkaError> {
-        if self.member_count() == 1 {
-            return Err(CgkaError::RemoveLastMember);
-        }
         let l_idx = *self.leaf_index_for_id(id)?;
         let mut removed_keys = Vec::new();
         for idx in treemath::direct_path((l_idx).into(), self.tree_size) {
@@ -184,8 +181,8 @@ impl BeeKem {
         }
         self.blank_leaf_and_path(l_idx);
         self.id_to_leaf_idx.remove(&id);
-        // Collect any contiguous "tombstones" at the end of the leaves Vec
-        while self.leaf(self.next_leaf_idx - 1).is_none() {
+        // Collect any contiguous "tombstones" at the end of the leaves Vec.
+        while self.next_leaf_idx.u32() > 0 && self.leaf(self.next_leaf_idx - 1).is_none() {
             self.blank_path(treemath::parent((self.next_leaf_idx - 1).into()));
             self.next_leaf_idx -= 1;
         }
