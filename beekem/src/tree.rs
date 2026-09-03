@@ -640,6 +640,23 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use rand::{rngs::StdRng, SeedableRng};
 
+    fn join_new_member_to_share_key_map(
+        rng: &mut StdRng,
+        sks: &mut ShareKeyMap,
+    ) -> (MemberId, ShareKey) {
+        let id = MemberId::from(SigningKey::generate(rng).verifying_key());
+        let sk = ShareSecretKey::generate(rng);
+        sks.insert(sk.share_key(), sk);
+        (id, sk.share_key())
+    }
+
+    fn one_member_tree(rng: &mut StdRng, sks: &mut ShareKeyMap) -> (BeeKem, MemberId) {
+        let doc_id = TreeId::from(SigningKey::generate(rng).verifying_key());
+        let (owner, owner_pk) = join_new_member_to_share_key_map(rng, sks);
+        let tree = BeeKem::new(doc_id, owner, owner_pk).expect("a one-member tree");
+        (tree, owner)
+    }
+
     /// A four-leaf tree, its members in leaf order, and a genuine path published
     /// by the member at leaf 0. The tree is a peer's copy, taken before
     /// `encrypt_path` wrote that path into the publisher's own.
@@ -710,6 +727,97 @@ mod tests {
         assert!(
             refused.inner_node(InnerNodeIndex::new(2)).is_none(),
             "a secret store was merged into another member's node"
+        );
+    }
+
+    #[test]
+    fn removing_every_member_empties_the_tree() {
+        let (mut tree, ids, path) = seeded();
+        tree.apply_path(&path);
+        assert!(
+            tree.has_root_key(),
+            "the fixture should start with a root key"
+        );
+
+        for id in ids {
+            tree.remove_id(id).expect("removing a member");
+        }
+
+        assert_eq!(tree.member_count(), 0, "the tree still has members");
+        assert!(
+            !tree.has_root_key(),
+            "emptying the tree left a root key behind"
+        );
+    }
+
+    #[test]
+    fn an_emptied_tree_regains_a_root_key_only_once_a_member_encrypts() {
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut sks = ShareKeyMap::new();
+        let (mut tree, owner) = one_member_tree(&mut rng, &mut sks);
+        tree.remove_id(owner).expect("removing the last member");
+
+        let (joiner, joiner_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
+        assert_eq!(
+            tree.push_leaf(joiner, joiner_pk.into()),
+            0,
+            "an emptied tree did not free leaf index 0"
+        );
+        assert!(!tree.has_root_key(), "a leaf on its own is not a root key");
+
+        tree.encrypt_path(joiner, joiner_pk, &mut sks, &mut rng)
+            .expect("encrypting a path")
+            .expect("the joiner is in the tree");
+        assert!(
+            tree.has_root_key(),
+            "encrypting a path produced no root key"
+        );
+    }
+
+    #[test]
+    fn removing_a_member_not_in_the_tree_is_an_error() {
+        let mut rng = StdRng::seed_from_u64(2);
+        let mut sks = ShareKeyMap::new();
+        let (mut tree, owner) = one_member_tree(&mut rng, &mut sks);
+        let (outsider, _) = join_new_member_to_share_key_map(&mut rng, &mut sks);
+
+        assert!(
+            matches!(tree.remove_id(outsider), Err(CgkaError::IdentifierNotFound)),
+            "an outsider was not reported as absent from a one-member tree"
+        );
+        tree.remove_id(owner).expect("removing the last member");
+        assert!(
+            matches!(tree.remove_id(owner), Err(CgkaError::IdentifierNotFound)),
+            "a member removed twice was not reported as absent"
+        );
+    }
+
+    #[test]
+    fn a_concurrent_add_may_reuse_the_leaf_a_removal_freed() {
+        let mut rng = StdRng::seed_from_u64(3);
+        let mut sks = ShareKeyMap::new();
+        let (mut tree, owner) = one_member_tree(&mut rng, &mut sks);
+
+        let (freed, _) = tree.remove_id(owner).expect("removing the last member");
+        let (joiner, joiner_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
+        assert_eq!(
+            tree.push_leaf(joiner, joiner_pk.into()),
+            freed,
+            "the add did not reuse the freed leaf"
+        );
+
+        tree.sort_leaves_and_blank_paths_for_concurrent_membership_changes(
+            Set::from_iter([joiner]),
+            BTreeSet::from_iter([(owner, freed)]),
+        );
+
+        assert!(
+            tree.contains_id(&joiner),
+            "the concurrently added member was lost"
+        );
+        assert!(
+            tree.node_key_for_id(joiner).is_ok(),
+            "the removal blanked the added member's leaf"
         );
     }
 }
