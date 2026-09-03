@@ -1,4 +1,4 @@
-use beekem::{cgka::Cgka, id::MemberId};
+use beekem::{cgka::Cgka, error::CgkaError, id::MemberId};
 use future_form::Sendable;
 use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
@@ -346,5 +346,41 @@ async fn a_duplicate_remove_should_not_create_an_invalid_state() -> Result<()> {
         .map_err(|e| format!("right could not add a member afterwards: {e:?}"))?;
 
     assert_eq!(ids(&left), ids(&right), "replicas disagree");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_group_can_be_emptied_and_refilled() -> Result<()> {
+    let (mut cgka, signer, _) = cgka_with(&mut OsRng, 0).await?;
+    let owner = cgka.member_ids().next().expect("the owner");
+
+    cgka.remove::<Sendable, _>(owner, &signer).await?;
+    assert_eq!(
+        cgka.group_size(),
+        0,
+        "removing the last member left members"
+    );
+    assert!(!cgka.has_pcs_key(), "an empty group reported a PCS key");
+
+    let sk = ShareSecretKey::generate(&mut OsRng);
+    assert!(
+        matches!(
+            cgka.update::<Sendable, _, _>(sk.share_key(), sk, &signer, &mut OsRng)
+                .await,
+            Err(CgkaError::NoMembers)
+        ),
+        "an empty group has no leaf to encrypt a path from"
+    );
+
+    let rejoin_pk = ShareSecretKey::generate(&mut OsRng).share_key();
+    cgka.add::<Sendable, _>(owner, rejoin_pk, &signer).await?;
+    let rotate = ShareSecretKey::generate(&mut OsRng);
+    cgka.update::<Sendable, _, _>(rotate.share_key(), rotate, &signer, &mut OsRng)
+        .await?;
+    assert!(
+        cgka.has_pcs_key(),
+        "a refilled group did not recover a PCS key"
+    );
+
     Ok(())
 }
