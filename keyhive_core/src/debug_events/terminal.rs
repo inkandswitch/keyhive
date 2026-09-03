@@ -196,6 +196,23 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                         preds
                     )
                 }
+                CgkaOperationDetails::Bridge {
+                    pcs_key,
+                    under,
+                    predecessors,
+                } => {
+                    let preds = predecessors
+                        .iter()
+                        .map(|p| p.short_hex())
+                        .collect::<Vec<String>>()
+                        .join(", ");
+                    format!(
+                        "PCS Key: {}\nUnder: {}\nPredecessors: {}",
+                        pcs_key.short_hex(),
+                        under.short_hex(),
+                        preds
+                    )
+                }
             };
 
             if verbose {

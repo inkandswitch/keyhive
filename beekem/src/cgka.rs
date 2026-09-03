@@ -16,7 +16,7 @@ use crate::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{NodeKey, ShareKeyMap},
-    operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph, Invitation},
+    operation::{Bridge, CgkaEpoch, CgkaOperation, CgkaOperationGraph, Invitation},
     pcs_key::{ApplicationSecret, PcsKey},
     transact::{Fork, Merge},
     tree::BeeKem,
@@ -39,7 +39,7 @@ use keyhive_crypto::{
 };
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument};
 
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
@@ -76,6 +76,13 @@ pub struct Cgka {
     /// Invitations for new members.
     invitations: Map<MemberId, Vec<Invitation>>,
 
+    /// Bridges. Map keys are the root secret each wraps.
+    bridges: Map<Digest<PcsKey>, Vec<Bridge>>,
+
+    /// The root secrets that it was last reported content heads were
+    /// encrypted under.
+    reported_head_secrets: Vec<Digest<PcsKey>>,
+
     original_member: (MemberId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
 }
@@ -99,6 +106,8 @@ impl Hash for Cgka {
             .iter()
             .collect::<BTreeMap<_, _>>()
             .hash(state);
+        self.bridges.iter().collect::<BTreeMap<_, _>>().hash(state);
+        self.reported_head_secrets.hash(state);
         self.original_member.hash(state);
         self.init_add_op.hash(state);
     }
@@ -135,6 +144,8 @@ impl Cgka {
             pcs_key_ops: Map::new(),
             newest_encrypting_pcs_key: None,
             invitations: Map::new(),
+            bridges: Map::new(),
+            reported_head_secrets: Vec::new(),
             original_member: (owner_id, owner_pk),
             init_add_op: init_add_op.clone(),
         };
@@ -397,6 +408,211 @@ impl Cgka {
             .find_map(|pk| self.owner_sks.get(&pk).map(|sk| (pk, *sk)))
     }
 
+    /// Checks if there are content heads that a member cannot currently decrypt
+    /// (for example, a fork whose other branch used a secret they cannot derive).
+    /// If so, returns bridge ops to allow them to decrypt.
+    ///
+    /// `head_key_hashes` are the secrets those heads were encrypted under.
+    /// It normally returns an empty `Vec`.
+    ///
+    /// Call this when the set of content heads changes.
+    #[instrument(skip_all)]
+    pub async fn bridge_content_heads<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        head_key_hashes: &[Digest<PcsKey>],
+        signer: &S,
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+        let mut seen = Set::new();
+        self.reported_head_secrets = head_key_hashes
+            .iter()
+            .filter(|hash| seen.insert(**hash))
+            .copied()
+            .collect();
+        self.bridge_reported_heads::<F, S>(signer).await
+    }
+
+    /// Re-examine the heads a caller last reported.
+    #[instrument(skip_all)]
+    pub async fn bridge_reported_heads<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        signer: &S,
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+        let heads = self.reported_head_secrets.clone();
+        // If there is only one secret, it can be used to decrypt every head
+        // here and there is no need for a bridge. This is the common case.
+        if heads.len() < 2 {
+            return Ok(Vec::new());
+        }
+
+        let members: Vec<MemberId> = self.tree.member_ids().collect();
+        let add_ops = self.add_ops_by_member();
+        let reaching: Vec<(Digest<PcsKey>, Set<MemberId>)> = heads
+            .iter()
+            .map(|hash| (*hash, self.members_reaching(hash, &members, &add_ops)))
+            .collect();
+
+        let mut wanted: Vec<(Digest<PcsKey>, Digest<PcsKey>)> = Vec::new();
+        for (closed, reached) in &reaching {
+            let mut blocked: Set<MemberId> = members
+                .iter()
+                .filter(|member| !reached.contains(member))
+                .copied()
+                .collect();
+            for under in self.bridge_encryption_key_candidates(&heads, closed, &blocked) {
+                if blocked.is_empty() {
+                    break;
+                }
+                let covered = self.members_reaching(&under, &members, &add_ops);
+                if !blocked.iter().any(|member| covered.contains(member)) {
+                    continue;
+                }
+                blocked.retain(|member| !covered.contains(member));
+                wanted.push((*closed, under));
+            }
+        }
+
+        let mut ops = Vec::new();
+        for (pcs_key_hash, under) in wanted {
+            if let Some(op) = self.bridge::<F, S>(pcs_key_hash, under, signer).await? {
+                ops.push(op);
+            }
+        }
+        Ok(ops)
+    }
+
+    /// The members that can reach `pcs_key_hash`.
+    ///
+    /// Either they were in the tree when it was created or they received it
+    /// in an invitation.
+    fn members_reaching(
+        &self,
+        pcs_key_hash: &Digest<PcsKey>,
+        members: &[MemberId],
+        add_ops: &Map<MemberId, Vec<Digest<Signed<CgkaOperation>>>>,
+    ) -> Set<MemberId> {
+        let ancestors = self
+            .pcs_key_ops
+            .get(pcs_key_hash)
+            .map(|update_op| self.ops_graph.ancestors_of(update_op))
+            .unwrap_or_default();
+        members
+            .iter()
+            .filter(|member| {
+                self.invitations.get(member).is_some_and(|invitations| {
+                    invitations
+                        .iter()
+                        .any(|invitation| invitation.pcs_key_hash == *pcs_key_hash)
+                }) || add_ops
+                    .get(member)
+                    .is_some_and(|adds| adds.iter().any(|add| ancestors.contains(add)))
+            })
+            .copied()
+            .collect()
+    }
+
+    /// The operations that added each member.
+    ///
+    /// A member removed and added again has more than one.
+    fn add_ops_by_member(&self) -> Map<MemberId, Vec<Digest<Signed<CgkaOperation>>>> {
+        let mut acc: Map<MemberId, Vec<Digest<Signed<CgkaOperation>>>> = Map::new();
+        for (hash, op) in self.ops_graph.cgka_ops.iter() {
+            if let CgkaOperation::Add { added_id, .. } = op.payload {
+                acc.entry(added_id).or_default().push(*hash);
+            }
+        }
+        acc
+    }
+
+    /// PCS keys we could potentially use to encrypt `closed` for a bridge.
+    fn bridge_encryption_key_candidates(
+        &self,
+        heads: &[Digest<PcsKey>],
+        closed: &Digest<PcsKey>,
+        blocked: &Set<MemberId>,
+    ) -> Vec<Digest<PcsKey>> {
+        let mut seen = Set::new();
+        heads
+            .iter()
+            .copied()
+            .chain(
+                blocked
+                    .iter()
+                    .filter_map(|member| self.invitations.get(member))
+                    .flatten()
+                    .map(|invitation| invitation.pcs_key_hash),
+            )
+            .filter(|hash| hash != closed && seen.insert(*hash) && self.pcs_keys.contains_key(hash))
+            .collect()
+    }
+
+    /// Create a bridge from `under` to `pcs_key_hash` for members that can derive
+    /// the former but not the latter.
+    ///
+    /// Returns `None` when we are missing either secret, `pcs_key_hash` and `under`
+    /// are equivalent, or a bridge between them is already present.
+    #[instrument(skip_all)]
+    async fn bridge<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        pcs_key_hash: Digest<PcsKey>,
+        under: Digest<PcsKey>,
+        signer: &S,
+    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+        if pcs_key_hash == under || self.has_bridge(&pcs_key_hash, &under) {
+            return Ok(None);
+        }
+        let (Some(secret), Some(under_key)) = (
+            self.pcs_keys.get(&pcs_key_hash).map(|key| **key),
+            self.pcs_keys.get(&under).map(|key| **key),
+        ) else {
+            return Ok(None);
+        };
+        let (Some(pcs_update_op_hash), Some(under_update_op_hash)) = (
+            self.pcs_key_ops.get(&pcs_key_hash).copied(),
+            self.pcs_key_ops.get(&under).copied(),
+        ) else {
+            return Ok(None);
+        };
+
+        let root_secret = under_key
+            .derive_bridge_key()
+            .try_seal(secret.0.as_slice(), self.doc_id.as_bytes())
+            .map_err(CgkaError::Encryption)?;
+        let op = CgkaOperation::Bridge {
+            bridge: alloc::boxed::Box::new(Bridge {
+                root_secret,
+                pcs_key_hash,
+                pcs_update_op_hash,
+                under,
+                under_update_op_hash,
+            }),
+            predecessors: Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned()),
+            doc_id: self.doc_id,
+        };
+        let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
+        self.record_bridge(&signed_op);
+        self.ops_graph.add_local_op(&signed_op);
+        Ok(Some(signed_op))
+    }
+
+    /// Whether we have a bridge encrypting the `pcs_key_hash` secret under `under`.
+    fn has_bridge(&self, pcs_key_hash: &Digest<PcsKey>, under: &Digest<PcsKey>) -> bool {
+        self.bridges
+            .get(pcs_key_hash)
+            .is_some_and(|bridges| bridges.iter().any(|bridge| bridge.under == *under))
+    }
+
+    /// If there is a bridge, record it under the root secret it wraps.
+    fn record_bridge(&mut self, op: &Signed<CgkaOperation>) {
+        let CgkaOperation::Bridge { bridge, .. } = &op.payload else {
+            return;
+        };
+        let bridge = bridge.as_ref();
+        let stored = self.bridges.entry(bridge.pcs_key_hash).or_default();
+        if !stored.contains(bridge) {
+            stored.push(bridge.clone());
+        }
+    }
+
     /// If there is an invitation, record it for the id it targets.
     fn record_invitation(&mut self, op: &Signed<CgkaOperation>) {
         let CgkaOperation::Invite { invitation, .. } = &op.payload else {
@@ -519,6 +735,7 @@ impl Cgka {
             return Err(CgkaError::OutOfOrderOperation);
         }
         self.record_invitation(&op);
+        self.record_bridge(&op);
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
             if self.pending_ops_for_structural_change {
@@ -566,6 +783,7 @@ impl Cgka {
                 self.tree.apply_path(new_path);
             }
             CgkaOperation::Invite { .. } => self.record_invitation(&op),
+            CgkaOperation::Bridge { .. } => self.record_bridge(&op),
         }
         self.ops_graph.add_op(&op, &op.payload.predecessors());
         Ok(())
@@ -584,7 +802,9 @@ impl Cgka {
                 if epoch.iter().all(|op| {
                     matches!(
                         op.payload,
-                        CgkaOperation::Update { .. } | CgkaOperation::Invite { .. }
+                        CgkaOperation::Update { .. }
+                            | CgkaOperation::Invite { .. }
+                            | CgkaOperation::Bridge { .. }
                     )
                 }) {
                     for op in epoch.iter() {
@@ -660,13 +880,73 @@ impl Cgka {
                 }
             }
         }
-        // An invitation may already contain this key, in which case we don't require
-        // a rebuild.
+
+        // An invitation or a bridge may already contain this key, in which case we
+        // don't require a rebuild.
         if let Some(pcs_key) = self.pcs_key_from_invitation(pcs_key_hash) {
             self.insert_pcs_key(&pcs_key, *update_op_hash);
             return Ok(pcs_key);
         }
+        if let Some(pcs_key) = self.pcs_key_from_bridge(pcs_key_hash, &mut Set::new()) {
+            self.insert_pcs_key(&pcs_key, *update_op_hash);
+            return Ok(pcs_key);
+        }
+
         self.derive_pcs_key_for_op(update_op_hash)
+    }
+
+    /// Return this PCS key if we can derive it through a bridge. Return `None`
+    /// otherwise.
+    ///
+    /// It's possible we can derive a key through a chain of bridges, but there
+    /// could be cycles. `seen` ensures the traversal terminates.
+    #[instrument(skip_all)]
+    fn pcs_key_from_bridge(
+        &mut self,
+        pcs_key_hash: &Digest<PcsKey>,
+        seen: &mut Set<Digest<PcsKey>>,
+    ) -> Option<PcsKey> {
+        if !seen.insert(*pcs_key_hash) {
+            return None;
+        }
+        let bridges = self.bridges.get(pcs_key_hash)?.clone();
+        for bridge in bridges {
+            let Some(under) = self.encryption_pcs_key_for(&bridge, seen) else {
+                continue;
+            };
+            let Ok(plaintext) = under.derive_bridge_key().try_open(&bridge.root_secret) else {
+                continue;
+            };
+            let Ok(bytes) = <[u8; 32]>::try_from(plaintext) else {
+                continue;
+            };
+            let pcs_key = PcsKey::new(ShareSecretKey::force_from_bytes(bytes));
+            // Before returning, validate that the bridged key actually
+            // corresponds to the hash that was passed in.
+            if Digest::hash(&pcs_key) == *pcs_key_hash {
+                debug!("recovered a root secret from a bridge");
+                return Some(pcs_key);
+            }
+        }
+        None
+    }
+
+    /// The secret used to encrypt the root secret wrapped by `bridge`.
+    fn encryption_pcs_key_for(
+        &mut self,
+        bridge: &Bridge,
+        seen: &mut Set<Digest<PcsKey>>,
+    ) -> Option<PcsKey> {
+        if let Some(pcs_key) = self.pcs_keys.get(&bridge.under) {
+            return Some(**pcs_key);
+        }
+        if let Some(pcs_key) = self.pcs_key_from_invitation(&bridge.under) {
+            return Some(pcs_key);
+        }
+        if let Ok(pcs_key) = self.derive_pcs_key_for_op(&bridge.under_update_op_hash) {
+            return Some(pcs_key);
+        }
+        self.pcs_key_from_bridge(&bridge.under, seen)
     }
 
     /// Return this PCS key if we have it in an invitation and `None` otherwise.
@@ -825,6 +1105,7 @@ impl Cgka {
         );
         self.pcs_key_ops.extend(other.pcs_key_ops.iter());
         self.receive_invitations(&other.invitations);
+        self.receive_bridges(&other.bridges);
         self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
     }
 
@@ -834,6 +1115,17 @@ impl Cgka {
             for invitation in invitations {
                 if !stored.contains(invitation) {
                     stored.push(invitation.clone());
+                }
+            }
+        }
+    }
+
+    fn receive_bridges(&mut self, other: &Map<Digest<PcsKey>, Vec<Bridge>>) {
+        for (pcs_key_hash, bridges) in other.iter() {
+            let stored = self.bridges.entry(*pcs_key_hash).or_default();
+            for bridge in bridges {
+                if !stored.contains(bridge) {
+                    stored.push(bridge.clone());
                 }
             }
         }
@@ -855,6 +1147,7 @@ impl Merge for Cgka {
         self.pcs_keys.merge(fork.pcs_keys);
         self.pcs_key_ops.extend(fork.pcs_key_ops.iter());
         self.receive_invitations(&fork.invitations);
+        self.receive_bridges(&fork.bridges);
         // The fork may have reached content we did not, so take its newest encrypting
         // key only if it comes later than ours.
         if let Some(hash) = fork.newest_encrypting_pcs_key {

@@ -749,6 +749,54 @@ impl<
         Ok((op, new_share_key, new_share_secret_key))
     }
 
+    /// Checks if there are content heads that a member cannot currently decrypt
+    /// (for example, a fork whose other branch used a secret they cannot derive).
+    /// If so, returns bridge ops to allow them to decrypt.
+    ///
+    /// `head_key_hashes` are the secrets those heads were encrypted under.
+    /// Call this method when the content head set changes. It normally returns
+    /// an empty `Vec`.
+    #[instrument(skip_all)]
+    pub async fn bridge_content_heads(
+        &self,
+        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        head_key_hashes: &[Digest<PcsKey>],
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+        let signer = { self.active.lock().await.signer.clone() };
+        let ops = doc
+            .lock()
+            .await
+            .cgka_mut()?
+            .bridge_content_heads::<F, S>(head_key_hashes, &signer)
+            .await?;
+        for op in &ops {
+            self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
+        }
+        Ok(ops)
+    }
+
+    /// Re-examine a document's reported content heads after its membership
+    /// changes, announcing anything new.
+    #[instrument(skip_all)]
+    async fn bridge_after_membership_change(&self, doc: &Arc<Mutex<Document<F, S, T, L>>>) {
+        let signer = { self.active.lock().await.signer.clone() };
+        let ops = {
+            let mut locked_doc = doc.lock().await;
+            match locked_doc.cgka_mut() {
+                Ok(cgka) => cgka.bridge_reported_heads::<F, S>(&signer).await,
+                Err(e) => Err(e),
+            }
+        };
+        match ops {
+            Ok(ops) => {
+                for op in &ops {
+                    self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
+                }
+            }
+            Err(e) => tracing::warn!(?e, "could not bridge after a membership change"),
+        }
+    }
+
     #[instrument(skip_all)]
     pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<F, S, T, L>> {
         let active = self.active.dupe();
@@ -1826,14 +1874,21 @@ impl<
                 let merged = locked_doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 locked_doc.reset_cgka_owner(active_id)?;
                 drop(locked_doc);
+                // Bridging locks the active agent and the document itself.
+                drop(locked_active);
                 if merged {
                     self.event_listener.on_cgka_op(&signed_op).await;
+                    self.bridge_after_membership_change(&doc).await;
                 }
                 return Ok(());
             }
         }
-        if doc.lock().await.merge_cgka_op(signed_op.clone())? {
+        let merged = doc.lock().await.merge_cgka_op(signed_op.clone())?;
+        if merged {
             self.event_listener.on_cgka_op(&signed_op).await;
+            if matches!(signed_op.payload, CgkaOperation::Add { .. }) {
+                self.bridge_after_membership_change(&doc).await;
+            }
         }
         Ok(())
     }

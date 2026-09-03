@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 const STATIC_CONTEXT: &str = "/keyhive/beekem/app_secret/";
+const BRIDGE_CONTEXT: &str = "/keyhive/beekem/bridge/";
 
 /// A [`SymmetricKey`] plus metadata needed for causal encryption.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -101,6 +102,11 @@ impl PcsKey {
             content_ref.clone(),
             *pred_refs,
         )
+    }
+
+    /// Derive the key a [`Bridge`] wrapping another root secret is encrypted under.
+    pub fn derive_bridge_key(&self) -> SymmetricKey {
+        SymmetricKey::derive_from_bytes(&blake3::derive_key(BRIDGE_CONTEXT, self.0.as_slice()))
     }
 }
 

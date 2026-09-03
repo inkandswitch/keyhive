@@ -15,6 +15,7 @@ impl JsCgkaOperation {
             CgkaOperation::Remove { .. } => JsCgkaOperationVariant::Remove,
             CgkaOperation::Update { .. } => JsCgkaOperationVariant::Update,
             CgkaOperation::Invite { .. } => JsCgkaOperationVariant::Invite,
+            CgkaOperation::Bridge { .. } => JsCgkaOperationVariant::Bridge,
         }
         .to_string()
     }
@@ -26,6 +27,7 @@ pub enum JsCgkaOperationVariant {
     Remove,
     Update,
     Invite,
+    Bridge,
 }
 
 impl std::fmt::Display for JsCgkaOperationVariant {
@@ -35,6 +37,7 @@ impl std::fmt::Display for JsCgkaOperationVariant {
             JsCgkaOperationVariant::Remove => write!(f, "CGKA_REMOVE"),
             JsCgkaOperationVariant::Update => write!(f, "CGKA_UPDATE"),
             JsCgkaOperationVariant::Invite => write!(f, "CGKA_INVITE"),
+            JsCgkaOperationVariant::Bridge => write!(f, "CGKA_BRIDGE"),
         }
     }
 }

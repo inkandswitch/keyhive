@@ -86,6 +86,33 @@ pub struct Invitation {
     pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
 }
 
+/// A member added on one branch of a forked history cannot derive the root secret
+/// that content heads on another branch were encrypted under. A bridge shares
+/// a root secret from that branch by encrypting it under a root secret everyone on
+/// this branch can derive.
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct Bridge {
+    /// The root secret being shared, encrypted under a key derived from
+    /// [`Self::under`]. Unlike an [`Invitation`], which is encrypted to one
+    /// member's prekey, this is readable by anyone with that earlier secret.
+    pub root_secret: Vec<u8>,
+
+    /// Which root secret is wrapped. Used to identify encrypted content
+    /// associated with that secret.
+    pub pcs_key_hash: Digest<PcsKey>,
+
+    /// The update operation that originally produced the wrapped secret. Used to
+    /// derive an application secret from it.
+    pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
+
+    /// The root secret needed to decrypt [`Self::root_secret`].
+    pub under: Digest<PcsKey>,
+
+    /// The update operation that produced [`Self::under`].
+    pub under_update_op_hash: Digest<Signed<CgkaOperation>>,
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum CgkaOperation {
@@ -111,10 +138,16 @@ pub enum CgkaOperation {
         doc_id: TreeId,
     },
     /// Wraps an [`Invitation`] for a new member, allowing them to read content
-    /// before the next PCS update. The only [`CgkaOperation`] that does not
-    /// modify the tree.
+    /// before the next PCS update. Does not modify the tree.
     Invite {
         invitation: alloc::boxed::Box<Invitation>,
+        predecessors: Vec<Digest<Signed<CgkaOperation>>>,
+        doc_id: TreeId,
+    },
+    /// Wraps a [`Bridge`], allowing a member to decrypt a content head it could
+    /// not otherwise derive a key for. Does not modify the tree.
+    Bridge {
+        bridge: alloc::boxed::Box<Bridge>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
@@ -138,7 +171,8 @@ impl CgkaOperation {
             CgkaOperation::Add { predecessors, .. }
             | CgkaOperation::Remove { predecessors, .. }
             | CgkaOperation::Update { predecessors, .. }
-            | CgkaOperation::Invite { predecessors, .. } => {
+            | CgkaOperation::Invite { predecessors, .. }
+            | CgkaOperation::Bridge { predecessors, .. } => {
                 Set::from_iter(predecessors.iter().cloned())
             }
         }
@@ -150,7 +184,8 @@ impl CgkaOperation {
             CgkaOperation::Add { doc_id, .. }
             | CgkaOperation::Remove { doc_id, .. }
             | CgkaOperation::Update { doc_id, .. }
-            | CgkaOperation::Invite { doc_id, .. } => doc_id,
+            | CgkaOperation::Invite { doc_id, .. }
+            | CgkaOperation::Bridge { doc_id, .. } => doc_id,
         }
     }
 }
@@ -330,6 +365,29 @@ impl CgkaOperationGraph {
         op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Option<&Set<Digest<Signed<CgkaOperation>>>> {
         self.cgka_ops_predecessors.get(op_hash)
+    }
+
+    /// Every operation reachable backwards from `op_hash`, including itself.
+    pub fn ancestors_of(
+        &self,
+        op_hash: &Digest<Signed<CgkaOperation>>,
+    ) -> Set<Digest<Signed<CgkaOperation>>> {
+        let mut seen = Set::new();
+        seen.insert(*op_hash);
+        let mut frontier = alloc::collections::VecDeque::from([*op_hash]);
+        while let Some(hash) = frontier.pop_front() {
+            let Some(predecessors) = self.predecessors_for(&hash) else {
+                continue;
+            };
+            for predecessor in predecessors {
+                if seen.contains(predecessor) {
+                    continue;
+                }
+                seen.insert(*predecessor);
+                frontier.push_back(*predecessor);
+            }
+        }
+        seen
     }
 
     /// Topsort all operations in the graph.

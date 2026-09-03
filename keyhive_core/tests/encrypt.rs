@@ -2363,3 +2363,479 @@ async fn test_making_a_document_public_opens_its_history() -> TestResult {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_bridge_opens_content_under_a_key_not_provided_by_the_invitation() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+
+    let earlier = b"written under the first root secret".to_vec();
+    let earlier_ref = *blake3::hash(&earlier).as_bytes();
+    let doc = alice.generate_doc(vec![], nonempty![earlier_ref]).await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    let earlier_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &earlier_ref, &vec![], &earlier)
+        .await?;
+
+    // Rotate, so what follows is encrypted under a second root secret and Bob's
+    // invitation provides that one rather than the first.
+    alice.force_pcs_update(doc.dupe()).await?;
+
+    let later = b"written under the second root secret".to_vec();
+    let later_ref = *blake3::hash(&later).as_bytes();
+    let later_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &later_ref, &vec![], &later)
+        .await?;
+
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    let events = alice
+        .static_events_for_agent(&bob.active().lock().await.clone().into())
+        .await;
+    bob.ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+    let doc_on_bob = bob
+        .get_document(doc_id)
+        .await
+        .expect("bob has the document");
+
+    // Bob never reads the later content, so the only place he holds the secret
+    // the bridge is encrypted under is his own invitation.
+    assert!(
+        bob.try_decrypt_content(doc_on_bob.dupe(), earlier_encrypted.encrypted_content())
+            .await
+            .is_err(),
+        "the first root secret predates bob's leaf and no invitation names it"
+    );
+
+    let bridged = alice
+        .bridge_content_heads(
+            doc.dupe(),
+            &[
+                earlier_encrypted.encrypted_content().pcs_key_hash,
+                later_encrypted.encrypted_content().pcs_key_hash,
+            ],
+        )
+        .await?;
+    assert_eq!(
+        bridged.len(),
+        1,
+        "one head names a secret bob cannot derive, so one bridge covers it"
+    );
+
+    let repeated = alice
+        .bridge_content_heads(
+            doc.dupe(),
+            &[
+                earlier_encrypted.encrypted_content().pcs_key_hash,
+                later_encrypted.encrypted_content().pcs_key_hash,
+            ],
+        )
+        .await?;
+    assert!(
+        repeated.is_empty(),
+        "a second pass should not issue the same bridge again"
+    );
+
+    let events = alice
+        .static_events_for_agent(&bob.active().lock().await.clone().into())
+        .await;
+    bob.ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+
+    let decrypted = bob
+        .try_decrypt_content(doc_on_bob, earlier_encrypted.encrypted_content())
+        .await?;
+    assert_eq!(
+        decrypted, earlier,
+        "the bridge should hand bob the root secret his invitation did not name"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_bridge_is_useless_without_the_secret_it_is_encrypted_under() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+
+    let earlier = b"written under the first root secret".to_vec();
+    let earlier_ref = *blake3::hash(&earlier).as_bytes();
+    let doc = alice.generate_doc(vec![], nonempty![earlier_ref]).await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    let earlier_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &earlier_ref, &vec![], &earlier)
+        .await?;
+    alice.force_pcs_update(doc.dupe()).await?;
+    let later = b"written under the second root secret".to_vec();
+    let later_ref = *blake3::hash(&later).as_bytes();
+    let later_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &later_ref, &vec![], &later)
+        .await?;
+
+    // Bob is added and gets an invitation wrapping the second secret. Carol is
+    // not, so she holds neither secret.
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+    alice
+        .bridge_content_heads(
+            doc.dupe(),
+            &[
+                earlier_encrypted.encrypted_content().pcs_key_hash,
+                later_encrypted.encrypted_content().pcs_key_hash,
+            ],
+        )
+        .await?;
+
+    // Provide Carol everything Bob would receive (including the bridge).
+    let NewKeyhive { keyhive: carol, .. } = make_keyhive().await;
+    let events = alice
+        .static_events_for_agent(&bob.active().lock().await.clone().into())
+        .await;
+    carol
+        .ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+
+    let Some(doc_on_carol) = carol.get_document(doc_id).await else {
+        // Carol never became a member, so she may not have the document at all.
+        return Ok(());
+    };
+    let result = carol
+        .try_decrypt_content(doc_on_carol, earlier_encrypted.encrypted_content())
+        .await;
+    assert!(
+        result.is_err(),
+        "carol holds neither root secret, so the bridge opens nothing for her, got: {:?}",
+        result.map(|_| "decrypted"),
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_bridge_concurrent_with_a_membership_change_still_opens_content() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+
+    let earlier = b"written under the first root secret".to_vec();
+    let earlier_ref = *blake3::hash(&earlier).as_bytes();
+    let doc = alice.generate_doc(vec![], nonempty![earlier_ref]).await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    let earlier_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &earlier_ref, &vec![], &earlier)
+        .await?;
+    alice.force_pcs_update(doc.dupe()).await?;
+    let later = b"written under the second root secret".to_vec();
+    let later_ref = *blake3::hash(&later).as_bytes();
+    let later_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &later_ref, &vec![], &later)
+        .await?;
+
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Admin,
+            &[],
+        )
+        .await?;
+
+    let events = alice
+        .static_events_for_agent(&bob.active().lock().await.clone().into())
+        .await;
+    bob.ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+    let doc_on_bob = bob
+        .get_document(doc_id)
+        .await
+        .expect("bob has the document");
+
+    // Neither admin sees the other before acting, so what alice does next is
+    // concurrent with bob's add.
+    let NewKeyhive { keyhive: carol, .. } = make_keyhive().await;
+    let NewKeyhive { keyhive: dave, .. } = make_keyhive().await;
+    let indie_dave = { dave.active().lock().await.individual().lock().await.clone() };
+    bob.add_member(
+        Agent::Individual(indie_dave.id(), Arc::new(Mutex::new(indie_dave))),
+        &Membered::Document(doc_id, doc_on_bob.dupe()),
+        Access::Read,
+        &[],
+    )
+    .await?;
+
+    let indie_carol = {
+        carol
+            .active()
+            .lock()
+            .await
+            .individual()
+            .lock()
+            .await
+            .clone()
+    };
+    alice
+        .add_member(
+            Agent::Individual(indie_carol.id(), Arc::new(Mutex::new(indie_carol))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+    alice
+        .bridge_content_heads(
+            doc.dupe(),
+            &[
+                earlier_encrypted.encrypted_content().pcs_key_hash,
+                later_encrypted.encrypted_content().pcs_key_hash,
+            ],
+        )
+        .await?;
+
+    let events = bob
+        .static_events_for_agent(&alice.active().lock().await.clone().into())
+        .await;
+    alice
+        .ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+
+    let events = alice
+        .static_events_for_agent(&carol.active().lock().await.clone().into())
+        .await;
+    carol
+        .ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+
+    let doc_on_carol = carol
+        .get_document(doc_id)
+        .await
+        .expect("carol has the document");
+    let decrypted = carol
+        .try_decrypt_content(doc_on_carol, earlier_encrypted.encrypted_content())
+        .await?;
+    assert_eq!(
+        decrypted, earlier,
+        "a bridge that arrived alongside a membership change should still open content"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_one_bridge_covers_every_member_on_a_fork() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+
+    let earlier = b"written under the first root secret".to_vec();
+    let earlier_ref = *blake3::hash(&earlier).as_bytes();
+    let doc = alice.generate_doc(vec![], nonempty![earlier_ref]).await?;
+    let doc_id = { doc.lock().await.doc_id() };
+    let earlier_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &earlier_ref, &vec![], &earlier)
+        .await?;
+
+    // Bob's invitation wraps the secret in force now.
+    alice.force_pcs_update(doc.dupe()).await?;
+    let middle = b"written under the second root secret".to_vec();
+    let middle_ref = *blake3::hash(&middle).as_bytes();
+    alice
+        .try_encrypt_content(doc.dupe(), &middle_ref, &vec![], &middle)
+        .await?;
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    // Carol's invitation wraps a later key, so she does not share an invitation with Bob.
+    alice.force_pcs_update(doc.dupe()).await?;
+    let later = b"written under the third root secret".to_vec();
+    let later_ref = *blake3::hash(&later).as_bytes();
+    let later_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &later_ref, &vec![], &later)
+        .await?;
+    let NewKeyhive { keyhive: carol, .. } = make_keyhive().await;
+    let indie_carol = {
+        carol
+            .active()
+            .lock()
+            .await
+            .individual()
+            .lock()
+            .await
+            .clone()
+    };
+    alice
+        .add_member(
+            Agent::Individual(indie_carol.id(), Arc::new(Mutex::new(indie_carol))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    let bridged = alice
+        .bridge_content_heads(
+            doc.dupe(),
+            &[
+                earlier_encrypted.encrypted_content().pcs_key_hash,
+                later_encrypted.encrypted_content().pcs_key_hash,
+            ],
+        )
+        .await?;
+    assert_eq!(
+        bridged.len(),
+        1,
+        "one bridge works for both since they can both derive the secret it is encrypted under"
+    );
+
+    for (reader, who) in [(&bob, "bob"), (&carol, "carol")] {
+        let events = alice
+            .static_events_for_agent(&reader.active().lock().await.clone().into())
+            .await;
+        reader
+            .ingest_unsorted_static_events(events.into_values().collect())
+            .await;
+        let doc_on_reader = reader
+            .get_document(doc_id)
+            .await
+            .unwrap_or_else(|| panic!("{who} has the document"));
+        let decrypted = reader
+            .try_decrypt_content(doc_on_reader, earlier_encrypted.encrypted_content())
+            .await
+            .unwrap_or_else(|e| panic!("{who} could not read through the bridge: {e:?}"));
+        assert_eq!(decrypted, earlier, "{who} should read through the bridge");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_no_bridge_when_the_heads_share_a_secret() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+
+    let first = b"one".to_vec();
+    let first_ref = *blake3::hash(&first).as_bytes();
+    let doc = alice.generate_doc(vec![], nonempty![first_ref]).await?;
+    let doc_id = { doc.lock().await.doc_id() };
+    let first_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &first_ref, &vec![], &first)
+        .await?;
+    let second = b"two".to_vec();
+    let second_ref = *blake3::hash(&second).as_bytes();
+    let second_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &second_ref, &vec![], &second)
+        .await?;
+
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    let bridged = alice
+        .bridge_content_heads(
+            doc.dupe(),
+            &[
+                first_encrypted.encrypted_content().pcs_key_hash,
+                second_encrypted.encrypted_content().pcs_key_hash,
+            ],
+        )
+        .await?;
+    assert!(
+        bridged.is_empty(),
+        "both heads are associated with the same secret"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_no_bridge_when_every_member_reaches_both_heads() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+
+    let genesis = b"before anyone joined".to_vec();
+    let genesis_ref = *blake3::hash(&genesis).as_bytes();
+    let doc = alice.generate_doc(vec![], nonempty![genesis_ref]).await?;
+    let doc_id = { doc.lock().await.doc_id() };
+
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    // Both secrets are created after bob's leaf exists, so he can derive either.
+    alice.force_pcs_update(doc.dupe()).await?;
+    let first = b"one".to_vec();
+    let first_ref = *blake3::hash(&first).as_bytes();
+    let first_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &first_ref, &vec![], &first)
+        .await?;
+    alice.force_pcs_update(doc.dupe()).await?;
+    let second = b"two".to_vec();
+    let second_ref = *blake3::hash(&second).as_bytes();
+    let second_encrypted = alice
+        .try_encrypt_content(doc.dupe(), &second_ref, &vec![], &second)
+        .await?;
+
+    let bridged = alice
+        .bridge_content_heads(
+            doc.dupe(),
+            &[
+                first_encrypted.encrypted_content().pcs_key_hash,
+                second_encrypted.encrypted_content().pcs_key_hash,
+            ],
+        )
+        .await?;
+    assert!(
+        bridged.is_empty(),
+        "every member was in the tree before either secret was created"
+    );
+
+    Ok(())
+}

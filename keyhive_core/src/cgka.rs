@@ -179,6 +179,30 @@ impl Cgka {
         self.0.add_multiple(converted, signer).await
     }
 
+    /// Checks if there are content heads that a member cannot currently decrypt
+    /// (for example, a fork whose other branch used a secret they cannot derive).
+    /// If so, returns bridge ops to allow them to decrypt.
+    ///
+    /// `head_key_hashes` are the secrets those heads were encrypted under.
+    /// It normally returns an empty `Vec`.
+    pub async fn bridge_content_heads<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        head_key_hashes: &[Digest<PcsKey>],
+        signer: &S,
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+        self.0
+            .bridge_content_heads::<F, S>(head_key_hashes, signer)
+            .await
+    }
+
+    /// Re-examine the heads a caller last reported. Call after a membership change.
+    pub async fn bridge_reported_heads<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        signer: &S,
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+        self.0.bridge_reported_heads::<F, S>(signer).await
+    }
+
     pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,

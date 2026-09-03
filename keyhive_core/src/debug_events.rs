@@ -89,6 +89,11 @@ pub enum CgkaOperationDetails {
         pcs_key: Hash,
         predecessors: Vec<Hash>,
     },
+    Bridge {
+        pcs_key: Hash,
+        under: Hash,
+        predecessors: Vec<Hash>,
+    },
 }
 
 impl DebugEventTable {
@@ -271,6 +276,21 @@ impl DebugEventRow {
                                 .collect(),
                         };
                         ("Invite", op_details)
+                    }
+                    beekem::operation::CgkaOperation::Bridge {
+                        bridge,
+                        predecessors,
+                        ..
+                    } => {
+                        let op_details = CgkaOperationDetails::Bridge {
+                            pcs_key: Hash::new(bridge.pcs_key_hash.as_slice(), nicknames),
+                            under: Hash::new(bridge.under.as_slice(), nicknames),
+                            predecessors: predecessors
+                                .iter()
+                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
+                                .collect(),
+                        };
+                        ("Bridge", op_details)
                     }
                 };
 
