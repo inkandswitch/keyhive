@@ -153,6 +153,8 @@ impl Cgka {
     ///
     /// If the tree does not currently contain a root key, then we must first
     /// perform a leaf key rotation.
+    ///
+    /// Returns a [`CgkaError::NoMembers`] error if the group is empty.
     #[instrument(skip_all)]
     #[allow(clippy::type_complexity)]
     pub async fn new_app_secret_for<
@@ -279,6 +281,8 @@ impl Cgka {
     }
 
     /// Remove member from group.
+    ///
+    /// Returns `Ok(None)` if the member is not in the group.
     #[instrument(skip_all)]
     pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
@@ -290,9 +294,6 @@ impl Cgka {
         }
         if self.should_replay() {
             self.replay_ops_graph()?;
-        }
-        if self.group_size() == 1 {
-            return Err(CgkaError::RemoveLastMember);
         }
         let (leaf_idx, removed_keys) = self.tree.remove_id(id)?;
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -312,6 +313,8 @@ impl Cgka {
     /// This also triggers a tree path update for that leaf.
     /// If the owner is not in the tree but Public is, falls back to
     /// encrypting from Public's leaf using Public's well-known keys.
+    ///
+    /// Returns a [`CgkaError::NoMembers`] error if the group is empty.
     #[instrument(skip_all)]
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
@@ -322,6 +325,9 @@ impl Cgka {
     ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
         if self.should_replay() {
             self.replay_ops_graph()?;
+        }
+        if self.group_size() == 0 {
+            return Err(CgkaError::NoMembers);
         }
         let (update_id, update_pk, update_sk) = if self.tree.contains_id(&self.owner_id) {
             (self.owner_id, new_pk, new_sk)
@@ -432,8 +438,6 @@ impl Cgka {
                     Ok(_) => {}
                     // A concurrent history might have removed the same member.
                     Err(CgkaError::IdentifierNotFound) => {}
-                    // TODO: Support empty trees
-                    Err(CgkaError::RemoveLastMember) => {}
                     Err(e) => return Err(e),
                 }
             }

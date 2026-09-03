@@ -175,7 +175,8 @@ async fn scenario(seed: u64) -> Result<Option<String>> {
     if trace {
         eprintln!("seed {seed}: replicas={replica_count} base_members={base_members}");
     }
-    let (base, signer, members) = cgka_with(&mut rng, base_members).await?;
+    let (base, signer, _) = cgka_with(&mut rng, base_members).await?;
+    let members: Vec<MemberId> = base.member_ids().collect();
 
     let mut replicas: Vec<Cgka> = (0..replica_count).map(|_| base.clone()).collect();
     let mut ops = Vec::new();
@@ -198,7 +199,6 @@ async fn scenario(seed: u64) -> Result<Option<String>> {
                     }
                 }
                 CgkaOp::Remove(i) => {
-                    // Removing the last member is refused by design.
                     if let Ok(Some(o)) = replica.remove::<Sendable, _>(members[i], &signer).await {
                         ops.push(o);
                     }

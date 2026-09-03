@@ -33,6 +33,9 @@ pub enum CgkaError {
     #[cfg_attr(feature = "thiserror", error("Invalid path length"))]
     InvalidPathLength,
 
+    #[cfg_attr(feature = "thiserror", error("Group has no members"))]
+    NoMembers,
+
     #[cfg_attr(feature = "thiserror", error("No root key"))]
     NoRootKey,
 
@@ -56,10 +59,6 @@ pub enum CgkaError {
 
     #[cfg_attr(feature = "thiserror", error("SecretKey not found"))]
     SecretKeyNotFound,
-
-    // TODO: Support empty trees and remove this error
-    #[cfg_attr(feature = "thiserror", error("Tried to remove last member from group"))]
-    RemoveLastMember,
 
     #[cfg_attr(feature = "thiserror", error("Serialization failed: {0}"))]
     Serialize(alloc::string::String),
@@ -96,6 +95,7 @@ impl core::fmt::Display for CgkaError {
             Self::IdentifierNotFound => write!(f, "Identifier not found"),
             Self::InvalidOperation => write!(f, "Invalid operation"),
             Self::InvalidPathLength => write!(f, "Invalid path length"),
+            Self::NoMembers => write!(f, "Group has no members"),
             Self::NoRootKey => write!(f, "No root key"),
             Self::NotInitialized => write!(f, "Cgka is not initialized"),
             Self::OperationNotFound => write!(f, "Operation not found"),
@@ -105,7 +105,6 @@ impl core::fmt::Display for CgkaError {
             Self::OwnerIdentifierNotFound => write!(f, "Owner Identifier not found"),
             Self::ShareKeyNotFound => write!(f, "ShareKey not found"),
             Self::SecretKeyNotFound => write!(f, "SecretKey not found"),
-            Self::RemoveLastMember => write!(f, "Tried to remove last member from group"),
             Self::Serialize(msg) => write!(f, "Serialization failed: {msg}"),
             Self::UnexpectedKeyConflict => write!(f, "Unexpected key conflict"),
             Self::UnexpectedInitialOperation => {
