@@ -331,7 +331,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let still_reachable = self.group.individual_ids().await;
         ids_to_remove.retain(|id| !still_reachable.contains(id));
 
-        // FIXME: We need to check if this has revoked the last member in our group.
         let mut ops = cgka_ops;
         for id in ids_to_remove {
             if let Some(op) = self.cgka_mut()?.remove(id, signer).await? {
