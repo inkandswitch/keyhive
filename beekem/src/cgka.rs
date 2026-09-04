@@ -262,8 +262,8 @@ impl Cgka {
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
-        // Check after replay since a concurrent add of the same member might be
-        // pending.
+        // Check after replay since a concurrent add of the same member might
+        // have been pending.
         if self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -309,8 +309,8 @@ impl Cgka {
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
-        // Check after replay since a concurrent add of the same member might be
-        // pending, and we will need to override that add.
+        // Check after replay since a concurrent add of the same member might
+        // have been pending.
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -471,10 +471,7 @@ impl Cgka {
         }
         match op.payload {
             CgkaOperation::Add { added_id, pk, .. } => {
-                // A concurrent history might have added the same member. Pushing
-                // a second leaf for them would leave one that `id_to_leaf_idx` no
-                // longer points at, so a later removal could not blank it and the
-                // removed member would remain.
+                // A concurrent history might have added the same member.
                 if !self.tree.contains_id(&added_id) {
                     self.tree.push_leaf(added_id, pk.into());
                 }
@@ -712,3 +709,6 @@ impl Cgka {
         self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
     }
 }
+
+#[cfg(test)]
+mod concurrent_membership_changes;
