@@ -638,6 +638,86 @@ pub struct LeafNode {
 }
 
 #[cfg(test)]
+impl BeeKem {
+    /// Which member sits at which leaf, by ascending [`MemberId`].
+    pub(crate) fn seating(&self) -> Vec<(MemberId, u32)> {
+        self.id_to_leaf_idx
+            .iter()
+            .map(|(id, idx)| (*id, idx.u32()))
+            .collect()
+    }
+
+    /// Returns one message per disagreement between the tree's fields. It checks
+    /// `leaves` and `inner_nodes` against `tree_size`, and `leaves` against
+    /// `id_to_leaf_idx` and `next_leaf_idx`.
+    ///
+    /// A merge can leave these disagreeing without returning an error, so a merge
+    /// that completes is not evidence the tree is intact.
+    pub(crate) fn invariant_violations(&self) -> Vec<alloc::string::String> {
+        use alloc::format;
+
+        let mut violations = Vec::new();
+        if self.leaves.len() != self.tree_size.leaf_count() as usize {
+            violations.push(format!(
+                "leaves has {} slots but tree_size calls for {}",
+                self.leaves.len(),
+                self.tree_size.leaf_count()
+            ));
+        }
+        if self.inner_nodes.len() != self.tree_size.inner_node_count() as usize {
+            violations.push(format!(
+                "inner_nodes has {} slots but tree_size calls for {}",
+                self.inner_nodes.len(),
+                self.tree_size.inner_node_count()
+            ));
+        }
+        if self.next_leaf_idx.usize() > self.leaves.len() {
+            violations.push(format!(
+                "next_leaf_idx is {} but there are only {} leaf slots",
+                self.next_leaf_idx,
+                self.leaves.len()
+            ));
+        }
+        for (id, idx) in &self.id_to_leaf_idx {
+            match self.leaves.get(idx.usize()) {
+                Some(Some(leaf)) if leaf.id == *id => {}
+                Some(Some(leaf)) => violations.push(format!(
+                    "{id:?} is counted at leaf {idx}, which holds {:?}",
+                    leaf.id
+                )),
+                Some(None) => violations.push(format!(
+                    "{id:?} is counted as a member but leaf {idx} is blank"
+                )),
+                None => violations.push(format!(
+                    "{id:?} is counted at leaf {idx}, past the {} slots that exist",
+                    self.leaves.len()
+                )),
+            }
+        }
+        for (i, slot) in self.leaves.iter().enumerate() {
+            let Some(leaf) = slot else { continue };
+            match self.id_to_leaf_idx.get(&leaf.id) {
+                Some(idx) if idx.usize() == i => {}
+                Some(idx) => violations.push(format!(
+                    "leaf {i} holds {:?}, whom the map places at leaf {idx}",
+                    leaf.id
+                )),
+                None => {
+                    violations.push(format!("leaf {i} holds {:?}, who is not a member", leaf.id))
+                }
+            }
+            if i >= self.next_leaf_idx.usize() {
+                violations.push(format!(
+                    "leaf {i} is occupied but sits at or above next_leaf_idx ({})",
+                    self.next_leaf_idx
+                ));
+            }
+        }
+        violations
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
