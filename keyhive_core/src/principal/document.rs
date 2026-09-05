@@ -7,7 +7,7 @@ use crate::{
     access::Access,
     cgka::Cgka,
     crypto::envelope::Envelope,
-    error::missing_dependency::MissingDependency,
+    error::{missing_dependency::MissingDependency, not_found},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         agent::{id::AgentId, Agent},
@@ -72,6 +72,8 @@ pub struct Document<
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
+    /// Keys for content this document has written or read, so a later write can carry
+    /// them to a reader in an envelope. Not persisted, and not evicted.
     known_decryption_keys: HashMap<T, SymmetricKey>,
     cgka: Option<Cgka>,
 }
@@ -468,6 +470,43 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         Ok((op, new_share_key, new_share_secret_key))
     }
 
+    /// Encrypt `content` in an [`Envelope`], listing its ancestors and carrying the keys to
+    /// open them.
+    #[cfg(any(test, feature = "test_utils"))]
+    #[instrument(skip_all)]
+    pub async fn try_encrypt_content_in_envelope<R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        content_ref: &T,
+        content: &[u8],
+        pred_refs: &Vec<T>,
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<EncryptedContentWithUpdate<T>, EncryptInEnvelopeError<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let mut ancestors = HashMap::with_capacity(pred_refs.len());
+        for pred in pred_refs {
+            let key = self
+                .known_decryption_keys
+                .get(pred)
+                .copied()
+                .ok_or_else(|| EncryptInEnvelopeError::NoKeyForAncestor(pred.clone()))?;
+            ancestors.insert(pred.clone(), key);
+        }
+
+        let envelope = Envelope {
+            plaintext: content.to_vec(),
+            ancestors,
+        };
+        let bytes = bincode::serialize(&envelope)?;
+
+        let (encrypted, _key) = self
+            .try_encrypt_content_keyed(content_ref, &bytes, pred_refs, signer, csprng)
+            .await?;
+        Ok(encrypted)
+    }
+
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
@@ -510,7 +549,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .map(|(plaintext, _key)| plaintext)
     }
 
-    /// Decrypt content and also return the application secret key that was used.
+    /// Decrypt content and return the application secret that was used.
     #[instrument(skip_all)]
     pub fn try_decrypt_content_keyed<P: for<'de> Deserialize<'de>>(
         &mut self,
@@ -526,6 +565,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         decrypt_key
             .try_decrypt(encrypted_content.nonce, &mut plaintext)
             .map_err(DecryptError::DecryptionFailed)?;
+
+        self.known_decryption_keys
+            .insert(encrypted_content.content_ref.clone(), decrypt_key);
 
         // FIXME for some reason this decrypts successfully,
         // but the bytes of the symmetric key are different,
@@ -560,7 +602,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             raw_entrypoint.as_slice(),
         )
         .map_err(|e| CausalDecryptionError::<F, T, P, C> {
-            progress: acc.clone(),
+            progress: Box::new(acc.clone()),
             cannot: HashMap::from_iter([(
                 encrypted_content.content_ref.clone(),
                 ErrorReason::DeserializationFailed(e),
@@ -693,6 +735,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
 #[derive(Debug, Error)]
 pub enum AddMemberError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] not_found::NotFound),
+
     #[error(transparent)]
     AddMemberError(#[from] AddGroupMemberError),
 
@@ -702,6 +748,10 @@ pub enum AddMemberError {
 
 #[derive(Debug, Error)]
 pub enum EncryptError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] not_found::NotFound),
+
     #[error("Encryption failed: {0}")]
     EncryptionFailed(chacha20poly1305::Error),
 
@@ -710,6 +760,19 @@ pub enum EncryptError {
 
     #[error("Failed to make app secret: {0}")]
     FailedToMakeAppSecret(CgkaError),
+}
+
+/// Why content could not be written into an [`Envelope`].
+#[derive(Debug, Error)]
+pub enum EncryptInEnvelopeError<T: ContentRef> {
+    #[error("no key for ancestor {0:?}")]
+    NoKeyForAncestor(T),
+
+    #[error(transparent)]
+    Serialization(#[from] bincode::Error),
+
+    #[error(transparent)]
+    Encrypt(#[from] EncryptError),
 }
 
 #[derive(Debug, Error)]
@@ -763,6 +826,10 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
 
 #[derive(Debug, Error)]
 pub enum DecryptError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] not_found::NotFound),
+
     #[error("Key not found")]
     KeyNotFound,
 

@@ -31,6 +31,7 @@ use super::{
     encrypted_keyed::JsEncryptedKeyed,
     event_handler::JsEventHandler,
     generate_doc_error::JsGenerateDocError,
+    generate_group_error::JsGenerateGroupError,
     group::JsGroup,
     identifier::JsIdentifier,
     individual_id::JsIndividualId,
@@ -50,7 +51,9 @@ use dupe::{Dupe, IterDupedExt};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use keyhive_core::{
+    all_agent_events::EventDigest,
     crypto::digest::Digest,
+    error::not_found::NotFound,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{
@@ -129,19 +132,20 @@ impl JsKeyhive {
     pub async fn generate_group(
         &self,
         js_coparents: Vec<JsPeerRef>,
-    ) -> Result<JsGroup, JsSigningError> {
+    ) -> Result<JsGroup, JsGenerateGroupError> {
         let coparents = js_coparents
             .into_iter()
             .map(|js_peer| JsPeer::from_js_ref(&js_peer).0)
             .collect::<Vec<_>>();
 
-        let group = self.0.generate_group(coparents).await?;
+        let group_id = self.0.generate_group(coparents).await?;
+        let inner = self
+            .0
+            .get_group(group_id)
+            .await
+            .ok_or_else(|| NotFound::new(group_id))?;
 
-        let group_id = { group.lock().await.group_id() };
-        Ok(JsGroup {
-            group_id,
-            inner: group.dupe(),
-        })
+        Ok(JsGroup { group_id, inner })
     }
 
     #[wasm_bindgen(js_name = generateDocument)]
@@ -152,7 +156,7 @@ impl JsKeyhive {
         more_initial_content_refs: Vec<JsChangeIdRef>,
     ) -> Result<JsDocument, JsGenerateDocError> {
         init_span!("JsKeyhive::generate_doc");
-        let doc = self
+        let doc_id = self
             .0
             .generate_doc(
                 coparents
@@ -168,12 +172,13 @@ impl JsKeyhive {
                 },
             )
             .await?;
+        let inner = self
+            .0
+            .get_document(doc_id)
+            .await
+            .ok_or_else(|| NotFound::new(doc_id))?;
 
-        let doc_id = { doc.lock().await.doc_id() };
-        Ok(JsDocument {
-            doc_id,
-            inner: doc.dupe(),
-        })
+        Ok(JsDocument { doc_id, inner })
     }
 
     #[wasm_bindgen(js_name = trySign)]
@@ -198,7 +203,7 @@ impl JsKeyhive {
 
         Ok(self
             .0
-            .try_encrypt_content(doc.inner.dupe(), content_ref, &pred_refs, content)
+            .try_encrypt_content(doc.doc_id, content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -221,34 +226,12 @@ impl JsKeyhive {
 
         let (inner, key) = self
             .0
-            .try_encrypt_content_keyed(doc.inner.dupe(), content_ref, &pred_refs, content)
+            .try_encrypt_content_keyed(doc.doc_id, content_ref, &pred_refs, content)
             .await?;
         Ok(JsEncryptedKeyed {
             inner,
             application_secret: key.as_slice().to_vec(),
         })
-    }
-
-    // NOTE: this is with a fresh doc secret
-    #[wasm_bindgen(js_name = tryEncryptArchive)]
-    pub async fn try_encrypt_archive(
-        &self,
-        doc: &JsDocument,
-        content_ref: &JsChangeId,
-        pred_refs: Vec<JsChangeIdRef>,
-        content: &[u8],
-    ) -> Result<JsEncryptedContentWithUpdate, JsEncryptError> {
-        init_span!("JsKeyhive::try_encrypt_archive");
-        let pred_refs: Vec<JsChangeId> = pred_refs
-            .into_iter()
-            .map(|js_ref| JsChangeId::from_js_ref(&js_ref))
-            .collect();
-
-        Ok(self
-            .0
-            .try_encrypt_content(doc.inner.dupe(), content_ref, &pred_refs, content)
-            .await?
-            .into())
     }
 
     #[wasm_bindgen(js_name = tryDecrypt)]
@@ -258,10 +241,7 @@ impl JsKeyhive {
         encrypted: &JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
         init_span!("JsKeyhive::try_decrypt");
-        Ok(self
-            .0
-            .try_decrypt_content(doc.inner.dupe(), &encrypted.0)
-            .await?)
+        Ok(self.0.try_decrypt_content(doc.doc_id, &encrypted.0).await?)
     }
 
     /// Decrypt content and also return the 32-byte application secret key used.
@@ -274,7 +254,7 @@ impl JsKeyhive {
         init_span!("JsKeyhive::try_decrypt_keyed");
         let (plaintext, key) = self
             .0
-            .try_decrypt_content_keyed(doc.inner.dupe(), &encrypted.0)
+            .try_decrypt_content_keyed(doc.doc_id, &encrypted.0)
             .await?;
         Ok(JsDecryptedKeyed::new(plaintext, key.as_slice().to_vec()))
     }
@@ -298,8 +278,8 @@ impl JsKeyhive {
         let res = self
             .0
             .add_member(
-                to_add.0.dupe(),
-                &membered.0,
+                to_add.0.id(),
+                membered.0.membered_id(),
                 **access,
                 other_docs.as_slice(),
             )
@@ -318,7 +298,11 @@ impl JsKeyhive {
         init_span!("JsKeyhive::revoke_member");
         let res = self
             .0
-            .revoke_member(to_revoke.id().0, retain_all_other_members, &membered.0)
+            .revoke_member(
+                to_revoke.id().0,
+                retain_all_other_members,
+                membered.0.membered_id(),
+            )
             .await?;
 
         Ok(res
@@ -332,18 +316,15 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = reachableDocs)]
     pub async fn reachable_docs(&self) -> Vec<Summary> {
         init_span!("JsKeyhive::reachable_docs");
-        let mut acc = Vec::new();
-        for ability in self.0.reachable_docs().await.into_values() {
-            let doc_id = { ability.doc().lock().await.doc_id() };
-            acc.push(Summary {
-                doc: JsDocument {
-                    doc_id,
-                    inner: ability.doc().dupe(),
-                },
-                access: JsAccess(ability.can()),
-            });
-        }
-        acc
+        self.0
+            .reachable_doc_handles()
+            .await
+            .into_iter()
+            .map(|(doc_id, (inner, can))| Summary {
+                doc: JsDocument { doc_id, inner },
+                access: JsAccess(can),
+            })
+            .collect()
     }
 
     /// Force a PCS key rotation and return the new leaf secret, serialized as a
@@ -355,7 +336,7 @@ impl JsKeyhive {
         init_span!("JsKeyhive::force_pcs_update");
         let (_op, new_share_key, new_share_secret_key) = self
             .0
-            .force_pcs_update(doc.inner.dupe())
+            .force_pcs_update(doc.doc_id)
             .await
             .map_err(EncryptContentError::from)
             .map_err(JsEncryptError::from)?;
@@ -365,11 +346,12 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = tryPcsKeyHash)]
-    pub async fn try_pcs_key_hash(&self, doc: &JsDocument) -> Option<Vec<u8>> {
-        self.0
-            .try_pcs_key_hash(doc.inner.dupe())
-            .await
-            .map(|d| d.as_slice().to_vec())
+    pub async fn try_pcs_key_hash(&self, doc: &JsDocument) -> Result<Option<Vec<u8>>, JsNotFound> {
+        Ok(self
+            .0
+            .try_pcs_key_hash(doc.doc_id)
+            .await?
+            .map(|d| d.as_slice().to_vec()))
     }
 
     #[wasm_bindgen(js_name = rotatePrekey)]
@@ -390,7 +372,7 @@ impl JsKeyhive {
     pub async fn contact_card(&self) -> Result<JsContactCard, JsSigningError> {
         init_span!("JsKeyhive::contact_card");
         self.0
-            .contact_card()
+            .generate_contact_card()
             .await
             .map(Into::into)
             .map_err(Into::into)
@@ -409,15 +391,15 @@ impl JsKeyhive {
     ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
         init_span!("JsKeyhive::receive_contact_card");
         match self.0.receive_contact_card(&contact_card.clone()).await {
-            Ok(individual) => {
-                let id = { individual.lock().await.id() };
-                let js_indie = JsIndividual {
-                    id,
-                    inner: individual.dupe(),
-                };
-                Ok(js_indie)
+            Ok(id) => {
+                let inner = self
+                    .0
+                    .get_individual(id)
+                    .await
+                    .ok_or_else(|| NotFound::new(id))?;
+                Ok(JsIndividual { id, inner })
             }
-            Err(err) => Err(JsReceivePreKeyOpError(err)),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -499,158 +481,78 @@ impl JsKeyhive {
         Ok(map)
     }
 
-    /// Returns event hashes for provided [`JsAgent`] as an array of hash bytes.
+    /// The hashes of every event `agent` can reach, as an array of hash bytes.
     #[wasm_bindgen(js_name = eventHashesForAgent)]
     pub async fn event_hashes_for_agent(&self, agent: &JsAgent) -> js_sys::Array {
         init_span!("JsKeyhive::event_hashes_for_agent");
-
-        let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
-        let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(&agent.0).await;
-        let cgka_ops = self.0.cgka_ops_reachable_by_agent(&agent.0).await;
-
         let arr = js_sys::Array::new();
-
-        // Add membership operation hashes
-        for (digest, _op) in membership_ops {
-            let hash = js_sys::Uint8Array::from(digest.as_slice());
-            arr.push(&hash.into());
+        for digest in self.0.event_digests_for_agent(&agent.0).await {
+            arr.push(&js_sys::Uint8Array::from(digest.as_slice()).into());
         }
-
-        // Add prekey operation hashes
-        for key_ops in reachable_prekey_ops.values() {
-            for key_op in key_ops.iter() {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                    Event::from(key_op.as_ref().dupe());
-                let digest = Digest::hash(&event);
-                let hash = js_sys::Uint8Array::from(digest.as_slice());
-                arr.push(&hash.into());
-            }
-        }
-
-        // Add CGKA operation hashes
-        for cgka_op in cgka_ops {
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = Event::from(cgka_op);
-            let digest = Digest::hash(&event);
-            let hash = js_sys::Uint8Array::from(digest.as_slice());
-            arr.push(&hash.into());
-        }
-
         arr
     }
 
-    /// Returns all agent events with deduplicated storage and two-tier indirection
-    /// for membership, prekey, and CGKA ops.
+    /// Every event each agent can reach, deduplicated, with a source layer so one digest
+    /// list is shared by every agent that reaches it.
+    ///
+    /// The consumer follows: agent -> source IDs -> hashes -> event bytes.
     #[wasm_bindgen(js_name = allAgentEvents)]
     pub async fn all_agent_events(&self) -> Result<JsAllAgentEvents, JsSerializationError> {
         init_span!("JsKeyhive::all_agent_events");
+        let all = self.0.all_agent_events().await;
 
-        let all_membership = self.0.membership_ops_for_all_agents().await;
-        let all_prekey = self.0.reachable_prekey_ops_for_all_agents().await;
-        let all_cgka = self.0.cgka_ops_for_all_agents().await;
-
-        // Deduplicated events map: hash bytes -> serialized event bytes.
-        // Tracks which digests have already been serialized to avoid redundant
-        // serialization when the same op appears in multiple sources.
-        let events_map = js_sys::Map::new();
-        let mut serialized_hashes: HashSet<Vec<u8>> = HashSet::new();
-
-        // Build membershipSources: one per source (group/doc/agent), shared across agents.
-        // Also serialize membership events into the deduplicated events map.
-        let membership_sources_map = js_sys::Map::new();
-        for (source_id, source_ops) in &all_membership.ops {
-            let source_hashes = js_sys::Array::new();
-            for (digest, op) in source_ops {
-                let hash_bytes = digest.as_slice().to_vec();
-                let hash = js_sys::Uint8Array::from(digest.as_slice());
-                if serialized_hashes.insert(hash_bytes) {
-                    let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                        op.clone().into();
-                    let static_event = StaticEvent::from(event);
-                    let bytes = bincode::serialize(&static_event)?;
-                    let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-                    events_map.set(&hash.clone().into(), &js_bytes.into());
-                }
-                source_hashes.push(&hash.into());
-            }
-            let id_bytes = js_sys::Uint8Array::from(source_id.as_bytes().as_slice());
-            membership_sources_map.set(&id_bytes.into(), &source_hashes.into());
+        let events = js_sys::Map::new();
+        for (digest, event) in &all.events {
+            let bytes = bincode::serialize(&StaticEvent::from(event.clone()))?;
+            events.set(
+                &js_sys::Uint8Array::from(digest.as_slice()).into(),
+                &js_sys::Uint8Array::from(bytes.as_slice()).into(),
+            );
         }
 
-        fn build_agent_index(index: &HashMap<Identifier, HashSet<Identifier>>) -> js_sys::Map {
+        fn hashes_per_source(
+            sources: &HashMap<
+                Identifier,
+                Vec<EventDigest<Local, JsSigner, JsChangeId, JsEventHandler>>,
+            >,
+        ) -> js_sys::Map {
             let map = js_sys::Map::new();
-            for (agent_id, source_ids) in index {
-                let sources = js_sys::Array::new();
-                for id in source_ids {
-                    sources.push(&js_sys::Uint8Array::from(id.as_bytes().as_slice()).into());
+            for (source_id, digests) in sources {
+                let arr = js_sys::Array::new();
+                for digest in digests {
+                    arr.push(&js_sys::Uint8Array::from(digest.as_slice()).into());
                 }
                 map.set(
-                    &js_sys::Uint8Array::from(agent_id.as_bytes().as_slice()).into(),
-                    &sources.into(),
+                    &js_sys::Uint8Array::from(source_id.as_bytes().as_slice()).into(),
+                    &arr.into(),
                 );
             }
             map
         }
 
-        let agent_membership_sources_map = build_agent_index(&all_membership.index);
-
-        // Build prekey sources: one per identifier, shared across agents.
-        // Also serialize prekey events into the deduplicated events map.
-        let prekey_sources_map = js_sys::Map::new();
-        for (identifier, ops_vec) in &all_prekey.ops {
-            let source_hashes = js_sys::Array::new();
-            for key_op in ops_vec {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                    Event::from(key_op.as_ref().dupe());
-                let digest = Digest::hash(&event);
-                let hash_bytes = digest.as_slice().to_vec();
-                let hash = js_sys::Uint8Array::from(digest.as_slice());
-                if serialized_hashes.insert(hash_bytes) {
-                    let static_event = StaticEvent::from(event);
-                    let bytes = bincode::serialize(&static_event)?;
-                    let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-                    events_map.set(&hash.clone().into(), &js_bytes.into());
+        fn sources_per_agent(index: &HashMap<Identifier, HashSet<Identifier>>) -> js_sys::Map {
+            let map = js_sys::Map::new();
+            for (agent_id, source_ids) in index {
+                let arr = js_sys::Array::new();
+                for id in source_ids {
+                    arr.push(&js_sys::Uint8Array::from(id.as_bytes().as_slice()).into());
                 }
-                source_hashes.push(&hash.into());
+                map.set(
+                    &js_sys::Uint8Array::from(agent_id.as_bytes().as_slice()).into(),
+                    &arr.into(),
+                );
             }
-            let id_bytes = js_sys::Uint8Array::from(identifier.as_bytes().as_slice());
-            prekey_sources_map.set(&id_bytes.into(), &source_hashes.into());
+            map
         }
-
-        let agent_prekey_sources_map = build_agent_index(&all_prekey.index);
-
-        // Build CGKA sources: one per document, shared across agents.
-        // Also serialize CGKA events into the deduplicated events map.
-        let cgka_sources_map = js_sys::Map::new();
-        for (doc_id, cgka_ops) in &all_cgka.ops {
-            let source_hashes = js_sys::Array::new();
-            for cgka_op in cgka_ops {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                    Event::from(cgka_op.dupe());
-                let digest = Digest::hash(&event);
-                let hash_bytes = digest.as_slice().to_vec();
-                let hash = js_sys::Uint8Array::from(digest.as_slice());
-                if serialized_hashes.insert(hash_bytes) {
-                    let static_event = StaticEvent::from(event);
-                    let bytes = bincode::serialize(&static_event)?;
-                    let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-                    events_map.set(&hash.clone().into(), &js_bytes.into());
-                }
-                source_hashes.push(&hash.into());
-            }
-            let id_bytes = js_sys::Uint8Array::from(doc_id.as_bytes().as_slice());
-            cgka_sources_map.set(&id_bytes.into(), &source_hashes.into());
-        }
-
-        let agent_cgka_sources_map = build_agent_index(&all_cgka.index);
 
         Ok(JsAllAgentEvents::new(
-            events_map,
-            membership_sources_map,
-            agent_membership_sources_map,
-            prekey_sources_map,
-            agent_prekey_sources_map,
-            cgka_sources_map,
-            agent_cgka_sources_map,
+            events,
+            hashes_per_source(&all.membership_sources),
+            sources_per_agent(&all.membership_index),
+            hashes_per_source(&all.prekey_sources),
+            sources_per_agent(&all.prekey_index),
+            hashes_per_source(&all.cgka_sources),
+            sources_per_agent(&all.cgka_index),
         ))
     }
 
@@ -850,7 +752,25 @@ impl JsKeyhive {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsReceivePreKeyOpError(#[from] pub(crate) ReceivePrekeyOpError);
+pub struct JsNotFound(#[from] NotFound);
+
+impl From<JsNotFound> for JsValue {
+    fn from(err: JsNotFound) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("NotFound");
+        err.into()
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum JsReceivePreKeyOpError {
+    #[error(transparent)]
+    ReceivePrekeyOp(#[from] ReceivePrekeyOpError),
+
+    /// The individual was registered and could not then be read back.
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+}
 
 impl From<JsReceivePreKeyOpError> for JsValue {
     fn from(err: JsReceivePreKeyOpError) -> Self {

@@ -5,8 +5,8 @@ pub enum AddError {
     #[error("Invalid subject {0}")]
     InvalidSubject(Box<Identifier>),
 
-    #[error("Escelation: claims {claimed}, but the proof has {proof}")]
-    Escelation { claimed: Access, proof: Access },
+    #[error("Escalation: wanted {wanted}, but only {held} is justified")]
+    Escalation { wanted: Access, held: Access },
 
     #[error("Invalid proof chain")]
     InvalidProofChain,

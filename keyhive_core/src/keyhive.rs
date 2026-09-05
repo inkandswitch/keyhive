@@ -1,13 +1,13 @@
 //! The primary API for the library.
 
 use crate::{
-    ability::Ability,
     access::Access,
+    all_agent_events::{AllAgentEvents, EventDigest},
     archive::Archive,
     cgka::AllCgkaOps,
     contact_card::ContactCard,
     crypto::signed_ext::{SignedId, SignedSubjectId},
-    error::missing_dependency::MissingDependency,
+    error::{missing_dependency::MissingDependency, not_found::NotFound},
     event::{static_event::StaticEvent, Event},
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
@@ -15,8 +15,9 @@ use crate::{
         agent::{id::AgentId, Agent},
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError,
-            DocCausalDecryptionError, Document, EncryptError, EncryptedContentWithUpdate,
-            GenerateDocError, MissingIndividualError, RevokeMemberUpdate,
+            DocCausalDecryptionError, Document, EncryptError, EncryptInEnvelopeError,
+            EncryptedContentWithUpdate, GenerateDocError, MissingIndividualError,
+            RevokeMemberUpdate,
         },
         group::{
             delegation::{Delegation, StaticDelegation},
@@ -79,8 +80,16 @@ use std::{
     mem,
     sync::Arc,
 };
+
 use thiserror::Error;
 use tracing::instrument;
+
+// Only `cgka_members_for()` uses this.
+#[cfg(any(test, feature = "test_utils"))]
+use std::collections::BTreeSet;
+// Only `try_causal_decrypt_from` uses this.
+#[cfg(any(test, feature = "test_utils"))]
+use crate::store::ciphertext::CausalDecryptionError;
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
@@ -211,15 +220,6 @@ impl<
         &self.active
     }
 
-    /// Inject events into the pending set. For testing only.
-    #[cfg(any(test, feature = "test_utils"))]
-    pub async fn inject_pending_events(&self, events: Vec<StaticEvent<T>>) {
-        let mut pending = self.pending_events.lock().await;
-        for event in events {
-            pending.push(Arc::new(event));
-        }
-    }
-
     /// Get the [`Individual`] for the current Keyhive user.
     ///
     /// This is what you would share with a peer for them to
@@ -248,7 +248,7 @@ impl<
     pub async fn generate_group(
         &self,
         coparents: Vec<Peer<F, S, T, L>>,
-    ) -> Result<Arc<Mutex<Group<F, S, T, L>>>, SigningError> {
+    ) -> Result<GroupId, SigningError> {
         let group = Group::generate(
             NonEmpty {
                 head: Agent::Active(self.active.lock().await.id(), self.active.dupe()),
@@ -261,9 +261,11 @@ impl<
         )
         .await?;
         let group_id = group.group_id();
-        let g = Arc::new(Mutex::new(group));
-        self.groups.lock().await.insert(group_id, g.dupe());
-        Ok(g)
+        self.groups
+            .lock()
+            .await
+            .insert(group_id, Arc::new(Mutex::new(group)));
+        Ok(group_id)
     }
 
     /// Generate a document.
@@ -273,7 +275,7 @@ impl<
         &self,
         coparents: Vec<Peer<F, S, T, L>>,
         initial_content_heads: NonEmpty<T>,
-    ) -> Result<Arc<Mutex<Document<F, S, T, L>>>, GenerateDocError> {
+    ) -> Result<DocumentId, GenerateDocError> {
         for peer in coparents.iter() {
             if self.get_agent(peer.id()).await.is_none() {
                 self.register_peer(peer.dupe()).await;
@@ -309,14 +311,20 @@ impl<
         }
 
         let doc_id = new_doc.doc_id();
-        let doc = Arc::new(Mutex::new(new_doc));
-        self.docs.lock().await.insert(doc_id, doc.dupe());
+        self.docs
+            .lock()
+            .await
+            .insert(doc_id, Arc::new(Mutex::new(new_doc)));
 
-        Ok(doc)
+        Ok(doc_id)
     }
 
+    /// Generate a new contact card, rotating a prekey in the process.
+    ///
+    /// Use [`Keyhive::get_existing_contact_card`] to read a current contact card without
+    /// generating one.
     #[instrument(skip_all)]
-    pub async fn contact_card(&self) -> Result<ContactCard, SigningError> {
+    pub async fn generate_contact_card(&self) -> Result<ContactCard, SigningError> {
         let rot_key_op = self
             .active
             .lock()
@@ -338,21 +346,20 @@ impl<
             .contact_card()
     }
 
+    /// Receive `contact_card`, and report who it belongs to.
     #[instrument(skip_all)]
     pub async fn receive_contact_card(
         &self,
         contact_card: &ContactCard,
-    ) -> Result<Arc<Mutex<Individual>>, ReceivePrekeyOpError> {
-        let result = if let Some(indie) = self.get_individual(contact_card.id()).await {
+    ) -> Result<IndividualId, ReceivePrekeyOpError> {
+        if let Some(indie) = self.get_individual(contact_card.id()).await {
             indie
                 .lock()
                 .await
                 .receive_prekey_op(contact_card.op().dupe())?;
-            indie.dupe()
         } else {
             let new_user = Arc::new(Mutex::new(Individual::from(contact_card)));
-            self.register_individual(new_user.dupe()).await;
-            new_user
+            self.register_individual(new_user).await;
         };
 
         match contact_card.op() {
@@ -364,7 +371,7 @@ impl<
             }
         }
 
-        Ok(result)
+        Ok(contact_card.id())
     }
 
     #[instrument(skip_all)]
@@ -430,70 +437,29 @@ impl<
         true
     }
 
-    #[instrument(skip_all)]
-    pub async fn register_group(&self, root_delegation: Signed<Delegation<F, S, T, L>>) -> bool {
-        if self
-            .groups
-            .lock()
-            .await
-            .contains_key(&GroupId(root_delegation.subject_id()))
-        {
-            return false;
-        }
-
-        let group = Arc::new(Mutex::new(
-            Group::new(
-                GroupId(root_delegation.issuer.into()),
-                Arc::new(root_delegation),
-                self.delegations.dupe(),
-                self.revocations.dupe(),
-                self.event_listener.clone(),
-            )
-            .await,
-        ));
-
-        {
-            let locked = group.lock().await;
-            self.groups
-                .lock()
-                .await
-                .insert(locked.group_id(), group.dupe());
-        }
-        true
-    }
-
-    #[instrument(skip_all)]
-    pub async fn get_membership_operation(
-        &self,
-        digest: &Digest<MembershipOperation<F, S, T, L>>,
-    ) -> Option<MembershipOperation<F, S, T, L>> {
-        if let Some(d) = self.delegations.lock().await.get(&digest.coerce()) {
-            Some(d.dupe().into())
-        } else {
-            self.revocations
-                .lock()
-                .await
-                .get(&digest.coerce())
-                .map(|r| r.dupe().into())
-        }
-    }
-
+    /// Delegate `to_add` `can` access to `resource`.
+    ///
+    /// Returns an error if we have never heard of `to_add` or `resource`.
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,
-        to_add: Agent<F, S, T, L>,
-        resource: &Membered<F, S, T, L>,
+        to_add: impl Into<Identifier>,
+        resource: impl Into<MemberedId>,
         can: Access,
         other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>], // TODO make this automatic
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        let to_add = self.agent_by_id(to_add.into()).await?;
+        let resource = self.membered_by_id(resource.into()).await?;
+
         let signer = { self.active.lock().await.signer.clone() };
-        let update = match resource {
+        let update = match &resource {
             Membered::Group(group_id, group) => {
                 let mut update = group
                     .lock()
                     .await
                     .add_member(to_add, can, &signer, other_relevant_docs)
-                    .await?;
+                    .await
+                    .map_err(AddMemberError::from)?;
 
                 // Propagate CGKA adds to docs that contain this group.
                 // TODO: O(# of docs x `transitive_members()`). We should replace this approach
@@ -533,7 +499,8 @@ impl<
                         let mut locked_doc = doc.lock().await;
                         let ops = locked_doc
                             .add_cgka_members_from_prekeys(&prekeys, &signer)
-                            .await?;
+                            .await
+                            .map_err(AddMemberError::from)?;
                         update.cgka_ops.extend(ops);
                     }
                 }
@@ -557,16 +524,26 @@ impl<
         Ok(update)
     }
 
+    /// Revoke `to_revoke`'s membership in `resource`.
+    ///
+    /// With `retain_all_other_members`, the members `to_revoke` had admitted keep their
+    /// access, because their delegations are re-issued under the revoker.
+    ///
+    /// Errors if this instance has never received `resource`.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn revoke_member(
         &self,
-        to_revoke: Identifier,
+        to_revoke: impl Into<Identifier>,
         retain_all_other_members: bool,
-        resource: &Membered<F, S, T, L>,
+        resource: impl Into<MemberedId>,
     ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
+        let to_revoke = to_revoke.into();
+        let resource = self.membered_by_id(resource.into()).await?;
+
+        let active_id = { self.active.lock().await.id().into() };
         let mut relevant_docs = BTreeMap::new();
-        for (doc_id, Ability { doc, .. }) in self.reachable_docs().await {
+        for (doc_id, (doc, _)) in self.doc_handles_reachable_by(active_id).await {
             let locked = doc.lock().await;
             relevant_docs.insert(doc_id, locked.content_heads.iter().cloned().collect());
         }
@@ -575,7 +552,7 @@ impl<
 
         // When revoking from a group, collect the revoked member's individual
         // IDs before the revocation removes them from the members map.
-        let revoked_individual_ids: HashSet<IndividualId> = match resource {
+        let revoked_individual_ids: HashSet<IndividualId> = match &resource {
             Membered::Group(_, group) => {
                 let delegates: Vec<Agent<F, S, T, L>> = {
                     let locked = group.lock().await;
@@ -607,7 +584,7 @@ impl<
         // Propagate CGKA removals to docs that contain this group.
         // TODO: O(# of docs x `transitive_members()`). We should replace this approach
         // (possibly with a reverse index lookup).
-        if let Membered::Group(group_id, _) = resource {
+        if let Membered::Group(group_id, _) = &resource {
             if !revoked_individual_ids.is_empty() {
                 let group_identifier: Identifier = (*group_id).into();
                 let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
@@ -648,11 +625,11 @@ impl<
         Ok(update)
     }
 
-    /// Encrypt content for a document.
+    /// Encrypt `content` into `doc`.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
@@ -663,16 +640,56 @@ impl<
             .0)
     }
 
-    /// Encrypt content, also returning the application secret key it was
+    /// Encrypt `content` into `doc` in an [`Envelope`](crate::crypto::envelope::Envelope),
+    /// listing its ancestors and carrying the keys to open them.
+    ///
+    /// Read it back with [`Keyhive::try_causal_decrypt_content`], which unwraps the envelope.
+    /// [`Keyhive::try_decrypt_content`] returns the serialized envelope instead.
+    #[cfg(any(test, feature = "test_utils"))]
+    #[instrument(skip_all)]
+    pub async fn try_encrypt_content_in_envelope(
+        &self,
+        doc: DocumentId,
+        content_ref: &T,
+        pred_refs: &Vec<T>,
+        content: &[u8],
+    ) -> Result<EncryptedContentWithUpdate<T>, EnvelopeError<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let handle = self.document_by_id(doc).await?;
+        let signer = { self.active.lock().await.signer.clone() };
+        let result = {
+            let mut locked_csprng = self.csprng.lock().await;
+            handle
+                .lock()
+                .await
+                .try_encrypt_content_in_envelope(
+                    content_ref,
+                    content,
+                    pred_refs,
+                    &signer,
+                    &mut *locked_csprng,
+                )
+                .await?
+        };
+        if let Some(op) = &result.update_op {
+            self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
+        }
+        Ok(result)
+    }
+
+    /// Encrypt `content` into `doc`. Returns the application secret it was
     /// encrypted under.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         content_ref: &T,
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
+        let doc = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
         let (result, application_secret_key) = {
             let mut locked_csprng = self.csprng.lock().await;
@@ -685,7 +702,8 @@ impl<
                     &signer,
                     &mut *locked_csprng,
                 )
-                .await?
+                .await
+                .map_err(EncryptContentError::from)?
         };
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
@@ -693,53 +711,129 @@ impl<
         Ok((result, application_secret_key))
     }
 
+    /// The identities in `doc`'s encryption tree. Returns `None` if it has no tree yet.
+    ///
+    /// Returns an error if `doc` is not known.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub async fn cgka_members_for(
+        &self,
+        doc: DocumentId,
+    ) -> Result<Option<BTreeSet<IndividualId>>, NotFound> {
+        let doc = self.document_by_id(doc).await?;
+        let members = doc
+            .lock()
+            .await
+            .cgka_members()
+            .ok()
+            .map(|ids| ids.collect());
+        Ok(members)
+    }
+
+    /// The hash of `doc`'s current PCS key. Returns `None` if it has no key to hash.
+    ///
+    /// Returns an error if we have never heard of `doc`.
     pub async fn try_pcs_key_hash(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
-    ) -> Option<Digest<PcsKey>> {
-        doc.lock().await.cgka_mut().ok()?.try_pcs_key_hash().ok()
+        doc: DocumentId,
+    ) -> Result<Option<Digest<PcsKey>>, NotFound> {
+        let handle = self.document_by_id(doc).await?;
+        let hash = handle
+            .lock()
+            .await
+            .cgka_mut()
+            .ok()
+            .and_then(|cgka| cgka.try_pcs_key_hash().ok());
+        Ok(hash)
     }
 
+    /// Try causal decrypt from more than one entrypoint at once.
+    ///
+    /// [`Keyhive::try_causal_decrypt_content`] takes a single entrypoint.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub async fn try_causal_decrypt_from(
+        &self,
+        entrypoints: &[(Arc<EncryptedContent<P, T>>, SymmetricKey)],
+    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<F, T, P, C>>
+    where
+        T: for<'de> Deserialize<'de>,
+        P: Clone + Serialize + for<'de> Deserialize<'de>,
+    {
+        let mut to_walk = entrypoints.to_vec();
+        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(&self.ciphertext_store, &mut to_walk)
+            .await
+    }
+
+    /// Decrypt `encrypted` out of `doc`.
     pub async fn try_decrypt_content(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
-        doc.lock().await.try_decrypt_content(encrypted)
+        Ok(self.try_decrypt_content_keyed(doc, encrypted).await?.0)
     }
 
-    /// Decrypt content and also return the application secret key that was used.
+    /// Whether decryption succeeds.
+    ///
+    /// `Ok(false)` means this instance holds no key for the content, or holds one that does
+    /// not authenticate it. Not knowing about `doc` at all is an error.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub async fn can_decrypt_content(
+        &self,
+        doc: DocumentId,
+        encrypted: &EncryptedContent<P, T>,
+    ) -> Result<bool, DecryptError> {
+        match self.try_decrypt_content(doc, encrypted).await {
+            Ok(_) => Ok(true),
+            Err(
+                DecryptError::KeyNotFound
+                | DecryptError::SivMismatch
+                | DecryptError::DecryptionFailed(_),
+            ) => Ok(false),
+            Err(other) => Err(other),
+        }
+    }
+
+    /// Decrypt `encrypted` out of `doc`. Returns the application secret that was
+    /// used.
     pub async fn try_decrypt_content_keyed(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
-        doc.lock().await.try_decrypt_content_keyed(encrypted)
+        let doc = self.document_by_id(doc).await?;
+        let out = doc.lock().await.try_decrypt_content_keyed(encrypted);
+        out
     }
 
+    /// Walk back from `encrypted` through the ancestors it lists.
     pub async fn try_causal_decrypt_content(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
-    ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<F, T, P, C>>
+    ) -> Result<CausalDecryptionState<T, P>, CausalDecryptError<F, T, P, C>>
     where
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,
     {
-        doc.lock()
-            .await
-            .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
-            .await
+        let doc = self.document_by_id(doc).await?;
+        let out = {
+            let mut locked = doc.lock().await;
+            locked
+                .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
+                .await
+        };
+        Ok(out?)
     }
 
     #[instrument(skip_all)]
     pub async fn force_pcs_update(
         &self,
-        doc: Arc<Mutex<Document<F, S, T, L>>>,
+        doc: DocumentId,
     ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
+        let handle = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
         let mut locked_csprng = self.csprng.lock().await;
-        let (op, new_share_key, new_share_secret_key) = doc
+        let (op, new_share_key, new_share_secret_key) = handle
             .lock()
             .await
             .pcs_update(&signer, &mut *locked_csprng)
@@ -748,56 +842,123 @@ impl<
         Ok((op, new_share_key, new_share_secret_key))
     }
 
+    /// Every document the active agent reaches and at what access level.
     #[instrument(skip_all)]
-    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Ability<F, S, T, L>> {
-        let active = self.active.dupe();
-        let locked_active = self.active.lock().await;
-        self.docs_reachable_by_agent(&Agent::Active(locked_active.id(), active))
+    pub async fn reachable_docs(&self) -> BTreeMap<DocumentId, Access> {
+        self.reachable_doc_handles()
             .await
+            .into_iter()
+            .map(|(doc_id, (_, can))| (doc_id, can))
+            .collect()
     }
 
-    #[instrument(skip_all)]
+    /// Like [`Keyhive::reachable_docs`] but returning each document's handle instead
+    /// of id.
     #[allow(clippy::type_complexity)]
-    pub async fn reachable_members(
+    #[instrument(skip_all)]
+    pub async fn reachable_doc_handles(
         &self,
-        membered: Membered<F, S, T, L>,
-    ) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        match membered {
-            Membered::Group(_, group) => group.lock().await.transitive_members().await,
-            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
-        }
+    ) -> BTreeMap<DocumentId, (Arc<Mutex<Document<F, S, T, L>>>, Access)> {
+        let id = { self.active.lock().await.id().into() };
+        self.doc_handles_reachable_by(id).await
     }
 
+    /// The documents `who` reaches and at what access level.
+    ///
+    /// Errors if we have never heard of `who`.
     #[instrument(skip_all)]
     pub async fn docs_reachable_by_agent(
         &self,
-        agent: &Agent<F, S, T, L>,
-    ) -> BTreeMap<DocumentId, Ability<F, S, T, L>> {
-        let mut caps: BTreeMap<DocumentId, Ability<F, S, T, L>> = BTreeMap::new();
+        who: impl Into<Identifier>,
+    ) -> Result<BTreeMap<DocumentId, Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        Ok(self
+            .doc_handles_reachable_by(who)
+            .await
+            .into_iter()
+            .map(|(doc_id, (_, can))| (doc_id, can))
+            .collect())
+    }
+
+    /// The groups and documents `who` reaches and at what access level.
+    ///
+    /// Errors if we have never heard of `who`.
+    #[instrument(skip_all)]
+    pub async fn membered_reachable_by_agent(
+        &self,
+        who: impl Into<Identifier>,
+    ) -> Result<BTreeMap<MemberedId, Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        Ok(self
+            .membered_handles_reachable_by(who)
+            .await
+            .into_iter()
+            .map(|(id, (_, can))| (id, can))
+            .collect())
+    }
+
+    /// Everyone who reaches `membered`, including through nested groups.
+    ///
+    /// Errors if we have never heard of `membered`.
+    #[instrument(skip_all)]
+    pub async fn reachable_members(
+        &self,
+        membered: impl Into<MemberedId>,
+    ) -> Result<BTreeMap<Identifier, Access>, NotFound> {
+        Ok(self
+            .transitive_members_of(membered.into())
+            .await?
+            .into_iter()
+            .map(|(id, (_agent, can))| (id, can))
+            .collect())
+    }
+
+    #[allow(clippy::type_complexity)]
+    async fn transitive_members_of(
+        &self,
+        membered: MemberedId,
+    ) -> Result<HashMap<Identifier, (Agent<F, S, T, L>, Access)>, NotFound> {
+        Ok(match self.membered_by_id(membered).await? {
+            Membered::Group(_, group) => group.lock().await.transitive_members().await,
+            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
+        })
+    }
+
+    /// Returns `who` if we have heard of it. Otherwise returns an error.
+    async fn check_received(&self, who: Identifier) -> Result<Identifier, NotFound> {
+        self.has_received(who)
+            .await
+            .then_some(who)
+            .ok_or_else(|| NotFound::new(who))
+    }
+
+    /// The documents `who` reaches.
+    #[allow(clippy::type_complexity)]
+    #[instrument(skip_all)]
+    pub(crate) async fn doc_handles_reachable_by(
+        &self,
+        who: Identifier,
+    ) -> BTreeMap<DocumentId, (Arc<Mutex<Document<F, S, T, L>>>, Access)> {
+        let mut caps = BTreeMap::new();
 
         // TODO will be very slow on large hives. Old code here: https://github.com/inkandswitch/keyhive/pull/111/files:
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
             let locked = doc.lock().await;
-            if let Some((_, cap)) = locked.transitive_members().await.get(&agent.id()) {
-                caps.insert(
-                    locked.doc_id(),
-                    Ability {
-                        doc: doc.dupe(),
-                        can: *cap,
-                    },
-                );
+            if let Some((_, can)) = locked.transitive_members().await.get(&who) {
+                caps.insert(locked.doc_id(), (doc.dupe(), *can));
             }
         }
 
         caps
     }
 
+    /// The groups and documents reachable by `who`.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
-    pub async fn membered_reachable_by_agent(
+    pub(crate) async fn membered_handles_reachable_by(
         &self,
-        agent: &Agent<F, S, T, L>,
+        who: Identifier,
     ) -> HashMap<MemberedId, (Membered<F, S, T, L>, Access)> {
         let mut caps = HashMap::new();
 
@@ -811,7 +972,7 @@ impl<
         };
         for group in groups {
             let locked = group.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
+            if let Some((_, can)) = locked.transitive_members().await.get(&who) {
                 let membered = Membered::Group(locked.group_id(), group.dupe());
                 caps.insert(locked.group_id().into(), (membered, *can));
             }
@@ -820,7 +981,7 @@ impl<
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
             let locked = doc.lock().await;
-            if let Some((_, can)) = locked.transitive_members().await.get(&agent.id()) {
+            if let Some((_, can)) = locked.transitive_members().await.get(&who) {
                 let membered = Membered::Document(locked.doc_id(), doc.dupe());
                 caps.insert(locked.doc_id().into(), (membered, *can));
             }
@@ -885,9 +1046,9 @@ impl<
         agent: &Agent<F, S, T, L>,
     ) -> Vec<Arc<Signed<CgkaOperation>>> {
         let mut ops = Vec::new();
-        let reachable = self.docs_reachable_by_agent(agent).await;
-        for (doc_id, ability) in reachable {
-            let epochs = match ability.doc.lock().await.cgka_ops() {
+        let reachable = self.doc_handles_reachable_by(agent.id()).await;
+        for (doc_id, (doc, _)) in reachable {
+            let epochs = match doc.lock().await.cgka_ops() {
                 Ok(epochs) => epochs,
                 Err(CgkaError::NotInitialized) => continue,
                 Err(e) => {
@@ -935,7 +1096,11 @@ impl<
             MembershipOperation<F, S, T, L>,
         )> = Vec::new();
 
-        for (mem_rc, _max_acces) in self.membered_reachable_by_agent(agent).await.values() {
+        for (mem_rc, _) in self
+            .membered_handles_reachable_by(agent.id())
+            .await
+            .values()
+        {
             for (hash, dlg_head) in mem_rc.delegation_heads().await.iter() {
                 heads.push((hash.coerce(), dlg_head.dupe().into()));
             }
@@ -1351,6 +1516,84 @@ impl<
         AllCgkaOps { ops, index }
     }
 
+    /// Every event `agent` can reach, under the digests they are sent by.
+    pub async fn event_digests_for_agent(
+        &self,
+        agent: &Agent<F, S, T, L>,
+    ) -> HashSet<EventDigest<F, S, T, L>> {
+        let mut digests = HashSet::new();
+
+        for (digest, _) in self.membership_ops_for_agent(agent).await {
+            digests.insert(digest.coerce());
+        }
+        for key_ops in self.reachable_prekey_ops_for_agent(agent).await.values() {
+            for key_op in key_ops.iter() {
+                let event: Event<F, S, T, L> = Event::from(key_op.as_ref().clone());
+                digests.insert(Digest::hash(&event));
+            }
+        }
+        for cgka_op in self.cgka_ops_reachable_by_agent(agent).await {
+            let event: Event<F, S, T, L> = Event::from(cgka_op);
+            digests.insert(Digest::hash(&event));
+        }
+
+        digests
+    }
+
+    /// Every event each agent can reach, gathered once and deduplicated.
+    pub async fn all_agent_events(&self) -> AllAgentEvents<F, S, T, L> {
+        let all_membership = self.membership_ops_for_all_agents().await;
+        let all_prekey = self.reachable_prekey_ops_for_all_agents().await;
+        let all_cgka = self.cgka_ops_for_all_agents().await;
+
+        let mut events = HashMap::new();
+
+        let mut membership_sources = HashMap::new();
+        for (source_id, source_ops) in all_membership.ops {
+            let mut digests = Vec::with_capacity(source_ops.len());
+            for (digest, op) in source_ops {
+                let digest = digest.coerce();
+                digests.push(digest);
+                events.entry(digest).or_insert_with(|| op.into());
+            }
+            membership_sources.insert(source_id, digests);
+        }
+
+        let mut prekey_sources = HashMap::new();
+        for (source_id, key_ops) in all_prekey.ops {
+            let mut digests = Vec::with_capacity(key_ops.len());
+            for key_op in key_ops {
+                let event: Event<F, S, T, L> = Event::from(key_op.as_ref().clone());
+                let digest = Digest::hash(&event);
+                digests.push(digest);
+                events.entry(digest).or_insert(event);
+            }
+            prekey_sources.insert(source_id, digests);
+        }
+
+        let mut cgka_sources = HashMap::new();
+        for (source_id, cgka_ops) in all_cgka.ops {
+            let mut digests = Vec::with_capacity(cgka_ops.len());
+            for cgka_op in cgka_ops {
+                let event: Event<F, S, T, L> = Event::from(cgka_op);
+                let digest = Digest::hash(&event);
+                digests.push(digest);
+                events.entry(digest).or_insert(event);
+            }
+            cgka_sources.insert(source_id, digests);
+        }
+
+        AllAgentEvents {
+            events,
+            membership_sources,
+            prekey_sources,
+            cgka_sources,
+            membership_index: all_membership.index,
+            prekey_index: all_prekey.index,
+            cgka_index: all_cgka.index,
+        }
+    }
+
     #[instrument(skip_all)]
     pub async fn get_individual(&self, id: IndividualId) -> Option<Arc<Mutex<Individual>>> {
         self.individuals.lock().await.get(&id).duped()
@@ -1427,35 +1670,6 @@ impl<
         }
 
         None
-    }
-
-    #[allow(clippy::type_complexity)]
-    #[instrument(skip_all)]
-    pub async fn static_event_to_event(
-        &self,
-        static_event: StaticEvent<T>,
-    ) -> Result<Event<F, S, T, L>, StaticEventConversionError<F, S, T, L>> {
-        match static_event {
-            StaticEvent::PrekeysExpanded(op) => Ok(Event::PrekeysExpanded(Arc::new(*op))),
-            StaticEvent::PrekeyRotated(op) => Ok(Event::PrekeyRotated(Arc::new(*op))),
-            StaticEvent::CgkaOperation(op) => Ok(Event::CgkaOperation(Arc::new(*op))),
-            StaticEvent::Delegated(static_dlg) => {
-                let delegation = self.static_delegation_to_delegation(&static_dlg).await?;
-                Ok(Event::Delegated(Arc::new(Signed::new(
-                    delegation,
-                    static_dlg.issuer,
-                    static_dlg.signature,
-                ))))
-            }
-            StaticEvent::Revoked(static_rev) => {
-                let revocation = self.static_revocation_to_revocation(&static_rev).await?;
-                Ok(Event::Revoked(Arc::new(Signed::new(
-                    revocation,
-                    static_rev.issuer,
-                    static_rev.signature,
-                ))))
-            }
-        }
     }
 
     #[allow(clippy::type_complexity)]
@@ -1772,18 +1986,6 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn receive_membership_op(
-        &self,
-        static_op: &StaticMembershipOperation<T>,
-    ) -> Result<(), ReceiveStaticDelegationError<F, S, T, L>> {
-        match static_op {
-            StaticMembershipOperation::Delegation(d) => self.receive_delegation(d).await?,
-            StaticMembershipOperation::Revocation(r) => self.receive_revocation(r).await?,
-        }
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
     pub async fn receive_cgka_op(
         &self,
         signed_op: Signed<CgkaOperation>,
@@ -1795,7 +1997,7 @@ impl<
             let locked_docs = self.docs.lock().await;
             locked_docs
                 .get(&doc_id)
-                .ok_or_else(|| ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)))?
+                .ok_or(ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)))?
                 .dupe()
         };
 
@@ -1838,7 +2040,7 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn promote_individual_to_group(
+    async fn promote_individual_to_group(
         &self,
         individual: Arc<Mutex<Individual>>,
         head: Arc<Signed<Delegation<F, S, T, L>>>,
@@ -2485,6 +2687,71 @@ impl<
             pending_revoked_by_active,
         }
     }
+
+    /// What access `who` has for `doc`. Returns `None` for no access.
+    ///
+    /// Errors if we have never heard of `who` or `doc`.
+    pub async fn access_for_doc(
+        &self,
+        who: impl Into<Identifier>,
+        doc: DocumentId,
+    ) -> Result<Option<Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        Ok(self
+            .transitive_members_of(doc.into())
+            .await?
+            .get(&who)
+            .map(|(_agent, can)| *can))
+    }
+
+    /// The higher of `who`'s access to `doc` and public's access to `doc`.
+    ///
+    /// Errors if we have never heard of `who` or `doc`.
+    pub async fn best_access_for_doc(
+        &self,
+        who: impl Into<Identifier>,
+        doc: DocumentId,
+    ) -> Result<Option<Access>, NotFound> {
+        let who = self.check_received(who.into()).await?;
+        let members = self.reachable_members(doc).await?;
+        let direct = members.get(&who).copied();
+        let public = members.get(&Public.id()).copied();
+        // `None` sorts below `Some`, so this is "the better of the two, if either".
+        Ok(direct.max(public))
+    }
+
+    /// Whether this instance has received the events that describe `who`.
+    pub async fn has_received(&self, who: impl Into<Identifier>) -> bool {
+        self.get_agent(who.into()).await.is_some()
+    }
+
+    pub(crate) async fn agent_by_id(&self, id: Identifier) -> Result<Agent<F, S, T, L>, NotFound> {
+        self.get_agent(id).await.ok_or_else(|| NotFound::new(id))
+    }
+
+    pub(crate) async fn document_by_id(
+        &self,
+        id: DocumentId,
+    ) -> Result<Arc<Mutex<Document<F, S, T, L>>>, NotFound> {
+        self.get_document(id).await.ok_or_else(|| NotFound::new(id))
+    }
+
+    pub(crate) async fn membered_by_id(
+        &self,
+        id: MemberedId,
+    ) -> Result<Membered<F, S, T, L>, NotFound> {
+        match id {
+            MemberedId::DocumentId(doc_id) => self
+                .get_document(doc_id)
+                .await
+                .map(|doc| Membered::Document(doc_id, doc)),
+            MemberedId::GroupId(group_id) => self
+                .get_group(group_id)
+                .await
+                .map(|group| Membered::Group(group_id, group)),
+        }
+        .ok_or_else(|| NotFound::new(id))
+    }
 }
 
 impl<
@@ -2687,6 +2954,29 @@ where
     }
 }
 
+/// Why a causal decryption named by identifier could not be carried out.
+///
+/// Separate from the other errors because it carries the store's own error type and
+/// type parameters.
+#[derive(Debug, Error)]
+pub enum CausalDecryptError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>> {
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+
+    #[error(transparent)]
+    Document(#[from] DocCausalDecryptionError<F, T, P, C>),
+}
+
+/// Why content could not be written into an [`Envelope`](crate::crypto::envelope::Envelope).
+#[derive(Debug, Error)]
+pub enum EnvelopeError<T: ContentRef> {
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+
+    #[error(transparent)]
+    Encrypt(#[from] EncryptInEnvelopeError<T>),
+}
+
 #[derive(Clone, PartialEq, Eq, Error)]
 #[derive_where(Debug)]
 pub enum StaticEventConversionError<
@@ -2787,6 +3077,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 #[derive(Debug, Error)]
 pub enum EncryptContentError {
     #[error(transparent)]
+    NotFound(#[from] NotFound),
+
+    #[error(transparent)]
     EncryptError(#[from] EncryptError),
 
     #[error("Error signing Cgka op: {0}")]
@@ -2860,37 +3153,6 @@ mod tests {
         let id = indie.lock().await.id();
         assert!(owner.register_individual(indie.clone()).await);
         (id, indie)
-    }
-
-    fn extract_removed_vks(
-        update: &RevokeMemberUpdate<Sendable, MemorySigner, [u8; 32], NoListener>,
-    ) -> HashSet<ed25519_dalek::VerifyingKey> {
-        update
-            .cgka_ops()
-            .iter()
-            .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove {
-                    id: MemberId(vk), ..
-                } => Some(*vk),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn extract_added_vks(
-        update: &AddMemberUpdate<Sendable, MemorySigner, [u8; 32], NoListener>,
-    ) -> HashSet<ed25519_dalek::VerifyingKey> {
-        update
-            .cgka_ops
-            .iter()
-            .filter_map(|op| match op.payload() {
-                CgkaOperation::Add {
-                    added_id: MemberId(vk),
-                    ..
-                } => Some(*vk),
-                _ => None,
-            })
-            .collect()
     }
 
     #[tokio::test]
@@ -2989,17 +3251,12 @@ mod tests {
             Individual::generate::<Sendable, _, _>(&indie_sk, &mut csprng).await?,
         ));
         kh.register_individual(indie.dupe()).await;
-        let doc = kh.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let doc_id = DocumentId(doc.lock().await.id());
-        let membered_doc = Membered::Document(doc_id, doc.dupe());
+        let doc_id = kh.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
         // Delegate to an individual and then revoke
         let indie_id = indie.lock().await.id();
-        let indie_agent = Agent::Individual(indie_id, indie.dupe());
-        kh.add_member(indie_agent, &membered_doc, Access::Edit, &[])
-            .await?;
-        kh.revoke_member(indie_id.into(), true, &membered_doc)
-            .await?;
+        kh.add_member(indie_id, doc_id, Access::Edit, &[]).await?;
+        kh.revoke_member(indie_id, true, doc_id).await?;
 
         // Create an archive and try to load it into a fresh Keyhive
         let archive = kh.into_archive().await;
@@ -3033,13 +3290,14 @@ mod tests {
             hive1.active.lock().await.individual.lock().await.clone(),
         ));
         hive2.register_individual(hive1_on_hive2.dupe()).await;
-        let group1_on_hive1 = hive1
+        let group1_on_hive1_id = hive1
             .generate_group(vec![Peer::Individual(
                 hive2_on_hive1.lock().await.id(),
                 hive2_on_hive1.dupe(),
             )])
             .await
             .unwrap();
+        let group1_on_hive1 = hive1.get_group(group1_on_hive1_id).await.unwrap();
 
         assert_eq!(hive1.delegations.lock().await.len(), 2);
         assert_eq!(hive1.revocations.lock().await.len(), 0);
@@ -3101,7 +3359,7 @@ mod tests {
             .await
             .unwrap();
         // 1 delegation (you)
-        let left_group = left.generate_group(vec![]).await.unwrap();
+        let left_group_id = left.generate_group(vec![]).await.unwrap();
 
         assert_eq!(left.delegations.lock().await.len(), 3);
         assert_eq!(left.revocations.lock().await.len(), 0);
@@ -3116,25 +3374,15 @@ mod tests {
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
 
-        assert!(left
-            .docs
-            .lock()
-            .await
-            .contains_key(&left_doc.lock().await.doc_id()));
-        assert!(left
-            .groups
-            .lock()
-            .await
-            .contains_key(&left_group.lock().await.group_id()));
+        assert!(left.docs.lock().await.contains_key(&left_doc));
+        assert!(left.groups.lock().await.contains_key(&left_group_id));
 
-        // NOTE: *NOT* the group
-        let left_membered = left
-            .membered_reachable_by_agent(&Public.individual().into())
-            .await;
+        // Not the group.
+        let left_membered = left.membered_reachable_by_agent(Public.id()).await.unwrap();
 
         assert_eq!(left_membered.len(), 1);
-        assert!(left_membered.contains_key(&left_doc.lock().await.doc_id().into()));
-        assert!(!left_membered.contains_key(&left_group.lock().await.group_id().into())); // NOTE *not* included because Public is not a member
+        assert!(left_membered.contains_key(&left_doc.into()));
+        assert!(!left_membered.contains_key(&left_group_id.into())); // not included because Public is not a member
 
         let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).await;
         assert_eq!(left_to_mid_ops.len(), 14);
@@ -3148,16 +3396,8 @@ mod tests {
         assert_eq!(left.revocations.lock().await.len(), 0);
 
         // Middle should now look the same
-        assert!(middle
-            .docs
-            .lock()
-            .await
-            .contains_key(&left_doc.lock().await.doc_id()));
-        assert!(!middle
-            .groups
-            .lock()
-            .await
-            .contains_key(&left_group.lock().await.group_id())); // NOTE: *None*
+        assert!(middle.docs.lock().await.contains_key(&left_doc));
+        assert!(!middle.groups.lock().await.contains_key(&left_group_id)); // none of them
 
         assert_eq!(middle.individuals.lock().await.len(), 3); // NOTE: includes Left
         assert_eq!(middle.groups.lock().await.len(), 0);
@@ -3165,13 +3405,12 @@ mod tests {
 
         assert_eq!(middle.revocations.lock().await.len(), 0);
         assert_eq!(middle.delegations.lock().await.len(), 2);
-        let left_doc_id = left_doc.lock().await.doc_id();
         assert_eq!(
             middle
                 .docs
                 .lock()
                 .await
-                .get(&left_doc_id)
+                .get(&left_doc)
                 .unwrap()
                 .lock()
                 .await
@@ -3204,16 +3443,8 @@ mod tests {
         assert_eq!(right.delegations.lock().await.len(), 2);
 
         assert!(right.groups.lock().await.len() == 1 || right.docs.lock().await.len() == 1);
-        assert!(right
-            .docs
-            .lock()
-            .await
-            .contains_key(&DocumentId(left_doc.lock().await.id())));
-        assert!(!right
-            .groups
-            .lock()
-            .await
-            .contains_key(&left_group.lock().await.group_id())); // NOTE: *None*
+        assert!(right.docs.lock().await.contains_key(&left_doc));
+        assert!(!right.groups.lock().await.contains_key(&left_group_id)); // none of them
 
         assert_eq!(right.individuals.lock().await.len(), 4);
         assert_eq!(right.groups.lock().await.len(), 0);
@@ -3234,11 +3465,9 @@ mod tests {
                 .sort_by_key(|(k, _v)| **k),
         );
 
+        let left_doc_handle = left.get_document(left_doc).await.expect("just created");
         right
-            .generate_group(vec![Peer::Document(
-                left_doc.lock().await.doc_id(),
-                left_doc.dupe(),
-            )])
+            .generate_group(vec![Peer::Document(left_doc, left_doc_handle)])
             .await
             .unwrap();
 
@@ -3272,17 +3501,12 @@ mod tests {
             )
             .await
             .unwrap();
-        let member = Public.individual().into();
-        let membered = Membered::Document(doc.lock().await.doc_id(), doc.dupe());
         let dlg = keyhive
-            .add_member(member, &membered, Access::Read, &[])
+            .add_member(Public.id(), doc, Access::Read, &[])
             .await
             .unwrap();
 
-        assert_eq!(
-            dlg.delegation.subject_id(),
-            doc.lock().await.doc_id().into()
-        );
+        assert_eq!(dlg.delegation.subject_id(), doc.into());
     }
 
     #[tokio::test]
@@ -3291,48 +3515,34 @@ mod tests {
 
         // Create a keyhive and a doc
         let hive1 = make_keyhive().await;
-        let group = hive1.generate_group(vec![]).await.unwrap();
-        let group_id = group.lock().await.group_id();
+        let group_id = hive1.generate_group(vec![]).await.unwrap();
+        let group = hive1.get_group(group_id).await.unwrap();
         let doc = hive1
-            .generate_doc(
-                vec![Peer::Group(group_id, group.dupe())],
-                nonempty![[0u8; 32]],
-            )
+            .generate_doc(vec![Peer::Group(group_id, group)], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let doc_id = doc.lock().await.doc_id();
 
         // Create two more keyhives
         let hive2 = make_keyhive().await;
         let (hive2_on_hive1_id, hive2_on_hive1) = register_peer(&hive1, &hive2).await;
 
         let hive3 = make_keyhive().await;
-        let (hive3_on_hive1_id, hive3_on_hive1) = register_peer(&hive1, &hive3).await;
+        let (hive3_on_hive1_id, _hive3_on_hive1) = register_peer(&hive1, &hive3).await;
 
         // Add hive2 as a member of the doc
         hive1
-            .add_member(
-                Agent::Individual(hive2_on_hive1_id, hive2_on_hive1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(hive2_on_hive1_id, doc, Access::Edit, &[])
             .await
             .unwrap();
 
         // Add hive3 as a member of the group that was parent of the doc
         hive1
-            .add_member(
-                Agent::Individual(hive3_on_hive1_id, hive3_on_hive1.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(hive3_on_hive1_id, group_id, Access::Read, &[])
             .await
             .unwrap();
 
         // Verify hive1 can see hive3's access to the doc
-        let doc_on_hive1 = hive1.get_document(doc_id).await.unwrap();
+        let doc_on_hive1 = hive1.get_document(doc).await.unwrap();
         let hive1_members = doc_on_hive1.lock().await.transitive_members().await;
         let hive3_on_hive1_access = hive1_members.get(&hive3_on_hive1_id.into());
         assert!(
@@ -3353,7 +3563,7 @@ mod tests {
             .unwrap();
 
         // Now verify hive2 can see hive3's access to the doc
-        let doc_on_hive2 = hive2.get_document(doc_id).await.unwrap();
+        let doc_on_hive2 = hive2.get_document(doc).await.unwrap();
         let members = doc_on_hive2.lock().await.transitive_members().await;
         let hive3_access = members.get(&hive3_on_hive2_id.into());
         assert!(
@@ -3382,14 +3592,8 @@ mod tests {
         let bob_on_alice = Arc::new(Mutex::new(Individual::new(add_op.dupe())));
         assert!(alice.register_individual(bob_on_alice.clone()).await);
         let bob_on_alice_id = { bob_on_alice.lock().await.id() };
-        let doc_id = { doc.lock().await.doc_id() };
         alice
-            .add_member(
-                Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_on_alice_id, doc, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3413,14 +3617,8 @@ mod tests {
         let bob_on_charlie = Arc::new(Mutex::new(Individual::new(KeyOp::Rotate(rotate_op))));
         assert!(charlie.register_individual(bob_on_charlie.clone()).await);
         let bob_on_charlie_id = { bob_on_charlie.lock().await.id() };
-        let doc2_id = { doc2.lock().await.doc_id() };
         charlie
-            .add_member(
-                Agent::Individual(bob_on_charlie_id, bob_on_charlie.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_on_charlie_id, doc2, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3460,14 +3658,8 @@ mod tests {
             .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let doc_id = doc.lock().await.doc_id();
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_on_alice_for_delegation.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_id, doc, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3575,64 +3767,25 @@ mod tests {
         alice.receive_prekey_op(&KeyOp::Rotate(frank_rot2)).await?;
 
         // Create doc1 with bob (3 ops) and carol (2 ops)
-        let doc1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc1_id = doc1.lock().await.doc_id();
+        let doc1_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice.add_member(bob_id, doc1_id, Access::Read, &[]).await?;
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(carol_id, doc1_id, Access::Edit, &[])
             .await?;
 
         // Create doc2 with dan (1 op)
         let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let doc2_id = doc2.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Individual(dan_id, dan_indie.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(dan_id, doc2, Access::Read, &[]).await?;
 
         // Create a group with carol (2 ops) and eve (4 ops), then add group to doc2
-        let group = alice.generate_group(vec![]).await?;
-        let group_id = group.lock().await.group_id();
+        let group_id = alice.generate_group(vec![]).await?;
         alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(carol_id, group_id, Access::Read, &[])
             .await?;
         alice
-            .add_member(
-                Agent::Individual(eve_id, eve_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(eve_id, group_id, Access::Edit, &[])
             .await?;
-        alice
-            .add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(group_id, doc2, Access::Read, &[]).await?;
 
         // Get the all-agents result
         let all_results = alice.reachable_prekey_ops_for_all_agents().await;
@@ -3755,77 +3908,34 @@ mod tests {
         let (eve_id, _eve_indie) = register_peer(&alice, &eve).await;
 
         // doc1: bob and carol are direct members
-        let doc1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc1_id = doc1.lock().await.doc_id();
+        let doc1_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice.add_member(bob_id, doc1_id, Access::Read, &[]).await?;
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(carol_id, doc1_id, Access::Edit, &[])
             .await?;
 
         // group: bob and carol
-        let group = alice.generate_group(vec![]).await?;
-        let group_id = group.lock().await.group_id();
+        let group_id = alice.generate_group(vec![]).await?;
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_id, group_id, Access::Read, &[])
             .await?;
         alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(carol_id, group_id, Access::Edit, &[])
             .await?;
 
         // doc2: group is a member (so bob and carol are transitive members)
         let doc2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let doc2_id = doc2.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(group_id, doc2, Access::Read, &[]).await?;
 
         // dave: only on doc1 directly (not in any group)
         alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(dave_id, doc1_id, Access::Read, &[])
             .await?;
 
         // eve: registered but not a member of anything (verified below)
 
         // Revoke bob from doc1
-        alice
-            .revoke_member(
-                bob_id.into(),
-                false,
-                &Membered::Document(doc1_id, doc1.dupe()),
-            )
-            .await?;
+        alice.revoke_member(bob_id, false, doc1_id).await?;
 
         // Get the all-agents result
         let all_results = alice.membership_ops_for_all_agents().await;
@@ -3887,27 +3997,16 @@ mod tests {
 
         // doc1: bob and carol are direct members
         // generate_doc creates initial CGKA ops; each add_member creates a CGKA Add op
-        let doc1 = alice
+        let doc1_id = alice
             .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let doc1_id = doc1.lock().await.doc_id();
         alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(bob_id, doc1_id, Access::Read, &[])
             .await
             .unwrap();
         alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(carol_id, doc1_id, Access::Edit, &[])
             .await
             .unwrap();
 
@@ -3920,24 +4019,13 @@ mod tests {
         );
 
         // group: carol and dave
-        let group = alice.generate_group(vec![]).await.unwrap();
-        let group_id = group.lock().await.group_id();
+        let group_id = alice.generate_group(vec![]).await.unwrap();
         alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(carol_id, group_id, Access::Read, &[])
             .await
             .unwrap();
         alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(dave_id, group_id, Access::Edit, &[])
             .await
             .unwrap();
 
@@ -3946,14 +4034,8 @@ mod tests {
             .generate_doc(vec![], nonempty![[1u8; 32]])
             .await
             .unwrap();
-        let doc2_id = doc2.lock().await.doc_id();
         alice
-            .add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(group_id, doc2, Access::Read, &[])
             .await
             .unwrap();
 
@@ -3962,14 +4044,7 @@ mod tests {
         // --- Revoke bob from doc1 ---
         // After revocation, bob should no longer see doc1 CGKA ops (and has
         // no other docs), so both methods should agree he has zero.
-        alice
-            .revoke_member(
-                bob_id.into(),
-                false,
-                &Membered::Document(doc1_id, doc1.dupe()),
-            )
-            .await
-            .unwrap();
+        alice.revoke_member(bob_id, false, doc1_id).await.unwrap();
 
         // Get the all-agents result
         let all_results = alice.cgka_ops_for_all_agents().await;
@@ -4027,7 +4102,7 @@ mod tests {
         // Carol should have ops from both doc1 and doc2
         let carol_doc_ids = &all_results.index[&carol_identifier];
         assert!(
-            carol_doc_ids.contains(&doc1_id.into()) && carol_doc_ids.contains(&doc2_id.into()),
+            carol_doc_ids.contains(&doc1_id.into()) && carol_doc_ids.contains(&doc2.into()),
             "carol should reach both doc1 and doc2"
         );
 
@@ -4042,7 +4117,7 @@ mod tests {
         let dave_doc_ids = &all_results.index[&dave_identifier];
         assert_eq!(dave_doc_ids.len(), 1, "dave should only reach doc2");
         assert!(
-            dave_doc_ids.contains(&doc2_id.into()),
+            dave_doc_ids.contains(&doc2.into()),
             "dave should reach doc2"
         );
 
@@ -4057,1690 +4132,168 @@ mod tests {
         );
     }
 
-    /// Test that revoking a group from a document removes the correct individuals
-    /// from the doc's CGKA, including nested group members, without removing
-    /// individuals who are still reachable via other paths (direct membership).
-    ///
-    /// Setup:
-    ///   Doc D has members:
-    ///     - Alice (owner/active)
-    ///     - Bob (direct individual member)
-    ///     - Group G1:
-    ///       - Carol (individual)
-    ///       - Group G2:
-    ///         - Dave (individual)
-    ///         - Eve (individual)
-    ///     - Frank (direct individual member AND also in G2)
-    ///
-    /// Revoke G1 from Doc D → Carol, Dave, and Eve should be removed from D's
-    /// CGKA. Bob and Alice should remain (direct members). Frank should remain
-    /// because he is still a direct member of D even though he was also in G2.
     #[tokio::test]
-    async fn test_revoke_nested_group_removes_correct_cgka_members() -> TestResult {
+    async fn test_revoking_a_member_reports_the_removal_in_cgka_ops() -> TestResult {
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let carol_kh = make_keyhive().await;
-        let dave_kh = make_keyhive().await;
-        let eve_kh = make_keyhive().await;
-        let frank_kh = make_keyhive().await;
+        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
 
-        // Register individuals on alice
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-        let (carol_id, carol_indie) = register_peer(&alice, &carol_kh).await;
-        let (dave_id, dave_indie) = register_peer(&alice, &dave_kh).await;
-        let (eve_id, eve_indie) = register_peer(&alice, &eve_kh).await;
-        let (frank_id, frank_indie) = register_peer(&alice, &frank_kh).await;
-
-        // Create G2: Dave, Eve, and Frank
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(eve_id, eve_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Create G1: Carol and G2
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Create Doc D: Bob (direct), G1, and Frank (direct)
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
+        alice.add_member(bob_id, doc, Access::Read, &[]).await?;
 
-        // Sanity: check CGKA group size before revocation.
-        let size_before = doc.lock().await.cgka()?.group_size();
-        assert_eq!(
-            size_before, 7,
-            "CGKA should have 7 members: alice + bob + carol + dave + eve + frank(via G2) + frank(direct, no-op add) = 7"
-        );
+        let update = alice.revoke_member(bob_id, true, doc).await?;
 
-        // Revoke G1 from Doc D (not from the group level)
-        let update = alice
-            .revoke_member(
-                g1_id.into(),
-                true, // retain other doc members (Bob, Frank)
-                &Membered::Document(doc_id, doc.dupe()),
-            )
-            .await?;
-
-        // Check which individuals were removed via CGKA ops
-        let removed_vks = extract_removed_vks(&update);
-
-        // Carol, Dave, and Eve should be removed (G1's transitive individuals)
-        assert!(
-            removed_vks.contains(&carol_id.verifying_key()),
-            "Carol (G1 member) should be removed from CGKA"
-        );
-        assert!(
-            removed_vks.contains(&dave_id.verifying_key()),
-            "Dave (G2 member, nested in G1) should be removed from CGKA"
-        );
-        assert!(
-            removed_vks.contains(&eve_id.verifying_key()),
-            "Eve (G2 member, nested in G1) should be removed from CGKA"
-        );
-
-        // Bob should NOT be removed (direct member, not in G1)
-        assert!(
-            !removed_vks.contains(&bob_id.verifying_key()),
-            "Bob (direct member, not in G1) should not be removed"
-        );
-
-        // Alice should NOT be removed — she is the doc owner/active agent and
-        // was added to G1 automatically by generate_group, but is still reachable
-        // as the doc owner.
-        let alice_id = alice.active().lock().await.id();
-        assert!(
-            !removed_vks.contains(&alice_id.verifying_key()),
-            "Alice (owner) should not be removed"
-        );
-
-        // Frank should NOT be removed — even though he was in G2 (part of G1),
-        // he is also a direct member of Doc D and should be retained.
-        assert!(
-            !removed_vks.contains(&frank_id.verifying_key()),
-            "Frank (direct member of doc, even though also in revoked G2) should not be removed"
-        );
-
-        Ok(())
-    }
-
-    /// Test that revoking a sub-group from a parent group correctly removes
-    /// the sub-group's individuals from the CGKAs of documents that contain
-    /// the parent group, without removing individuals still reachable via
-    /// other paths.
-    ///
-    /// Setup:
-    ///   Group G1:
-    ///     - Alice (owner, auto-added by generate_group)
-    ///     - Carol (individual)
-    ///     - Group G2:
-    ///       - Alice (owner, auto-added)
-    ///       - Dave (individual)
-    ///       - Eve (individual)
-    ///       - Frank (individual)
-    ///
-    ///   Doc D has members:
-    ///     - Alice (owner/active)
-    ///     - Bob (direct individual)
-    ///     - G1
-    ///     - Frank (direct individual)
-    ///
-    /// Revoke G2 from G1 → Dave and Eve should be removed from D's CGKA.
-    /// Alice, Bob, Carol, and Frank should remain.
-    #[tokio::test]
-    async fn test_revoke_subgroup_from_group_removes_correct_cgka_members() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let carol_kh = make_keyhive().await;
-        let dave_kh = make_keyhive().await;
-        let eve_kh = make_keyhive().await;
-        let frank_kh = make_keyhive().await;
-
-        // Register individuals on alice
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-        let (carol_id, carol_indie) = register_peer(&alice, &carol_kh).await;
-        let (dave_id, dave_indie) = register_peer(&alice, &dave_kh).await;
-        let (eve_id, eve_indie) = register_peer(&alice, &eve_kh).await;
-        let (frank_id, frank_indie) = register_peer(&alice, &frank_kh).await;
-
-        // Create G2: Dave, Eve, and Frank
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(eve_id, eve_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Create G1: Carol and G2
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(carol_id, carol_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Create Doc D: Bob (direct), G1, and Frank (direct)
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(frank_id, frank_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Revoke G2 from G1 (group-level revocation, not doc-level)
-        let update = alice
-            .revoke_member(
-                g2_id.into(),
-                true, // retain Carol in G1
-                &Membered::Group(g1_id, g1.dupe()),
-            )
-            .await?;
-
-        // Check which individuals were removed via CGKA ops
-        let removed_vks = extract_removed_vks(&update);
-
-        // Dave and Eve should be removed (only reachable through G2)
-        assert!(
-            removed_vks.contains(&dave_id.verifying_key()),
-            "Dave (G2 member, no other path) should be removed from CGKA"
-        );
-        assert!(
-            removed_vks.contains(&eve_id.verifying_key()),
-            "Eve (G2 member, no other path) should be removed from CGKA"
-        );
-
-        // Alice should NOT be removed (doc owner, direct member of doc)
-        let alice_id = alice.active().lock().await.id();
-        assert!(
-            !removed_vks.contains(&alice_id.verifying_key()),
-            "Alice (owner) should not be removed"
-        );
-
-        // Bob should NOT be removed (direct member of doc, not in G1/G2)
-        assert!(
-            !removed_vks.contains(&bob_id.verifying_key()),
-            "Bob (direct doc member) should not be removed"
-        );
-
-        // Carol should NOT be removed (retained G1 member)
-        assert!(
-            !removed_vks.contains(&carol_id.verifying_key()),
-            "Carol (retained G1 member) should not be removed"
-        );
-
-        // Frank should NOT be removed (in G2 but also direct member of doc)
-        assert!(
-            !removed_vks.contains(&frank_id.verifying_key()),
-            "Frank (direct doc member, even though also in revoked G2) should not be removed"
-        );
-
-        // CGKA should have shrunk by exactly 2 (dave + eve)
-        let size_after = doc.lock().await.cgka()?.group_size();
-        assert_eq!(
-            size_after,
-            size_before - 2,
-            "CGKA should have 2 fewer members after revocation"
-        );
-
-        Ok(())
-    }
-
-    /// Revoking a sub-group from a group should not affect the CGKA of a doc
-    /// that is a member of that group. Adding D to G grants D access to G,
-    /// not G's members access to D.
-    #[tokio::test]
-    async fn test_revoke_from_group_does_not_affect_member_doc_cgka() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let dave_kh = make_keyhive().await;
-
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let (dave_id, dave_indie) = register_peer(&alice, &dave_kh).await;
-
-        // Doc D with Bob as a direct member
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Group G2 with Dave
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(dave_id, dave_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Group G with Doc D and G2 as members
-        let g = alice.generate_group(vec![]).await?;
-        let g_id = g.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Document(doc_id, doc.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Revoke G2 from G. D is a member of G (D has access to G), so
-        // D's CGKA should be unaffected by changes to G's other members.
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g_id, g.dupe()))
-            .await?;
-
-        // No CGKA removals should have been produced for Doc D
-        let cgka_removes: Vec<_> = update
+        let removed_vks: HashSet<_> = update
             .cgka_ops()
             .iter()
-            .filter(|op| {
-                matches!(
-                    op.payload(),
-                    beekem::operation::CgkaOperation::Remove { .. }
-                )
+            .filter_map(|op| match op.payload() {
+                CgkaOperation::Remove {
+                    id: MemberId(vk), ..
+                } => Some(*vk),
+                _ => None,
             })
             .collect();
-        assert!(
-            cgka_removes.is_empty(),
-            "Revoking from a group should not produce CGKA removals on a doc that is a member of that group"
-        );
-
-        let size_after = doc.lock().await.cgka()?.group_size();
-        assert_eq!(size_after, size_before, "Doc D's CGKA should be unchanged");
-
-        Ok(())
-    }
-
-    /// Adding an individual to a group should propagate CGKA adds to docs
-    /// that contain the group as a member. If G is a member of Doc D, then
-    /// adding Bob to G should add Bob to D's CGKA.
-    #[tokio::test]
-    async fn test_add_member_to_group_propagates_cgka_to_containing_doc() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        // Group G (empty besides alice)
-        let g = alice.generate_group(vec![]).await?;
-        let g_id = g.lock().await.group_id();
-
-        // Doc D with G as a member
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Add Bob to G. Since G is a member of D, Bob should be added to D's CGKA.
-        let update = alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let added_vks = extract_added_vks(&update);
-
-        assert!(
-            added_vks.contains(&bob_id.verifying_key()),
-            "Bob should be added to D's CGKA after being added to G"
-        );
-
-        let size_after = doc.lock().await.cgka()?.group_size();
-        assert_eq!(
-            size_after,
-            size_before + 1,
-            "Doc D's CGKA should have one more member"
-        );
-
-        Ok(())
-    }
-
-    /// G3 in G2 in G1 in Doc D. Adding Bob to G3 should propagate to D's CGKA.
-    #[tokio::test]
-    async fn test_add_to_deep_chain_propagates_cgka() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        // G3 in G2 in G1 in Doc D
-        let g3 = alice.generate_group(vec![]).await?;
-        let g3_id = g3.lock().await.group_id();
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-
-        alice
-            .add_member(
-                Agent::Group(g3_id, g3.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Add Bob to G3 — should propagate to D via G3→G2→G1→D
-        let update = alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let added_vks = extract_added_vks(&update);
-
-        assert!(
-            added_vks.contains(&bob_id.verifying_key()),
-            "Bob should be added to D's CGKA through G3→G2→G1→D chain"
-        );
-        let size_after = doc.lock().await.cgka()?.group_size();
-        assert_eq!(size_after, size_before + 1);
-
-        Ok(())
-    }
-
-    /// G1 is a member of both D1 and D2. Adding Bob to G1 should add Bob
-    /// to both D1's and D2's CGKAs.
-    #[tokio::test]
-    async fn test_add_to_group_propagates_to_multiple_docs() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-
-        let d1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let d1_id = d1.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d1_id, d1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let d2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let d2_id = d2.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d2_id, d2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_d1_before = d1.lock().await.cgka()?.group_size();
-        let size_d2_before = d2.lock().await.cgka()?.group_size();
-
-        let update = alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let added_vks = extract_added_vks(&update);
-
-        assert!(added_vks.contains(&bob_id.verifying_key()));
-        assert_eq!(d1.lock().await.cgka()?.group_size(), size_d1_before + 1);
-        assert_eq!(d2.lock().await.cgka()?.group_size(), size_d2_before + 1);
-
-        Ok(())
-    }
-
-    /// G is a member of both G1 and G2, both in Doc D. Bob is in G.
-    /// Revoke G from G1 → Bob should still be in D's CGKA (reachable via G2).
-    #[tokio::test]
-    async fn test_revoke_multipath_keeps_cgka_member() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        // G with Bob
-        let g = alice.generate_group(vec![]).await?;
-        let g_id = g.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // G1 and G2, both containing G
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Doc D with both G1 and G2
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Revoke G from G1 — Bob still reachable via G2
-        let update = alice
-            .revoke_member(g_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
-
-        let removed_vks = extract_removed_vks(&update);
-
-        assert!(
-            !removed_vks.contains(&bob_id.verifying_key()),
-            "Bob should NOT be removed — still reachable via G→G2→D"
-        );
-        let size_after = doc.lock().await.cgka()?.group_size();
-        assert_eq!(size_after, size_before, "CGKA size should be unchanged");
-
-        Ok(())
-    }
-
-    /// Bob reads Doc D through Group G and separately has relay access to D directly.
-    /// Revoke G from D. Bob should lose his cgka access.
-    #[tokio::test]
-    async fn test_revoke_leaves_no_key_with_a_direct_relay_member() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        // G with Bob as a reader
-        let g = alice.generate_group(vec![]).await?;
-        let g_id = g.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Doc D, which G reads and Bob may also relay in his own right
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Relay,
-                &[],
-            )
-            .await?;
-
-        assert!(
-            { doc.lock().await.cgka_members()?.any(|m| m == bob_id) },
-            "Bob should hold a key while he reads the document through G"
-        );
-
-        alice
-            .revoke_member(g_id.into(), true, &Membered::Document(doc_id, doc.dupe()))
-            .await?;
-
-        assert!(
-            !{ doc.lock().await.cgka_members()?.any(|m| m == bob_id) },
-            "Bob kept his key on a document he may now only relay"
-        );
-
-        Ok(())
-    }
-
-    /// G in G1 in D1, and G in G2 in D2. Bob in G.
-    /// Revoke G from G1 → Bob loses D1, keeps D2.
-    #[tokio::test]
-    async fn test_revoke_cross_doc_partial() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g = alice.generate_group(vec![]).await?;
-        let g_id = g.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g_id, g.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // G1 with G, in D1
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        let d1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let d1_id = d1.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d1_id, d1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // G2 with G, in D2
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g_id, g.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        let d2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let d2_id = d2.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Document(d2_id, d2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_d1_before = d1.lock().await.cgka()?.group_size();
-        let size_d2_before = d2.lock().await.cgka()?.group_size();
-
-        // Revoke G from G1 → Bob removed from D1, not D2
-        let update = alice
-            .revoke_member(g_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
-
-        let removed_vks = extract_removed_vks(&update);
 
         assert!(
             removed_vks.contains(&bob_id.verifying_key()),
-            "Bob should be removed from D1's CGKA"
-        );
-        assert_eq!(
-            d1.lock().await.cgka()?.group_size(),
-            size_d1_before - 1,
-            "D1 should have one fewer member"
-        );
-        assert_eq!(
-            d2.lock().await.cgka()?.group_size(),
-            size_d2_before,
-            "D2 should be unchanged"
+            "revoking Bob should report his removal in the update's CGKA ops"
         );
 
         Ok(())
     }
 
-    /// G1 in D1 and D2. Bob in G1. Revoke G1 from D1 → Bob loses D1, keeps D2.
     #[tokio::test]
-    async fn test_revoke_group_from_one_of_two_docs() -> TestResult {
+    async fn test_revoking_a_subgroup_reports_its_members_removals_in_cgka_ops() -> TestResult {
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let d1 = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let d1_id = d1.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d1_id, d1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let d2 = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let d2_id = d2.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(d2_id, d2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_d1_before = d1.lock().await.cgka()?.group_size();
-        let size_d2_before = d2.lock().await.cgka()?.group_size();
-
-        // Revoke G1 from D1 (doc-level revocation)
-        let update = alice
-            .revoke_member(g1_id.into(), true, &Membered::Document(d1_id, d1.dupe()))
-            .await?;
-
-        let removed_vks = extract_removed_vks(&update);
-
-        assert!(
-            removed_vks.contains(&bob_id.verifying_key()),
-            "Bob should be removed from D1"
-        );
-        assert_eq!(d1.lock().await.cgka()?.group_size(), size_d1_before - 1);
-        assert_eq!(
-            d2.lock().await.cgka()?.group_size(),
-            size_d2_before,
-            "D2 should be unchanged"
-        );
-
-        Ok(())
-    }
-
-    /// G2 in G1 in D, and also G2 directly in D. Bob in G2.
-    /// Revoke G2 from G1 → Bob still in D's CGKA (G2 is a direct member of D).
-    #[tokio::test]
-    async fn test_revoke_from_parent_group_keeps_direct_doc_member() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        // G1 in D (so G2 reaches D via G1)
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        // G2 also directly in D
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Revoke G2 from G1 — Bob still reachable via G2 directly in D
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
-
-        let removed_vks = extract_removed_vks(&update);
-
-        assert!(
-            !removed_vks.contains(&bob_id.verifying_key()),
-            "Bob should NOT be removed — G2 is still a direct member of D"
-        );
-        assert_eq!(doc.lock().await.cgka()?.group_size(), size_before);
-
-        Ok(())
-    }
-
-    /// G3 in G2 in G1 in D. Bob in G3. Revoke G2 from G1 →
-    /// Bob (and G2, G3's members) should be removed from D's CGKA.
-    #[tokio::test]
-    async fn test_revoke_deep_chain_removes_all_below() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g3 = alice.generate_group(vec![]).await?;
-        let g3_id = g3.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g3_id, g3.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Revoke G2 from G1 — Bob (in G3 in G2) should be removed
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
-
-        let removed_vks = extract_removed_vks(&update);
-
-        assert!(
-            removed_vks.contains(&bob_id.verifying_key()),
-            "Bob should be removed — G2 (and G3 below it) disconnected from D"
-        );
-        assert!(doc.lock().await.cgka()?.group_size() < size_before);
-
-        Ok(())
-    }
-
-    /// G1 contains G2, G2 contains G1 (direct cycle). G1 is in Doc D.
-    /// Bob in G2 → Bob should be in D's CGKA (reachable via G2→G1→D).
-    #[tokio::test]
-    async fn test_direct_cycle_add_propagates() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-
-        // Create cycle: G1 contains G2, G2 contains G1
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // G1 in Doc D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Add Bob to G2 — should reach D via G2→G1→D (cycle doesn't block)
-        let update = alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let added_vks = extract_added_vks(&update);
-
-        assert!(
-            added_vks.contains(&bob_id.verifying_key()),
-            "Bob should be added to D's CGKA despite cycle"
-        );
-        assert_eq!(doc.lock().await.cgka()?.group_size(), size_before + 1);
-
-        Ok(())
-    }
-
-    /// G1↔G2 cycle, G1 in D. Bob in G2. Revoke G2 from G1 →
-    /// Bob should be removed. The doc reaches down through G1, and G1 no longer
-    /// contains G2 after revocation. G2 still containing G1 doesn't help — that
-    /// means G1's members can access G2, not that G2 can access D.
-    #[tokio::test]
-    async fn test_direct_cycle_revoke_removes_access() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-
-        // Cycle + Bob in G2
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // G1 in D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Revoke G2 from G1 — G2 still has G1 as its member, so G2→G1→D still works
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
-
-        let removed_vks = extract_removed_vks(&update);
-
-        assert!(
-            removed_vks.contains(&bob_id.verifying_key()),
-            "Bob should be removed — G1 no longer contains G2 after revocation"
-        );
-        assert!(doc.lock().await.cgka()?.group_size() < size_before);
-
-        Ok(())
-    }
-
-    /// G1→G2→G3→G1 indirect cycle. G1 in D. Bob in G3.
-    /// Revoke G2 from G1 → Bob loses access. The doc reaches down through
-    /// G1, and G1 no longer contains G2. The remaining cycle edges
-    /// (G2→G3→G1) don't help — the doc only reaches down through G1.
-    #[tokio::test]
-    async fn test_indirect_cycle_revoke_removes_access() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        let g3 = alice.generate_group(vec![]).await?;
-        let g3_id = g3.lock().await.group_id();
-
-        // G1 contains G2, G2 contains G3, G3 contains G1
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g3_id, g3.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Bob in G3
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // G1 in D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Revoke G2 from G1 — G2 still reaches D via G2→G3→G1→D
-        let update = alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
-
-        let removed_vks = extract_removed_vks(&update);
-
-        assert!(
-            removed_vks.contains(&bob_id.verifying_key()),
-            "Bob should be removed — G1 no longer contains G2 after revocation"
-        );
-        assert!(doc.lock().await.cgka()?.group_size() < size_before);
-
-        Ok(())
-    }
-
-    /// G1→G2→G3→G1 indirect cycle. G1 in D. Bob in G3.
-    /// Revoke G2 from G1 AND G1 from G3 → cycle broken.
-    /// Only G1 is still in D directly. G2 and G3 lose access.
-    #[tokio::test]
-    async fn test_indirect_cycle_break_removes_access() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-        let g3 = alice.generate_group(vec![]).await?;
-        let g3_id = g3.lock().await.group_id();
-
-        // G1 contains G2, G2 contains G3, G3 contains G1
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g3_id, g3.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Bob in G3
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g3_id, g3.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // G1 in D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Revoke G2 from G1 — severs the path from D to G2/G3
-        alice
-            .revoke_member(g2_id.into(), true, &Membered::Group(g1_id, g1.dupe()))
-            .await?;
-
-        // Revoke G1 from G3 — further breaks the cycle, should not panic/deadlock
-        alice
-            .revoke_member(g1_id.into(), true, &Membered::Group(g3_id, g3.dupe()))
-            .await?;
-
-        // After both revocations, Bob should not be in D's CGKA
-        let size_after = doc.lock().await.cgka()?.group_size();
-        assert!(
-            size_after < size_before,
-            "Bob should have been removed from D's CGKA after cycle was broken"
-        );
-
-        Ok(())
-    }
-
-    /// G1↔G2 cycle, both are direct members of D. Bob in G1.
-    /// Revoke G1 from D → G2 is still a direct member of D, and G2 contains G1,
-    /// so Bob is still reachable via D→G2→G1. Bob should stay in D's CGKA.
-    #[tokio::test]
-    async fn test_direct_cycle_both_in_doc_revoke_one_keeps_other() -> TestResult {
-        test_utils::init_logging();
-
-        let alice = make_keyhive().await;
-        let bob_kh = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob_kh).await;
-
-        let g1 = alice.generate_group(vec![]).await?;
-        let g1_id = g1.lock().await.group_id();
-        let g2 = alice.generate_group(vec![]).await?;
-        let g2_id = g2.lock().await.group_id();
-
-        // Create cycle
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Group(g2_id, g2.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Bob in G1
-        alice
-            .add_member(
-                Agent::Individual(bob_id, bob_indie.dupe()),
-                &Membered::Group(g1_id, g1.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        // Both G1 and G2 are direct members of D
-        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-        let doc_id = doc.lock().await.doc_id();
-        alice
-            .add_member(
-                Agent::Group(g1_id, g1.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-        alice
-            .add_member(
-                Agent::Group(g2_id, g2.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-
-        let size_before = doc.lock().await.cgka()?.group_size();
-
-        // Revoke G1 from D — G2 is still in D, and G2 contains G1,
-        // so Bob (in G1) is still reachable via D→G2→G1
-        let update = alice
-            .revoke_member(g1_id.into(), true, &Membered::Document(doc_id, doc.dupe()))
-            .await?;
-
-        let removed_vks = extract_removed_vks(&update);
-
-        assert!(
-            !removed_vks.contains(&bob_id.verifying_key()),
-            "Bob should NOT be removed — still reachable via D→G2→G1"
-        );
-        assert_eq!(
-            doc.lock().await.cgka()?.group_size(),
-            size_before,
-            "CGKA size should be unchanged"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_relay_does_not_get_into_cgka_tree() -> TestResult {
-        test_utils::init_logging();
-
-        let mk_hive = || async {
-            let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
-            Keyhive::<Sendable, MemorySigner, [u8; 32], String, _, NoListener, _>::generate(
-                sk,
-                Arc::new(Mutex::new(MemoryCiphertextStore::new())),
-                NoListener,
-                rand::rngs::OsRng,
-            )
-            .await
-        };
-
-        async fn mk_person(
-            hive: &Keyhive<
-                Sendable,
-                MemorySigner,
-                [u8; 32],
-                String,
-                Arc<Mutex<MemoryCiphertextStore<[u8; 32], String>>>,
-                NoListener,
-                rand::rngs::OsRng,
-            >,
-        ) -> (
-            IndividualId,
-            Agent<Sendable, MemorySigner, [u8; 32], NoListener>,
-        ) {
-            let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
-            let indie = Arc::new(Mutex::new(
-                Individual::generate::<Sendable, _, _>(&sk, &mut rand::rngs::OsRng)
-                    .await
-                    .unwrap(),
-            ));
-            hive.register_individual(indie.dupe()).await;
-            let id = { indie.lock().await.id() };
-            (id, Agent::Individual(id, indie))
+        let dave_kh = make_keyhive().await;
+        let eve_kh = make_keyhive().await;
+        let (dave_id, _dave_indie) = register_peer(&alice, &dave_kh).await;
+        let (eve_id, _eve_indie) = register_peer(&alice, &eve_kh).await;
+
+        let inner_id = alice.generate_group(vec![]).await?;
+        for who in [dave_id, eve_id] {
+            alice.add_member(who, inner_id, Access::Read, &[]).await?;
         }
+        let outer_id = alice.generate_group(vec![]).await?;
+        alice
+            .add_member(inner_id, outer_id, Access::Read, &[])
+            .await?;
 
-        // a) relay directly on the document
-        {
-            let hive = mk_hive().await?;
-            let (id, agent) = mk_person(&hive).await;
-            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-            let doc_id = DocumentId(doc.lock().await.id());
-            hive.add_member(
-                agent,
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Relay,
-                &[],
-            )
-            .await?;
-            assert!(
-                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
-                "a relay member of the document has cgka access to it"
-            );
-        }
+        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice.add_member(outer_id, doc, Access::Read, &[]).await?;
 
-        // b) relay in a group, then the group is given edit on the document
-        {
-            let hive = mk_hive().await?;
-            let (id, agent) = mk_person(&hive).await;
-            let group = hive.generate_group(vec![]).await?;
-            let group_id = { group.lock().await.group_id() };
-            hive.add_member(
-                agent,
-                &Membered::Group(group_id, group.dupe()),
-                Access::Relay,
-                &[],
-            )
-            .await?;
-            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-            let doc_id = DocumentId(doc.lock().await.id());
-            hive.add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Edit,
-                &[],
-            )
-            .await?;
-            assert!(
-                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
-                "someone who may only relay the group has cgka access to a document it edits"
-            );
-        }
+        let update = alice.revoke_member(inner_id, true, outer_id).await?;
 
-        // c) the same, in the other order
-        {
-            let hive = mk_hive().await?;
-            let (id, agent) = mk_person(&hive).await;
-            let group = hive.generate_group(vec![]).await?;
-            let group_id = { group.lock().await.group_id() };
-            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-            let doc_id = DocumentId(doc.lock().await.id());
-            hive.add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Edit,
-                &[],
-            )
-            .await?;
-            hive.add_member(
-                agent,
-                &Membered::Group(group_id, group.dupe()),
-                Access::Relay,
-                &[],
-            )
-            .await?;
-            assert!(
-                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
-                "a relay member added to a group that already holds the document has cgka access"
-            );
+        let removed_vks: HashSet<_> = update
+            .cgka_ops()
+            .iter()
+            .filter_map(|op| match op.payload() {
+                CgkaOperation::Remove {
+                    id: MemberId(vk), ..
+                } => Some(*vk),
+                _ => None,
+            })
+            .collect();
 
-            // d) then promote that member to read within the group
-            let (id2, agent2) = mk_person(&hive).await;
-            hive.add_member(
-                agent2.dupe(),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Relay,
-                &[],
-            )
-            .await?;
+        for (who, id) in [("dave", dave_id), ("eve", eve_id)] {
             assert!(
-                !{ doc.lock().await.cgka_members()?.any(|m| m == id2) },
-                "a relay member has cgka access before being promoted"
-            );
-            hive.add_member(
-                agent2,
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-            assert!(
-                { doc.lock().await.cgka_members()?.any(|m| m == id2) },
-                "promoting to read within the group did not grant cgka access"
-            );
-        }
-
-        // e) the opposite of b): the group only has relay for the document and a reader
-        //    is added to the group
-        {
-            let hive = mk_hive().await?;
-            let (id, agent) = mk_person(&hive).await;
-            let group = hive.generate_group(vec![]).await?;
-            let group_id = { group.lock().await.group_id() };
-            let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-            let doc_id = DocumentId(doc.lock().await.id());
-            hive.add_member(
-                Agent::Group(group_id, group.dupe()),
-                &Membered::Document(doc_id, doc.dupe()),
-                Access::Relay,
-                &[],
-            )
-            .await?;
-            hive.add_member(
-                agent,
-                &Membered::Group(group_id, group.dupe()),
-                Access::Read,
-                &[],
-            )
-            .await?;
-            assert!(
-                !{ doc.lock().await.cgka_members()?.any(|m| m == id) },
-                "a reader in a group that may only relay the document has cgka access"
+                removed_vks.contains(&id.verifying_key()),
+                "{who} came in through the revoked subgroup and their removal was not reported"
             );
         }
 
         Ok(())
     }
 
+    /// A redundant direct membership must not put someone in the CGKA tree twice.
     #[tokio::test]
-    async fn test_group_member_below_read_gets_no_key() -> TestResult {
+    async fn test_a_second_route_does_not_add_a_member_to_the_tree_twice() -> TestResult {
         test_utils::init_logging();
 
-        let mut csprng = rand::rngs::OsRng;
-        let sk = MemorySigner::generate(&mut csprng);
-        let hive: Keyhive<Sendable, MemorySigner, [u8; 32], String, _, NoListener, _> =
-            Keyhive::generate(
-                sk,
-                Arc::new(Mutex::new(MemoryCiphertextStore::new())),
-                NoListener,
-                rand::rngs::OsRng,
-            )
+        let alice = make_keyhive().await;
+        let frank_kh = make_keyhive().await;
+        let (frank_id, _frank_indie) = register_peer(&alice, &frank_kh).await;
+
+        let group_id = alice.generate_group(vec![]).await?;
+        alice
+            .add_member(frank_id, group_id, Access::Read, &[])
             .await?;
 
-        // Carol may only relay the group, which is below read.
-        let carol_sk = MemorySigner::generate(&mut csprng);
-        let carol = Arc::new(Mutex::new(
-            Individual::generate::<Sendable, _, _>(&carol_sk, &mut csprng).await?,
-        ));
-        hive.register_individual(carol.dupe()).await;
-        let carol_id = { carol.lock().await.id() };
-        let carol_agent = Agent::Individual(carol_id, carol.dupe());
+        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice.add_member(group_id, doc, Access::Read, &[]).await?;
 
-        let group = hive.generate_group(vec![]).await?;
-        let group_id = { group.lock().await.group_id() };
-        let membered_group = Membered::Group(group_id, group.dupe());
-        hive.add_member(carol_agent, &membered_group, Access::Relay, &[])
-            .await?;
-
-        // The group edits the document.
-        let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let doc_id = DocumentId(doc.lock().await.id());
-        let membered_doc = Membered::Document(doc_id, doc.dupe());
-        let group_agent = Agent::Group(group_id, group.dupe());
-        hive.add_member(group_agent, &membered_doc, Access::Edit, &[])
-            .await?;
-
-        let transitive = { doc.lock().await.transitive_members().await };
+        let with_one_route = alice
+            .cgka_members_for(doc)
+            .await?
+            .expect("the document has a tree")
+            .len();
         assert_eq!(
-            transitive.get(&carol_id.into()).map(|(_, access)| *access),
-            Some(Access::Relay),
-            "carol relays the group, so she relays the document"
+            with_one_route, 3,
+            "the document's own key, alice and frank, so frank really is in the tree \
+             by way of the group rather than absent from it"
         );
 
+        // Frank is already reachable through the group. Adding him directly is a second
+        // route to the same identity, not a second identity.
+        alice.add_member(frank_id, doc, Access::Read, &[]).await?;
+
+        assert_eq!(
+            alice
+                .cgka_members_for(doc)
+                .await?
+                .expect("the document has a tree")
+                .len(),
+            with_one_route,
+            "a second route to frank should not put him in the tree a second time"
+        );
+
+        Ok(())
+    }
+
+    /// `add_member` must refuse when the document's CGKA state is missing rather
+    /// than proceed without it.
+    #[tokio::test]
+    async fn test_add_member_refuses_when_the_key_agreement_is_not_initialized() -> TestResult {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let (bob_id, bob_indie) = register_peer(&alice, &bob).await;
+        register_peer(&bob, &alice).await;
+
+        let account_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        let project_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+
+        alice
+            .add_member(account_id, project_id, Access::Admin, &[])
+            .await?;
+        alice
+            .add_member(bob_id, account_id, Access::Admin, &[])
+            .await?;
+
+        // Bob receives the delegations that describe both documents and none of the CGKA
+        // operations that would let him rekey one.
+        let mut for_bob = alice
+            .events_for_agent(&Agent::Individual(bob_id, bob_indie.dupe()))
+            .await;
+        for_bob.retain(|_, event| !matches!(event, Event::CgkaOperation(_)));
+        bob.ingest_event_table(for_bob).await?;
+
+        let public = Public.individual();
+        let result = bob
+            .add_member(public.id(), project_id, Access::Read, &[])
+            .await;
+
         assert!(
-            !{ doc.lock().await.cgka_members()?.any(|m| m == carol_id) },
-            "carol cannot read the document, yet has cgka access to it"
+            matches!(
+                result,
+                Err(AddMemberError::CgkaError(CgkaError::NotInitialized))
+            ),
+            "expected a non-initialized CGKA error, got {result:?}"
         );
 
         Ok(())

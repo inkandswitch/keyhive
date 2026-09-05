@@ -1,0 +1,23 @@
+use derive_more::{Display, From};
+use keyhive_core::error::not_found::NotFound;
+use keyhive_crypto::signed::SigningError;
+use thiserror::Error;
+use wasm_bindgen::prelude::*;
+
+#[derive(Debug, Display, Error, From)]
+pub enum JsGenerateGroupError {
+    #[display("{_0}")]
+    Signing(SigningError),
+
+    /// The group was created and could not then be read back.
+    #[display("{_0}")]
+    NotFound(NotFound),
+}
+
+impl From<JsGenerateGroupError> for JsValue {
+    fn from(err: JsGenerateGroupError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("GenerateGroupError");
+        err.into()
+    }
+}

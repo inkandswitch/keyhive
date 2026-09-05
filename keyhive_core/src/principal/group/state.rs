@@ -160,9 +160,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let heads = std::iter::once(delegation.as_ref()).chain(lineage.iter().map(|p| p.as_ref()));
         for (head, proof) in heads.zip(lineage.iter()) {
             if delegation.payload.can > proof.payload.can {
-                return Err(AddError::Escelation {
-                    claimed: delegation.payload.can,
-                    proof: proof.payload.can,
+                return Err(AddError::Escalation {
+                    wanted: delegation.payload.can,
+                    held: proof.payload.can,
                 });
             }
 
@@ -234,9 +234,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             let heads = std::iter::once(proof.as_ref()).chain(lineage.iter().map(|p| p.as_ref()));
             for (head, next_proof) in heads.zip(lineage.iter()) {
                 if proof.payload.can > next_proof.payload.can {
-                    return Err(AddError::Escelation {
-                        claimed: proof.payload.can,
-                        proof: next_proof.payload.can,
+                    return Err(AddError::Escalation {
+                        wanted: proof.payload.can,
+                        held: next_proof.payload.can,
                     });
                 }
 
