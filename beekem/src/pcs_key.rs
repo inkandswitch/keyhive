@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 const STATIC_CONTEXT: &str = "/keyhive/beekem/app_secret/";
+const PREDECESSOR_SECRETS_CONTEXT: &str = "/keyhive/beekem/predecessor_secrets/";
 
 /// A [`SymmetricKey`] plus metadata needed for causal encryption.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -67,12 +68,19 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
 
 /// A key used to derive application secrets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct PcsKey(pub ShareSecretKey);
 
 impl PcsKey {
     /// Lift a `ShareSecretKey` into a `PcsKey`.
     pub fn new(share_secret_key: ShareSecretKey) -> Self {
         Self(share_secret_key)
+    }
+
+    /// Derive the key for encrypting the root secrets of an update's predecessors.
+    pub(crate) fn derive_predecessor_secrets_key(&self) -> SymmetricKey {
+        let bytes = blake3::derive_key(PREDECESSOR_SECRETS_CONTEXT, self.0.as_slice());
+        SymmetricKey::derive_from_bytes(&bytes)
     }
 
     /// Derive an [`ApplicationSecret`] from this PCS key.

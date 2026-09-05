@@ -12,16 +12,25 @@
 use crate::{
     collections::{Map, Set},
     content_addressed_map::CaMap,
-    encrypted::EncryptedContent,
+    encrypted::{encrypt_secret, EncryptedContent},
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{NodeKey, ShareKeyMap},
-    operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph},
+    operation::{
+        CgkaEpoch, CgkaOperation, CgkaOperationGraph, Invitation, InvitationSecret,
+        PredecessorSecret,
+    },
     pcs_key::{ApplicationSecret, PcsKey},
     transact::{Fork, Merge},
     tree::BeeKem,
 };
-use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    vec,
+    vec::Vec,
+};
 use core::hash::{Hash, Hasher};
 use future_form::FutureForm;
 use keyhive_crypto::{
@@ -35,7 +44,7 @@ use keyhive_crypto::{
 };
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
-use tracing::{info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
@@ -63,8 +72,11 @@ pub struct Cgka {
     // TODO: Enable policies to evict older entries.
     pcs_keys: CaMap<PcsKey>,
 
-    /// The update operations for each PCS key.
-    pcs_key_ops: Map<Digest<PcsKey>, Digest<Signed<CgkaOperation>>>,
+    /// The root secret each update operation produced, for the ones we can reach.
+    pcs_keys_by_update: Map<Digest<Signed<CgkaOperation>>, PcsKey>,
+
+    /// Invitations for new members.
+    invitations: Map<MemberId, Vec<Invitation>>,
 
     original_member: (MemberId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
@@ -79,10 +91,14 @@ impl Hash for Cgka {
         self.ops_graph.hash(state);
         self.pending_ops_for_structural_change.hash(state);
         self.pcs_keys.keys().collect::<BTreeSet<_>>().hash(state);
-        self.pcs_key_ops
+        self.pcs_keys_by_update
             .keys()
             .map(|k| k.as_slice())
             .collect::<BTreeSet<_>>()
+            .hash(state);
+        self.invitations
+            .iter()
+            .collect::<BTreeMap<_, _>>()
             .hash(state);
         self.original_member.hash(state);
         self.init_add_op.hash(state);
@@ -117,7 +133,8 @@ impl Cgka {
             ops_graph: CgkaOperationGraph::new(),
             pending_ops_for_structural_change: false,
             pcs_keys: CaMap::new(),
-            pcs_key_ops: Map::new(),
+            pcs_keys_by_update: Map::new(),
+            invitations: Map::new(),
             original_member: (owner_id, owner_pk),
             init_add_op: init_add_op.clone(),
         };
@@ -135,7 +152,7 @@ impl Cgka {
         cgka.owner_id = my_id;
         cgka.owner_sks = owner_sks;
         cgka.pcs_keys = self.pcs_keys.clone();
-        cgka.pcs_key_ops = self.pcs_key_ops.clone();
+        cgka.pcs_keys_by_update = self.pcs_keys_by_update.clone();
         Ok(cgka)
     }
 
@@ -169,37 +186,43 @@ impl Cgka {
         csprng: &mut R,
     ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
         let mut op = None;
-        let current_pcs_key = if !self.has_pcs_key() {
+        let (current_pcs_key, current_op_hash) = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
             let (pcs_key, update_op) = self
                 .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
-            self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
+            let op_hash = Digest::hash(&update_op);
+            self.insert_pcs_key(&pcs_key, op_hash);
             op = Some(update_op);
-            pcs_key
+            (pcs_key, op_hash)
         } else {
+            // `has_pcs_key()` above guarantees a single head.
+            debug_assert!(self.ops_graph.has_single_head());
             let pcs_key = self.pcs_key_from_tree_root()?;
-            let pcs_hash = Digest::hash(&pcs_key);
-            if !self.pcs_keys.contains_key(&pcs_hash) {
-                // `has_pcs_key()` above guarantees a single head.
-                debug_assert!(self.ops_graph.has_single_head());
-                if let Some(head) = self.ops_graph.cgka_op_heads.iter().next() {
-                    self.insert_pcs_key(&pcs_key, *head);
+            let op_hash = match self.record_tree_root_secret() {
+                Some((op_hash, _)) => op_hash,
+                None => {
+                    let head = self
+                        .ops_graph
+                        .cgka_op_heads
+                        .iter()
+                        .next()
+                        .copied()
+                        .ok_or(CgkaError::UnknownPcsKey)?;
+                    self.insert_pcs_key(&pcs_key, head);
+                    head
                 }
-            }
-            pcs_key
+            };
+            (pcs_key, op_hash)
         };
-        let pcs_key_hash = Digest::hash(&current_pcs_key);
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id.as_bytes());
         Ok((
             current_pcs_key.derive_application_secret(
                 &nonce,
                 content_ref,
                 &Digest::hash(pred_refs),
-                self.pcs_key_ops
-                    .get(&pcs_key_hash)
-                    .expect("PcsKey hash should be present because we derived it above"),
+                &current_op_hash,
             ),
             op,
         ))
@@ -216,9 +239,7 @@ impl Cgka {
     ) -> Result<SymmetricKey, CgkaError> {
         let pcs_key =
             self.pcs_key_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
-        if !self.pcs_keys.contains_key(&encrypted.pcs_key_hash) {
-            self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
-        }
+        self.insert_pcs_key(&pcs_key, encrypted.pcs_update_op_hash);
         let app_secret = pcs_key.derive_application_secret(
             &encrypted.nonce,
             &encrypted.content_ref,
@@ -235,19 +256,28 @@ impl Cgka {
     }
 
     /// Add member to group.
+    ///
+    /// Returns the add operation and an [`CgkaOperation::Invite`].
+    /// Empty if the member is already in the tree.
     #[instrument(skip_all)]
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: MemberId,
         pk: ShareKey,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         if self.tree.contains_id(&id) {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
+        // Find the update heads before the new leaf blanks the root so we can
+        // put them in an invitation.
+        let heads = self.ops_graph.cgka_op_heads.clone();
+        self.record_tree_root_secret();
+        self.derive_missing_ancestor_secrets(&heads);
+        let invitation = self.invitation_for(id, pk);
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
         let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
@@ -262,7 +292,25 @@ impl Cgka {
 
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
         self.ops_graph.add_local_op(&signed_op);
-        Ok(Some(signed_op))
+        let mut ops = vec![signed_op];
+
+        if let Some(invitation) = invitation {
+            let op = CgkaOperation::Invite {
+                invitation: Box::new(invitation),
+                predecessors: Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned()),
+                doc_id: self.doc_id,
+            };
+            let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
+            self.record_invitation(&signed_op);
+            self.ops_graph.add_local_op(&signed_op);
+            ops.push(signed_op);
+        } else {
+            debug!(
+                "no root secret to invite {:?} with; it can only read content written from now on",
+                id
+            );
+        }
+        Ok(ops)
     }
 
     /// Add multiple members to group.
@@ -273,9 +321,78 @@ impl Cgka {
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();
         for m in members {
-            ops.push(self.add::<F, S>(m.0, m.1, signer).await?);
+            ops.extend(self.add::<F, S>(m.0, m.1, signer).await?);
         }
-        Ok(ops.into_iter().flatten().collect())
+        Ok(ops)
+    }
+
+    /// Build an invitation for a member we are adding.
+    ///
+    /// Returns `None` if we don't have access to any root secret.
+    #[instrument(skip_all)]
+    fn invitation_for(&self, invitee_id: MemberId, invitee_pk: ShareKey) -> Option<Invitation> {
+        let (inviter_pk, inviter_sk) = self.inviter_key_pair()?;
+        let wanted = self
+            .ops_graph
+            .nearest_update_ancestors(&self.ops_graph.cgka_op_heads);
+        let mut head_secrets: Vec<InvitationSecret> = wanted
+            .iter()
+            .filter_map(|op_hash| Some((*op_hash, self.root_secret_for(op_hash)?)))
+            .filter_map(|(update_op_hash, secret)| {
+                Some(InvitationSecret {
+                    update_op_hash,
+                    encrypted_root_secret: encrypt_secret(
+                        self.doc_id.as_bytes(),
+                        secret.0,
+                        &inviter_sk,
+                        &invitee_pk,
+                    )
+                    .ok()?,
+                })
+            })
+            .collect();
+        head_secrets.sort_by_key(|invited| invited.update_op_hash);
+        head_secrets.dedup_by_key(|invited| invited.update_op_hash);
+        if head_secrets.is_empty() {
+            return None;
+        }
+        Some(Invitation {
+            invitee_id,
+            invitee_pk,
+            inviter_pk,
+            head_secrets,
+        })
+    }
+
+    /// A key pair at our own leaf, for the Diffie-Hellman exchange that
+    /// encrypts an invitation.
+    ///
+    /// Falls back to Public's leaf if we are not in the tree but it is, just
+    /// as [`Self::update`] does. Returns `None` if neither has access.
+    fn inviter_key_pair(&self) -> Option<(ShareKey, ShareSecretKey)> {
+        let id = if self.tree.contains_id(&self.owner_id) {
+            self.owner_id
+        } else {
+            MemberId::public()
+        };
+        self.tree
+            .node_key_for_id(id)
+            .ok()?
+            .keys()
+            .into_iter()
+            .find_map(|pk| self.owner_sks.get(&pk).map(|sk| (pk, *sk)))
+    }
+
+    /// If there is an invitation, record it for the id it targets.
+    fn record_invitation(&mut self, op: &Signed<CgkaOperation>) {
+        let CgkaOperation::Invite { invitation, .. } = &op.payload else {
+            return;
+        };
+        let invitation = invitation.as_ref();
+        let stored = self.invitations.entry(invitation.invitee_id).or_default();
+        if !stored.contains(invitation) {
+            stored.push(invitation.clone());
+        }
     }
 
     /// Remove member from group.
@@ -342,10 +459,14 @@ impl Cgka {
             self.tree
                 .encrypt_path(update_id, update_pk, &mut self.owner_sks, csprng)?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
-            let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
+            let heads = self.ops_graph.cgka_op_heads.clone();
+            let predecessors = Vec::from_iter(heads.iter().cloned());
+            self.derive_missing_ancestor_secrets(&heads);
+            let predecessor_secrets = self.predecessor_secrets(&pcs_key, &heads);
             let op = CgkaOperation::Update {
                 id: update_id,
-                new_path: alloc::boxed::Box::new(new_path),
+                new_path: Box::new(new_path),
+                predecessor_secrets,
                 predecessors,
                 doc_id: self.doc_id,
             };
@@ -387,6 +508,7 @@ impl Cgka {
         if !self.ops_graph.contains_predecessors(&predecessors) {
             return Err(CgkaError::OutOfOrderOperation);
         }
+        self.record_invitation(&op);
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
             if self.pending_ops_for_structural_change {
@@ -433,6 +555,7 @@ impl Cgka {
             CgkaOperation::Update { ref new_path, .. } => {
                 self.tree.apply_path(new_path);
             }
+            CgkaOperation::Invite { .. } => self.record_invitation(&op),
         }
         self.ops_graph.add_op(&op, &op.payload.predecessors());
         Ok(())
@@ -446,12 +569,14 @@ impl Cgka {
             if epoch.len() == 1 {
                 self.apply_operation(epoch[0].clone())?;
             } else {
-                // If all operations in this epoch are updates, we can apply them
-                // directly and move on to the next epoch.
-                if epoch
-                    .iter()
-                    .all(|op| matches!(op.payload, CgkaOperation::Update { .. }))
-                {
+                // If no operation in this epoch changes the tree's structure, we can
+                // apply them directly and move on to the next epoch.
+                if epoch.iter().all(|op| {
+                    matches!(
+                        op.payload,
+                        CgkaOperation::Update { .. } | CgkaOperation::Invite { .. }
+                    )
+                }) {
                     for op in epoch.iter() {
                         self.apply_operation(op.clone())?;
                     }
@@ -525,7 +650,213 @@ impl Cgka {
                 }
             }
         }
+        // Record the root secret so we can traverse its predecessors.
+        self.record_tree_root_secret();
+        // An invitation may already contain this key, in which case we don't require
+        // a rebuild.
+        if let Some((invited_op_hash, pcs_key)) = self.pcs_key_from_invitation(pcs_key_hash) {
+            self.insert_pcs_key(&pcs_key, invited_op_hash);
+            return Ok(pcs_key);
+        }
+        if let Some((predecessor_op_hash, pcs_key)) =
+            self.pcs_key_from_predecessor_secrets(pcs_key_hash)
+        {
+            self.insert_pcs_key(&pcs_key, predecessor_op_hash);
+            return Ok(pcs_key);
+        }
         self.derive_pcs_key_for_op(update_op_hash)
+    }
+
+    /// Derive and record the root secret of any nearest update ancestor of `heads`
+    /// we have not recorded already.
+    #[instrument(skip_all)]
+    fn derive_missing_ancestor_secrets(&mut self, heads: &Set<Digest<Signed<CgkaOperation>>>) {
+        for op_hash in self.ops_graph.nearest_update_ancestors(heads) {
+            if self.root_secret_for(&op_hash).is_some() {
+                continue;
+            }
+            if let Err(e) = self.derive_pcs_key_for_op(&op_hash) {
+                warn!(?e, "could not derive an ancestor root secret");
+            }
+        }
+    }
+
+    /// Encrypt the root secret of each nearest update ancestor of `heads` under a key
+    /// derived from `pcs_key`, so that a member who can derive `pcs_key` can derive
+    /// those too.
+    #[instrument(skip_all)]
+    fn predecessor_secrets(
+        &self,
+        pcs_key: &PcsKey,
+        heads: &Set<Digest<Signed<CgkaOperation>>>,
+    ) -> Vec<PredecessorSecret> {
+        let wanted = self.ops_graph.nearest_update_ancestors(heads);
+        if wanted.is_empty() {
+            return Vec::new();
+        }
+        let key = pcs_key.derive_predecessor_secrets_key();
+        let mut candidates: Vec<(Digest<Signed<CgkaOperation>>, PcsKey)> = wanted
+            .iter()
+            .filter_map(|op_hash| Some((*op_hash, self.root_secret_for(op_hash)?)))
+            .collect();
+        candidates.sort_by_key(|(op_hash, secret)| (*op_hash, Digest::hash(secret)));
+        candidates.dedup_by_key(|(op_hash, secret)| (*op_hash, Digest::hash(secret)));
+        let secrets: Vec<PredecessorSecret> = candidates
+            .into_iter()
+            .filter_map(|(op_hash, secret)| {
+                match key.try_seal(secret.0.as_slice(), self.doc_id.as_bytes()) {
+                    Ok(sealed) => Some(PredecessorSecret {
+                        update_op_hash: op_hash,
+                        encrypted_root_secret: sealed,
+                    }),
+                    Err(e) => {
+                        warn!(?e, "could not seal a predecessor root secret");
+                        None
+                    }
+                }
+            })
+            .collect();
+        secrets
+    }
+
+    /// Derive and record the current root secret, if it exists.
+    #[instrument(skip_all)]
+    fn record_tree_root_secret(&mut self) -> Option<(Digest<Signed<CgkaOperation>>, PcsKey)> {
+        if !self.has_pcs_key() {
+            return None;
+        }
+        let mut ancestors = self
+            .ops_graph
+            .nearest_update_ancestors(&self.ops_graph.cgka_op_heads)
+            .into_iter();
+        let (Some(op_hash), None) = (ancestors.next(), ancestors.next()) else {
+            return None;
+        };
+        let pcs_key = self.pcs_key_from_tree_root().ok()?;
+        self.insert_pcs_key(&pcs_key, op_hash);
+        Some((op_hash, pcs_key))
+    }
+
+    /// The root secret `op_hash` produced, if we can reach it without a rebuild.
+    fn root_secret_for(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> Option<PcsKey> {
+        if !matches!(
+            self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload),
+            Some(CgkaOperation::Update { .. })
+        ) {
+            return None;
+        }
+        self.pcs_keys_by_update.get(op_hash).copied().or_else(|| {
+            self.invited_root_secrets()
+                .find(|(invited_op, _)| invited_op == op_hash)
+                .map(|(_, key)| key)
+        })
+    }
+
+    /// Every root secret we can reach without a rebuild, paired with the update it
+    /// came from.
+    fn known_root_secrets(
+        &self,
+    ) -> impl Iterator<Item = (Digest<Signed<CgkaOperation>>, PcsKey)> + '_ {
+        self.pcs_keys_by_update
+            .iter()
+            .map(|(op_hash, key)| (*op_hash, *key))
+            .chain(self.invited_root_secrets())
+            .filter(|(op_hash, _)| {
+                matches!(
+                    self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload),
+                    Some(CgkaOperation::Update { .. })
+                )
+            })
+    }
+
+    /// Return the requested PCS key and the update that produced it, if we can
+    /// derive it from the predecessor secrets chain.
+    #[instrument(skip_all)]
+    fn pcs_key_from_predecessor_secrets(
+        &self,
+        pcs_key_hash: &Digest<PcsKey>,
+    ) -> Option<(Digest<Signed<CgkaOperation>>, PcsKey)> {
+        let mut frontier: Vec<(Digest<Signed<CgkaOperation>>, PcsKey)> =
+            self.known_root_secrets().collect();
+        let mut seen: Set<(Digest<Signed<CgkaOperation>>, Digest<PcsKey>)> = Set::new();
+        while let Some((op_hash, pcs_key)) = frontier.pop() {
+            if !seen.insert((op_hash, Digest::hash(&pcs_key))) {
+                continue;
+            }
+            let Some(op) = self.ops_graph.cgka_ops.get(&op_hash) else {
+                continue;
+            };
+            let CgkaOperation::Update {
+                predecessor_secrets,
+                ..
+            } = &op.payload
+            else {
+                continue;
+            };
+            let key = pcs_key.derive_predecessor_secrets_key();
+            for predecessor in predecessor_secrets {
+                let Some(found) = Self::decrypt_predecessor_secret(&key, predecessor) else {
+                    continue;
+                };
+                if Digest::hash(&found) == *pcs_key_hash {
+                    return Some((predecessor.update_op_hash, found));
+                }
+                frontier.push((predecessor.update_op_hash, found));
+            }
+        }
+        None
+    }
+
+    /// Decrypt the provided predecessor secret using `key`. Returns `None` if it
+    /// fails to decrypt or is not 32 bytes.
+    fn decrypt_predecessor_secret(
+        key: &SymmetricKey,
+        predecessor: &PredecessorSecret,
+    ) -> Option<PcsKey> {
+        let plaintext = key.try_open(&predecessor.encrypted_root_secret).ok()?;
+        let bytes = <[u8; 32]>::try_from(plaintext).ok()?;
+        Some(PcsKey::new(ShareSecretKey::force_from_bytes(bytes)))
+    }
+
+    /// Every root secret we can open from an invitation addressed to us, paired with
+    /// the update operation that produced it.
+    fn invited_root_secrets(
+        &self,
+    ) -> impl Iterator<Item = (Digest<Signed<CgkaOperation>>, PcsKey)> + '_ {
+        [self.owner_id, MemberId::public()]
+            .into_iter()
+            .filter_map(|id| self.invitations.get(&id))
+            .flatten()
+            .flat_map(|invitation| {
+                invitation.head_secrets.iter().filter_map(|invited| {
+                    let plaintext = self
+                        .owner_sks
+                        .try_decrypt_encryption(
+                            invitation.inviter_pk,
+                            &invited.encrypted_root_secret,
+                        )
+                        .ok()?;
+                    let bytes = <[u8; 32]>::try_from(plaintext).ok()?;
+                    Some((
+                        invited.update_op_hash,
+                        PcsKey::new(ShareSecretKey::force_from_bytes(bytes)),
+                    ))
+                })
+            })
+    }
+
+    /// Look up this PCS key and the update that produced it if we have it in an
+    /// invitation. Return `None` otherwise.
+    #[instrument(skip_all)]
+    fn pcs_key_from_invitation(
+        &self,
+        pcs_key_hash: &Digest<PcsKey>,
+    ) -> Option<(Digest<Signed<CgkaOperation>>, PcsKey)> {
+        let found = self
+            .invited_root_secrets()
+            .find(|(_, pcs_key)| Digest::hash(pcs_key) == *pcs_key_hash)?;
+        info!("recovered a root secret from an invitation");
+        Some(found)
     }
 
     /// Derive [`PcsKey`] for this operation hash.
@@ -598,12 +929,11 @@ impl Cgka {
         Ok(pcs_key)
     }
 
+    /// Record a root secret and the update that produced it.
     #[instrument(skip_all)]
     fn insert_pcs_key(&mut self, pcs_key: &PcsKey, op_hash: Digest<Signed<CgkaOperation>>) {
-        let digest = Digest::hash(pcs_key);
-        info!("{:?}", digest);
-        self.pcs_key_ops.insert(digest, op_hash);
         self.pcs_keys.insert((*pcs_key).into());
+        self.pcs_keys_by_update.entry(op_hash).or_insert(*pcs_key);
     }
 
     /// Extend our state with that of the provided [`Cgka`].
@@ -617,8 +947,21 @@ impl Cgka {
                 .iter()
                 .map(|(hash, key)| (*hash, key.clone())),
         );
-        self.pcs_key_ops.extend(other.pcs_key_ops.iter());
+        self.pcs_keys_by_update
+            .extend(other.pcs_keys_by_update.iter());
+        self.receive_invitations(&other.invitations);
         self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
+    }
+
+    fn receive_invitations(&mut self, other: &Map<MemberId, Vec<Invitation>>) {
+        for (member, invitations) in other.iter() {
+            let stored = self.invitations.entry(*member).or_default();
+            for invitation in invitations {
+                if !stored.contains(invitation) {
+                    stored.push(invitation.clone());
+                }
+            }
+        }
     }
 }
 
@@ -635,7 +978,9 @@ impl Merge for Cgka {
         self.owner_sks.merge(fork.owner_sks);
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
-        self.pcs_key_ops.extend(fork.pcs_key_ops.iter());
+        self.pcs_keys_by_update
+            .extend(fork.pcs_keys_by_update.iter());
+        self.receive_invitations(&fork.invitations);
         self.replay_ops_graph()
             .expect("two valid graphs should always merge causal consistency");
     }
