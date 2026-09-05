@@ -7,7 +7,7 @@ use crate::{
     access::Access,
     cgka::Cgka,
     crypto::envelope::Envelope,
-    error::missing_dependency::MissingDependency,
+    error::{missing_dependency::MissingDependency, not_found},
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::{
         agent::{id::AgentId, Agent},
@@ -737,7 +737,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 pub enum AddMemberError {
     /// The identifier was not found.
     #[error(transparent)]
-    NotFound(#[from] crate::error::not_found::NotFound),
+    NotFound(#[from] not_found::NotFound),
 
     #[error(transparent)]
     AddMemberError(#[from] AddGroupMemberError),
@@ -750,7 +750,7 @@ pub enum AddMemberError {
 pub enum EncryptError {
     /// The identifier was not found.
     #[error(transparent)]
-    NotFound(#[from] crate::error::not_found::NotFound),
+    NotFound(#[from] not_found::NotFound),
 
     #[error("Encryption failed: {0}")]
     EncryptionFailed(chacha20poly1305::Error),
@@ -828,7 +828,7 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
 pub enum DecryptError {
     /// The identifier was not found.
     #[error(transparent)]
-    NotFound(#[from] crate::error::not_found::NotFound),
+    NotFound(#[from] not_found::NotFound),
 
     #[error("Key not found")]
     KeyNotFound,

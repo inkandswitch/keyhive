@@ -24,6 +24,7 @@ use super::{
 };
 use crate::{
     access::Access,
+    error::not_found,
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
@@ -977,7 +978,7 @@ pub enum AddGroupMemberError {
 pub enum RevokeMemberError {
     /// The identifier was not found.
     #[error(transparent)]
-    NotFound(#[from] crate::error::not_found::NotFound),
+    NotFound(#[from] not_found::NotFound),
 
     #[error(transparent)]
     AddError(#[from] error::AddError),
