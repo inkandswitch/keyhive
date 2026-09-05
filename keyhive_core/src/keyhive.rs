@@ -717,6 +717,7 @@ impl<
         doc.lock().await.try_decrypt_content_keyed(encrypted)
     }
 
+    #[allow(clippy::result_large_err)]
     pub async fn try_causal_decrypt_content(
         &self,
         doc: Arc<Mutex<Document<F, S, T, L>>>,

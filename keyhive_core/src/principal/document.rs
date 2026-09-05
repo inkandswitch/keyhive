@@ -290,9 +290,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
-            if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
-                acc.push(op);
-            }
+            acc.extend(self.cgka_mut()?.add(*id, *prekey, signer).await?);
         }
         Ok(acc)
     }
