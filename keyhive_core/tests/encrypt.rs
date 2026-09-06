@@ -583,8 +583,8 @@ async fn test_an_inviter_offers_the_newest_secret_it_can_reach() -> TestResult {
         .ingest_unsorted_static_events(all_events.into_values().collect())
         .await;
 
-    // The chain only leads backwards, so an invitation naming the older secret
-    // leaves everything written under the newer one out of Carol's reach.
+    // Bob's invitation wraps the newer secret, so Carol can read what was written
+    // under it.
     let doc_on_carol = carol.get_document(doc_id).await.unwrap();
     assert_eq!(
         carol
@@ -714,6 +714,148 @@ async fn test_an_invitation_carries_every_update_head_the_inviter_can_reach() ->
             .await?,
         shared_content,
         "and the chain should reach behind both"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_an_update_propagates_an_ancestor_it_cannot_reach() -> TestResult {
+    test_utils::init_logging();
+
+    let NewKeyhive { keyhive: alice, .. } = make_keyhive().await;
+    let NewKeyhive { keyhive: bob, .. } = make_keyhive().await;
+
+    let bob_content = "on Bob's branch".as_bytes().to_vec();
+    let bob_hash = blake3::hash(&bob_content);
+    let seed_content = "before the fork".as_bytes().to_vec();
+    let seed_hash = blake3::hash(&seed_content);
+
+    let doc = alice
+        .generate_doc(vec![], nonempty![seed_hash.into()])
+        .await?;
+    let doc_id = { doc.lock().await.doc_id() };
+    let indie_bob = { bob.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(indie_bob.id(), Arc::new(Mutex::new(indie_bob))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Admin,
+            &[],
+        )
+        .await?;
+    alice
+        .try_encrypt_content(doc.clone(), &seed_hash.into(), &vec![], &seed_content)
+        .await?;
+
+    let bob_agent: Agent<_, _, _, _> = bob.active().lock().await.clone().into();
+    bob.ingest_unsorted_static_events(
+        alice
+            .static_events_for_agent(&bob_agent)
+            .await
+            .into_values()
+            .collect(),
+    )
+    .await;
+    let doc_on_bob = bob.get_document(doc_id).await.unwrap();
+
+    // Each rotates without seeing the other. Only Bob writes on his branch.
+    alice.force_pcs_update(doc.dupe()).await?;
+    bob.force_pcs_update(doc_on_bob.dupe()).await?;
+    let on_bob = bob
+        .try_encrypt_content(doc_on_bob.dupe(), &bob_hash.into(), &vec![], &bob_content)
+        .await?;
+
+    // Alice adds Carol while still partitioned, so Carol's invitation wraps Alice's
+    // update and Carol has no way to reach Bob's.
+    let NewKeyhive { keyhive: carol, .. } = make_keyhive().await;
+    let indie_carol = {
+        carol
+            .active()
+            .lock()
+            .await
+            .individual()
+            .lock()
+            .await
+            .clone()
+    };
+    alice
+        .add_member(
+            Agent::Individual(indie_carol.id(), Arc::new(Mutex::new(indie_carol))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Admin,
+            &[],
+        )
+        .await?;
+
+    // Alice takes Bob's branch first, and Carol receives from Alice. Bob has never
+    // heard of Carol, having been partitioned when she was added, so asking him for
+    // her events yields nothing and she would never see his update at all.
+    let alice_agent: Agent<_, _, _, _> = alice.active().lock().await.clone().into();
+    alice
+        .ingest_unsorted_static_events(
+            bob.static_events_for_agent(&alice_agent)
+                .await
+                .into_values()
+                .collect(),
+        )
+        .await;
+    let carol_agent: Agent<_, _, _, _> = carol.active().lock().await.clone().into();
+    carol
+        .ingest_unsorted_static_events(
+            alice
+                .static_events_for_agent(&carol_agent)
+                .await
+                .into_values()
+                .collect(),
+        )
+        .await;
+
+    // Carol updates. Bob's update is one of her nearest ancestors and she cannot
+    // reach it, so she has to record it as still unreachable rather than drop it.
+    let doc_on_carol = carol.get_document(doc_id).await.unwrap();
+    carol.force_pcs_update(doc_on_carol.dupe()).await?;
+    alice
+        .ingest_unsorted_static_events(
+            carol
+                .static_events_for_agent(&alice_agent)
+                .await
+                .into_values()
+                .collect(),
+        )
+        .await;
+
+    // Alice updates next. Her only nearest ancestor is Carol's update, so unless
+    // Carol's propagates her derivation gap nothing will ever point at Bob's update
+    // again.
+    alice.force_pcs_update(doc.dupe()).await?;
+
+    let NewKeyhive { keyhive: dave, .. } = make_keyhive().await;
+    let indie_dave = { dave.active().lock().await.individual().lock().await.clone() };
+    alice
+        .add_member(
+            Agent::Individual(indie_dave.id(), Arc::new(Mutex::new(indie_dave))),
+            &Membered::Document(doc_id, doc.dupe()),
+            Access::Read,
+            &[],
+        )
+        .await?;
+
+    let dave_agent: Agent<_, _, _, _> = dave.active().lock().await.clone().into();
+    let mut to_dave: HashMap<Digest<StaticEvent<[u8; 32]>>, StaticEvent<[u8; 32]>> = HashMap::new();
+    to_dave.extend(alice.static_events_for_agent(&dave_agent).await);
+    to_dave.extend(bob.static_events_for_agent(&dave_agent).await);
+    to_dave.extend(carol.static_events_for_agent(&dave_agent).await);
+    dave.ingest_unsorted_static_events(to_dave.into_values().collect())
+        .await;
+
+    let doc_on_dave = dave.get_document(doc_id).await.unwrap();
+    assert_eq!(
+        dave.try_decrypt_content(doc_on_dave, on_bob.encrypted_content())
+            .await?,
+        bob_content,
+        "Carol could not reach Bob's update, so she had to propagate it for \
+         Alice to handle"
     );
 
     Ok(())

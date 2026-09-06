@@ -82,6 +82,19 @@ pub struct Cgka {
     init_add_op: Signed<CgkaOperation>,
 }
 
+/// Predecessor (or formerly unreachable) root secrets. Also includes unreachable
+/// root secrets to ensure we can eventually create a chain back to them after
+/// subsequent updates (possibly by other members).
+struct AncestorSecrets {
+    /// Every root secret that could be derived, corresponding either to an
+    /// immediate predecessor update or a formerly unreachable root secret.
+    reached: Vec<(Digest<Signed<CgkaOperation>>, PcsKey)>,
+
+    /// Updates corresponding to root secrets that could not be derived, either
+    /// immediate predecessors or those older ancestors propagated as unreachable.
+    unreachable: Vec<Digest<Signed<CgkaOperation>>>,
+}
+
 impl Hash for Cgka {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.doc_id.hash(state);
@@ -275,8 +288,8 @@ impl Cgka {
         // Find the update heads before the new leaf blanks the root so we can
         // put them in an invitation.
         let heads = self.ops_graph.cgka_op_heads.clone();
-        let ancestor_secrets = self.reachable_ancestor_secrets(&heads);
-        let invitation = self.invitation_for(id, pk, &ancestor_secrets);
+        let ancestors = self.reachable_ancestor_secrets(&heads);
+        let invitation = self.invitation_for(id, pk, &ancestors.reached);
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
         let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
@@ -459,12 +472,13 @@ impl Cgka {
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let heads = self.ops_graph.cgka_op_heads.clone();
             let predecessors = Vec::from_iter(heads.iter().cloned());
-            let ancestor_secrets = self.reachable_ancestor_secrets(&heads);
-            let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestor_secrets);
+            let ancestors = self.reachable_ancestor_secrets(&heads);
+            let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestors.reached);
             let op = CgkaOperation::Update {
                 id: update_id,
                 new_path: Box::new(new_path),
                 predecessor_secrets,
+                unreachable_ancestors: ancestors.unreachable,
                 predecessors,
                 doc_id: self.doc_id,
             };
@@ -671,21 +685,40 @@ impl Cgka {
     fn reachable_ancestor_secrets(
         &mut self,
         heads: &Set<Digest<Signed<CgkaOperation>>>,
-    ) -> Vec<(Digest<Signed<CgkaOperation>>, PcsKey)> {
+    ) -> AncestorSecrets {
+        let nearest = self.ops_graph.nearest_update_ancestors(heads);
+        // Whatever those updates could not reach is still owed, and this is the only
+        // place it gets asked about again.
+        let mut targets = nearest.clone();
+        for op_hash in &nearest {
+            if let Some(CgkaOperation::Update {
+                unreachable_ancestors,
+                ..
+            }) = self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload)
+            {
+                targets.extend(unreachable_ancestors.iter().copied());
+            }
+        }
+
         let mut found = Vec::new();
-        for op_hash in self.ops_graph.nearest_update_ancestors(heads) {
+        let mut unreachable = Vec::new();
+        for op_hash in targets {
             if let Some(secret) = self.root_secret_for(&op_hash) {
                 found.push((op_hash, secret));
                 continue;
             }
             match self.derive_pcs_key_for_op(&op_hash) {
                 Ok(secret) => found.push((op_hash, secret)),
-                Err(e) => warn!(?e, "could not derive an ancestor root secret"),
+                Err(_e) => unreachable.push(op_hash),
             }
         }
         // The ancestors are an unordered set, so sort to keep the bytes stable.
         found.sort_by_key(|(op_hash, _)| *op_hash);
-        found
+        unreachable.sort();
+        AncestorSecrets {
+            reached: found,
+            unreachable,
+        }
     }
 
     /// Encrypt each of `ancestor_secrets` under a key derived from `pcs_key` so that

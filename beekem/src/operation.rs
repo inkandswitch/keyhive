@@ -122,8 +122,13 @@ pub enum CgkaOperation {
     Update {
         id: MemberId,
         new_path: Box<PathChange>,
-        /// The root secrets of the immediate update ancestors of this one
+        /// The root secrets of the immediate update ancestors of this one and
+        /// any formerly unreachable ancestors we were able to derive.
         predecessor_secrets: Vec<PredecessorSecret>,
+        /// Updates corresponding to ancestor root secrets we could not derive. These
+        /// are propagated until they can be derived, so can include ancestors of
+        /// immediate predecessors.
+        unreachable_ancestors: Vec<Digest<Signed<CgkaOperation>>>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
@@ -545,6 +550,7 @@ mod nearest_update_ancestor_tests {
                 removed_keys: Vec::new(),
             }),
             predecessor_secrets: Vec::new(),
+            unreachable_ancestors: Vec::new(),
             predecessors: Vec::new(),
             doc_id,
         }
