@@ -28,7 +28,6 @@ use crate::{
         merge::{Merge, MergeAsync},
     },
 };
-use derivative::Derivative;
 use dupe::Dupe;
 use future_form::FutureForm;
 use futures::{lock::Mutex, prelude::*};
@@ -40,12 +39,15 @@ use keyhive_crypto::{
     verifiable::Verifiable,
 };
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fmt::{self, Debug},
+    marker::PhantomData,
+    sync::Arc,
+};
 use thiserror::Error;
 
 /// The current user agent (which can sign and encrypt).
-#[derive(Derivative)]
-#[derivative(Debug)]
 pub struct Active<
     F: FutureForm,
     S: AsyncSigner<F>,
@@ -53,7 +55,6 @@ pub struct Active<
     L: PrekeyListener<F> = NoListener,
 > {
     /// The signing key of the active agent.
-    #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
 
     // TODO generalize to use e.g. KMS for X25519 secret keys
@@ -65,10 +66,21 @@ pub struct Active<
     pub(crate) individual: Arc<Mutex<Individual>>,
 
     ///The listener for prekey events.
-    #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
 
     pub(crate) _phantom: PhantomData<(F, T)>,
+}
+
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Debug
+    for Active<F, S, T, L>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Active")
+            .field("prekey_pairs", &self.prekey_pairs)
+            .field("id", &self.id)
+            .field("individual", &self.individual)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Active<F, S, T, L> {

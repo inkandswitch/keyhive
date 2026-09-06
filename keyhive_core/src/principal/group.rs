@@ -27,7 +27,6 @@ use crate::{
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
 use beekem::error::CgkaError;
-use derivative::Derivative;
 use derive_more::Debug;
 use derive_where::derive_where;
 use dupe::{Dupe, IterDupedExt};
@@ -60,7 +59,7 @@ use thiserror::Error;
 /// Groups are stateful agents. It is possible the delegate control over them,
 /// and they can be delegated to. This produces transitives lines of authority
 /// through the network of [`Agent`]s.
-#[derive(Clone, Derivative)]
+#[derive(Clone)]
 #[derive_where(Debug; T)]
 pub struct Group<
     F: FutureForm,

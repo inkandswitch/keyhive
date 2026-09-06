@@ -11,7 +11,6 @@ use crate::{
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
-use derivative::Derivative;
 use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
@@ -35,8 +34,7 @@ use std::num::NonZeroUsize;
 /// `Individual`s can be thought of as the terminal agents. They represent
 /// keys that may sign ops, be delegated capabilties to
 /// [`Document`][super::document::Document]s and [`Group`][super::group::Group]s.
-#[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
-#[derivative(PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Individual {
     /// The public key identifier.
     pub(crate) id: IndividualId,
