@@ -726,14 +726,16 @@ impl Cgka {
                 continue;
             }
             match self.derive_pcs_key_for_op(&op_hash) {
-                Ok(secret) => found.push((op_hash, secret)),
+                Ok(_) => match self.root_secret_for(&op_hash) {
+                    Some(secret) => found.push((op_hash, secret)),
+                    None => unreachable.push(op_hash),
+                },
                 // Expected for a root secret from before we joined the tree.
                 Err(_e) => unreachable.push(op_hash),
             }
         }
         // The ancestors are an unordered set, so sort to keep the bytes stable.
         found.sort_by_key(|(op_hash, _)| *op_hash);
-        unreachable.sort();
         AncestorSecrets {
             reached: found,
             unreachable,
@@ -794,8 +796,12 @@ impl Cgka {
             return None;
         }
         self.pcs_keys_by_update.get(op_hash).copied().or_else(|| {
+            // Validate that the update op described the correct secret/op pairing.
+            let root_share_key = self.root_share_key_for(op_hash)?;
             self.invited_root_secrets()
-                .find(|(invited_op, _)| invited_op == op_hash)
+                .find(|(invited_op, key)| {
+                    invited_op == op_hash && key.0.share_key() == root_share_key
+                })
                 .map(|(_, key)| key)
         })
     }
