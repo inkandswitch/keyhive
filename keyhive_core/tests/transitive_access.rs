@@ -1416,8 +1416,12 @@ async fn test_competing_cgka_init_adds() -> TestResult {
 
         let doc_tree_id: beekem::id::TreeId = doc_id.verifying_key().into();
         let bob_member_id: beekem::id::MemberId = bob_active_id.verifying_key().into();
-        let init_add =
-            beekem::operation::CgkaOperation::init_add(doc_tree_id, bob_member_id, bob_pk, [0u8; 32]);
+        let init_add = beekem::operation::CgkaOperation::init_add(
+            doc_tree_id,
+            bob_member_id,
+            bob_pk,
+            [0u8; 32],
+        );
         let signed_init = keyhive_crypto::signer::async_signer::try_sign_async::<
             future_form::Sendable,
             _,
