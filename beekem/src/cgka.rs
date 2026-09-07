@@ -621,6 +621,9 @@ impl Cgka {
                     );
             }
         }
+        // Nothing else records the root secret of an update written by someone else,
+        // so without this every later update rebuilds the whole history to derive it.
+        self.record_tree_root_secret();
         Ok(())
     }
 
@@ -713,7 +716,7 @@ impl Cgka {
             match self.derive_pcs_key_for_op(&op_hash) {
                 Ok(secret) => found.push((op_hash, secret)),
                 // Expected for a root secret from before we joined the tree.
-                Err(e) => unreachable.push(op_hash),
+                Err(_e) => unreachable.push(op_hash),
             }
         }
         // The ancestors are an unordered set, so sort to keep the bytes stable.
@@ -1072,6 +1075,50 @@ mod cgka_tests {
     use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
 
     #[tokio::test]
+    async fn applying_an_update_records_the_root_secret_it_produced() {
+        let mut csprng = rand::thread_rng();
+        let alice_signer = MemorySigner::generate(&mut csprng);
+        let bob_signer = MemorySigner::generate(&mut csprng);
+        let doc_id = TreeId::from(alice_signer.verifying_key());
+        let alice_id = MemberId(alice_signer.verifying_key());
+        let bob_id = MemberId(bob_signer.verifying_key());
+
+        let alice_sk = ShareSecretKey::generate(&mut csprng);
+        let alice_pk = alice_sk.share_key();
+        let mut alice =
+            Cgka::new::<future_form::Local, _>(doc_id, alice_id, alice_pk, &alice_signer)
+                .await
+                .unwrap();
+        alice.owner_sks.insert(alice_pk, alice_sk);
+
+        let bob_sk = ShareSecretKey::generate(&mut csprng);
+        let bob_pk = bob_sk.share_key();
+        alice
+            .add::<future_form::Local, _>(bob_id, bob_pk, &alice_signer)
+            .await
+            .unwrap();
+        let sk = ShareSecretKey::generate(&mut csprng);
+        let (root, op) = alice
+            .update::<future_form::Local, _, _>(sk.share_key(), sk, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+
+        let mut bob_sks = ShareKeyMap::new();
+        bob_sks.insert(bob_pk, bob_sk);
+        let mut bob = Cgka::new_from_init_add(doc_id, alice_id, alice_pk, alice.init_add_op())
+            .unwrap()
+            .with_new_owner(bob_id, bob_sks)
+            .unwrap();
+        bob.apply_epochs(&alice.ops().unwrap()).unwrap();
+
+        assert_eq!(
+            bob.root_secret_for(&Digest::hash(&op)),
+            Some(root),
+            "applying Alice's update should have recorded the secret it produced"
+        );
+    }
+
+    #[tokio::test]
     async fn a_secret_is_recorded_only_for_the_update_that_produced_it() {
         let mut csprng = rand::thread_rng();
         let alice_signer = MemorySigner::generate(&mut csprng);
@@ -1124,7 +1171,8 @@ mod cgka_tests {
         };
 
         // Bob reads content written under the first rotation.
-        bob.decryption_key_for(&encrypt_pcs_key(root1, op1_hash)).unwrap();
+        bob.decryption_key_for(&encrypt_pcs_key(root1, op1_hash))
+            .unwrap();
 
         // Alice rotates again. Bob applies it without deriving its root secret,
         // which is the ordinary state for an update authored by someone else.
@@ -1139,7 +1187,8 @@ mod cgka_tests {
 
         // A peer sends content pairing the first rotation's secret with the second
         // rotation's operation. Both values are ones any peer legitimately holds.
-        bob.decryption_key_for(&encrypt_pcs_key(root1, op2_hash)).unwrap();
+        bob.decryption_key_for(&encrypt_pcs_key(root1, op2_hash))
+            .unwrap();
 
         assert_ne!(
             bob.root_secret_for(&op2_hash),
