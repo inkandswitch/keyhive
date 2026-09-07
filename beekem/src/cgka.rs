@@ -797,12 +797,8 @@ impl Cgka {
             return None;
         }
         self.pcs_keys_by_update.get(op_hash).copied().or_else(|| {
-            // Validate that the update op described the correct secret/op pairing.
-            let root_share_key = self.root_share_key_for(op_hash)?;
             self.invited_root_secrets()
-                .find(|(invited_op, key)| {
-                    invited_op == op_hash && key.0.share_key() == root_share_key
-                })
+                .find(|(invited_op, _)| invited_op == op_hash)
                 .map(|(_, key)| key)
         })
     }
@@ -815,10 +811,7 @@ impl Cgka {
         self.pcs_keys_by_update
             .iter()
             .map(|(op_hash, key)| (*op_hash, *key))
-            // Validate the invited root secrets are correctly paired
-            .chain(self.invited_root_secrets().filter(|(op_hash, key)| {
-                self.root_share_key_for(op_hash) == Some(key.0.share_key())
-            }))
+            .chain(self.invited_root_secrets())
     }
 
     /// Return the requested PCS key and the update that produced it, if we can
@@ -889,10 +882,13 @@ impl Cgka {
                         )
                         .ok()?;
                     let bytes = <[u8; 32]>::try_from(plaintext).ok()?;
-                    Some((
-                        invited.update_op_hash,
-                        PcsKey::new(ShareSecretKey::force_from_bytes(bytes)),
-                    ))
+                    let pcs_key = PcsKey::new(ShareSecretKey::force_from_bytes(bytes));
+                    // An inviter claims that this is an update op paired with this root secret.
+                    // Validate this claim and filter out if invalid.
+                    if self.root_share_key_for(&invited.update_op_hash)? != pcs_key.0.share_key() {
+                        return None;
+                    }
+                    Some((invited.update_op_hash, pcs_key))
                 })
             })
     }
@@ -1144,6 +1140,159 @@ mod cgka_tests {
             bob.root_secret_for(&Digest::hash(&op)),
             Some(root),
             "receiving Alice's update should have recorded the secret it produced"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_secret_is_not_recorded_for_an_update_that_did_not_produce_it() {
+        let mut csprng = rand::thread_rng();
+        let alice_signer = MemorySigner::generate(&mut csprng);
+        let doc_id = TreeId::from(alice_signer.verifying_key());
+        let alice_id = MemberId(alice_signer.verifying_key());
+        let alice_sk = ShareSecretKey::generate(&mut csprng);
+        let alice_pk = alice_sk.share_key();
+        let mut alice =
+            Cgka::new::<future_form::Local, _>(doc_id, alice_id, alice_pk, &alice_signer)
+                .await
+                .unwrap();
+        alice.owner_sks.insert(alice_pk, alice_sk);
+
+        let bob_signer = MemorySigner::generate(&mut csprng);
+        let bob_sk = ShareSecretKey::generate(&mut csprng);
+        alice
+            .add::<future_form::Local, _>(
+                MemberId(bob_signer.verifying_key()),
+                bob_sk.share_key(),
+                &alice_signer,
+            )
+            .await
+            .unwrap();
+
+        let sk1 = ShareSecretKey::generate(&mut csprng);
+        let (root1, _) = alice
+            .update::<future_form::Local, _, _>(sk1.share_key(), sk1, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let sk2 = ShareSecretKey::generate(&mut csprng);
+        let (root2, op2) = alice
+            .update::<future_form::Local, _, _>(sk2.share_key(), sk2, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let op2_hash = Digest::hash(&op2);
+        assert_ne!(root1, root2, "the two rotations produce different secrets");
+
+        alice.pcs_keys_by_update.remove(&op2_hash);
+        assert_eq!(
+            alice.root_secret_for(&op2_hash),
+            None,
+            "precondition: nothing is recorded for op2"
+        );
+
+        alice.insert_pcs_key(&root1, op2_hash);
+        assert_eq!(
+            alice.root_secret_for(&op2_hash),
+            None,
+            "a secret op2 did not produce should not be recorded for it"
+        );
+
+        alice.insert_pcs_key(&root2, op2_hash);
+        assert_eq!(
+            alice.root_secret_for(&op2_hash),
+            Some(root2),
+            "the secret op2 did produce should be"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_it() {
+        let mut csprng = rand::thread_rng();
+        let alice_signer = MemorySigner::generate(&mut csprng);
+        let bob_signer = MemorySigner::generate(&mut csprng);
+        let doc_id = TreeId::from(alice_signer.verifying_key());
+        let alice_id = MemberId(alice_signer.verifying_key());
+        let bob_id = MemberId(bob_signer.verifying_key());
+        let alice_sk = ShareSecretKey::generate(&mut csprng);
+        let alice_pk = alice_sk.share_key();
+        let mut alice =
+            Cgka::new::<future_form::Local, _>(doc_id, alice_id, alice_pk, &alice_signer)
+                .await
+                .unwrap();
+        alice.owner_sks.insert(alice_pk, alice_sk);
+        let bob_sk = ShareSecretKey::generate(&mut csprng);
+        let bob_pk = bob_sk.share_key();
+        alice
+            .add::<future_form::Local, _>(bob_id, bob_pk, &alice_signer)
+            .await
+            .unwrap();
+        let sk1 = ShareSecretKey::generate(&mut csprng);
+        let (root1, _) = alice
+            .update::<future_form::Local, _, _>(sk1.share_key(), sk1, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let sk2 = ShareSecretKey::generate(&mut csprng);
+        let (root2, op2) = alice
+            .update::<future_form::Local, _, _>(sk2.share_key(), sk2, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let op2_hash = Digest::hash(&op2);
+        assert_ne!(root1, root2, "the two rotations produce different secrets");
+
+        let mut bob_sks = ShareKeyMap::new();
+        bob_sks.insert(bob_pk, bob_sk);
+        let mut bob = Cgka::new_from_init_add(doc_id, alice_id, alice_pk, alice.init_add_op())
+            .unwrap()
+            .with_new_owner(bob_id, bob_sks)
+            .unwrap();
+        for epoch in alice.ops().unwrap() {
+            for op in epoch.iter() {
+                bob.merge_concurrent_operation(op.clone()).unwrap();
+            }
+        }
+
+        // An inviter chooses the op hash and the encrypted root secret, which
+        // could be selected to be incorrect.
+        let inviter_sk = ShareSecretKey::generate(&mut csprng);
+        let inviter_pk = inviter_sk.share_key();
+        let invitation = |secret: PcsKey| Invitation {
+            invitee_id: bob_id,
+            invitee_pk: bob_pk,
+            inviter_pk,
+            head_secrets: vec![InvitationSecret {
+                update_op_hash: op2_hash,
+                encrypted_root_secret: encrypt_secret(
+                    doc_id.as_bytes(),
+                    secret.0,
+                    &inviter_sk,
+                    &bob_pk,
+                )
+                .unwrap(),
+            }],
+        };
+        let signed = |invitation| async {
+            async_signer::try_sign_async::<future_form::Local, _, _>(
+                &alice_signer,
+                CgkaOperation::Invite {
+                    invitation: Box::new(invitation),
+                    predecessors: Vec::new(),
+                    doc_id,
+                },
+            )
+            .await
+            .unwrap()
+        };
+
+        bob.record_invitation(&signed(invitation(root1)).await);
+        assert!(
+            !bob.invited_root_secrets()
+                .any(|(op_hash, key)| op_hash == op2_hash && key == root1),
+            "an invitation wrapping op2 with a secret it did not produce should be ignored"
+        );
+
+        bob.record_invitation(&signed(invitation(root2)).await);
+        assert!(
+            bob.invited_root_secrets()
+                .any(|(op_hash, key)| op_hash == op2_hash && key == root2),
+            "an invitation wrapping op2 with the secret it did produce should be used"
         );
     }
 
