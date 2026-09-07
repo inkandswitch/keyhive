@@ -75,23 +75,20 @@ pub struct Cgka {
     /// The root secret each update operation produced, for the ones we can reach.
     pcs_keys_by_update: Map<Digest<Signed<CgkaOperation>>, PcsKey>,
 
-    /// Invitations for new members.
+    /// Every invitation we have seen by invite member.
     invitations: Map<MemberId, Vec<Invitation>>,
 
     original_member: (MemberId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
 }
 
-/// Predecessor (or formerly unreachable) root secrets. Also includes unreachable
-/// root secrets to ensure we can eventually create a chain back to them after
-/// subsequent updates (possibly by other members).
+/// The root secrets an update or an invitation should wrap.
 struct AncestorSecrets {
-    /// Every root secret that could be derived, corresponding either to an
-    /// immediate predecessor update or a formerly unreachable root secret.
+    /// The root secrets we could derive, paired with the update that produced each.
     reached: Vec<(Digest<Signed<CgkaOperation>>, PcsKey)>,
 
-    /// Updates corresponding to root secrets that could not be derived, either
-    /// immediate predecessors or those older ancestors propagated as unreachable.
+    /// Updates whose root secret we could not derive. They are propagated so a
+    /// later update, possibly by another member, can derive it.
     unreachable: Vec<Digest<Signed<CgkaOperation>>>,
 }
 
@@ -578,9 +575,8 @@ impl Cgka {
         }
         self.ops_graph.add_op(&op, &op.payload.predecessors());
         if matches!(op.payload, CgkaOperation::Update { .. }) {
-            // Nothing else records the root secret of an update written by another
-            // member, and this is where one arrives. Without it every later update
-            // rebuilds the whole history to derive it again.
+            // Record it while the tree is in the state this update produced.
+            // Otherwise a later update rebuilds the history to derive it again.
             self.record_tree_root_secret();
         }
         Ok(())
@@ -657,8 +653,9 @@ impl Cgka {
 
     /// Derive [`PcsKey`] for provided hashes.
     ///
-    /// If we have not seen this [`PcsKey`] before, we'll need to rebuild
-    /// the tree state for its corresponding update operation.
+    /// If we have not seen this [`PcsKey`] before, we look for it in an invitation
+    /// and then along the predecessor secret chain, and rebuild the tree state for
+    /// `update_op_hash` only if neither has it.
     #[instrument(skip_all)]
     fn pcs_key_from_hashes(
         &mut self,
@@ -692,16 +689,16 @@ impl Cgka {
         self.derive_pcs_key_for_op(update_op_hash)
     }
 
-    /// The root secret of each nearest update ancestor of `heads`, rebuilding for any
-    /// we have not recorded and sorted so the result is stable.
+    /// The root secrets of the nearest update ancestors of `heads`, plus any
+    /// ancestors those updates recorded as unreachable.
     #[instrument(skip_all)]
     fn reachable_ancestor_secrets(
         &mut self,
         heads: &Set<Digest<Signed<CgkaOperation>>>,
     ) -> AncestorSecrets {
         let nearest = self.ops_graph.nearest_update_ancestors(heads);
-        // Whatever those updates could not reach is still owed, and this is the only
-        // place it gets asked about again.
+        // Also retry the ancestors those updates could not reach, so a member that
+        // can derive one now puts it back into the chain.
         let mut targets = nearest.clone();
         for op_hash in &nearest {
             if let Some(CgkaOperation::Update {
@@ -773,7 +770,11 @@ impl Cgka {
         (encrypted, failed)
     }
 
-    /// Derive and record the current root secret, if it exists.
+    /// Derive the current root secret and record it for the update that
+    /// produced it.
+    ///
+    /// Returns `None` unless the tree has a root key and the current heads have
+    /// exactly one nearest update ancestor.
     #[instrument(skip_all)]
     fn record_tree_root_secret(&mut self) -> Option<(Digest<Signed<CgkaOperation>>, PcsKey)> {
         if !self.has_pcs_key() {
@@ -1011,7 +1012,7 @@ impl Cgka {
     /// The share key at the root of the tree when `op_hash` is applied.
     ///
     /// Returns `None` if we do not have the operation, if it is not an update, or if
-    /// there is no single root secret corresponding to it.
+    /// its path does not end in a single root share key.
     fn root_share_key_for(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> Option<ShareKey> {
         let Some(CgkaOperation::Update { new_path, .. }) =
             self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload)

@@ -68,8 +68,8 @@ pub struct InvitationSecret {
 }
 
 /// When a member is added, it can't derive a root secret from the tree until the next
-/// update. An invitation provides it the root secret associated with each update head
-/// in the inviter's CGKA operation graph.
+/// update. An invitation provides it the root secrets the inviter could reach at the
+/// point it was added.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct Invitation {
@@ -83,7 +83,8 @@ pub struct Invitation {
     /// each secret via Diffie-Hellman.
     pub inviter_pk: ShareKey,
 
-    /// The root secret of each update head the inviter could reach.
+    /// The root secrets the inviter could reach as immediate update predecessors
+    /// when it built this invitation.
     pub head_secrets: Vec<InvitationSecret>,
 }
 
@@ -125,9 +126,9 @@ pub enum CgkaOperation {
         /// The root secrets of the immediate update ancestors of this one and
         /// any formerly unreachable ancestors we were able to derive.
         predecessor_secrets: Vec<PredecessorSecret>,
-        /// Updates corresponding to ancestor root secrets we could not derive. These
-        /// are propagated until they can be derived, so can include ancestors of
-        /// immediate predecessors.
+        /// Updates corresponding to ancestor root secrets we could not derive.
+        /// They are propagated until they can be derived, and so can include ancestors
+        /// of our nearest update ancestors.
         unreachable_ancestors: Vec<Digest<Signed<CgkaOperation>>>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
@@ -508,7 +509,6 @@ mod op_test_helpers {
         ShareSecretKey::generate(&mut rand::thread_rng()).share_key()
     }
 
-    /// A new member id.
     pub(super) fn member_id() -> MemberId {
         MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key())
     }
