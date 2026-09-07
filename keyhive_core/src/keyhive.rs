@@ -638,8 +638,9 @@ impl<
                         if still_reachable.contains(&id) {
                             continue;
                         }
-                        if let Ok(Some(op)) =
-                            locked_doc.remove_cgka_member(id, authorization, &signer).await
+                        if let Ok(Some(op)) = locked_doc
+                            .remove_cgka_member(id, authorization, &signer)
+                            .await
                         {
                             update.cgka_ops.push(op);
                         }
@@ -1810,9 +1811,8 @@ impl<
 
         // Authority check. Bind each CGKA operation to the membership graph.
         // An add points to the delegation that authorizes it, a remove
-        // to the revocation, and both must be signed by the same key that
-        // signed that membership operation. An update must be signed by the
-        // member whose leaf it rotates.
+        // to the revocation, and any operation must be signed by that membership
+        // operation's signer.
         {
             let op_issuer = signed_op.issuer;
             let genesis_issuer = {
@@ -1830,23 +1830,50 @@ impl<
                     if predecessors.is_empty() && *added_id == MemberId(tree_id.0) {
                         true
                     } else if let Some(dlg_hash) = authorization {
-                        self.delegations
-                            .lock()
-                            .await
-                            .get(&Digest::from(*dlg_hash))
-                            .is_some_and(|dlg| dlg.issuer == op_issuer)
+                        // The delegation must exist, be signed by this op's
+                        // signer, and grant access to exactly the individual
+                        // delegated to.
+                        let dlg = { self.delegations.lock().await.get(&Digest::from(*dlg_hash)) };
+                        match dlg {
+                            Some(dlg) if dlg.issuer == op_issuer => dlg
+                                .payload
+                                .delegate
+                                .individual_ids()
+                                .await
+                                .contains(&IndividualId::from(*added_id)),
+                            _ => false,
+                        }
                     } else {
                         genesis_issuer == Some(op_issuer)
                     }
                 }
-                CgkaOperation::Remove { authorization, .. } => self
-                    .revocations
-                    .lock()
-                    .await
-                    .get(&Digest::from(*authorization))
-                    .is_some_and(|rev| rev.issuer == op_issuer),
-                CgkaOperation::Update { id, .. } => {
-                    op_issuer == id.0 || genesis_issuer == Some(op_issuer)
+                CgkaOperation::Remove {
+                    authorization, id, ..
+                } => {
+                    // The revocation must exist, be signed by this op's signer,
+                    // and revoke exactly the individual the remove targets.
+                    let rev = {
+                        self.revocations
+                            .lock()
+                            .await
+                            .get(&Digest::from(*authorization))
+                    };
+                    match rev {
+                        Some(rev) if rev.issuer == op_issuer => rev
+                            .payload
+                            .revoke
+                            .payload
+                            .delegate
+                            .individual_ids()
+                            .await
+                            .contains(&IndividualId::from(*id)),
+                        _ => false,
+                    }
+                }
+                CgkaOperation::Update { new_path, .. } => {
+                    // A path rotation must be signed by the owner of the leaf it
+                    // rotates.
+                    new_path.leaf_id.0 == op_issuer || genesis_issuer == Some(op_issuer)
                 }
             };
             if !authorized {
