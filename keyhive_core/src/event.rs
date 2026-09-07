@@ -195,7 +195,7 @@ mod tests {
             predecessors: vec![],
             add_predecessors: vec![],
             doc_id: TreeId(doc_id1.verifying_key()),
-            authorization: None,
+            authorization: [0u8; 32],
         })?;
 
         let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
@@ -214,7 +214,7 @@ mod tests {
             predecessors: vec![],
             add_predecessors: vec![],
             doc_id: TreeId(doc_id1.verifying_key()),
-            authorization: None,
+            authorization: [0u8; 32],
         })?;
 
         let hash1 = Digest::hash(&cgka_op_1);

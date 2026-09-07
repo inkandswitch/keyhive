@@ -94,9 +94,10 @@ impl Cgka {
         doc_id: TreeId,
         owner_id: MemberId,
         owner_pk: ShareKey,
+        authorization: [u8; 32],
         signer: &S,
     ) -> Result<Self, CgkaError> {
-        let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
+        let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk, authorization);
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, init_add_op).await?;
         Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
     }
@@ -240,7 +241,7 @@ impl Cgka {
         &mut self,
         id: MemberId,
         pk: ShareKey,
-        authorization: Option<[u8; 32]>,
+        authorization: [u8; 32],
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if self.tree.contains_id(&id) {
@@ -270,7 +271,7 @@ impl Cgka {
     /// Add multiple members to group.
     pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        members: NonEmpty<(MemberId, ShareKey, Option<[u8; 32]>)>,
+        members: NonEmpty<(MemberId, ShareKey, [u8; 32])>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();

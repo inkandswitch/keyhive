@@ -55,8 +55,7 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::{
-    encrypted::EncryptedContent, error::CgkaError, id::MemberId, operation::CgkaOperation,
-    pcs_key::PcsKey,
+    encrypted::EncryptedContent, error::CgkaError, operation::CgkaOperation, pcs_key::PcsKey,
 };
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
@@ -1821,30 +1820,32 @@ impl<
             };
             let authorized = match &signed_op.payload {
                 CgkaOperation::Add {
-                    predecessors,
                     authorization,
                     added_id,
-                    doc_id: tree_id,
                     ..
                 } => {
-                    if predecessors.is_empty() && *added_id == MemberId(tree_id.0) {
-                        true
-                    } else if let Some(dlg_hash) = authorization {
-                        // The delegation must exist, be signed by this op's
-                        // signer, and grant access to exactly the individual
-                        // delegated to.
-                        let dlg = { self.delegations.lock().await.get(&Digest::from(*dlg_hash)) };
-                        match dlg {
-                            Some(dlg) if dlg.issuer == op_issuer => dlg
-                                .payload
-                                .delegate
-                                .individual_ids()
-                                .await
-                                .contains(&IndividualId::from(*added_id)),
-                            _ => false,
+                    let dlg = {
+                        self.delegations
+                            .lock()
+                            .await
+                            .get(&Digest::from(*authorization))
+                    };
+                    match dlg {
+                        None => false,
+                        Some(dlg) => {
+                            let is_valid_genesis = dlg.payload.proof.is_none()
+                                && dlg.payload.can >= Access::Admin
+                                && dlg.subject_id() == Identifier::from(doc_id)
+                                && dlg.payload.delegate.id() == Identifier::from(op_issuer);
+                            let is_valid_op = dlg.issuer == op_issuer
+                                && dlg
+                                    .payload
+                                    .delegate
+                                    .individual_ids()
+                                    .await
+                                    .contains(&IndividualId::from(*added_id));
+                            is_valid_genesis || is_valid_op
                         }
-                    } else {
-                        genesis_issuer == Some(op_issuer)
                     }
                 }
                 CgkaOperation::Remove {

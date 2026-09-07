@@ -67,12 +67,14 @@ impl Cgka {
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
+        authorization: [u8; 32],
         signer: &S,
     ) -> Result<Self, CgkaError> {
         let mut inner = beekem::cgka::Cgka::new(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
             owner_pk,
+            authorization,
             signer,
         )
         .await?;
@@ -162,7 +164,7 @@ impl Cgka {
         &mut self,
         id: IndividualId,
         pk: ShareKey,
-        authorization: Option<[u8; 32]>,
+        authorization: [u8; 32],
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         self.0
@@ -172,7 +174,7 @@ impl Cgka {
 
     pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        members: NonEmpty<(IndividualId, ShareKey, Option<[u8; 32]>)>,
+        members: NonEmpty<(IndividualId, ShareKey, [u8; 32])>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let converted = members.map(|(id, pk, auth)| (MemberId(id.verifying_key()), pk, auth));

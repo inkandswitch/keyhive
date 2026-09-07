@@ -61,7 +61,7 @@ pub enum CgkaOperation {
         add_predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
         /// Hash of the membership delegation that occasioned adding this member.
-        authorization: Option<[u8; 32]>,
+        authorization: [u8; 32],
     },
     Remove {
         id: MemberId,
@@ -81,7 +81,12 @@ pub enum CgkaOperation {
 }
 
 impl CgkaOperation {
-    pub fn init_add(doc_id: TreeId, added_id: MemberId, pk: ShareKey) -> Self {
+    pub fn init_add(
+        doc_id: TreeId,
+        added_id: MemberId,
+        pk: ShareKey,
+        authorization: [u8; 32],
+    ) -> Self {
         Self::Add {
             added_id,
             pk,
@@ -89,7 +94,7 @@ impl CgkaOperation {
             predecessors: Vec::new(),
             add_predecessors: Vec::new(),
             doc_id,
-            authorization: None,
+            authorization,
         }
     }
 

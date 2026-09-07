@@ -172,6 +172,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError> {
         let mut locked_csprng = csprng.lock().await;
+        let creator_id = parents.head.id();
         let (group_result, group_vk) =
             EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
                 Group::generate_after_content(
@@ -194,14 +195,23 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let owner_share_secret_key = ShareSecretKey::generate(&mut *locked_csprng);
         let owner_share_key = owner_share_secret_key.share_key();
         let group_members = group.pick_individual_prekeys(doc_id).await;
-        let other_members: Vec<(IndividualId, ShareKey, Option<[u8; 32]>)> = group_members
+        // The genesis and every founding add cite the root delegation granting
+        // the creator admin.
+        let founding: [u8; 32] = Digest::hash(
+            group
+                .get_capability(&creator_id)
+                .ok_or(GenerateDocError::MissingFoundingDelegation)?
+                .as_ref(),
+        )
+        .into();
+        let other_members: Vec<(IndividualId, ShareKey, [u8; 32])> = group_members
             .iter()
             .filter(|(id, _sk)| **id != owner_id)
-            .map(|(id, pk)| (*id, *pk, None))
+            .map(|(id, pk)| (*id, *pk, founding))
             .collect();
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_share_key, owner_share_secret_key);
-        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, signer)
+        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, founding, signer)
             .await?
             .with_new_owner(owner_id, owner_sks)?;
         let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
@@ -295,7 +305,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         for (id, prekey) in prekeys.iter() {
             if let Some(op) = self
                 .cgka_mut()?
-                .add(*id, *prekey, Some(authorization), signer)
+                .add(*id, *prekey, authorization, signer)
                 .await?
             {
                 acc.push(op);
@@ -737,6 +747,9 @@ pub enum GenerateDocError {
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error("the creator has no founding delegation")]
+    MissingFoundingDelegation,
 }
 
 #[derive(Debug, Error)]
