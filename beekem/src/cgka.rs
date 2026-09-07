@@ -702,7 +702,16 @@ impl Cgka {
                 ..
             }) = self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload)
             {
-                targets.extend(unreachable_ancestors.iter().copied());
+                targets.extend(unreachable_ancestors.iter().copied().filter(|h| {
+                    match self.ops_graph.cgka_ops.get(h).map(|op| &op.payload) {
+                        // We are only interested in updates.
+                        Some(CgkaOperation::Update { .. }) => true,
+                        Some(_) => false,
+                        // We may not have this operation yet, so it could still be
+                        // an update we have not received.
+                        None => true,
+                    }
+                }));
             }
         }
 
@@ -1115,6 +1124,101 @@ mod cgka_tests {
             bob.root_secret_for(&Digest::hash(&op)),
             Some(root),
             "applying Alice's update should have recorded the secret it produced"
+        );
+    }
+
+    #[tokio::test]
+    async fn ancestors_are_only_propagated_if_they_are_updates() {
+        let mut csprng = rand::thread_rng();
+        let alice_signer = MemorySigner::generate(&mut csprng);
+        let bob_signer = MemorySigner::generate(&mut csprng);
+        let doc_id = TreeId::from(alice_signer.verifying_key());
+        let alice_id = MemberId(alice_signer.verifying_key());
+        let bob_id = MemberId(bob_signer.verifying_key());
+
+        let alice_sk = ShareSecretKey::generate(&mut csprng);
+        let alice_pk = alice_sk.share_key();
+        let mut alice =
+            Cgka::new::<future_form::Local, _>(doc_id, alice_id, alice_pk, &alice_signer)
+                .await
+                .unwrap();
+        alice.owner_sks.insert(alice_pk, alice_sk);
+
+        let bob_sk = ShareSecretKey::generate(&mut csprng);
+        let bob_pk = bob_sk.share_key();
+        alice
+            .add::<future_form::Local, _>(bob_id, bob_pk, &alice_signer)
+            .await
+            .unwrap();
+        let sk = ShareSecretKey::generate(&mut csprng);
+        let (_, update_op) = alice
+            .update::<future_form::Local, _, _>(sk.share_key(), sk, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+
+        // An add is an operation Bob holds that produces no root secret, so no honest
+        // update could have found it unreachable.
+        let add_hash = Digest::hash(&alice.init_add_op());
+        let CgkaOperation::Update {
+            id,
+            ref new_path,
+            ref predecessor_secrets,
+            ref predecessors,
+            ..
+        } = update_op.payload
+        else {
+            panic!("an update should be an Update op")
+        };
+        let tampered = CgkaOperation::Update {
+            id,
+            new_path: new_path.clone(),
+            predecessor_secrets: predecessor_secrets.clone(),
+            unreachable_ancestors: vec![add_hash],
+            predecessors: predecessors.clone(),
+            doc_id,
+        };
+        let tampered_op =
+            async_signer::try_sign_async::<future_form::Local, _, _>(&alice_signer, tampered)
+                .await
+                .unwrap();
+
+        let mut bob_sks = ShareKeyMap::new();
+        bob_sks.insert(bob_pk, bob_sk);
+        let mut bob = Cgka::new_from_init_add(doc_id, alice_id, alice_pk, alice.init_add_op())
+            .unwrap()
+            .with_new_owner(bob_id, bob_sks)
+            .unwrap();
+        // Bob takes Alice's history with her update replaced by the tampered one.
+        for epoch in alice.ops().unwrap() {
+            for op in epoch.iter() {
+                if Digest::hash(&**op) == Digest::hash(&update_op) {
+                    continue;
+                }
+                bob.apply_operation(op.clone()).unwrap();
+            }
+        }
+        bob.apply_operation(Arc::new(tampered_op)).unwrap();
+
+        let bob_sk2 = ShareSecretKey::generate(&mut csprng);
+        let (_, bob_op) = bob
+            .update::<future_form::Local, _, _>(
+                bob_sk2.share_key(),
+                bob_sk2,
+                &bob_signer,
+                &mut csprng,
+            )
+            .await
+            .unwrap();
+        let CgkaOperation::Update {
+            ref unreachable_ancestors,
+            ..
+        } = bob_op.payload
+        else {
+            panic!("an update should be an Update op")
+        };
+        assert!(
+            !unreachable_ancestors.contains(&add_hash),
+            "an entry containing an add should be rejected rather than replayed and propagated as unreachable"
         );
     }
 
