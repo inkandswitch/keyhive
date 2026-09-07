@@ -545,7 +545,7 @@ impl<
                 self.docs.lock().await.insert(doc_id, doc.dupe());
             }
         }
-
+        self.touch();
         true
     }
 
@@ -558,9 +558,9 @@ impl<
             if locked_individuals.contains_key(&id) {
                 return false;
             }
-
             locked_individuals.insert(id, individual.dupe());
         }
+        self.touch();
         true
     }
 
@@ -2265,7 +2265,7 @@ impl<
                 self.touch();
             }
         };
-
+        self.touch();
         // FIXME remove because this is way too high in the stack
         // self.event_listener.on_delegation(&delegation).await;
 
@@ -2298,11 +2298,13 @@ impl<
         let existing_group = { self.groups.lock().await.get(&GroupId(id)).cloned() };
         if let Some(group) = existing_group {
             group.lock().await.receive_revocation(revocation).await?;
+            self.touch();
             return Ok(());
         }
         let existing_doc = { self.docs.lock().await.get(&DocumentId(id)).cloned() };
         if let Some(doc) = existing_doc {
             doc.lock().await.receive_revocation(revocation).await?;
+            self.touch();
             return Ok(());
         }
         let individual = { self.individuals.lock().await.remove(&IndividualId(id)) };
@@ -2311,6 +2313,7 @@ impl<
                 .promote_individual_to_group(indie, revocation.payload.revoke.dupe())
                 .await;
             group.lock().await.receive_revocation(revocation).await?;
+            self.touch();
             return Ok(());
         }
         let group = Arc::new(Mutex::new(
@@ -2327,6 +2330,7 @@ impl<
         let mut locked = group.lock().await;
         self.groups.lock().await.insert(locked.group_id(), group2);
         locked.receive_revocation(revocation).await?;
+        self.touch();
 
         Ok(())
     }
@@ -3242,7 +3246,11 @@ impl<
                     .lock()
                     .await
                     .retain(|e| !replayed_pending.contains(&Digest::hash(e.as_ref())));
-                return (Vec::new(), !replayed_pending.is_empty());
+                let resolved_pending = !replayed_pending.is_empty();
+                if resolved_pending {
+                    self.touch();
+                }
+                return (Vec::new(), resolved_pending);
             }
 
             if next_epoch.len() == epoch_len {
