@@ -472,8 +472,11 @@ impl Cgka {
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let heads = self.ops_graph.cgka_op_heads.clone();
             let predecessors = Vec::from_iter(heads.iter().cloned());
-            let ancestors = self.reachable_ancestor_secrets(&heads);
-            let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestors.reached);
+            let mut ancestors = self.reachable_ancestor_secrets(&heads);
+            let (predecessor_secrets, unencrypted) =
+                self.predecessor_secrets(&pcs_key, &ancestors.reached);
+            ancestors.unreachable.extend(unencrypted);
+            ancestors.unreachable.sort();
             let op = CgkaOperation::Update {
                 id: update_id,
                 new_path: Box::new(new_path),
@@ -709,7 +712,8 @@ impl Cgka {
             }
             match self.derive_pcs_key_for_op(&op_hash) {
                 Ok(secret) => found.push((op_hash, secret)),
-                Err(_e) => unreachable.push(op_hash),
+                // Expected for a root secret from before we joined the tree.
+                Err(e) => unreachable.push(op_hash),
             }
         }
         // The ancestors are an unordered set, so sort to keep the bytes stable.
@@ -722,29 +726,30 @@ impl Cgka {
     }
 
     /// Encrypt each of `ancestor_secrets` under a key derived from `pcs_key` so that
-    /// a member who can derive `pcs_key` can derive those too.
+    /// a member who can derive `pcs_key` can derive those too. Returns a pair of
+    /// successfully encrypted secrets and the operations for any failed encryptions.
     #[instrument(skip_all)]
     fn predecessor_secrets(
         &self,
         pcs_key: &PcsKey,
         ancestor_secrets: &[(Digest<Signed<CgkaOperation>>, PcsKey)],
-    ) -> Vec<PredecessorSecret> {
+    ) -> (Vec<PredecessorSecret>, Vec<Digest<Signed<CgkaOperation>>>) {
         let key = pcs_key.derive_predecessor_secrets_key();
-        ancestor_secrets
-            .iter()
-            .filter_map(|(op_hash, secret)| {
-                match key.try_seal(secret.0.as_slice(), self.doc_id.as_bytes()) {
-                    Ok(sealed) => Some(PredecessorSecret {
-                        update_op_hash: *op_hash,
-                        encrypted_root_secret: sealed,
-                    }),
-                    Err(e) => {
-                        warn!(?e, "could not seal a predecessor root secret");
-                        None
-                    }
+        let mut encrypted = Vec::new();
+        let mut failed = Vec::new();
+        for (op_hash, secret) in ancestor_secrets {
+            match key.try_seal(secret.0.as_slice(), self.doc_id.as_bytes()) {
+                Ok(encrypted_root_secret) => encrypted.push(PredecessorSecret {
+                    update_op_hash: *op_hash,
+                    encrypted_root_secret,
+                }),
+                Err(e) => {
+                    warn!(?e, ?op_hash, "could not encrypt a predecessor root secret");
+                    failed.push(*op_hash);
                 }
-            })
-            .collect()
+            }
+        }
+        (encrypted, failed)
     }
 
     /// Derive and record the current root secret, if it exists.
