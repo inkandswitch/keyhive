@@ -359,3 +359,21 @@ async fn a_remove_cannot_cite_a_revocation_over_another_resource() -> TestResult
     assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
     Ok(())
 }
+
+#[tokio::test]
+async fn the_genesis_issuer_cannot_update_another_members_leaf() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+
+    let mut path = stolen_path(&alice).await;
+    path.leaf_id = MemberId(bob.id().verifying_key());
+    let op = CgkaOperation::Update {
+        id: MemberId(bob.id().verifying_key()),
+        new_path: path,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId(doc_id.verifying_key()),
+    };
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+
+    assert!(refused(&result), "{result:?}");
+    Ok(())
+}

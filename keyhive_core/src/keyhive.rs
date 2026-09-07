@@ -1818,6 +1818,16 @@ impl<
                 let locked = doc.lock().await;
                 locked.cgka().ok().map(|c| c.init_add_op().issuer)
             };
+            let genesis_id = {
+                let locked = doc.lock().await;
+                locked
+                    .cgka()
+                    .ok()
+                    .and_then(|c| match c.init_add_op().payload {
+                        CgkaOperation::Add { added_id, .. } => Some(added_id),
+                        _ => None,
+                    })
+            };
             let is_for_this_doc = |subject: Identifier| {
                 let doc = doc.dupe();
                 async move {
@@ -1893,7 +1903,9 @@ impl<
                 CgkaOperation::Update { new_path, .. } => {
                     // A path rotation must be signed by the owner of the leaf it
                     // rotates.
-                    new_path.leaf_id.0 == op_issuer || genesis_issuer == Some(op_issuer)
+                    new_path.leaf_id.0 == op_issuer
+                        || (genesis_issuer == Some(op_issuer)
+                            && genesis_id == Some(new_path.leaf_id))
                 }
             };
             if !authorized {
