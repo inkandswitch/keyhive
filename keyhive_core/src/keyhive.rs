@@ -1818,12 +1818,25 @@ impl<
                 let locked = doc.lock().await;
                 locked.cgka().ok().map(|c| c.init_add_op().issuer)
             };
+            let is_for_this_doc = |subject: Identifier| {
+                let doc = doc.dupe();
+                async move {
+                    if subject == Identifier::from(doc_id) {
+                        return true;
+                    }
+                    let locked = doc.lock().await;
+                    locked.transitive_members().await.contains_key(&subject)
+                }
+            };
             let authorized = match &signed_op.payload {
                 CgkaOperation::Add {
                     authorization,
                     added_id,
                     ..
                 } => {
+                    // The delegation must exist, be about this document, be
+                    // signed by this op's signer, and add exactly the
+                    // individual the delegation targets.
                     let dlg = {
                         self.delegations
                             .lock()
@@ -1838,6 +1851,7 @@ impl<
                                 && dlg.subject_id() == Identifier::from(doc_id)
                                 && dlg.payload.delegate.id() == Identifier::from(op_issuer);
                             let is_valid_op = dlg.issuer == op_issuer
+                                && is_for_this_doc(dlg.subject_id()).await
                                 && dlg
                                     .payload
                                     .delegate
@@ -1851,8 +1865,9 @@ impl<
                 CgkaOperation::Remove {
                     authorization, id, ..
                 } => {
-                    // The revocation must exist, be signed by this op's signer,
-                    // and revoke exactly the individual the remove targets.
+                    // The revocation must exist, be about this document, be
+                    // signed by this op's signer, and revoke exactly the
+                    // individual the remove targets.
                     let rev = {
                         self.revocations
                             .lock()
@@ -1860,14 +1875,18 @@ impl<
                             .get(&Digest::from(*authorization))
                     };
                     match rev {
-                        Some(rev) if rev.issuer == op_issuer => rev
-                            .payload
-                            .revoke
-                            .payload
-                            .delegate
-                            .individual_ids()
-                            .await
-                            .contains(&IndividualId::from(*id)),
+                        Some(rev)
+                            if rev.issuer == op_issuer
+                                && is_for_this_doc(rev.subject_id()).await =>
+                        {
+                            rev.payload
+                                .revoke
+                                .payload
+                                .delegate
+                                .individual_ids()
+                                .await
+                                .contains(&IndividualId::from(*id))
+                        }
                         _ => false,
                     }
                 }

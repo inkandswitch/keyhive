@@ -27,6 +27,13 @@ type Kh = keyhive_core::keyhive::Keyhive<
     rand::rngs::OsRng,
 >;
 
+type Mem = Membered<
+    future_form::Sendable,
+    keyhive_crypto::signer::memory::MemorySigner,
+    [u8; 32],
+    keyhive_core::listener::no_listener::NoListener,
+>;
+
 /// The current CGKA op heads for `doc` as `observer` sees them.
 async fn cgka_heads(observer: &Kh, doc: DocumentId) -> Vec<Digest<Signed<CgkaOperation>>> {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap().unwrap();
@@ -272,5 +279,83 @@ async fn a_remove_cannot_evict_the_wrong_subject() -> TestResult {
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
     assert!(refused(&result), "{result:?}");
+    Ok(())
+}
+
+/// A group of `mallory`'s own, with `subject` in it and that delegation's hash.
+async fn own_group_with(mallory: &Kh, subject: Identifier) -> TestResult<(Mem, [u8; 32])> {
+    let group = mallory.generate_group(vec![]).await?;
+    let membered = Membered::Group(group.lock().await.group_id(), group.dupe());
+    let agent = mallory.get_agent(subject).await.expect("knows the subject");
+    let update = mallory
+        .add_member(agent, &membered, Access::Admin, &[])
+        .await?;
+    Ok((membered, Digest::hash(update.delegation.as_ref()).into()))
+}
+
+/// Deliver `from`'s own history to `to` as a relay would.
+async fn leak_to(from: &Kh, to: &Kh) {
+    let self_agent = from.active().lock().await.clone().into();
+    let events = from.static_events_for_agent(&self_agent).await;
+    to.ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+}
+
+#[tokio::test]
+async fn an_add_cannot_cite_a_delegation_over_another_resource() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
+
+    let (_, elsewhere) = own_group_with(&mallory, mallory.id().into()).await?;
+    leak_to(&mallory, &alice).await;
+
+    let op = CgkaOperation::Add {
+        added_id: MemberId(mallory.id().verifying_key()),
+        pk: own_prekey(&mallory, doc_id).await,
+        leaf_index: 0,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        add_predecessors: vec![],
+        doc_id: TreeId(doc_id.verifying_key()),
+        authorization: elsewhere,
+    };
+    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+
+    assert!(refused(&result), "{result:?}");
+    assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_remove_cannot_cite_a_revocation_over_another_resource() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
+
+    let bob_id = learn(&mallory, &bob).await;
+    let (membered, _) = own_group_with(&mallory, bob_id.into()).await?;
+    let revoked = mallory
+        .revoke_member(bob_id.into(), false, &membered)
+        .await?;
+    let rev_hash: [u8; 32] = Digest::hash(
+        revoked
+            .revocations()
+            .first()
+            .expect("a revocation")
+            .as_ref(),
+    )
+    .into();
+    leak_to(&mallory, &alice).await;
+
+    let op = CgkaOperation::Remove {
+        id: MemberId(bob.id().verifying_key()),
+        leaf_idx: 1,
+        removed_keys: vec![],
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId(doc_id.verifying_key()),
+        authorization: rev_hash,
+    };
+    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+
+    assert!(refused(&result), "{result:?}");
+    assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
     Ok(())
 }
