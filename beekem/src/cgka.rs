@@ -352,16 +352,20 @@ impl Cgka {
         let head_secrets: Vec<InvitationSecret> = ancestor_secrets
             .iter()
             .filter_map(|(update_op_hash, secret)| {
-                Some(InvitationSecret {
-                    update_op_hash: *update_op_hash,
-                    encrypted_root_secret: encrypt_secret(
-                        self.doc_id.as_bytes(),
-                        secret.0,
-                        &inviter_sk,
-                        &invitee_pk,
-                    )
-                    .ok()?,
-                })
+                match encrypt_secret(self.doc_id.as_bytes(), secret.0, &inviter_sk, &invitee_pk) {
+                    Ok(encrypted_root_secret) => Some(InvitationSecret {
+                        update_op_hash: *update_op_hash,
+                        encrypted_root_secret,
+                    }),
+                    Err(e) => {
+                        warn!(
+                            ?e,
+                            ?update_op_hash,
+                            "could not encrypt a root secret to an invitee"
+                        );
+                        None
+                    }
+                }
             })
             .collect();
         if head_secrets.is_empty() {
