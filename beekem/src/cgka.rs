@@ -797,12 +797,8 @@ impl Cgka {
             return None;
         }
         self.pcs_keys_by_update.get(op_hash).copied().or_else(|| {
-            // Validate that the update op described the correct secret/op pairing.
-            let root_share_key = self.root_share_key_for(op_hash)?;
             self.invited_root_secrets()
-                .find(|(invited_op, key)| {
-                    invited_op == op_hash && key.0.share_key() == root_share_key
-                })
+                .find(|(invited_op, _)| invited_op == op_hash)
                 .map(|(_, key)| key)
         })
     }
@@ -815,10 +811,7 @@ impl Cgka {
         self.pcs_keys_by_update
             .iter()
             .map(|(op_hash, key)| (*op_hash, *key))
-            // Validate the invited root secrets are correctly paired
-            .chain(self.invited_root_secrets().filter(|(op_hash, key)| {
-                self.root_share_key_for(op_hash) == Some(key.0.share_key())
-            }))
+            .chain(self.invited_root_secrets())
     }
 
     /// Return the requested PCS key and the update that produced it, if we can
@@ -889,10 +882,13 @@ impl Cgka {
                         )
                         .ok()?;
                     let bytes = <[u8; 32]>::try_from(plaintext).ok()?;
-                    Some((
-                        invited.update_op_hash,
-                        PcsKey::new(ShareSecretKey::force_from_bytes(bytes)),
-                    ))
+                    let pcs_key = PcsKey::new(ShareSecretKey::force_from_bytes(bytes));
+                    // An inviter claims that this is an update op paired with this root secret.
+                    // Validate this claim and filter out if invalid.
+                    if self.root_share_key_for(&invited.update_op_hash)? != pcs_key.0.share_key() {
+                        return None;
+                    }
+                    Some((invited.update_op_hash, pcs_key))
                 })
             })
     }
