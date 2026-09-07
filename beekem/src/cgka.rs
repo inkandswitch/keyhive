@@ -209,10 +209,10 @@ impl Cgka {
         } else {
             // `has_pcs_key()` above guarantees a single head.
             debug_assert!(self.ops_graph.has_single_head());
-            let pcs_key = self.pcs_key_from_tree_root()?;
-            let op_hash = match self.record_tree_root_secret() {
-                Some((op_hash, _)) => op_hash,
+            match self.record_tree_root_secret() {
+                Some((op_hash, pcs_key)) => (pcs_key, op_hash),
                 None => {
+                    let pcs_key = self.pcs_key_from_tree_root()?;
                     let head = self
                         .ops_graph
                         .cgka_op_heads
@@ -221,10 +221,9 @@ impl Cgka {
                         .copied()
                         .ok_or(CgkaError::UnknownPcsKey)?;
                     self.insert_pcs_key(&pcs_key, head);
-                    head
+                    (pcs_key, head)
                 }
-            };
-            (pcs_key, op_hash)
+            }
         };
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id.as_bytes());
         Ok((
@@ -978,6 +977,14 @@ impl Cgka {
         .with_new_owner(self.owner_id, self.owner_sks.clone())?;
         rebuilt_cgka.apply_epochs(&epochs)?;
         let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
+        self.pcs_keys.extend(
+            rebuilt_cgka
+                .pcs_keys
+                .iter()
+                .map(|(hash, key)| (*hash, key.clone())),
+        );
+        self.pcs_keys_by_update
+            .extend(rebuilt_cgka.pcs_keys_by_update.iter());
         self.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
         Ok(pcs_key)
     }
