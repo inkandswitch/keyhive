@@ -55,7 +55,8 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::{
-    encrypted::EncryptedContent, error::CgkaError, operation::CgkaOperation, pcs_key::PcsKey,
+    encrypted::EncryptedContent, error::CgkaError, id::MemberId, operation::CgkaOperation,
+    pcs_key::PcsKey,
 };
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
@@ -530,9 +531,11 @@ impl<
                             .delegate
                             .pick_individual_prekeys(doc_id)
                             .await;
+                        let authorization: [u8; 32] =
+                            Digest::hash(update.delegation.as_ref()).into();
                         let mut locked_doc = doc.lock().await;
                         let ops = locked_doc
-                            .add_cgka_members_from_prekeys(&prekeys, &signer)
+                            .add_cgka_members_from_prekeys(&prekeys, authorization, &signer)
                             .await?;
                         update.cgka_ops.extend(ops);
                     }
@@ -626,12 +629,18 @@ impl<
                             _ => None,
                         })
                         .collect();
+                    let authorization: [u8; 32] = update
+                        .revocations
+                        .first()
+                        .map_or([0u8; 32], |r| Digest::hash(r.as_ref()).into());
                     let mut locked_doc = doc.lock().await;
                     for &id in &revoked_individual_ids {
                         if still_reachable.contains(&id) {
                             continue;
                         }
-                        if let Ok(Some(op)) = locked_doc.remove_cgka_member(id, &signer).await {
+                        if let Ok(Some(op)) =
+                            locked_doc.remove_cgka_member(id, authorization, &signer).await
+                        {
                             update.cgka_ops.push(op);
                         }
                     }
@@ -1799,6 +1808,52 @@ impl<
                 .dupe()
         };
 
+        // Authority check. Bind each CGKA operation to the membership graph.
+        // An add points to the delegation that authorizes it, a remove
+        // to the revocation, and both must be signed by the same key that
+        // signed that membership operation. An update must be signed by the
+        // member whose leaf it rotates.
+        {
+            let op_issuer = signed_op.issuer;
+            let genesis_issuer = {
+                let locked = doc.lock().await;
+                locked.cgka().ok().map(|c| c.init_add_op().issuer)
+            };
+            let authorized = match &signed_op.payload {
+                CgkaOperation::Add {
+                    predecessors,
+                    authorization,
+                    added_id,
+                    doc_id: tree_id,
+                    ..
+                } => {
+                    if predecessors.is_empty() && *added_id == MemberId(tree_id.0) {
+                        true
+                    } else if let Some(dlg_hash) = authorization {
+                        self.delegations
+                            .lock()
+                            .await
+                            .get(&Digest::from(*dlg_hash))
+                            .is_some_and(|dlg| dlg.issuer == op_issuer)
+                    } else {
+                        genesis_issuer == Some(op_issuer)
+                    }
+                }
+                CgkaOperation::Remove { authorization, .. } => self
+                    .revocations
+                    .lock()
+                    .await
+                    .get(&Digest::from(*authorization))
+                    .is_some_and(|rev| rev.issuer == op_issuer),
+                CgkaOperation::Update { id, .. } => {
+                    op_issuer == id.0 || genesis_issuer == Some(op_issuer)
+                }
+            };
+            if !authorized {
+                return Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(Box::new(doc_id)));
+            }
+        }
+
         let signed_op = Arc::new(signed_op);
         if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
             let added_id: IndividualId = added_id.into();
@@ -2763,6 +2818,9 @@ pub enum ReceiveCgkaOpError {
 
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
     UnknownInvitePrekey(ShareKey),
+
+    #[error("CGKA op for {0} is not authorized by a known delegation or revocation")]
+    UnauthorizedCgkaOp(Box<DocumentId>),
 }
 
 impl ReceiveCgkaOpError {
@@ -2772,6 +2830,8 @@ impl ReceiveCgkaOpError {
             Self::VerificationError(_) => false,
             Self::UnknownDocument(_) => false,
             Self::UnknownInvitePrekey(_) => false,
+            // The authorizing delegation or revocation may not have arrived yet.
+            Self::UnauthorizedCgkaOp(_) => true,
         }
     }
 }

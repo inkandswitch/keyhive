@@ -240,6 +240,7 @@ impl Cgka {
         &mut self,
         id: MemberId,
         pk: ShareKey,
+        authorization: Option<[u8; 32]>,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if self.tree.contains_id(&id) {
@@ -258,6 +259,7 @@ impl Cgka {
             predecessors,
             add_predecessors,
             doc_id: self.doc_id,
+            authorization,
         };
 
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
@@ -268,12 +270,12 @@ impl Cgka {
     /// Add multiple members to group.
     pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        members: NonEmpty<(MemberId, ShareKey)>,
+        members: NonEmpty<(MemberId, ShareKey, Option<[u8; 32]>)>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();
         for m in members {
-            ops.push(self.add::<F, S>(m.0, m.1, signer).await?);
+            ops.push(self.add::<F, S>(m.0, m.1, m.2, signer).await?);
         }
         Ok(ops.into_iter().flatten().collect())
     }
@@ -283,6 +285,7 @@ impl Cgka {
     pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: MemberId,
+        authorization: [u8; 32],
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if !self.tree.contains_id(&id) {
@@ -302,6 +305,7 @@ impl Cgka {
             removed_keys,
             predecessors,
             doc_id: self.doc_id,
+            authorization,
         };
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
         self.ops_graph.add_local_op(&signed_op);

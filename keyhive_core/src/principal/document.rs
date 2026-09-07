@@ -194,10 +194,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let owner_share_secret_key = ShareSecretKey::generate(&mut *locked_csprng);
         let owner_share_key = owner_share_secret_key.share_key();
         let group_members = group.pick_individual_prekeys(doc_id).await;
-        let other_members: Vec<(IndividualId, ShareKey)> = group_members
+        let other_members: Vec<(IndividualId, ShareKey, Option<[u8; 32]>)> = group_members
             .iter()
             .filter(|(id, _sk)| **id != owner_id)
-            .map(|(id, pk)| (*id, *pk))
+            .map(|(id, pk)| (*id, *pk, None))
             .collect();
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_share_key, owner_share_secret_key);
@@ -271,8 +271,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 .delegate
                 .pick_individual_prekeys(self.doc_id())
                 .await;
-            let cgka_ops_for_this_doc =
-                self.add_cgka_members_from_prekeys(&prekeys, signer).await?;
+            let authorization: [u8; 32] = Digest::hash(update.delegation.as_ref()).into();
+            let cgka_ops_for_this_doc = self
+                .add_cgka_members_from_prekeys(&prekeys, authorization, signer)
+                .await?;
             update.cgka_ops.extend(cgka_ops_for_this_doc);
         }
         Ok(update)
@@ -286,11 +288,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub(crate) async fn add_cgka_members_from_prekeys(
         &mut self,
         prekeys: &HashMap<IndividualId, ShareKey>,
+        authorization: [u8; 32],
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
-            if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
+            if let Some(op) = self
+                .cgka_mut()?
+                .add(*id, *prekey, Some(authorization), signer)
+                .await?
+            {
                 acc.push(op);
             }
         }
@@ -331,10 +338,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let still_reachable = self.group.individual_ids().await;
         ids_to_remove.retain(|id| !still_reachable.contains(id));
 
+        // Each CGKA removal is authorized by a revocation from this revoke call.
+        // They share the issuer (the revoking admin), so any of them proves the
+        // remove's authority.
+        let authorization: [u8; 32] = revocations
+            .first()
+            .map_or([0u8; 32], |r| Digest::hash(r.as_ref()).into());
+
         // FIXME: We need to check if this has revoked the last member in our group.
         let mut ops = cgka_ops;
         for id in ids_to_remove {
-            if let Some(op) = self.cgka_mut()?.remove(id, signer).await? {
+            if let Some(op) = self.cgka_mut()?.remove(id, authorization, signer).await? {
                 ops.push(op);
             }
         }
@@ -349,9 +363,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn remove_cgka_member(
         &mut self,
         id: IndividualId,
+        authorization: [u8; 32],
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.cgka_mut()?.remove(id, signer).await
+        self.cgka_mut()?.remove(id, authorization, signer).await
     }
 
     pub async fn get_agent_revocations(

@@ -60,6 +60,8 @@ pub enum CgkaOperation {
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         add_predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
+        /// Hash of the membership delegation that occasioned adding this member.
+        authorization: Option<[u8; 32]>,
     },
     Remove {
         id: MemberId,
@@ -67,6 +69,8 @@ pub enum CgkaOperation {
         removed_keys: Vec<ShareKey>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
+        /// Hash of the membership revocation that occasioned removing this member.
+        authorization: [u8; 32],
     },
     Update {
         id: MemberId,
@@ -85,6 +89,7 @@ impl CgkaOperation {
             predecessors: Vec::new(),
             add_predecessors: Vec::new(),
             doc_id,
+            authorization: None,
         }
     }
 
