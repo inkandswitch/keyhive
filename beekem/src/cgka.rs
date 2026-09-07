@@ -76,7 +76,7 @@ pub struct Cgka {
     pcs_keys_by_update: Map<Digest<Signed<CgkaOperation>>, PcsKey>,
 
     /// Every invitation we have seen by invite member.
-    invitations: Map<MemberId, Vec<Invitation>>,
+    invitations: Map<MemberId, BTreeMap<Digest<Invitation>, Invitation>>,
 
     original_member: (MemberId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
@@ -400,10 +400,10 @@ impl Cgka {
             return;
         };
         let invitation = invitation.as_ref();
-        let stored = self.invitations.entry(invitation.invitee_id).or_default();
-        if !stored.contains(invitation) {
-            stored.push(invitation.clone());
-        }
+        self.invitations
+            .entry(invitation.invitee_id)
+            .or_default()
+            .insert(Digest::hash(invitation), invitation.clone());
     }
 
     /// Remove member from group.
@@ -878,7 +878,7 @@ impl Cgka {
         [self.owner_id, MemberId::public()]
             .into_iter()
             .filter_map(|id| self.invitations.get(&id))
-            .flatten()
+            .flat_map(|held| held.values())
             .flat_map(|invitation| {
                 invitation.head_secrets.iter().filter_map(|invited| {
                     let plaintext = self
@@ -1044,14 +1044,15 @@ impl Cgka {
         self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
     }
 
-    fn receive_invitations(&mut self, other: &Map<MemberId, Vec<Invitation>>) {
+    fn receive_invitations(
+        &mut self,
+        other: &Map<MemberId, BTreeMap<Digest<Invitation>, Invitation>>,
+    ) {
         for (member, invitations) in other.iter() {
-            let stored = self.invitations.entry(*member).or_default();
-            for invitation in invitations {
-                if !stored.contains(invitation) {
-                    stored.push(invitation.clone());
-                }
-            }
+            self.invitations
+                .entry(*member)
+                .or_default()
+                .extend(invitations.iter().map(|(d, i)| (*d, i.clone())));
         }
     }
 }
