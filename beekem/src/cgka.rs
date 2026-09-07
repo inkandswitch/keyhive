@@ -573,6 +573,12 @@ impl Cgka {
             CgkaOperation::Invite { .. } => self.record_invitation(&op),
         }
         self.ops_graph.add_op(&op, &op.payload.predecessors());
+        if matches!(op.payload, CgkaOperation::Update { .. }) {
+            // Nothing else records the root secret of an update written by another
+            // member, and this is where one arrives. Without it every later update
+            // rebuilds the whole history to derive it again.
+            self.record_tree_root_secret();
+        }
         Ok(())
     }
 
@@ -621,9 +627,6 @@ impl Cgka {
                     );
             }
         }
-        // Nothing else records the root secret of an update written by someone else,
-        // so without this every later update rebuilds the whole history to derive it.
-        self.record_tree_root_secret();
         Ok(())
     }
 
@@ -1118,12 +1121,16 @@ mod cgka_tests {
             .unwrap()
             .with_new_owner(bob_id, bob_sks)
             .unwrap();
-        bob.apply_epochs(&alice.ops().unwrap()).unwrap();
+        for epoch in alice.ops().unwrap() {
+            for arriving in epoch.iter() {
+                bob.merge_concurrent_operation(arriving.clone()).unwrap();
+            }
+        }
 
         assert_eq!(
             bob.root_secret_for(&Digest::hash(&op)),
             Some(root),
-            "applying Alice's update should have recorded the secret it produced"
+            "receiving Alice's update should have recorded the secret it produced"
         );
     }
 
