@@ -707,14 +707,11 @@ impl Cgka {
             }) = self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload)
             {
                 targets.extend(unreachable_ancestors.iter().copied().filter(|h| {
-                    match self.ops_graph.cgka_ops.get(h).map(|op| &op.payload) {
-                        // We are only interested in updates.
-                        Some(CgkaOperation::Update { .. }) => true,
-                        Some(_) => false,
-                        // We may not have this operation yet, so it could still be
-                        // an update we have not received.
-                        None => true,
-                    }
+                    // Only an update produces a root secret.
+                    matches!(
+                        self.ops_graph.cgka_ops.get(h).map(|op| &op.payload),
+                        Some(CgkaOperation::Update { .. })
+                    )
                 }));
             }
         }
@@ -819,13 +816,10 @@ impl Cgka {
         self.pcs_keys_by_update
             .iter()
             .map(|(op_hash, key)| (*op_hash, *key))
-            .chain(self.invited_root_secrets())
-            .filter(|(op_hash, _)| {
-                matches!(
-                    self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload),
-                    Some(CgkaOperation::Update { .. })
-                )
-            })
+            // Validate the invited root secrets are correctly paired
+            .chain(self.invited_root_secrets().filter(|(op_hash, key)| {
+                self.root_share_key_for(op_hash) == Some(key.0.share_key())
+            }))
     }
 
     /// Return the requested PCS key and the update that produced it, if we can
@@ -1187,11 +1181,12 @@ mod cgka_tests {
         else {
             panic!("an update should be an Update op")
         };
+        let unknown_hash: Digest<Signed<CgkaOperation>> = [9u8; 32].into();
         let tampered = CgkaOperation::Update {
             id,
             new_path: new_path.clone(),
             predecessor_secrets: predecessor_secrets.clone(),
-            unreachable_ancestors: vec![add_hash],
+            unreachable_ancestors: vec![add_hash, unknown_hash],
             predecessors: predecessors.clone(),
             doc_id,
         };
@@ -1234,6 +1229,10 @@ mod cgka_tests {
         else {
             panic!("an update should be an Update op")
         };
+        assert!(
+            !unreachable_ancestors.contains(&unknown_hash),
+            "a hash with no corresponding op should be dropped"
+        );
         assert!(
             !unreachable_ancestors.contains(&add_hash),
             "an entry containing an add should be rejected rather than replayed and propagated as unreachable"
