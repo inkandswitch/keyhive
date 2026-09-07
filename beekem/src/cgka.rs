@@ -957,11 +957,42 @@ impl Cgka {
         Ok(pcs_key)
     }
 
-    /// Record a root secret and the update that produced it.
+    /// Cache a root secret and record it for `op_hash` if that was the update
+    /// that produced it.
     #[instrument(skip_all)]
     fn insert_pcs_key(&mut self, pcs_key: &PcsKey, op_hash: Digest<Signed<CgkaOperation>>) {
         self.pcs_keys.insert((*pcs_key).into());
-        self.pcs_keys_by_update.entry(op_hash).or_insert(*pcs_key);
+        if self.pcs_keys_by_update.contains_key(&op_hash) {
+            return;
+        }
+        let Some(root_pk) = self.root_share_key_for(&op_hash) else {
+            return;
+        };
+        if pcs_key.0.share_key() != root_pk {
+            debug!(
+                ?op_hash,
+                "a root secret does not match the update it was paired with"
+            );
+            return;
+        }
+        self.pcs_keys_by_update.insert(op_hash, *pcs_key);
+    }
+
+    /// The share key at the root of the tree when `op_hash` is applied.
+    ///
+    /// Returns `None` if we do not have the operation, if it is not an update, or if
+    /// there is no single root secret corresponding to it.
+    fn root_share_key_for(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> Option<ShareKey> {
+        let Some(CgkaOperation::Update { new_path, .. }) =
+            self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload)
+        else {
+            return None;
+        };
+        let (_, root_node) = new_path.path.last()?;
+        match root_node.node_key() {
+            NodeKey::ShareKey(pk) => Some(pk),
+            NodeKey::ConflictKeys(_) => None,
+        }
     }
 
     /// Extend our state with that of the provided [`Cgka`].
@@ -1026,5 +1057,110 @@ impl Cgka {
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
+    }
+}
+
+#[cfg(test)]
+mod cgka_tests {
+    use super::*;
+    use crate::encrypted::EncryptedContent;
+    use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
+
+    #[tokio::test]
+    async fn a_secret_is_recorded_only_for_the_update_that_produced_it() {
+        let mut csprng = rand::thread_rng();
+        let alice_signer = MemorySigner::generate(&mut csprng);
+        let bob_signer = MemorySigner::generate(&mut csprng);
+        let doc_id = TreeId::from(alice_signer.verifying_key());
+        let alice_id = MemberId(alice_signer.verifying_key());
+        let bob_id = MemberId(bob_signer.verifying_key());
+
+        let alice_sk = ShareSecretKey::generate(&mut csprng);
+        let alice_pk = alice_sk.share_key();
+        let mut alice =
+            Cgka::new::<future_form::Local, _>(doc_id, alice_id, alice_pk, &alice_signer)
+                .await
+                .unwrap();
+        alice.owner_sks.insert(alice_pk, alice_sk);
+
+        let bob_sk = ShareSecretKey::generate(&mut csprng);
+        let bob_pk = bob_sk.share_key();
+        alice
+            .add::<future_form::Local, _>(bob_id, bob_pk, &alice_signer)
+            .await
+            .unwrap();
+
+        // Alice rotates once. Bob is in the tree for it.
+        let sk1 = ShareSecretKey::generate(&mut csprng);
+        let (root1, op1) = alice
+            .update::<future_form::Local, _, _>(sk1.share_key(), sk1, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let op1_hash = Digest::hash(&op1);
+
+        // Bob builds his view from the operations.
+        let mut bob_sks = ShareKeyMap::new();
+        bob_sks.insert(bob_pk, bob_sk);
+        let mut bob = Cgka::new_from_init_add(doc_id, alice_id, alice_pk, alice.init_add_op())
+            .unwrap()
+            .with_new_owner(bob_id, bob_sks)
+            .unwrap();
+        bob.apply_epochs(&alice.ops().unwrap()).unwrap();
+
+        let encrypt_pcs_key = |pcs_key: PcsKey, op_hash| -> EncryptedContent<Vec<u8>, [u8; 32]> {
+            EncryptedContent::new(
+                Siv::new(&pcs_key.into(), b"content", doc_id.as_bytes()),
+                vec![0u8; 4],
+                Digest::hash(&pcs_key),
+                op_hash,
+                [0u8; 32],
+                Digest::hash(&Vec::<[u8; 32]>::new()),
+            )
+        };
+
+        // Bob reads content written under the first rotation.
+        bob.decryption_key_for(&encrypt_pcs_key(root1, op1_hash)).unwrap();
+
+        // Alice rotates again. Bob applies it without deriving its root secret,
+        // which is the ordinary state for an update authored by someone else.
+        let sk2 = ShareSecretKey::generate(&mut csprng);
+        let (root2, op2) = alice
+            .update::<future_form::Local, _, _>(sk2.share_key(), sk2, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let op2_hash = Digest::hash(&op2);
+        bob.apply_epochs(&alice.ops().unwrap()).unwrap();
+        assert_ne!(root1, root2, "the two rotations produce different secrets");
+
+        // A peer sends content pairing the first rotation's secret with the second
+        // rotation's operation. Both values are ones any peer legitimately holds.
+        bob.decryption_key_for(&encrypt_pcs_key(root1, op2_hash)).unwrap();
+
+        assert_ne!(
+            bob.root_secret_for(&op2_hash),
+            Some(root1),
+            "the incorrect pairing should not lead to an incorrect answer"
+        );
+
+        let sk3 = ShareSecretKey::generate(&mut csprng);
+        let (root3, op3) = bob
+            .update::<future_form::Local, _, _>(sk3.share_key(), sk3, &bob_signer, &mut csprng)
+            .await
+            .unwrap();
+        let CgkaOperation::Update {
+            ref predecessor_secrets,
+            ..
+        } = op3.payload
+        else {
+            panic!("an update should be an Update op")
+        };
+        let key = root3.derive_predecessor_secrets_key();
+        assert!(
+            predecessor_secrets
+                .iter()
+                .any(|sealed| Cgka::decrypt_predecessor_secret(&key, sealed) == Some(root2)),
+            "Bob's update should encrypt the secret op2 really produced, or nothing \
+             downstream will be able to reach it by the predecessor key chain again"
+        );
     }
 }
