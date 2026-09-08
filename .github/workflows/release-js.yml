@@ -1,42 +1,100 @@
 name: Publish Package to npmjs
+
 on:
   release:
     types: [published]
+
+permissions:
+  contents: read
+
 jobs:
-  build:
-    # Only publish tags starting with keyhive-wasm as we will also
-    # want to manage rust releases from this repo
+  publish:
+    # Only publish tags starting with keyhive-wasm; Rust crate releases
+    # from this repo are handled separately.
     if: ${{ contains(github.ref, 'keyhive-wasm') }}
-    defaults:
-      run:
-        working-directory: "./keyhive_wasm"
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      # Setup .npmrc file to publish to npm
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+
+      # Cheap check first, before the Nix install and Wasm build.
+      - name: Verify tag matches package.json version
+        working-directory: keyhive_wasm
+        run: |
+          pkg_version="$(jq -r .version package.json)"
+          # Tags look like keyhive-wasm/0.2.0-alpha.1
+          tag="${GITHUB_REF_NAME#keyhive-wasm/}"
+          if [ "$tag" != "$pkg_version" ]; then
+            echo "::error::tag version '$tag' != package.json version '$pkg_version'"
+            exit 1
+          fi
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v21
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
         with:
-          node-version: "22.x"
-          registry-url: "https://registry.npmjs.org"
-      - uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-          version: "10"
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Build package
-        run: "pnpm run build"
-      - run: pnpm install --frozen-lockfile
-      - name: "pnpm publish pre-release"
-        if: "github.event.release.prerelease"
-        run: pnpm publish --tag next --access public --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: "npm publish release"
-        if: "!github.event.release.prerelease"
-        run: pnpm publish --access public
+          name: inkandswitch
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      # Same toolchain as CI: pinned wasm-bindgen-cli, wasm-bodge, esbuild.
+      - name: Build npm package
+        run: nix develop --command wasm:bodge
+
+      # Load every entry point the export map advertises, from a packed
+      # tarball, so we test what consumers will install rather than the
+      # working tree.
+      - name: Smoke test the built package
+        working-directory: keyhive_wasm
+        run: |
+          nix develop --command bash -c '
+            set -euo pipefail
+            rm -f /tmp/keyhive-keyhive-*.tgz
+            pnpm pack --pack-destination /tmp >/dev/null
+            rm -rf /tmp/smoke && mkdir -p /tmp/smoke && cd /tmp/smoke
+            npm init -y >/dev/null
+            npm install --no-audit --no-fund /tmp/keyhive-keyhive-*.tgz >/dev/null
+            node --input-type=module -e "
+              const m = await import(\"@keyhive/keyhive\");
+              if (typeof m.Keyhive !== \"function\") throw new Error(\"Keyhive missing from ESM entry\");
+              const slim = await import(\"@keyhive/keyhive/slim\");
+              if (typeof slim.default !== \"function\") throw new Error(\"slim init missing\");
+              const b64 = await import(\"@keyhive/keyhive/wasm-base64\");
+              if (typeof b64.wasmBase64 !== \"string\") throw new Error(\"wasmBase64 missing from wasm-base64 entry\");
+              const wasmUrl = import.meta.resolve(\"@keyhive/keyhive/wasm\");
+              (await import(\"node:fs\")).accessSync(new URL(wasmUrl));
+              const iifeUrl = import.meta.resolve(\"@keyhive/keyhive/iife\");
+              (await import(\"node:fs\")).accessSync(new URL(iifeUrl));
+              console.log(\"esm ok:\", Object.keys(m).length, \"exports\");
+            "
+            node -e "
+              const m = require(\"@keyhive/keyhive\");
+              if (typeof m.Keyhive !== \"function\") throw new Error(\"Keyhive missing from CJS entry\");
+              require(\"@keyhive/keyhive/slim\");
+              console.log(\"cjs ok\");
+            "
+          '
+
+      - name: Configure npm auth
+        working-directory: keyhive_wasm
+        run: echo "//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}" > .npmrc
+
+      # Dist-tag follows the version, not the GitHub "pre-release" checkbox:
+      # anything with a semver pre-release suffix (e.g. 0.2.0-alpha.1) goes
+      # to `next` so `npm install @keyhive/keyhive` never resolves to an alpha.
+      - name: Publish
+        working-directory: keyhive_wasm
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$version" == *-* ]]; then
+            tag_args=(--tag next)
+          else
+            tag_args=()
+          fi
+          nix develop --command pnpm publish --no-git-checks "${tag_args[@]}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
