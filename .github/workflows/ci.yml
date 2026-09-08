@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # Include the ref so concurrent PRs don't cancel each other, but pushes
+  # to the same ref still cancel in-progress runs.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typos:
+    name: typos
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned exactly: a floating tag would fail CI whenever a new
+      # release learns new typos. Allow-list lives in `_typos.toml`.
+      - name: Spell check
+        uses: crate-ci/typos@v1.39.2
+
+  # Every check is a `nix run .#<check>` app defined in flake.nix, so hosted
+  # CI and `nix run .#ci` locally execute byte-identical commands.
+  checks:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # ci-wasm-node / ci-browser / ci-e2e are the only jobs that EXECUTE
+        # wasm-target tests; ci-test compiles them away and reports
+        # "running 0 tests". Without them those suites are ornamental.
+        check:
+          [
+            ci-fmt,
+            ci-clippy,
+            ci-test,
+            ci-doc,
+            ci-wasm,
+            ci-wasm-mut,
+            ci-wasm-node,
+            ci-browser,
+            ci-no-std,
+            ci-deny,
+            ci-msrv,
+            ci-e2e,
+          ]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v21
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        with:
+          name: inkandswitch
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: ${{ matrix.check }}
+        run: nix run .#${{ matrix.check }}
+
+      - name: Upload Playwright report
+        if: failure() && matrix.check == 'ci-e2e'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: keyhive_wasm/playwright-report/
+          retention-days: 7
+
+  # Mutation testing, scoped to the PR's changed code (full-workspace runs
+  # are hours; `nix run .#ci-mutants` does the deliberate full sweep
+  # locally). A missed mutant in code you touched fails the job.
+  mutants:
+    name: ci-mutants (PR diff)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the merge-base with the target branch exists.
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v21
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: Diff against the merge base
+        run: git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
+
+      - name: ci-mutants
+        run: nix run .#ci-mutants -- --in-diff pr.diff
+
+      # mutants.out holds the missed/caught/timeout lists and per-mutant
+      # logs — the thing to read when the job goes red.
+      - name: Upload mutants report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-report
+          path: mutants.out
+          if-no-files-found: ignore
