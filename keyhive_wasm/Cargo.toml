@@ -70,11 +70,6 @@ features = [
 ]
 optional = false
 
-[profile.release]
-wasm-opt = ["-Oz"]
-lto = true
-debug = true
-
 [features]
 default = ["console_error_panic_hook", "web-sys", "json"]
 browser_test = []

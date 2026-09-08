@@ -25,7 +25,7 @@ impl JsAccess {
         JsAccess(Access::Edit)
     }
 
-    /// The ability to revoke any members of a group, not just those that they have causal senority over.
+    /// The ability to revoke any members of a group, not just those that they have causal seniority over.
     pub fn admin() -> JsAccess {
         JsAccess(Access::Admin)
     }

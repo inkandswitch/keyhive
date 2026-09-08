@@ -124,7 +124,7 @@ pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<
     ///     pointer3_1 --> block1
     ///     pointer3_2 --> block2
     ///
-    ///     subgraph head[Read Capabilty]
+    ///     subgraph head[Read Capability]
     ///       pointer_head["Pointer #️⃣"]
     ///       key_head["Key 🔑"]
     ///     end
@@ -132,7 +132,7 @@ pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<
     ///     pointer_head --> block3
     /// ```
     ///
-    /// By passing in the entrypoint, futher keys are discovered, and can be pulled out
+    /// By passing in the entrypoint, further keys are discovered, and can be pulled out
     /// the store, which contain more keys and references, and so on.
     ///
     /// It is normal for this to stop decryption if it encounters an already-decrypted

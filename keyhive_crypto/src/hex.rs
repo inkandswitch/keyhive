@@ -3,7 +3,7 @@
 use alloc::string::String;
 use core::{fmt::Write, iter::Iterator};
 
-/// Convert some bytes to their hexidecimal representation.
+/// Convert some bytes to their hexadecimal representation.
 ///
 /// This does not include the `0x` prefix. It is mainly helpful in implementing
 /// [`core::fmt::LowerHex`] on the way to implement [`core::fmt::Display`].

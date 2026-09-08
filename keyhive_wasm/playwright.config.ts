@@ -77,6 +77,11 @@ export default defineConfig({
     command: "npx http-server -p 6891 ./e2e/server/",
     port: 6891,
     timeout: 10 * 60 * 1000, // 10 minutes
-    reuseExistingServer: !process.env.CI,
+    // `nix run .#ci-e2e` starts (and owns) the server itself, because
+    // Playwright's spawner hardcodes /bin/sh, which NixOS does not ship; it
+    // sets KEYHIVE_E2E_EXTERNAL_SERVER so we reuse it. Otherwise fall back to
+    // the usual rule: reuse locally, never in CI (a stale server would mask
+    // a broken build).
+    reuseExistingServer: !!process.env.KEYHIVE_E2E_EXTERNAL_SERVER || !process.env.CI,
   },
 });

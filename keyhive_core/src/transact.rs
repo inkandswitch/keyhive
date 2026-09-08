@@ -27,7 +27,7 @@ use tracing::{info_span, instrument};
 /// .unwrap();
 ///
 /// assert!(og.contains(&0));
-/// assert!(og.contains(&1)); // NOTE: it's back, becuase we merge the states of both HashSets
+/// assert!(og.contains(&1)); // NOTE: it's back, because we merge the states of both HashSets
 /// assert!(og.contains(&2));
 /// assert!(og.contains(&3));
 /// assert!(og.contains(&42));

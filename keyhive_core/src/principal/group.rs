@@ -298,7 +298,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         for member in self.members.keys() {
             let dlg = self
                 .get_capability(member)
-                .expect("members have capabilities by defintion");
+                .expect("members have capabilities by definition");
 
             seen.insert((dlg.signature.to_bytes(), Access::Admin));
 
@@ -2076,7 +2076,7 @@ mod tests {
             .await
             .unwrap();
 
-        // FIXME trasnitive add
+        // FIXME transitive add
         // g2.borrow_mut()
         //     .add_member(
         //         carol_agent.dupe(),
@@ -2262,7 +2262,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Dropped Carol, which also kicks out can becuase `retain_all: false`
+        // Dropped Carol, which also kicks out can because `retain_all: false`
         assert!(!g1.members.contains_key(&carol_id.into()));
         // FIXME assert!(!g1.members.contains_key(&dan.borrow().id().into()));
 

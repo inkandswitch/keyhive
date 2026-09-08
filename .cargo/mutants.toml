@@ -1,0 +1,17 @@
+# cargo-mutants configuration — https://mutants.rs/
+#
+# `nix run .#ci-mutants` (full sweep) and hosted CI (`--in-diff pr.diff`)
+# both read this file.
+
+# keyhive_wasm only runs on wasm32 (its tests need a JS runtime), so its
+# mutants cannot be tested by the host `cargo test`. test-utils is test
+# tooling, not product code.
+exclude_globs = ["keyhive_wasm/**", "test-utils/**"]
+
+# Feature set needed for the full test suite to build.
+additional_cargo_args = ["--features", "test_utils"]
+
+# Mutating `Debug`/`Display` impls just produces noisy survivors.
+exclude_re = ["impl (core::|std::)?(fmt::)?(Debug|Display) for"]
+
+timeout_multiplier = 3.0

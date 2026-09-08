@@ -529,9 +529,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
         // FIXME for some reason this decrypts successfully,
         // but the bytes of the symmetric key are different,
-        // so we get a different nocne.
+        // so we get a different nonce.
         //
-        // FIXME the above is beacuse the nonce is ignored due to CGKA changes. Fix this.
+        // FIXME the above is because the nonce is ignored due to CGKA changes. Fix this.
         //
         // let expected_siv = Siv::new(&decrypt_key, &plaintext, self.doc_id())?;
         // if expected_siv != encrypted_content.nonce {

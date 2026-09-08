@@ -3,27 +3,29 @@
 ## JavaScript Package Layout
 
 `wasm-pack` does not generate a single JavaScript package which can be used in
-every environment, instead you must choose the environment you are building for
-using the `--target` flag. This is not at all what we want because it makes it
-very difficult to transitively depend on keyhive, which is something we expect
-lots of packages to do.
+every environment; you must choose a `--target`. That makes it hard to depend
+on keyhive transitively, which we expect many packages to do.
 
-To get around this we use conditional exports. We build the package for each
-environment we care about (currently `bundler` and `nodejs`) and then include
-each build package in the built package. Then we use the `"exports"` field in
-`package.json` to choose which package is used at load time. This does lead
-to a larger package size.
+We therefore build the package with [`wasm-bodge`](https://github.com/alexjg/wasm-bodge),
+which produces one npm package with conditional exports for Node (ESM + CJS),
+bundlers, plain browsers (base64-embedded wasm), Cloudflare Workers, and an IIFE
+build, plus a `./slim` subpath for manual initialisation. Run it with
+`wasm:bodge` inside `nix develop` (or `pnpm build` if you have `wasm-bodge`,
+`wasm-bindgen-cli`, `wasm-opt`, and `esbuild` installed). Output lands in
+`dist/`; `package.json` is updated in place with the export map.
 
-### The `slim` package
+We pass `--panic abort`: wasm-bodge's default unwind strategy needs a rustup
+nightly toolchain, which the nix shell does not provide.
 
-In some environments it's not possible to import WebAssembly modules directly.
-For these environments we provide a `slim` subpath export, which doesn't
-perform initialization and instead provides a function to initialize the
-module manually. This requires some additional build steps, which are
-in the `build_slim.js` file.
+`wasm-pack build --target web` (`pnpm build:web`) is still used for the
+Playwright end-to-end tests, which load `pkg/` through `e2e/server/pkg`.
 
 ## Release Process
 
-Releases are automatically pushed to NPM by GitHub Actions when a release is
-created in the repository. Releases which are for a tag beginning with
-`keyhive-wasm` are pushed to NPM, others are ignored.
+Releases are pushed to npm by `.github/workflows/release-js.yml` when a GitHub
+release is published for a tag of the form `keyhive-wasm/<version>`. The
+workflow builds inside `nix develop` with `wasm:bodge` (the same pinned
+`wasm-bindgen-cli` / `wasm-bodge` as CI), checks that the tag matches
+`package.json`'s `version`, installs the packed tarball and loads every advertised entry point, and publishes
+with `pnpm publish` (`--tag next` for pre-releases). Bump `version` in
+`package.json` before tagging.
