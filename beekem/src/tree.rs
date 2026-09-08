@@ -118,8 +118,15 @@ impl BeeKem {
         let mut leaves_to_sort = Vec::new();
         for (id, idx) in removed_ids {
             added_ids.remove(&id);
+            if idx as usize >= self.leaves.len() {
+                continue;
+            }
             let leaf_idx = LeafNodeIndex::new(idx);
-            debug_assert!(self.leaf(leaf_idx).is_none());
+            if self.leaf(leaf_idx).is_some() {
+                // The removed member's leaf was cleared during the merge, so an
+                // occupied one here belongs to somebody else.
+                continue;
+            }
             // We should have already removed this id during merge, but concurrent
             // updates at other leaves with intersecting paths must be overridden by
             // this remove.
@@ -464,7 +471,7 @@ impl BeeKem {
             for idx in sibling_resolution {
                 let next_pk = match self.node_key_for_index(idx)? {
                     NodeKey::ShareKey(share_key) => share_key,
-                    _ => panic!("Sibling resolution nodes should have exactly one ShareKey"),
+                    NodeKey::ConflictKeys(_) => return Err(CgkaError::UnexpectedKeyConflict),
                 };
                 let encrypted_sk = crate::encrypted::encrypt_secret(
                     self.doc_id.as_bytes(),
@@ -569,15 +576,21 @@ impl BeeKem {
         self.inner_nodes[idx.usize()] = None;
     }
 
-    /// Whether the [`PathChange`] still makes sense given the state of the tree
-    /// we are attempting to merge it into.
+    /// Whether `new_path` is actually the direct path of its leaf.
     fn is_valid_path(&self, new_path: &PathChange) -> bool {
-        debug_assert!(self.id_to_leaf_idx.contains_key(&new_path.leaf_id));
-        let leaf_idx = self
-            .leaf_index_for_id(new_path.leaf_id)
-            .expect("Id should be present");
-        new_path.path.len() == self.path_length_for(LeafNodeIndex::new(new_path.leaf_idx))
-            && leaf_idx.u32() == new_path.leaf_idx
+        let Ok(leaf_idx) = self.leaf_index_for_id(new_path.leaf_id) else {
+            return false;
+        };
+        if leaf_idx.u32() != new_path.leaf_idx {
+            return false;
+        }
+        let expected = treemath::direct_path((*leaf_idx).into(), self.tree_size);
+        new_path.path.len() == expected.len()
+            && new_path
+                .path
+                .iter()
+                .zip(expected.iter())
+                .all(|((idx, _), expected_idx)| *idx == expected_idx.u32())
     }
 
     /// Growing the tree will add a new root and a new subtree, all blank.
@@ -598,10 +611,6 @@ impl BeeKem {
 
     fn is_root(&self, idx: TreeNodeIndex) -> bool {
         idx == treemath::root(self.tree_size)
-    }
-
-    fn path_length_for(&self, idx: LeafNodeIndex) -> usize {
-        treemath::direct_path(idx.into(), self.tree_size).len()
     }
 
     /// Highest non-blank, non-conflict descendants of a node
