@@ -8,17 +8,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1769220798,
-        "narHash": "sha256-ulD8bbh5eV4rUH61JC4gS8Ik0R2hBEEyCom3f8w2vXE=",
+        "lastModified": 1780272363,
+        "narHash": "sha256-kNxu1wkCevxc2SASJ+QXCoOcEWz+On6tR+lYv/ZWMpo=",
         "ref": "refs/heads/main",
-        "rev": "6c72a70e0241a5af26ba664ab63f3e2d89c45cd0",
-        "revCount": 5,
+        "rev": "eba91ae4f4a48eedab31777ed817d3c593cee7a8",
+        "revCount": 6,
         "type": "git",
-        "url": "https://codeberg.org/expede/nix-command-utils"
+        "url": "https://tangled.sh/@expede.wtf/nix-command-utils"
       },
       "original": {
         "type": "git",
-        "url": "https://codeberg.org/expede/nix-command-utils"
+        "url": "https://tangled.sh/@expede.wtf/nix-command-utils"
       }
     },
     "flake-utils": {
@@ -26,11 +26,11 @@
         "systems": "systems"
       },
       "locked": {
-        "lastModified": 1709126324,
-        "narHash": "sha256-q6EQdSeUZOG26WelxqkmR7kArjgWCdw5sfJVHPH/7j8=",
+        "lastModified": 1731533236,
+        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
         "owner": "numtide",
         "repo": "flake-utils",
-        "rev": "d465f4819400de7c8d874d50b982301f28a84605",
+        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
         "type": "github"
       },
       "original": {
@@ -56,33 +56,31 @@
         "type": "github"
       }
     },
-    "nixpkgs": {
+    "nixos-unstable": {
       "locked": {
-        "lastModified": 1772822230,
-        "narHash": "sha256-yf3iYLGbGVlIthlQIk5/4/EQDZNNEmuqKZkQssMljuw=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "71caefce12ba78d84fe618cf61644dce01cf3a96",
-        "type": "github"
+        "lastModified": 1788861675,
+        "narHash": "sha256-IQlUeZ4FH4KZ36SK8Hh8b09rDPEVtopDPYaKrib+Rfw=",
+        "rev": "003f062570b04be4890c4acdcd970365281fc955",
+        "type": "tarball",
+        "url": "https://releases.nixos.org/nixos/unstable-small/nixos-26.11pre1069739.003f062570b0/nixexprs.tar.xz"
       },
       "original": {
         "id": "nixpkgs",
-        "ref": "nixos-25.11",
+        "ref": "nixos-unstable-small",
         "type": "indirect"
       }
     },
-    "nixpkgs-unstable": {
+    "nixpkgs": {
       "locked": {
-        "lastModified": 1772956932,
-        "narHash": "sha256-M0yS4AafhKxPPmOHGqIV0iKxgNO8bHDWdl1kOwGBwRY=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "608d0cadfed240589a7eea422407a547ad626a14",
-        "type": "github"
+        "lastModified": 1788807765,
+        "narHash": "sha256-HpUcFydtAyJ4v+HhQYitv0hXM/sAld/boLdsnSRiRPs=",
+        "rev": "93108a538f079596c9a16c72cf03e9322782b6dd",
+        "type": "tarball",
+        "url": "https://releases.nixos.org/nixos/26.05/nixos-26.05.9334.93108a538f07/nixexprs.tar.xz"
       },
       "original": {
         "id": "nixpkgs",
-        "ref": "nixpkgs-unstable",
+        "ref": "nixos-26.05",
         "type": "indirect"
       }
     },
@@ -90,9 +88,10 @@
       "inputs": {
         "command-utils": "command-utils",
         "flake-utils": "flake-utils_2",
+        "nixos-unstable": "nixos-unstable",
         "nixpkgs": "nixpkgs",
-        "nixpkgs-unstable": "nixpkgs-unstable",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "wasm-bodge-src": "wasm-bodge-src"
       }
     },
     "rust-overlay": {
@@ -102,11 +101,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1773025773,
-        "narHash": "sha256-Wik8+xApNfldpUFjPmJkPdg0RrvUPSWGIZis+A/0N1w=",
+        "lastModified": 1788851328,
+        "narHash": "sha256-YOwlUD0Lt/3SulKhZ7z0Jmgbq/DWh8SjnGwUlFSw+YM=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "3c06fdbbd36ff60386a1e590ee0cd52dcd1892bf",
+        "rev": "6ae57a71bcb0bebc7a66cc2bd76942c4cf649167",
         "type": "github"
       },
       "original": {
@@ -142,6 +141,23 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
+        "type": "github"
+      }
+    },
+    "wasm-bodge-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786492779,
+        "narHash": "sha256-+0X85f8ulUfDV7wRhN7OvsIFC3s586FXJaz/GX1azio=",
+        "owner": "alexjg",
+        "repo": "wasm-bodge",
+        "rev": "ee3bca139cea45a38aab78a2f2fcc136432ce25f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "alexjg",
+        "ref": "v0.5.0",
+        "repo": "wasm-bodge",
         "type": "github"
       }
     }

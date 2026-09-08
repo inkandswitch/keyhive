@@ -27,6 +27,13 @@ private
 tests/report
 node_modules
 dist
+keyhive_wasm/*.tgz
+
+# Local agent/session artifacts
+.claude/
+.ignore/
 CLAUDE.md
-keyhive_wasm/keyhive-keyhive-0.0.0-*
-keyhive_wasm/e2e/server/pkg/
+
+# pnpm store created by nix run .#ci-e2e
+.pnpm-store/
+.pi-subagents/
