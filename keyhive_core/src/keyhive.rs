@@ -1780,7 +1780,7 @@ impl<
         }
 
         // NOTE: this is the only place this gets parsed and this verification ONLY happens here
-        // TODO add a Verified<T> newtype wapper
+        // TODO add a Verified<T> newtype wrapper
         static_dlg.try_verify()?;
 
         let payload = self.static_delegation_to_delegation(static_dlg).await?;
@@ -3003,7 +3003,7 @@ pub enum ReceiveCgkaOpError {
     #[error(transparent)]
     VerificationError(#[from] VerificationError),
 
-    #[error("Unknown document recipient for recieved CGKA op: {0}")]
+    #[error("Unknown document recipient for received CGKA op: {0}")]
     UnknownDocument(Box<DocumentId>),
 
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
@@ -4318,7 +4318,7 @@ mod tests {
             assert!(!locked_trunk.docs.lock().await.is_empty());
             assert!(locked_trunk.docs.lock().await.len() <= 3);
 
-            // FIXME add transact right on Keyhive taht aslo dispatches new events
+            // FIXME add transact right on Keyhive that also dispatches new events
             let () = tx?;
 
             // tx is done, so should be all caught up. Counts are now certain.

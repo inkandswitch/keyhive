@@ -692,7 +692,7 @@ mod tests {
     use testresult::TestResult;
 
     // FIXME
-    // FIXME these should probbaly use `lazy_static!`
+    // FIXME these should probably use `lazy_static!`
     static GROUP_SIGNER: LazyLock<MemorySigner> =
         LazyLock::new(|| MemorySigner::generate(&mut rand::thread_rng()));
 

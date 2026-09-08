@@ -9,6 +9,6 @@ pub struct RotateKeyOp {
     /// The prekey to remove.
     pub old: ShareKey,
 
-    /// The prekey that repalces the old one.
+    /// The prekey that replaces the old one.
     pub new: ShareKey,
 }
