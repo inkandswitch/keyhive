@@ -1,4 +1,4 @@
-# Contributing to `keyhive` and `beelay`
+# Contributing to `keyhive`
 
 Before all else: _thank you for taking the time to contribute!_
 
@@ -13,18 +13,18 @@ All types of contributions are encouraged and valued. Please make sure to read t
 ## Code of Conduct
 
 This project and everyone participating in it is governed by the
-[keyhive Code of Conduct](https:/github.com/inkandswitch/keyhive/CODE_OF_CONDUCT.md).
+[keyhive Code of Conduct](./CODE_OF_CONDUCT.md).
 By participating, you are expected to uphold this code.
 
 ## I Have a Question
 
-Before you ask a question, it is best to search for existing [Issues](https:/github.com/inkandswitch/keyhive/issues) that might help you. In case you have found a suitable issue and still need clarification, you can write your question in this issue. It is also advisable to search the internet for answers first.
+Before you ask a question, it is best to search for existing [Issues](https://github.com/inkandswitch/keyhive/issues) that might help you. In case you have found a suitable issue and still need clarification, you can write your question in this issue. It is also advisable to search the internet for answers first.
 
 If you then still feel the need to ask a question and need clarification, we recommend the following:
 
-- Open an [Issue](https:/github.com/inkandswitch/keyhive/issues/new).
+- Open an [Issue](https://github.com/inkandswitch/keyhive/issues/new).
 - Provide as much context as you can about what you're running into.
-- Provide project and platform versions (nodejs, npm, etc), depending on what seems relevant.
+- Provide project and platform versions (Rust toolchain, `keyhive_core` / `@keyhive/keyhive` version, browser or Node version for Wasm issues), depending on what seems relevant.
 
 We will then take care of the issue as soon as possible.
 
@@ -42,7 +42,7 @@ A good bug report shouldn't leave others needing to chase you up for more inform
 
 - Make sure that you are using the latest version.
 - Determine if your bug is really a bug and not an error on your side e.g. using incompatible environment components/versions.
-- To see if other users have experienced (and potentially already solved) the same issue you are having, check if there is not already a bug report existing for your bug or error in the [bug tracker](https:/github.com/inkandswitch/keyhive/issues?q=label%3Abug).
+- To see if other users have experienced (and potentially already solved) the same issue you are having, check if there is not already a bug report existing for your bug or error in the [bug tracker](https://github.com/inkandswitch/keyhive/issues?q=label%3Abug).
 - Also make sure to search the internet (including Stack Overflow) to see if users outside of the GitHub community have discussed the issue.
 - Collect information about the bug:
 - Stack trace (Traceback)
@@ -54,12 +54,11 @@ A good bug report shouldn't leave others needing to chase you up for more inform
 <!-- omit in toc -->
 #### How Do I Submit a Good Bug Report?
 
-> You must never report security related issues, vulnerabilities or bugs including sensitive information to the issue tracker, or elsewhere in public. Instead sensitive bugs must be sent by email to .
-<!-- You may add a PGP key to allow the messages to be sent encrypted as well. -->
+> You must never report security related issues, vulnerabilities or bugs including sensitive information to the issue tracker, or elsewhere in public. Instead, follow the process in [SECURITY.md](./SECURITY.md).
 
 We use GitHub issues to track bugs and errors. If you run into an issue with the project:
 
-- Open an [Issue](https:/github.com/inkandswitch/keyhive/issues/new). (Since we can't be sure at this point whether it is a bug or not, we ask you not to talk about a bug yet and not to label the issue.)
+- Open an [Issue](https://github.com/inkandswitch/keyhive/issues/new). (Since we can't be sure at this point whether it is a bug or not, we ask you not to talk about a bug yet and not to label the issue.)
 - Explain the behavior you would expect and the actual behavior.
 - Please provide as much context as possible and describe the *reproduction steps* that someone else can follow to recreate the issue on their own. This usually includes your code. For good bug reports you should isolate the problem and create a reduced test case.
 - Provide the information you collected in the previous section.
@@ -68,7 +67,7 @@ Once it's filed:
 
 - The project team will label the issue accordingly.
 - A team member will try to reproduce the issue with your provided steps. If there are no reproduction steps or no obvious way to reproduce the issue, the team will ask you for those steps and mark the issue as `needs-repro`. Bugs with the `needs-repro` tag will not be addressed until they are reproduced.
-- If the team is able to reproduce the issue, it will be marked `needs-fix`, as well as possibly other tags (such as `critical`), and the issue will be left to be [implemented by someone](#your-first-code-contribution).
+- If the team is able to reproduce the issue, it will be marked `needs-fix`, as well as possibly other tags (such as `critical`), and left open for implementation.
 
 ### Suggesting Enhancements
 
@@ -77,18 +76,30 @@ This section guides you through submitting an enhancement suggestion for keyhive
 #### Before Submitting an Enhancement
 
 - Make sure that you are using the latest version.
-- Read the [documentation]() carefully and find out if the functionality is already covered, maybe by an individual configuration.
-- Perform a [search](https:/github.com/inkandswitch/keyhive/issues) to see if the enhancement has already been suggested. If it has, add a comment to the existing issue instead of opening a new one.
+- Read the [design documents](./design/README.md) and the crate docs (`cargo doc --open`) to find out if the functionality is already covered.
+- Perform a [search](https://github.com/inkandswitch/keyhive/issues) to see if the enhancement has already been suggested. If it has, add a comment to the existing issue instead of opening a new one.
 - Find out whether your idea fits with the scope and aims of the project. It's up to you to make a strong case to convince the project's developers of the merits of this feature. Keep in mind that we want features that will be useful to the majority of our users and not just a small subset. If you're just targeting a minority of users, consider writing an add-on/plugin library.
 
 #### How Do I Submit a Good Enhancement Suggestion?
 
-Enhancement suggestions are tracked as [GitHub issues](https:/github.com/inkandswitch/keyhive/issues).
+Enhancement suggestions are tracked as [GitHub issues](https://github.com/inkandswitch/keyhive/issues).
 
 - Use a **clear and descriptive title** for the issue to identify the suggestion.
 - Provide a **step-by-step description of the suggested enhancement** in as many details as possible.
 - **Describe the current behavior** and **explain which behavior you expected to see instead** and why. At this point you can also tell which alternatives do not work for you.
 - **Explain why this enhancement would be useful** to most Keyhive users. You may also want to point out the other projects that solved it better and which could serve as inspiration.
+
+## Development Setup
+
+The repository ships a Nix flake with the full toolchain (Rust, `wasm32` target, nightly `rustfmt`, Playwright, `wasm-pack`, `wasm-bodge`):
+
+```sh
+nix develop        # enters the shell and prints the `menu` of commands
+nix run .#ci       # runs the same fast checks as hosted CI
+nix run .#ci-e2e   # Playwright tests against the Wasm build
+```
+
+Without Nix, `rust-toolchain.toml` pins the compiler; `cargo test --workspace --exclude keyhive_wasm --features test_utils` runs the host test suite. Formatting uses nightly `rustfmt` (`cargo +nightly fmt`). Pull requests are checked by `.github/workflows/ci.yml`, which invokes the same `nix run .#ci-*` apps.
 
 ## Attribution
 This guide is based on [contributing.md](https://contributing.md/generator)!

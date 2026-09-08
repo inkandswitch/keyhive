@@ -18,13 +18,25 @@ There are several diagrams below. We use the following graphical conventions:
 flowchart
     subgraph Legend
         direction RL
-        successor["Successor Op Author<br>--------------------------<br>Successor Op Payload"] -->|after| predecessor["Predessor Op Author<br>-----------------------------<br>Predecessor Op Payload"]
+        successor["Successor Op Author<br>--------------------------<br>Successor Op Payload"] -->|after| predecessor["Predecessor Op Author<br>-----------------------------<br>Predecessor Op Payload"]
     end
 ```
 
 # Agents
 
-"Agents" in Keyhive represent some principal that is capable of receiving, delegating, and exercising authority. They are distinguished by other entities in the system by being able to cryptographically sign operations. As such, Agents MUST be represented by a "root" key pair which acts as their ID.
+> [!NOTE]
+> This document predates the Rust implementation and uses the original design vocabulary. The mapping to the code is:
+>
+> | Design document               | Code                                             |
+> |-------------------------------|--------------------------------------------------|
+> | Stateless Agent / Singleton   | `Individual`                                     |
+> | Stateful Agent / Group        | `Group`                                          |
+> | Document                      | `Document`                                       |
+> | pull / read / mutate / manage | `Access::Relay` / `Read` / `Edit` / `Admin`      |
+>
+> See the [glossary](./glossary.md) for the full vocabulary.
+
+"Agents" in Keyhive represent some principal that is capable of receiving, delegating, and exercising authority. They are distinguished from other entities in the system by their ability to sign operations. As such, Agents MUST be represented by a "root" key pair which acts as their ID.
 
 Agents form a subtyping hierarchy: `Document :< Stateful :< Stateless`.
 
@@ -46,7 +58,7 @@ enum Agent {
 
 ## Stateless (AKA "Singleton")
 
-The simplest Agent variant is a public key with no associated state. Almost (but not all) ops in Keyhive are signed by Stateless Agents. These are typically the leaf keys in a [group hierarchy].
+The simplest Agent variant is a public key with no associated state. Most (but not all) ops in Keyhive are signed by Stateless Agents. These are typically the leaf keys in a [group hierarchy].
 
 Some examples of Stateless Agents include Passkeys, non-extractable WebCrypto keys, hardware keys, or other keys limited by application context.
 
@@ -63,7 +75,7 @@ flowchart TB
 
 Stateful Agents add authorization state. The operations that make up the state's history MUST be rooted in (begin at) the Stateful Agent's public key.
 
-Once another Agent is grated control of it, the Stateful Agent MAY delete its secret key.
+Once another Agent is granted control of it, the Stateful Agent MAY delete its secret key.
 
 A very common pattern is for the creator of an Agent to include instructions to add itself to the child's membership upon initialization. This is known as [Membership by Parenthood].
 
@@ -102,8 +114,8 @@ flowchart TB
         subgraph docGroup[Document Membership]
             docRootAddsSingleton["Doc Root<br>--------------------<br>Add Singleton PK"] --> docRoot[Document Root<br>----------------------<br>Self Certifying Init]
             docRootAddsAnotherGroup["Doc Root<br>------------------------------<br>Add Ink & Switch Group"] --> docRoot
-            singetonRemovesAnotherGroup[Singleton<br>----------------------------------<br>Remove Ink & Switch Group] --> docRootAddsSingleton
-            singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
+            singletonRemovesAnotherGroup[Singleton<br>----------------------------------<br>Remove Ink & Switch Group] --> docRootAddsSingleton
+            singletonRemovesAnotherGroup --> docRootAddsAnotherGroup
         end
 
         subgraph ops[Document Operations]
@@ -113,7 +125,7 @@ flowchart TB
         end
     end
 
-    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo
+    singletonRemovesAnotherGroup -.->|lock state after| addKeyFoo
     InitMap -.->|self-certified by| docRoot -.->|self-certified by| _docPK
 ```
 
@@ -131,8 +143,8 @@ flowchart TB
         subgraph docGroup[Document Membership]
             docRootAddsSingleton["Doc Root<br>--------------------<br>Add Singleton PK"] --> docRoot[Document Root<br>----------------------<br>Self Certifying Init]
             docRootAddsAnotherGroup["Doc Root<br>------------------------------<br>Add Ink & Switch Group"] --> docRoot
-            singetonRemovesAnotherGroup[Singleton<br>----------------------------------<br>Remove Ink & Switch Group] --> docRootAddsSingleton
-            singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
+            singletonRemovesAnotherGroup[Singleton<br>----------------------------------<br>Remove Ink & Switch Group] --> docRootAddsSingleton
+            singletonRemovesAnotherGroup --> docRootAddsAnotherGroup
         end
 
         subgraph ops[Document Operations]
@@ -142,11 +154,11 @@ flowchart TB
         addKeyFoo -.->|somewhere inside| ops
     end
 
-    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo(["Document PK @ Op Hash"])
+    singletonRemovesAnotherGroup -.->|lock state after| addKeyFoo(["Document PK @ Op Hash"])
     docRoot -.->|self-certified by| _docPK
 ```
 
-This enough information for the sync server to know may request document bytes, but not enough to actually decrypt the document state.
+This is enough for the sync server to know who may request document bytes, but not enough to decrypt the document.
 
 ### Cross-Group Dependencies
 
@@ -162,7 +174,7 @@ flowchart
             docRootAddsAnotherGroup
             docRootAddsSingleton
             docRootAddsSingleton
-            singetonRemovesAnotherGroup
+            singletonRemovesAnotherGroup
         end
 
         subgraph opsA[Document A Content]
@@ -181,11 +193,11 @@ flowchart
     
     docRootAddsSingleton["Doc A Root<br>--------------------<br>Add Carol PK"] --> docRoot[Document Root<br>----------------------<br>Self Certifying Init]
     docRootAddsAnotherGroup["Doc Root<br>-----------<br>Add Dan"] --> docRoot
-    singetonRemovesAnotherGroup[Carol<br>---------------<br>Remove Dan] --> docRootAddsSingleton
-    singetonRemovesAnotherGroup --> docRootAddsAnotherGroup
+    singletonRemovesAnotherGroup[Carol<br>---------------<br>Remove Dan] --> docRootAddsSingleton
+    singletonRemovesAnotherGroup --> docRootAddsAnotherGroup
 
-    singetonRemovesAnotherGroup -.->|lock state after| addKeyFoo
-    singetonRemovesAnotherGroup -.-> docBRootAddsAnotherGroup
+    singletonRemovesAnotherGroup -.->|lock state after| addKeyFoo
+    singletonRemovesAnotherGroup -.-> docBRootAddsAnotherGroup
     InitMap -.->|self-certified by| docRoot -.->|self-certified by| _docPK
 
     subgraph DocumentAgent2[Document B Agent]
@@ -342,7 +354,7 @@ flowchart BT
     style also_change_membership color:white,fill:darkred,stroke:#FFF,stroke-width:1px,stroke-dasharray: 5 3;
 ```
 
-Validating [capabilities] proceeds recursively. Given read access to the caveats of each group, a complete list of users and their capabilities. The lowest level of rights MUST be `relay`, which only requires knowing the current public key of leaf agents.
+Validating [capabilities] proceeds recursively. Given read access to each group's operations, a complete list of users and their capabilities can be computed. The lowest level of rights MUST be `Relay`, which only requires knowing the current public key of leaf agents.
 
 In this case, we have the following authority for Doc A:
 
@@ -380,7 +392,7 @@ And for Doc B:
 ```rust
 pub struct Attenuation {
     group_id: Option<GroupId>,
-    ceveats: CeveatDsl
+    caveats: CaveatDsl
 }
 
 enum AuthAction {
@@ -422,7 +434,7 @@ struct AuthOp {
 
 ### Roots
 
-Auth roots are the key pair associated to a group. Since their public key is the document ID, these are REQUIRED to make delegation chains "self-certifying".
+Auth roots are the key pair associated with a group or document. Since the public key _is_ the group's ID, these are REQUIRED to make delegation chains "self-certifying".
 
 ## Re-Adds
 
@@ -432,13 +444,13 @@ Note that for purposes of [seniority], the re-added Agent's seniority MUST be ca
 
 # Delegation
 
-Any [Agent] MAY delegate its authority over _it's own capabilities_ to others.
+Any [Agent] MAY delegate its authority over _its own capabilities_ to others.
 
 Restricting _sub-delegation_ of an Agent's capabilities MUST NOT be permitted. It is well known that attempting to do so leads to worse outcomes (e.g. users sharing secret keys), and prevents desirable behavior such as sub-delegating very narrow authority ([PoLA]) to ephemeral workers.
 
 ## Transitive Authority
 
-Recall that [capabilities come in the following categories][capabilities]: pull, read, mutate, and manager. All of these MAY be attenuated. For example, an Agent MAY be granted the ability to alter the membership of an external group or document.
+Recall that [capabilities come in the following levels][capabilities]: `Relay`, `Read`, `Edit`, and `Admin`. All of these MAY be attenuated. For example, an Agent MAY be granted the ability to alter the membership of an external group or document.
 
 ```mermaid
 sequenceDiagram
@@ -465,7 +477,7 @@ sequenceDiagram
 
     Note over Doc,Mallory: Mallory Revoked
     PvH -->> Ink & Switch: 💔 Revoke Mallory (authorized by ➊→➍)
-    Mallory --x Doc: 🚫 Edit Op3 (REJECTED becuase ➑)
+    Mallory --x Doc: 🚫 Edit Op3 (REJECTED because ➑)
 ```
 
 ### Cycles
@@ -538,12 +550,23 @@ flowchart TB
     end
 ```
 
-# Applications to [Collection Sync]
+# Applications to Sync
 
-Chunk providers (sync servers and peers) need to know which documents that Agents are permitted to pull. Ideally this is done in as few round trips as possible. The requester may not know of all the documents that are allowed to pull. To find the relevant documents, the provider walks the auth graph, starting from the requester. Every reachable document is included in the collection, and sent to the user in one response. If the requester knows of more documents that were not included, it either means that the provider is missing auth operations, and can prove access by pushing the relevant auth histories to the provider at the start of a second round.
+Collection sync (discovering _which_ documents a peer may pull) now lives in [Subduction]. The relevant property of the auth graph is described here for reference.
+
+Chunk providers (sync servers and peers) need to know which documents Agents are permitted to pull. Ideally this is done in as few round trips as possible. The requester may not know of all the documents it is allowed to pull. To find the relevant documents, the provider walks the auth graph, starting from the requester. Every reachable document is included in the collection, and sent to the user in one response. If the requester knows of documents that were not included, the provider is missing auth operations; the requester can prove access by pushing the relevant auth histories at the start of a second round.
 
 <!-- External Links -->
 
 [BCP 14]: https://datatracker.ietf.org/doc/bcp14/
-[Collection Sync]: ./collection_sync.md
- [capabilities]: ./convergent_capabilities.md
+[Subduction]: https://github.com/inkandswitch/subduction
+[capabilities]: ./convergent_capabilities.md
+[Agent]: ./glossary.md#principals
+[Document]: ./glossary.md#principals
+[Membership by Parenthood]: ./glossary.md#authority
+[PoLA]: ./glossary.md#authority
+[Relay]: ./glossary.md#authority
+[Stateful Agents]: #stateful-aka-group
+[for all of a user's devices]: #device-management
+[group hierarchy]: #authority-graphs
+[seniority]: ./glossary.md#authority

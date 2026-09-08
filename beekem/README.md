@@ -2,12 +2,12 @@
 
 BeeKEM is a Continuous Group Key Agreement (CGKA) protocol designed for local-first, peer-to-peer applications. It's an adaptation of TreeKEM (used by MLS) that drops the requirement for a central ordering server, relying only on causal ordering of operations and using only standard cryptographic primitives such as Diffie-Hellman key exchange (DH) and BLAKE3 hashing.
 
-A dynamic group of peers needs to maintain shared encryption keys over time, supporting offline operation, concurrent membership changes, and no central coordinator. BeeKEM is designed to handle this scenario while preserving forward secrecy (compromised keys don't expose past data) and post-compromise security (compromised keys don't expose future data after key rotations).
+A dynamic group of peers needs to maintain shared encryption keys over time, supporting offline operation, concurrent membership changes, and no central coordinator. BeeKEM provides post-compromise security: after a rotation or removal, an adversary holding the old keys cannot read future updates. It does not provide forward secrecy. Members retain old path and root secrets so that [causal encryption](../design/causal_encryption.md) can reach document history, and a compromised replica yields them.
 
 ## Tree Structure
 
 BeeKEM uses a binary tree:
-* Each leaf hold a member's identity and DH public key
+* Each leaf holds a member's identity and DH public key
 * The root holds the group's shared encryption key (encrypted)
 * Each inner node holds a DH public key and encrypted secrets (which effectively function as the shared key for its subtree/subgroup)
 
@@ -29,7 +29,7 @@ When a sibling is blank (from an add/remove), you can't do a single DH exchange.
 
 BeeKEM's innovation is in how it handles concurrent operations without a central server to pick winners. When two members concurrently update overlapping path nodes, both DH public keys are retained as **conflict keys** at that node.
 
-A node with conflict keys is treated similarly to a blank node during subsequent updates: you encrypt for its resolution rather than using a single key. This is prevents an adversary who compromised one fork from decrypting the other fork's path to root. Future updates by any member whose path passes through the conflicted node resolve the conflict by replacing all conflict keys with a single fresh key.
+A node with conflict keys is treated similarly to a blank node during subsequent updates: you encrypt for its resolution rather than using a single key. This prevents an adversary who compromised one fork from decrypting the other fork's path to root. Future updates by any member whose path passes through the conflicted node resolve the conflict by replacing all conflict keys with a single fresh key.
 
 When applying a concurrent path change, BeeKEM merges keys at each affected node (combining into conflict keys where needed) and merges secret stores (keeping all concurrent versions). Removes are applied last, blanking paths after all other concurrent operations merge.
 
@@ -41,9 +41,9 @@ Space is O(n log n) worst case for conflict key storage.
 
 ## Security Properties
 
-* **Forward secrecy**: Each update generates a fresh, independent leaf keypair, leading to a fresh root secret. Application secrets are independently derived from that root secret (via one-way BLAKE3 KDF with content-specific context), so compromising an application secret does not reveal the root secret or any other application secret.
+* **No forward secrecy**: Old root and path secrets are kept so that earlier content stays decryptable; compromising a member reveals them. Application secrets are derived from the root secret with BLAKE3 `derive_key`, so compromising one application secret reveals neither the root secret nor other application secrets.
 * **Post-compromise security**: Leaf key rotation introduces fresh entropy and conflict key handling ensures an adversary with outdated leaf secrets can't decrypt new paths.
-* **Standard crypto only**: Unlike Causal TreeKEM (which requires commutative/associative primitives like BLS), BeeKEM uses only DH, BLAKE3, and ChaCha20-Poly1305.
+* **Standard crypto only**: Unlike Causal TreeKEM (which requires commutative/associative primitives like BLS), BeeKEM uses only X25519 Diffie-Hellman, BLAKE3, and XChaCha20-Poly1305.
 
 # BeeKEM Deep Dive: The Algorithms
 
@@ -81,7 +81,7 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
       * If the sibling has a single public key (the common case), the resolution is just that one node.
       * If the sibling is blank or has conflict keys, recursively descend into the sibling's subtree to find the highest non-blank, non-conflict descendants.
 
-   d. **Encrypt the new parent secret for each node in the sibling resolution.** For each resolved node, derive a symmetric key via DH between the child's secret key and the resolved node's public key, then use that symmetric key to encrypt the new parent secret (using ChaCha20-Poly1305 with a synthetic IV). Each encrypted secret also records which public key it was paired with during DH. This is needed later during decryption so that non-encrypter members can identify the correct secret key to use. Store all encrypted secrets in a map keyed by tree node index, plus an additional entry for the encrypter child's own index (a copy of the first entry, enabling the encrypter to decrypt this node later using the same DH pair).
+   d. **Encrypt the new parent secret for each node in the sibling resolution.** For each resolved node, derive a symmetric key via DH between the child's secret key and the resolved node's public key, then use that symmetric key to encrypt the new parent secret (using XChaCha20-Poly1305 with a synthetic IV derived by BLAKE3 from the key, plaintext, and tree ID; see [`design/ciphersuite.md`](../design/ciphersuite.md)). Each encrypted secret also records which public key it was paired with during DH. This is needed later during decryption so that non-encrypter members can identify the correct secret key to use. Store all encrypted secrets in a map keyed by tree node index, plus an additional entry for the encrypter child's own index (a copy of the first entry, enabling the encrypter to decrypt this node later using the same DH pair).
 
    e. **Handle the empty resolution case.** If the sibling's entire subtree is blank (no members), generate a throwaway keypair and use it for the DH. The encrypted secret is stored keyed by the child's own index only (so the encrypter can still decrypt it later).
 
@@ -183,7 +183,7 @@ A secret store "has a conflict" when it has more than one version.
 
 ## Security Notes
 
-**After a merge of concurrent updates, the tree has no root key.** This is by design. The conflict keys at inner nodes mean that no single member can claim an uncontested root secret. A fresh update from any member will resolve the conflicts along its path and establish a new root.
+**After a merge of concurrent updates, the tree has no root key.** The conflict keys at inner nodes mean that no single member can claim an uncontested root secret. A fresh update from any member will resolve the conflicts along its path and establish a new root.
 
 **An adversary needs all historical leaf secrets from at least one leaf to exploit conflict merges.** Because conflict keys are retained (rather than picking a winner), an adversary who compromises one branch of a fork cannot read the other branch without also knowing its leaf secrets.
 
