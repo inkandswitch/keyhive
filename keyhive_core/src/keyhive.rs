@@ -1716,45 +1716,38 @@ impl<
 
         let id = revocation.subject_id();
         let revocation = Arc::new(revocation);
-        if let Some(group) = self.groups.lock().await.get(&GroupId(id)) {
-            group
-                .lock()
-                .await
-                .receive_revocation(revocation.clone())
-                .await?;
-        } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(id)) {
-            doc.lock()
-                .await
-                .receive_revocation(revocation.clone())
-                .await?;
-        } else if let Some(indie) = self.individuals.lock().await.remove(&IndividualId(id)) {
+        let existing_group = { self.groups.lock().await.get(&GroupId(id)).cloned() };
+        if let Some(group) = existing_group {
+            group.lock().await.receive_revocation(revocation).await?;
+            return Ok(());
+        }
+        let existing_doc = { self.docs.lock().await.get(&DocumentId(id)).cloned() };
+        if let Some(doc) = existing_doc {
+            doc.lock().await.receive_revocation(revocation).await?;
+            return Ok(());
+        }
+        let individual = { self.individuals.lock().await.remove(&IndividualId(id)) };
+        if let Some(indie) = individual {
             let group = self
                 .promote_individual_to_group(indie, revocation.payload.revoke.dupe())
                 .await;
-            group
-                .lock()
-                .await
-                .receive_revocation(revocation.clone())
-                .await?;
-        } else {
-            let group = Arc::new(Mutex::new(
-                Group::new(
-                    GroupId(static_rev.issuer.into()),
-                    revocation.payload.revoke.dupe(),
-                    self.delegations.dupe(),
-                    self.revocations.dupe(),
-                    self.event_listener.clone(),
-                )
-                .await,
-            ));
-
-            {
-                let group2 = group.dupe();
-                let mut locked = group.lock().await;
-                self.groups.lock().await.insert(locked.group_id(), group2);
-                locked.receive_revocation(revocation.clone()).await?;
-            }
+            group.lock().await.receive_revocation(revocation).await?;
+            return Ok(());
         }
+        let group = Arc::new(Mutex::new(
+            Group::new(
+                GroupId(static_rev.issuer.into()),
+                revocation.payload.revoke.dupe(),
+                self.delegations.dupe(),
+                self.revocations.dupe(),
+                self.event_listener.clone(),
+            )
+            .await,
+        ));
+        let group2 = group.dupe();
+        let mut locked = group.lock().await;
+        self.groups.lock().await.insert(locked.group_id(), group2);
+        locked.receive_revocation(revocation).await?;
 
         Ok(())
     }
