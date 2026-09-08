@@ -1,4 +1,4 @@
-//! Helpers for working with [`Document`] access capabilties.
+//! Helpers for working with [`Document`] access capabilities.
 
 use crate::{
     access::Access,
@@ -12,7 +12,7 @@ use futures::lock::Mutex;
 use keyhive_crypto::{content::reference::ContentRef, signer::async_signer::AsyncSigner};
 use std::sync::Arc;
 
-/// [`Ability`] is a helper type for working with [`Document`] access capabilties.
+/// [`Ability`] is a helper type for working with [`Document`] access capabilities.
 #[derive_where(Debug; T)]
 pub struct Ability<
     F: FutureForm,

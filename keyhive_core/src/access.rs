@@ -35,7 +35,7 @@ pub enum Access {
     /// The ability to edit (append ops to) the content of a document.
     Edit,
 
-    /// The ability to revoke any members of a group, not just those that they have causal senority over.
+    /// The ability to revoke any members of a group, not just those that they have causal seniority over.
     Admin,
 }
 

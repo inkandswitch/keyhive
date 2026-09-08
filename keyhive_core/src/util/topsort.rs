@@ -328,8 +328,8 @@ mod tests {
             max_edges: usize,
         ) -> impl Strategy<Value = (usize, Vec<(usize, usize)>)> {
             (1..=max_nodes).prop_flat_map(move |n| {
-                let edge_strat = prop::collection::vec((0..n, 0..n), 0..max_edges);
-                (Just(n), edge_strat)
+                let edge_strategy = prop::collection::vec((0..n, 0..n), 0..max_edges);
+                (Just(n), edge_strategy)
             })
         }
 

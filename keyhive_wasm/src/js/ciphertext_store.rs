@@ -66,7 +66,7 @@ impl CiphertextStore<Local, JsChangeId, Vec<u8>> for JsCiphertextStore {
                             JsGetCiphertextError(JsWebStorageError::ConvertFromBase64Error(e))
                         })?;
                         let encrypted = bincode::deserialize(&bytes)
-                            .map_err(JsWebStorageError::DeserailizationError)?;
+                            .map_err(JsWebStorageError::DeserializationError)?;
 
                         Ok(Some(encrypted))
                     } else {
@@ -111,7 +111,7 @@ impl CiphertextStore<Local, JsChangeId, Vec<u8>> for JsCiphertextStore {
                                 JsGetCiphertextError(JsWebStorageError::ConvertFromBase64Error(e))
                             })?;
                             let encrypted = bincode::deserialize(&bytes)
-                                .map_err(JsWebStorageError::DeserailizationError)?;
+                                .map_err(JsWebStorageError::DeserializationError)?;
 
                             acc.push(encrypted);
                         }
@@ -175,7 +175,7 @@ pub enum JsWebStorageError {
     RetrievalError(JsValue),
 
     #[error(transparent)]
-    DeserailizationError(#[from] bincode::Error),
+    DeserializationError(#[from] bincode::Error),
 
     #[error("Error while removing item from web storage: {0:?}")]
     ConvertFromBase64Error(base64_simd::Error),

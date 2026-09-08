@@ -33,7 +33,7 @@ use std::num::NonZeroUsize;
 /// Single agents with no internal membership.
 ///
 /// `Individual`s can be thought of as the terminal agents. They represent
-/// keys that may sign ops, be delegated capabilties to
+/// keys that may sign ops, be delegated capabilities to
 /// [`Document`][super::document::Document]s and [`Group`][super::group::Group]s.
 #[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
 #[derivative(PartialEq, Eq)]
