@@ -354,7 +354,7 @@ _Laws._
 - Widest path: `effective_access(s, a)` equals the max over routes of min along each, computed independently by brute force on small graphs.
 - Digest stability: same set (any order) gives the same `digest()`; different sets differ.
 
-_Scenarios._ The seven findings and the running scenario from [edge-cases], encoded as fixtures: rotation moots but never un-applies; concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; root edge is undeniable; retention of the subject key allows re-rooting; renunciation is total; `seen` re-issue heals with the same downstream hashes.
+_Scenarios._ The seven findings and the running scenario from [edge-cases], encoded as fixtures: rotation moots but never un-applies; concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; root edge is undeniable, even by Owners' admins; retention of the subject key allows re-rooting; retraction and renunciation are total; a non-admin's cut is confined to their own node; `seen` re-issue heals with the same downstream hashes. Plus the composition and clamping cases from [Evaluation](#evaluation): membership carries whatever the role reaches, including documents added later; a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example). `MemoryKeyline`'s unit tests are the first cut of these fixtures.
 
 _Negative._ A revocation naming an unknown hash is `New` and changes no answer. A duplicate reports the covering revocation if one exists.
 
