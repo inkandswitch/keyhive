@@ -1,6 +1,6 @@
 //! Delegations: signed edges granting an access level over a subject.
 
-use crate::{access::Access, id::Id};
+use crate::{access::Access, id::Id, revocation::Revocation};
 use alloc::vec::Vec;
 use keyhive_codec::{
     error::DecodeError,
@@ -23,9 +23,15 @@ use keyhive_crypto::digest::Digest;
 /// Ed25519 is deterministic and certificates are content-addressed, so
 /// re-issuing an identical delegation produces the identical certificate: same
 /// bytes, same signature, same hash. `seen` exists so that a grant identical to
-/// a revoked one can be re-issued with a fresh hash. It names a certificate the
-/// issuer has seen (typically the revoked one), documents the heal, and has no
-/// other semantics: evaluation ignores it entirely. Absent means first issuance.
+/// a revoked one can be re-issued with a fresh hash. It names the revocation the
+/// issuer has seen and is re-issuing past, documents the heal, and has no other
+/// semantics: evaluation ignores it entirely. Absent means first issuance.
+///
+/// It names the revocation rather than the revoked delegation because the
+/// latter's digest is a function of the fields being re-issued (so it adds no
+/// information and a second heal would collide), and because a revocation is
+/// the only event that ever poisons a hash. When several revocations name the
+/// same delegation, any of them serves.
 ///
 /// A random nonce was rejected in its place because it would flip the fail
 /// direction: accidental duplicate issuance would yield independently live
@@ -49,8 +55,8 @@ pub struct Delegation {
     /// Requested level; clamped by the issuer's own level, never raised.
     pub can: Access,
 
-    /// Freshness for re-issuing past a revocation. Ignored by evaluation.
-    pub seen: Option<Digest<Delegation>>,
+    /// The revocation this delegation is re-issued past. Ignored by evaluation.
+    pub seen: Option<Digest<Revocation>>,
 }
 
 impl Delegation {
@@ -64,12 +70,20 @@ impl Delegation {
         }
     }
 
-    /// Re-issue this delegation past a revoked certificate, giving it a fresh hash.
-    pub fn reissue(self, seen: Digest<Delegation>) -> Self {
+    /// Re-issue this delegation past a revocation, giving it a fresh hash.
+    pub fn reissue(self, seen: Digest<Revocation>) -> Self {
         Delegation {
             seen: Some(seen),
             ..self
         }
+    }
+
+    /// Content address of the payload: what a [`Revocation`] names.
+    ///
+    /// This is the digest of the delegation's own encoding, not of the
+    /// [`crate::certificate::Certificate`] wrapper (which carries a kind tag).
+    pub fn digest(&self) -> Digest<Delegation> {
+        Digest::of(&self.encode())
     }
 }
 
