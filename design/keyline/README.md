@@ -57,6 +57,24 @@ A couple intuitions carry most of the design:
 
 One ocap property is deliberately absent: delegator-independence. Dropping your reference in ocap leaves the copies you introduced intact. That property depends on a moment of transfer — an instant at which the recipient definitively holds the reference — and in a weakly consistent system with no finality and no wall clock there is no such instant. Two timeless replacements remain: a grant is live if its issuer was _ever_ authorized (independence recovered, but fail-open — a booted admin's grants stand), or only while its issuer is _currently_ authorized. Keyline takes the second for delegations, so your grants live and die with your standing; it takes the first for revocations, where "ever" is the [service record][service records]. Both choices are the same rule — ambiguity resolves toward less authority — applied to opposite tenses. The trade buys healing (a partitioned graph reconnects with every certificate's provenance intact) at the price of [zombies][resurrection].
 
+### Prior Art
+
+Keyline's wire format is certificate-capability and its evaluation is graph-based. Both halves have history, and naming it saves the reader from rediscovering it.
+
+| System                            | What Keyline takes from it                                                                                                                   | What differs                                                                                                         |
+|-----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| [SPKI/SDSI]                       | Signed, self-certifying certificates; keys as the only principals; attenuation along a chain; and _chain discovery_ by the verifier ([Clarke et al.][sdsi discovery]), which is the SDSI half that later systems dropped | No CRLs; revocation is a first-class signed fact with scoped effect                                                   |
+| [UCAN]                            | Certificate shape (`iss`, `aud`, `sub`, `can`), content addressing, offline verification                                                    | UCAN embeds the proof chain and evaluates it at invocation; Keyline has no proof field and searches the set          |
+| [RT₀][rt]                         | Roles as principals; membership in a role as an edge (`Members.member ← Alice`); role-to-resource supply (`Doc.admin ← Members.member`); evaluation as reachability over the credential graph; the chain-discovery complexity results | RT has no revocation. Keyline adds it without leaving the Datalog fragment                                            |
+| [ARBAC97][arbac]                  | Administrative relations: authority _over_ a role's membership as distinct from membership in it. "Admin over `N` lets you act as `N`" is an administrative role | ARBAC assumes a central RBAC store; Keyline's admin relation is a signed edge and its reach is the frozen service record |
+| [Binder], [SecPAL]                | Authorization as stratified Datalog with a unique least model; negation only over fully computed strata                                     | Those are policy languages; Keyline fixes one program                                                                |
+| [Zanzibar]                        | Operational shape: `group#member` usersets, admin relations, membership as the only edge kind                                              | Zanzibar's tuple store is trusted and central; its consistency problem (the "new enemy": a revocation and a later write observed out of order) is one Keyline cannot express, because it has no order. That problem reappears at the content layer as whiteout |
+| [ocap]                            | The proxy-network reading of a certificate chain; revocation as a forwarder declining to forward; the caretaker pattern                     | Delegator-independence, given up for the reasons above                                                               |
+
+One comparison is easy to get wrong. UCAN _without_ revocation has certificate-local validity: a chain is checked on its own terms. UCAN _with_ revocation does not — the moment a verifier honors a revocation list, validity depends on a set the verifier holds, and a revoked certificate deep in a chain kills everything below it. That is issuer-recursive, set-global liveness, and every deployed certificate-capability system has it. Keyline did not introduce it; it made it the model instead of a bolt-on. Likewise delegator-independence was never a certificate-capability property; it belongs to ocap references, and SPKI with a CRL lacks it too. What Keyline gives up relative to ocap it does not give up relative to SPKI or UCAN.
+
+Structurally, then: RT₀ with SDSI chain discovery, revocation semantics closest to ARBAC97's administrative relations, evaluated as stratified Datalog. The certificate layer is not packaging over that model. It is the reason the model needs no server: any replica holding the set computes the same answer, offline, and two replicas merge by set union.
+
 ### An Assembly Language for Authority
 
 The main insight versus prior versions of Keyhive is that once we have a directed authority graph, we can express all scenarios that are otherwise special cased. This does mean relying more on patterns than baking concepts into the core semantics. However, earlier iterations of this design _already admitted these patterns_; they were merely ignored.
@@ -474,7 +492,14 @@ Resolved in this draft: concurrent mutual revocation (both stand; the parent adj
 [sealing]: patterns.md#reconnection-and-sealing
 [service records]: #service-records
 [sub is a scope, not an endpoint]: #sub-is-a-scope-not-an-endpoint
+[arbac]: https://doi.org/10.1145/300830.300839
+[binder]: https://doi.org/10.1109/SECPRI.2002.1004365
 [ocap]: http://erights.org/elib/capability/index.html
+[rt]: https://doi.org/10.1109/SECPRI.2002.1004366
+[sdsi discovery]: https://doi.org/10.3233/JCS-2001-9402
+[secpal]: https://doi.org/10.3233/JCS-2009-0364
+[spki/sdsi]: https://www.rfc-editor.org/rfc/rfc2693.html
+[zanzibar]: https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/
 [revocations]: #revocations
 [spki]: https://www.rfc-editor.org/rfc/rfc2693.html
 [subduction]: https://github.com/inkandswitch/subduction
