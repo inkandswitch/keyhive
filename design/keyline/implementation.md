@@ -93,7 +93,7 @@ pub struct Revocation {
 }
 ```
 
-The type of `revoke` makes revoking a revocation unwritable. There is no `sub`: effect is scoped by the issuer's service record, not by the issuer's choice, so a narrowing field would have no meaning.
+The type of `revoke` makes revoking a revocation unwritable. There is no `sub`: effect is scoped by the issuer's service record, not by the issuer's choice. A jurisdiction field was considered and rejected because it would make every rotation invalidate every standing denial; see [alternatives](alternatives.md#a-sub-jurisdiction-field-on-revocation).
 
 ### `Certificate`
 
