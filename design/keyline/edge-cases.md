@@ -236,6 +236,9 @@ With the scope derivable from `iss`, the revocation is `{iss, revoke, sig}`.
 
 Add `record(K) ⊇ {K}` (every key governs its own node) and note that a cert's endpoints are on all of its routes. Then a revocation by the target's issuer or recipient is automatically *total* — retraction and renunciation stop being special cases with their own validity rule; one rule covers everything. Granted in passing: any intermediate, at any level, can refuse to let their own standing carry a third party's cert — deny-only, hop-confined, and strictly weaker than renouncing, which anyone could already do.
 
+> [!NOTE]
+> Only the issuer is on a cert's routes. A route runs from the subject to the _issuer_; the recipient is where it delivers, not a node it transits. If the recipient counted with reach coverage, every ever-admin of `Owners` could cut `Doc → Owners` and brick the document. Retraction is therefore a corollary of the self-axiom; renunciation is an explicit clause, by signature (`¬rev(aud, h)`). See [implementation, Evaluation](implementation.md#evaluation).
+
 ### Probed and kept: the Admin gate
 
 "Should Edit members revoke others at ≤ their level?" was tested and rejected. Delegating ≤ your level is constructive and self-scoped; revoking a third party's cert is an act on the graph — governance, categorically. Level-relative revocation would have destroyed the headline containment theorem (*inviting a thousand editors adds zero grief surface*), created editor-tier MAD among a large unvetted population, and made every conveyance level a governance level. The tier structure stands: anyone over their own hop, signers over their own certs, ever-admins over their estates.
@@ -260,6 +263,9 @@ Revocation: {iss, revoke, sig}
 ```
 
 Every scoping mechanism is a key or a node — capacities are dedicated keys, jurisdictions are rosters, pinning is `sub`, denial scope is the signer's record. Each surviving field defeated an elimination attempt; each eliminated field's jobs moved into the graph.
+
+> [!NOTE]
+> `seen` is `Option<Hash<Revocation>>`: the revoked delegation's hash is a function of the fields being re-issued, so it carries no information and a second heal would collide; a revocation is the only event that poisons a hash. "Record" in this file is what the design calls _admin reach_. See [README, The `seen` Field](README.md#the-seen-field).
 
 <!-- Links -->
 

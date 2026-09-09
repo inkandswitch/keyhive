@@ -152,21 +152,21 @@ A revocation breaks a previously issued delegation, identified by hash:
 | Revoke    | `Hash<Delegation>`      | The delegation being revoked       |
 | Signature | Ed25519 signature       | Over all of the above              |
 
-Revocations annihilate delegations _on paths controlled by (admin or direct) the revoker_. Both certificate species are add-only; merging is set union.
+Revocations kill delegations on the routes the revoker controls, or that the revoker signed. Both certificate species are add-only; merging is set union.
 
 There is one revocation rule for third parties and one for the parties themselves. Third parties: a revocation breaks the target on every route that passes through the issuer's *admin reach* — the nodes the issuer ever held Admin over, plus the issuer's own node ([Admin Reach][admin reach]). The parties: whoever signed the certificate, as issuer or as recipient, may kill it on every route.
 
-Where the admin reach doesn't touch the target's routes and the issuer is neither party, the revocation is *inert*: a no-op, not an error. Validity is unconditional; any well-signed revocation is admissible. Authority appears only as reach. A revocation that breaks a certificate far below the issuer's jurisdiction is a *deep cut*.
+Where the admin reach doesn't touch the target's routes and the issuer is neither party, the revocation is *inert*: a no-op, not an error. Validity is unconditional; any well-signed revocation is admissible. A revocation has no authority of its own, only coverage. One that breaks a certificate far below the issuer's jurisdiction is a *deep cut*.
 
 - *Retraction* (`iss = target.iss`) needs no second rule: the issuer is the final node on every route of their own certificate and in their own admin reach. Unmake what you signed.
-- *Renunciation* (`iss = target.aud`) is why the second rule exists. Routes end at the issuer, so no admin reach — not even the recipient's own — reaches a certificate through its `aud`; if it did, every ever-admin of `Owners` could cut `Doc → Owners` ([The Root Edge Protects Itself][apex]). Shed what names you, by signature rather than by record.
+- *Renunciation* (`iss = target.aud`) is why the second rule exists. Routes end at the issuer, so no admin reach — not even the recipient's own — reaches a certificate through its `aud`; if it did, every ever-admin of `Owners` could cut `Doc → Owners` ([The Root Edge Protects Itself][apex]). Shed what names you, by signature rather than by reach.
 
 The full tier structure, each tier matched to its trust basis:
 
-| Who                              | Breaks the edge on…                 | Trust basis                    |
-|----------------------------------|-------------------------------------|--------------------------------|
-| Anyone                           | routes through their own node       | it's your own conveyance       |
-| Issuer / recipient of the target | all routes (total)                  | your signature, your act       |
+| Who                              | Breaks the edge on…              | Trust basis                    |
+|----------------------------------|----------------------------------|--------------------------------|
+| Anyone                           | routes through their own node    | it's your own conveyance       |
+| Issuer / recipient of the target | all routes (total)               | your signature, your act       |
 | Ever-admins                      | routes through their admin reach | governance, granted explicitly |
 
 The first row means even a Read-level intermediate can refuse to let their standing carry someone else's grant — deny-only, confined to their own hop, and strictly weaker than renouncing (which anyone can do and which kills the same routes plus their own access).
@@ -224,12 +224,12 @@ This set is K's *admin reach*. "Ever" means exactly that: we compute it from the
 Computing it while ignoring revocations looks strange at first. There are three reasons, and they are one reason from three angles:
 
 - *Removal has to stick.* If booting an admin shrank their admin reach, it would also cancel every revocation they signed while in office — remove the moderator, and everyone the moderator banned walks back in.
-- *Revocations must not judge each other.* If one revocation could shrink the admin reach another depends on, the result would depend on arrival order, and two replicas with the same certificates would disagree. Records built from delegations alone give every replica the same answer, in any order.
+- *Revocations must not judge each other.* If one revocation could shrink the admin reach another depends on, the result would depend on arrival order, and two replicas with the same certificates would disagree. Reach built from delegations alone gives every replica the same answer, in any order.
 - *Quitting must not un-ban anyone.* If resigning shrank your admin reach, resigning would cancel your own past revocations — leaving a role would become a way to let banned people back in.
 
 The growth direction is safe: when K joins a new role, K's old revocations now also cover routes through it. Coverage can only ever expand, and expanding coverage only ever removes access — the surprise, if any, is in the fail-closed direction.
 
-Point 2 — your own node always counts — is what makes retraction and renunciation work with no extra rules: a certificate's issuer and audience sit on every one of its routes, so their revocations always cover it completely.
+Point 2 — your own node always counts — is what makes retraction total with no extra rule: a certificate's issuer is the last node on every one of its routes, so the issuer's revocation always covers it completely. Renunciation does not work this way; the recipient is where a route delivers, not a node it transits, and is handled by signature ([Revocations][revocation semantics]).
 
 #### The Effect is Scoped; the Validity is Not
 
@@ -241,7 +241,7 @@ Total fail-closed is unavailable in any eventually consistent system: unseen den
 
 Route geometry does two jobs earlier drafts needed a separate independence condition for:
 
-- *Seniority falls out for free.* You cannot cut the branch you stand on: an edge *above* your admin reach never routes through them, so your revocation of it is inert. Deep cuts only run downward.
+- *Seniority falls out for free.* You cannot cut the branch you stand on: an edge *above* your admin reach never routes through it, so your revocation of it is inert. Deep cuts only run downward.
 - *Peers can revoke each other.* Two admins of one node each have it in their admin reach, and each other's membership certificates route through it. Both cuts of a concurrent duel land; both stand ([permanence]). The branch's parent repairs by [rotation][rotating a role] — under [constitutional flatness] it holds supply, not constitutional membership, so it re-rosters via a successor rather than re-adding directly.
 
 #### Renunciation
