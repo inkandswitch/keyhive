@@ -255,7 +255,7 @@
           # `beekem --no-default-features` does not build at all yet (needs a
           # no_std serializer). Both are tracked as known issues.
           ci-no-std = mkCheck "ci-no-std" ''
-            cargo check -p keyhive_crypto --no-default-features
+            cargo check -p keyhive_codec -p keyhive_crypto -p keyline --no-default-features
           '';
 
           ci-deny = mkCheck "ci-deny" ''

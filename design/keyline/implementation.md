@@ -28,6 +28,8 @@ The crate sits beside `beekem`: both are engines over untyped keys, both are wra
 
 A newtype over `ed25519_dalek::VerifyingKey`. Every principal, role, document, and group is an `Id`. `keyline` attaches no meaning to which is which.
 
+`keyhive_core` has `Identifier` for the same thing; `keyline` defines its own for now and `keyhive_core` converts at the boundary, as it does for `beekem::MemberId`. Unifying shared types into a `keyhive_types` crate is a follow-up; the code carries `TODO(keyhive_types)` markers where it applies.
+
 ### `Access`
 
 ```rust
@@ -82,7 +84,7 @@ Compared with the current `keyhive_core::Delegation`, the fields `proof`, `after
 
 #### Why `seen` and not a nonce
 
-A random nonce would remove the need for an issuer to know which certificate it is re-issuing past. It was considered and rejected because it changes the fail direction. Two accidental issuances of the same grant (a retry, a device restore, two devices) would produce two independently live certificates with two hashes; revoking one leaves the other live, and a duplicate nobody noticed is a lingering grant. With `seen`, an identical re-issue produces the identical certificate: same payload, and because Ed25519 is deterministic, the same signature and the same hash. One revocation covers every copy. An issuer who re-mints a revoked grant without knowing it was revoked produces a certificate that silently does not take. That is fail-closed, and it is detectable: [`insert`](#insert) reports the collision and the covering revocation, so `keyhive_core` can prompt for a re-issue with `seen`. `seen` also records in the certificate that the issuer re-granted knowing of the revocation. A nonce records nothing.
+A random nonce would remove the need for an issuer to know which certificate it is re-issuing past. It was considered and rejected because it changes the fail direction. Two accidental issuances of the same grant (a retry, a device restore, two devices) would produce two independently live certificates with two hashes; revoking one leaves the other live, and a duplicate nobody noticed is a lingering grant. With `seen`, an identical re-issue produces the identical certificate: same payload, and because Ed25519 is deterministic, the same signature and the same hash. One revocation covers every copy. An issuer who re-mints a revoked grant without knowing it was revoked produces a certificate that silently does not take. That is fail-closed, and it is detectable: [`insert`](#inserted) reports the collision and the covering revocation, so `keyhive_core` can prompt for a re-issue with `seen`. `seen` also records in the certificate that the issuer re-granted knowing of the revocation. A nonce records nothing.
 
 ### `Revocation`
 
@@ -103,25 +105,50 @@ pub enum Certificate { Delegation(Delegation), Revocation(Revocation) }
 
 The unit of insertion and of the set.
 
-### `Digest<T>`
+### `Encoded<T>`
 
-`keyhive_crypto::Digest<T>`: BLAKE3, 32 bytes, phantom-typed. `keyline` computes it over the certificate's canonical bytes (see [Encoding](#encoding)) and builds the `Digest` from the raw hash, so the `std`-gated `Digest::hash` (which needs `bincode`) is not used.
-
-### `Verified<T>`
-
-A witness that a `Signed<T>` has had its signature checked against `iss`. It lives in `keyhive_crypto` so that `keyline` and `keyhive_core` share it:
+The bytes of a `T`, tagged with the type they encode:
 
 ```rust
-pub struct Verified<T> { /* private */ }
-
-impl<T> Signed<T> {
-    pub fn verify(self) -> Result<Verified<T>, VerificationError>;
+pub struct Encoded<T> {
+    bytes: Vec<u8>,
+    _phantom: PhantomData<fn() -> T>,   // covariant; Send + Sync regardless of T
 }
 ```
 
-The only public constructor is `verify`. `Verified<T>` carries the `Digest<T>` computed over the same bytes the signature covers, so the identity a revocation names and the identity the set stores can never disagree. A `test_utils`-gated constructor exists for the conformance suite so that tests do not pay for signing.
+`Encoded::new(&T)` is the only way in from a value. Equality, `Hash`, and `Ord` are byte equality, which is certificate identity, so a set of `Encoded<Certificate>` needs no separate digest index. It serializes as a byte string behind a `serde` feature so that `keyhive_core` can carry it through its existing serde paths for now.
 
-`keyline` does not verify signatures. It depends on `ed25519-dalek` only for the `VerifyingKey` type.
+`Encoded<T>` and the `Encode` / `Decode` traits live in a new `keyhive_codec` crate (see [Crates](#crates)). Digest and signature are both computed over `Encoded::as_bytes()`, so they cover the same bytes by construction; nothing re-encodes a payload to check it.
+
+### `Digest<T>`
+
+`keyhive_crypto::Digest<T>`: BLAKE3, 32 bytes, phantom-typed. `keyline` obtains it as `Digest::of(&Encoded<T>)`, a constructor added to `keyhive_crypto` that hashes the encoded bytes. The `std`-gated `Digest::hash` (which needs `bincode`) is not used. `Digest<T>`'s `T: Serialize` bound is removed from the struct and its trait impls and kept only on `hash()`; this is additive.
+
+### `Signed<T>` and `Verified<T>`
+
+```rust
+pub struct Signed<T> {
+    encoded:   Encoded<T>,
+    issuer:    Id,
+    signature: ed25519_dalek::Signature,   // over encoded.as_bytes()
+}
+
+pub struct Verified<T> {
+    payload: T,          // decoded exactly once, canonical form checked
+    digest:  Digest<T>,
+    signed:  Signed<T>,  // retained so the certificate can be forwarded as received
+}
+
+impl<T: Decode> Signed<T> {
+    pub fn verify(self) -> Result<Verified<T>, VerifyError>;
+}
+```
+
+`verify` is the only public constructor of `Verified<T>`. It checks the signature over the encoded bytes, decodes, and rejects non-canonical input (below). Because the digest is taken from the same bytes the signature covers, the identity a revocation names and the identity the set stores can never disagree. A `test_utils`-gated constructor exists for the conformance suite so that tests do not pay for signing.
+
+These two types live in `keyline` for this branch, marked `TODO(keyhive_types)`. `keyhive_crypto`'s existing serde-based `Signed<T>` is untouched and remains what `keyhive_core` uses until the codec migration unifies them.
+
+`keyline` does not verify signatures anywhere else. It depends on `ed25519-dalek` for `VerifyingKey`, `Signature`, and `verify_strict`.
 
 ## The `Keyline` Trait
 
@@ -200,18 +227,50 @@ The model document's [Computation] section explains why the shortcut "delete rev
 
 ## Encoding
 
-`Digest<T>` and the signature both cover `canonical_bytes(payload)`. For this branch, `canonical_bytes` is a fixed-width concatenation:
+```rust
+// keyhive_codec
+pub trait Encode {
+    fn encode_into(&self, out: &mut Vec<u8>);
+    fn encode(&self) -> Encoded<Self> where Self: Sized;
+}
+
+pub trait Decode: Sized {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError>;
+}
+```
+
+Every implementation MUST satisfy two laws:
+
+1. `decode(encode(x)) == x` — round trip.
+2. `encode(decode(b)) == b` for every `b` that `decode` accepts — canonicality.
+
+The second is a security requirement, not tidiness. Certificates travel as `Encoded<T>` and the receiver verifies and hashes the bytes it received; nothing re-encodes. If the codec admitted two byte forms for one value, a peer could ship the same delegation twice with two digests, producing two live certificates for one grant of which a revocation covers only one — the [nonce failure mode](alternatives.md#a-random-nonce-instead-of-seen) through the back door. `decode` MUST therefore reject any non-canonical input, either because the format admits exactly one encoding per value or by re-encoding and comparing. A corollary: absent `seen` has exactly one encoding, distinct from every present value.
+
+For this branch, `keyline` implements the traits for its own types with a fixed-width layout:
 
 ```
 Delegation:  iss ‖ aud ‖ sub ‖ can:u8 ‖ seen_tag:u8 ‖ seen?
 Revocation:  iss ‖ revoke
 ```
 
-where `seen_tag` is `0` with no following bytes when `seen` is absent and `1` followed by 32 bytes when present.
+where `seen_tag` is `0` with no following bytes when `seen` is absent and `1` followed by 32 bytes when present. Fixed-width layouts are canonical by construction, so `decode` only has to check length and enum ranges.
 
-This is a placeholder. Keyhive is moving to a bespoke codec after this branch; when it lands, `canonical_bytes` is replaced by the codec's encoding and every hash changes, which the API break already absorbs. The placeholder exists so that the crate is `no_std` from the start (no `bincode`) and so that the evaluator and its tests have stable hashes to build against.
+This layout is a placeholder. Keyhive is moving to a bespoke codec after this branch; when it lands, these `Encode` / `Decode` impls are replaced (possibly by derive macros in `keyhive_codec`), every hash changes, and the API break already in progress absorbs that. `Encoded<T>`, `Signed<T>`, `Verified<T>`, and the `Keyline` trait do not change. The placeholder exists so that the crate is `no_std` from the start (no `bincode`) and so that the evaluator and its tests have stable hashes to build against.
 
-One requirement the codec MUST preserve: absent `seen` has exactly one encoding, distinct from every present value. The model document's "one meaning, one encoding" invariant depends on it.
+## Crates
+
+```
+keyhive_codec        Encode, Decode, Encoded<T>. No dependencies beyond alloc; serde optional.
+      ▲
+keyhive_crypto       Digest<T> (bound loosened), Digest::of(&Encoded<T>). Old Signed<T> untouched.
+      ▲
+keyline              Id, Access, Delegation, Revocation, Certificate, Signed/Verified over Encoded,
+                     the Keyline trait, AuthGraph, conformance suite.
+      ▲
+keyhive_core         consumes keyline (later); never sees raw bytes.
+```
+
+`keyhive_codec` exists now, with only the traits and `Encoded<T>`, because the dependency direction is only right if it sits at the bottom: `beekem` will implement the same traits when it migrates, and `beekem → keyline` would be wrong. It contains no BLAKE3; hashing an `Encoded<T>` is `keyhive_crypto`'s job.
 
 ## Crate Layout and Features
 
@@ -223,7 +282,8 @@ keyline/
     access.rs       Access
     delegation.rs   Delegation
     revocation.rs   Revocation
-    certificate.rs  Certificate, canonical_bytes
+    certificate.rs  Certificate; Encode/Decode impls for all three
+    signed.rs       Signed<T>, Verified<T>
     keyline.rs      the Keyline trait, Inserted
     graph.rs        AuthGraph
     graph/          eval.rs (stratified evaluator), index.rs
@@ -231,7 +291,7 @@ keyline/
 ```
 
 - `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`.
-- Depends on `keyhive_crypto` (for `Digest`, `Signed`, `Verified`) and `ed25519-dalek` (for `VerifyingKey`). Nothing else at runtime.
+- Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`), and `ed25519-dalek` (`VerifyingKey`, `Signature`). Nothing else at runtime.
 - `std` feature (default on): `HashMap`/`HashSet` via `beekem::collections`-style aliases, `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
 - `test_utils` feature: the conformance suite and the unverified `Verified` constructor.
 - `serde` feature: derives on the public types for `keyhive_core`'s internal use (archives). Not the wire format.
