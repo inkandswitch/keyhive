@@ -257,7 +257,7 @@
           # `std`, so they are compiled out and `beekem` cannot do without
           # them. Add `-p beekem` here once `bincode` is replaced.
           ci-no-std = mkCheck "ci-no-std" ''
-            cargo check -p keyhive_crypto --no-default-features
+            cargo check -p keyhive_codec -p keyhive_crypto -p keyline --no-default-features
           '';
 
           ci-deny = mkCheck "ci-deny" ''

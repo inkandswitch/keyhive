@@ -2,9 +2,11 @@
 resolver = "2"
 members = [
   "beekem",
+  "keyhive_codec",
   "keyhive_core",
   "keyhive_crypto",
   "keyhive_wasm",
+  "keyline",
   "test-utils",
 ]
 
