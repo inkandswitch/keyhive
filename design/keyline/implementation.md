@@ -56,6 +56,24 @@ pub struct Delegation {
 | `can`  | Requested level; clamped, never raised.                                                                             |
 | `seen` | Freshness for re-issuing a grant identical to a revoked one. Evaluation ignores it. Absent means first issuance.   |
 
+A delegation is the Granovetter operator from object capabilities: Alice, who has a reference to Carol, introduces Bob to Carol by handing him that reference. In the classic diagram the arrows are references; here they are authority over a subject.
+
+```
+                     ┌───────┐
+                     │ Alice │  iss
+                     └───┬───┘
+            has authority │  \
+              over Carol  │   \  introduces: { iss: Alice, aud: Bob, sub: Carol, can }
+                          │    \
+                          ▼     ▼
+                     ┌───────┐  ┌─────┐
+                sub  │ Carol │◄╴╴│ Bob │  aud
+                     └───────┘  └─────┘
+                            Bob now has min(Alice's level, can) over Carol
+```
+
+The solid arrow is Alice's existing authority over the subject; the dashed one is what the certificate creates. Everything about the rules follows from reading it this way: Alice can only introduce Bob to what she herself reaches (attenuation), the introduction is a fact about Alice's standing and dies with it (issuer-recursive liveness), and Alice can always take it back (retraction). Ocap's Granovetter diagram is a message; Keyline's is a signed, content-addressed record of the same act, evaluated against the whole set instead of delivered once.
+
 Anyone MAY issue a delegation over any subject. The issuer's effective level over `sub` clamps the result; no Admin requirement exists on the grant side. This resolves the model document's open question on delegation below Admin: the attenuation rule is the whole rule.
 
 Admin is not required to grant. It matters for revocation, in two tiers. You can always cut a delegation you issued: the edge below you is yours, and retraction needs no standing. Holding Admin over a node lets you act as that node for revocation: your cuts cover anything on routes through it, all the way down. "Act as" is revocation-side only. Admin over `N` does not let you sign as `N`; you grant authority _over_ `N` by issuing `{iss: you, sub: N, …}`, clamped by your own level.
