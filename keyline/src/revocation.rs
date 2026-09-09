@@ -11,12 +11,12 @@ use keyhive_crypto::digest::Digest;
 /// A signed statement that a delegation no longer holds.
 ///
 /// Validity is unconditional: any well-signed revocation is admitted to the
-/// set. Its _effect_ is scoped by the issuer's service record: the target is
+/// set. Its _effect_ is scoped by the issuer's admin reach: the target is
 /// dead on every route that transits a node the issuer ever held `Admin` over,
-/// or the issuer's own node, and inert elsewhere. The record is computed on the
+/// or the issuer's own node, and inert elsewhere. Admin reach is computed on the
 /// revocation-free graph and only grows, so a revocation's reach is permanent.
 ///
-/// There is no `sub`: effect is scoped by the record, not by the issuer's
+/// There is no `sub`: effect is scoped by the admin reach, not by the issuer's
 /// choice. A jurisdiction field was rejected because every rotation would then
 /// invalidate every standing denial; see `design/keyline/alternatives.md`.
 ///
@@ -25,7 +25,7 @@ use keyhive_crypto::digest::Digest;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Revocation {
-    /// Signer. Determines the service record that scopes the effect.
+    /// Signer. Determines the admin reach that scopes the effect.
     pub iss: Id,
 
     /// The delegation being revoked, by content address.

@@ -2,15 +2,15 @@
 //!
 //! This is the evaluation program in `design/keyline/implementation.md`
 //! executed literally, with no caching. Every query recomputes stratum 1
-//! (service records and coverage) and stratum 2 (the live set and edge caps)
+//! (admin reach and coverage) and stratum 2 (the live set and edge caps)
 //! from the certificate set, then runs one widest-path search rooted at the
 //! queried subject. Anything faster MUST agree with it on every set; the
 //! conformance suite is how that is checked.
 //!
 //! ```text
 //! stratum 1   reaches   = search(all subjects, exclude ∅, every edge, cap = can)
-//!             record(k) = { n : last hop onto k is an Admin edge about n } ∪ {k}
-//!             covered(h) = ⋃ record(k) for every k revoking h
+//!             admin_reach(k) = { n : last hop onto k is an Admin edge about n } ∪ {k}
+//!             covered(h) = ⋃ admin_reach(k) for every k revoking h
 //!
 //! stratum 2   live      = least fixed point:  h joins when iss(h) is reachable
 //!                         from sub(h) over live edges avoiding covered(h),
@@ -100,8 +100,8 @@ impl MemoryKeyline {
     fn coverage(&self) -> Map<Digest<Delegation>, Set<Id>> {
         let reaches = self.search(self.edges.keys().copied(), &Params::positive());
 
-        // record(k, n): the last hop onto k is an Admin edge about n.
-        let mut record: Map<Id, Set<Id>> = Map::new();
+        // admin_reach(k, n): the last hop onto k is an Admin edge about n.
+        let mut reach: Map<Id, Set<Id>> = Map::new();
         for (n, by_iss) in &self.edges {
             let Some(levels) = reaches.get(n) else {
                 continue;
@@ -111,7 +111,7 @@ impl MemoryKeyline {
                 for h in edges {
                     let d = &self.delegations[h];
                     if (*l).min(d.can) == Access::Admin {
-                        record.entry(d.aud).or_default().insert(*n);
+                        reach.entry(d.aud).or_default().insert(*n);
                     }
                 }
             }
@@ -123,7 +123,7 @@ impl MemoryKeyline {
                 let mut nodes = Set::new();
                 for k in revs.iter().map(|r| self.revocations[r].iss) {
                     nodes.insert(k);
-                    if let Some(ns) = record.get(&k) {
+                    if let Some(ns) = reach.get(&k) {
                         nodes.extend(ns.iter().copied());
                     }
                 }
@@ -173,7 +173,7 @@ impl MemoryKeyline {
 
     /// Whether the recipient of `h` has revoked it themself. The recipient is
     /// not on the route to the issuer, so this is the one place a revocation's
-    /// effect is decided by the signer's identity rather than their record.
+    /// effect is decided by the signer's identity rather than their admin reach.
     fn renounced(&self, h: &Digest<Delegation>, aud: Id) -> bool {
         self.denials
             .get(h)
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn admin_over_a_transited_node_cuts_deep() {
         // Brooke never signed Alice's membership, but Owners is in Brooke's
-        // record and Members' only route to Carol grounds through Owners.
+        // admin reach and Members' only route to Carol grounds through Owners.
         let (mut g, _, alice_member) = standard();
         g.insert(cert(r(BROOKE, &alice_member)));
         assert!(!g.is_live(&alice_member.digest()));
@@ -593,7 +593,7 @@ mod tests {
         let (mut g, _, alice_member) = standard();
         g.insert(cert(d(DOC, K, DOC, Access::Read)));
         g.insert(cert(k_grant));
-        // K holds only Read; K's record is {K}. Alice's membership never
+        // K holds only Read; K's admin reach is {K}. Alice's membership never
         // transits K, so K's cut of it is inert.
         g.insert(cert(r(K, &alice_member)));
         assert!(g.is_live(&alice_member.digest()));
@@ -607,7 +607,7 @@ mod tests {
     fn ex_admin_record_is_frozen() {
         let (mut g, carol_owner, alice_member) = standard();
         // Brooke boots Carol from Owners; Carol was Alice's sponsor, so Alice
-        // dies implicitly. Carol's record still holds Owners.
+        // dies implicitly. Carol's admin reach still holds Owners.
         g.insert(cert(r(BROOKE, &carol_owner)));
         assert_eq!(access(&g, DOC, CAROL), None);
         assert_eq!(access(&g, DOC, ALICE), None);
@@ -638,7 +638,7 @@ mod tests {
         let (mut g, _, _) = standard();
         let root = d(DOC, OWNERS, DOC, Access::Admin);
         g.insert(cert(r(BROOKE, &root)));
-        // Doc is in nobody's record; the route to Doc is [Doc] alone.
+        // Doc is in nobody's admin reach; the route to Doc is [Doc] alone.
         assert!(g.is_live(&root.digest()));
         assert_eq!(access(&g, DOC, BROOKE), Some(Access::Admin));
     }

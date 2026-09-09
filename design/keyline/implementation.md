@@ -115,7 +115,7 @@ pub struct Revocation {
 }
 ```
 
-The type of `revoke` makes revoking a revocation unwritable. There is no `sub`: effect is scoped by the issuer's service record, not by the issuer's choice. A jurisdiction field was considered and rejected because it would make every rotation invalidate every standing denial; see [alternatives](alternatives.md#a-sub-jurisdiction-field-on-revocation).
+The type of `revoke` makes revoking a revocation unwritable. There is no `sub`: effect is scoped by the issuer's admin reach, not by the issuer's choice. A jurisdiction field was considered and rejected because it would make every rotation invalidate every standing denial; see [alternatives](alternatives.md#a-sub-jurisdiction-field-on-revocation).
 
 ### `Certificate`
 
@@ -209,7 +209,7 @@ Not yet on the trait: `get(&Digest<Certificate>) -> Option<&Signed<Certificate>>
 
 ### `MemoryKeyline`
 
-The reference implementation: in-memory, `impl Keyline`. Plain maps of plain data; no `Rc`, no `Cell`, so `Send + Sync` hold without effort. It MAY memoize stratum-1 results (records, coverage) between inserts, since those are monotone in the set; any memo is invalidated on `insert` and never requires a write lock to read.
+The reference implementation: in-memory, `impl Keyline`. Plain maps of plain data; no `Rc`, no `Cell`, so `Send + Sync` hold without effort. It MAY memoize stratum-1 results (admin reach, coverage) between inserts, since those are monotone in the set; any memo is invalidated on `insert` and never requires a write lock to read.
 
 ## Evaluation
 
@@ -226,9 +226,9 @@ Stratum 1 — positive pass, blind to revocations
   reaches(s, x,   min(l₁, l₂)) :- reaches(s, n, l₁), reaches(n, x, l₂), n ≠ s          membership
 
   direct(n, aud, min(l, can))  :- reaches(n, iss, l), del(_, iss, aud, n, can)         last hop is about n
-  record(k, n)   :- direct(n, k, Admin)                                 k ever held Admin over n
-  record(k, k)                                                          own node always counts
-  covered(h, n)  :- rev(k, h), record(k, n)
+  admin_reach(k, n)   :- direct(n, k, Admin)                                 k ever held Admin over n
+  admin_reach(k, k)                                                          own node always counts
+  covered(h, n)  :- rev(k, h), admin_reach(k, n)
 
 Stratum 2 — live pass, negation over stratum 1 only
   -- existence: least fixed point
@@ -253,15 +253,15 @@ Stratum 2 — live pass, negation over stratum 1 only
 Notes on the program:
 
 - _`sub` composes._ The third `reaches` rule is what makes `sub: Members` mean membership: whatever `Members` reaches, its members reach too, clamped by both hops. Without it `members(Doc)` would name roles and never humans, and the layer above would have to know which nodes are roles — which the crate boundary forbids. Every node with standing over `s` acts as a role for `s`; the rule does not ask what kind of key `n` is. A "route" is therefore a derivation, not a walk along `iss → aud` edges: Alice's membership `{iss: Brooke, aud: Alice, sub: Members}` sits on Doc's route to Alice because Brooke has standing over `Members`, not because Brooke is the previous node.
-- _Records are direct, not composed._ `record(k, n)` requires the last hop to be an edge _about_ `n`. Brooke, an Admin member of `Owners`, reaches `Doc` at Admin, but her record holds `Owners`, not `Doc`; the README's apex analysis depends on this ("nobody ever held Admin over the subject itself"). Only a direct `{…, sub: Doc, can: Admin}` grant puts `Doc` in a record.
-- _Stratum 1 is global; stratum 2 is rooted._ `record(k, n)` must see every subject, because Bob's Admin over `Members` is what lets him cut things on `Doc`'s routes. Stratum 2 is grounded at one subject and ranges over every subject that subject reaches; "per-subject" means rooted at one subject, not confined to one subject's certificates.
+- _Records are direct, not composed._ `admin_reach(k, n)` requires the last hop to be an edge _about_ `n`. Brooke, an Admin member of `Owners`, reaches `Doc` at Admin, but her record holds `Owners`, not `Doc`; the README's apex analysis depends on this ("nobody ever held Admin over the subject itself"). Only a direct `{…, sub: Doc, can: Admin}` grant puts `Doc` in a record.
+- _Stratum 1 is global; stratum 2 is rooted._ `admin_reach(k, n)` must see every subject, because Bob's Admin over `Members` is what lets him cut things on `Doc`'s routes. Stratum 2 is grounded at one subject and ranges over every subject that subject reaches; "per-subject" means rooted at one subject, not confined to one subject's certificates.
 - _Both passes are the same rule._ `reaches` is `level(·, ·, ⊥, ·)` with every edge live and every cap equal to its `can`. The reference implementation is one bounded widest-path search over the composed graph, parameterised by an exclusion set; stratum 1 runs it with the empty set.
 - _Two fixed points, in the safe direction each._ Existence (`route`, `live`) is a least fixed point: revisiting a node assumes dead, so ungrounded cycles cannot certify themselves. Caps are a greatest fixed point iterated down from `can`: caps only ever decrease, and the descent is finite (four levels, finitely many edges). The two are separable because existence never reads a cap.
-- _Covered edges are clamped, not just gated._ A covered edge conveys at most the level its issuer holds _on a derivation that avoids the covered nodes_, not the issuer's global level. Example: `K` is an Admin of role `Mods`; `B` is a Mod (Admin over Doc via `Mods`) and also holds a direct Read over `Doc` from `Owners`; `B` grants `C` Admin over `Doc` (`h`); `K` revokes `h`. `record(K) = {K, Mods}`, so `h` is dead on the derivation through `Mods` and live on the one through `Owners`. `C` gets `min(Read, Admin) = Read`: `B`'s standing as a Mod does not flow through the edge `K` cut, while `B`'s independent Read does. Gating alone (existence via the avoiding derivation, level from `B`'s global Admin) would hand `C` the very authority the cut was about. Clamping yields the same live set and levels `≤` the gated reading everywhere: ambiguity resolves toward less authority.
+- _Covered edges are clamped, not just gated._ A covered edge conveys at most the level its issuer holds _on a derivation that avoids the covered nodes_, not the issuer's global level. Example: `K` is an Admin of role `Mods`; `B` is a Mod (Admin over Doc via `Mods`) and also holds a direct Read over `Doc` from `Owners`; `B` grants `C` Admin over `Doc` (`h`); `K` revokes `h`. `admin_reach(K) = {K, Mods}`, so `h` is dead on the derivation through `Mods` and live on the one through `Owners`. `C` gets `min(Read, Admin) = Read`: `B`'s standing as a Mod does not flow through the edge `K` cut, while `B`'s independent Read does. Gating alone (existence via the avoiding derivation, level from `B`'s global Admin) would hand `C` the very authority the cut was about. Clamping yields the same live set and levels `≤` the gated reading everywhere: ambiguity resolves toward less authority.
 - _Clamping is a relaxation of route-consistency._ The exact reading — a single derivation in which every edge's own covered set is avoided by that derivation's prefix — is a path-with-forbidden-pairs problem and is not known to be polynomial; a reference semantics an adversary can make exponential with crafted certificates is a denial-of-service vector. `cap(h)` avoids `h`'s covered set but takes the edges it traverses as already-live facts, each justified by its own derivation. See [alternatives, route-consistent levels](alternatives.md#route-consistent-levels).
 - _Negation appears once, over fully computed lower strata._ Revocations target delegations, never other revocations, so `covered` never depends on `live`. This is what makes the result independent of insertion order.
 - _Aggregation is a bucketed BFS._ Four levels, so the widest-path pass over un-revoked certificates is linear. Each covered certificate pays one route search with its exclusion set, plus one more per cap-descent round.
-- _The route ends at `iss`; the recipient answers only to their own signature._ Record coverage applies to the nodes a derivation transits, and the derivation for `h` runs from `sub` to `iss`. Retraction (`k = iss`) is therefore total with no special case: `iss` is in its own record and on its own route. Renunciation (`k = aud`) is the one explicit clause, `¬rev(aud, h)`: the recipient's _own_ revocation kills what names them, but nobody's _record_ reaches a certificate through its `aud`. The alternative — `aud` on the route with record coverage — would let every ever-admin of `Owners` cut `Doc → Owners` and brick the document, which is the whole-document kill the record rule exists to prevent (README, _The Root Edge Protects Itself_).
+- _The route ends at `iss`; the recipient answers only to their own signature._ Admin-reach coverage applies to the nodes a derivation transits, and the derivation for `h` runs from `sub` to `iss`. Retraction (`k = iss`) is therefore total with no special case: `iss` is in its own admin reach and on its own route. Renunciation (`k = aud`) is the one explicit clause, `¬rev(aud, h)`: the recipient's _own_ revocation kills what names them, but nobody's _record_ reaches a certificate through its `aud`. The alternative — `aud` on the route with admin-reach coverage — would let every ever-admin of `Owners` cut `Doc → Owners` and brick the document, which is the whole-document kill the record rule exists to prevent (README, _The Root Edge Protects Itself_).
 - _Un-grounded certificates cost storage only._ Evaluation forward-chains from root edges and never visits them.
 - _Root edges are not special-cased._ `reaches(n, n, Admin)` puts every node at Admin over itself, so `{iss: Doc, aud: Owners, sub: Doc}` is an ordinary edge whose issuer happens to reach the subject. The evaluator never tests `iss == sub`.
 
@@ -337,7 +337,7 @@ keyline/
 - `std` feature (default on): `HashMap`/`HashSet` via `beekem::collections`-style aliases, `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
 - `test_utils` feature: the conformance suite and the unverified `Verified` constructor.
 - `serde` feature: derives on the public types for `keyhive_core`'s internal use (archives). Not the wire format.
-- No `parallel` feature yet. If one comes, it is native-only (`rayon`); Wasm stays single-threaded because `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator is written so the independent units (records per issuer, route search per covered certificate) are plain iterators.
+- No `parallel` feature yet. If one comes, it is native-only (`rayon`); Wasm stays single-threaded because `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator is written so the independent units (admin reach per issuer, route search per covered certificate) are plain iterators.
 
 Follows the workspace's `beekem` conventions: `foo.rs` + `foo/`, manual impls instead of `derivative`, `tracing` behind `std`.
 
@@ -354,7 +354,7 @@ _Laws._
 - Widest path: `effective_access(s, a)` equals the max over routes of min along each, computed independently by brute force on small graphs.
 - Digest stability: same set (any order) gives the same `digest()`; different sets differ.
 
-_Scenarios._ The seven findings and the running scenario from [edge-cases], encoded as fixtures: rotation moots but never un-applies; concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen record; root edge is undeniable; retention of the subject key allows re-rooting; renunciation is total; `seen` re-issue heals with the same downstream hashes.
+_Scenarios._ The seven findings and the running scenario from [edge-cases], encoded as fixtures: rotation moots but never un-applies; concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; root edge is undeniable; retention of the subject key allows re-rooting; renunciation is total; `seen` re-issue heals with the same downstream hashes.
 
 _Negative._ A revocation naming an unknown hash is `New` and changes no answer. A duplicate reports the covering revocation if one exists.
 
@@ -373,7 +373,7 @@ Not part of this branch; recorded so the crate's shape is checked against its on
 
 | Model-document open item | Resolution                                                                                                    |
 |--------------------------|---------------------------------------------------------------------------------------------------------------|
-| Delegation below Admin   | Anyone may delegate; attenuation is the only rule. Admin matters for service records only.                    |
+| Delegation below Admin   | Anyone may delegate; attenuation is the only rule. Admin matters for admin reach only.                    |
 | `seen` vs nonce          | `seen`. Rationale above.                                                                                      |
 | Silent collision UX      | `insert == false` plus `revocations_naming` gives the caller what it needs to prompt.                         |
 

@@ -10,7 +10,7 @@ use keyhive_codec::{
 ///
 /// `Relay`, `Read`, and `Edit` are conveyance levels: what may travel along a
 /// route. `Admin` is the governance level: it places the subject in the
-/// holder's service record, which is what gives third-party revocations their
+/// holder's admin reach, which is what gives third-party revocations their
 /// reach. Attenuation along a route is `min`; combination across routes is `max`.
 // TODO(keyhive_types): `keyhive_core::Access` is the same type; unify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
