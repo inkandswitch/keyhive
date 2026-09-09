@@ -235,7 +235,7 @@ Stratum 2 — live pass, negation over stratum 1 only
   route(s, s, h)      :- ¬covered(h, s)
   route(s, aud, h)    :- route(s, iss, h), live(h′), del(h′, iss, aud, s, _), ¬covered(h, aud)
   route(s, x, h)      :- route(s, n, h), route(n, x, h), n ≠ s
-  live(h)             :- del(h, iss, _, s, _), route(s, iss, h)
+  live(h)             :- del(h, iss, aud, s, _), route(s, iss, h), ¬rev(aud, h)
 
   -- level: greatest fixed point, iterated down from cap(h) = can
   level(s, s, h, Admin)              :- ¬covered(h, s)
@@ -261,6 +261,7 @@ Notes on the program:
 - _Clamping is a relaxation of route-consistency._ The exact reading — a single derivation in which every edge's own covered set is avoided by that derivation's prefix — is a path-with-forbidden-pairs problem and is not known to be polynomial; a reference semantics an adversary can make exponential with crafted certificates is a denial-of-service vector. `cap(h)` avoids `h`'s covered set but takes the edges it traverses as already-live facts, each justified by its own derivation. See [alternatives, route-consistent levels](alternatives.md#route-consistent-levels).
 - _Negation appears once, over fully computed lower strata._ Revocations target delegations, never other revocations, so `covered` never depends on `live`. This is what makes the result independent of insertion order.
 - _Aggregation is a bucketed BFS._ Four levels, so the widest-path pass over un-revoked certificates is linear. Each covered certificate pays one route search with its exclusion set, plus one more per cap-descent round.
+- _The route ends at `iss`; the recipient answers only to their own signature._ Record coverage applies to the nodes a derivation transits, and the derivation for `h` runs from `sub` to `iss`. Retraction (`k = iss`) is therefore total with no special case: `iss` is in its own record and on its own route. Renunciation (`k = aud`) is the one explicit clause, `¬rev(aud, h)`: the recipient's _own_ revocation kills what names them, but nobody's _record_ reaches a certificate through its `aud`. The alternative — `aud` on the route with record coverage — would let every ever-admin of `Owners` cut `Doc → Owners` and brick the document, which is the whole-document kill the record rule exists to prevent (README, _The Root Edge Protects Itself_).
 - _Un-grounded certificates cost storage only._ Evaluation forward-chains from root edges and never visits them.
 - _Root edges are not special-cased._ `reaches(n, n, Admin)` puts every node at Admin over itself, so `{iss: Doc, aud: Owners, sub: Doc}` is an ordinary edge whose issuer happens to reach the subject. The evaluator never tests `iss == sub`.
 
