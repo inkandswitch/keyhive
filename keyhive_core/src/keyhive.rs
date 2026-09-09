@@ -3257,6 +3257,60 @@ mod tests {
         Ok(())
     }
 
+    /// Document generation must not hold the shared RNG while waiting for the
+    /// active principal: prekey rotation takes those locks in the opposite order.
+    #[tokio::test]
+    async fn document_generation_does_not_invert_active_and_csprng_locks() -> TestResult {
+        let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
+        let hive: TestKeyhive = Keyhive::generate(
+            signer.clone(),
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await?;
+
+        let active_guard = hive.active.lock().await;
+        let active_id = active_guard.id();
+        let active = hive.active.dupe();
+        let delegations = hive.delegations.dupe();
+        let revocations = hive.revocations.dupe();
+        let listener = hive.event_listener.clone();
+        let csprng = hive.csprng.dupe();
+        let before = delegations.lock().await.len();
+        let generate = tokio::spawn(async move {
+            Document::generate(
+                nonempty![Agent::Active(active_id, active)],
+                nonempty![[7u8; 32]],
+                delegations,
+                revocations,
+                listener,
+                &signer,
+                csprng,
+            )
+            .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if hive.delegations.lock().await.len() > before {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("document generation never reached prekey selection");
+
+        let rng_guard = tokio::time::timeout(std::time::Duration::from_secs(1), hive.csprng.lock())
+            .await
+            .expect("document generation held csprng while waiting for active");
+        drop(rng_guard);
+        drop(active_guard);
+        generate.await??;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn reserved_signer_document_uses_reserved_identity() -> TestResult {
         let signer = MemorySigner::generate(&mut rand::rngs::OsRng);

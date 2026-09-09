@@ -188,7 +188,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 let rc = Arc::new(dlg);
                 delegations.lock().await.insert(rc.dupe());
                 delegation_heads.insert(rc.dupe());
-
                 let listen = async_listener.dupe();
                 let target = id;
                 futs.push(async move {

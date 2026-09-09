@@ -233,7 +233,7 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::principal::individual::op::add_key::AddKeyOp;
+    use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
     use keyhive_crypto::signer::memory::MemorySigner;
 
     #[test]
@@ -327,5 +327,52 @@ mod tests {
 
         assert_eq!(index1, 0);
         assert_eq!(index1, index2);
+    }
+
+    /// Regression: a stale rotation cycle (rotate A→B then B→A) must never
+    /// empty the published prekey set. `pick_prekey` panics on an empty set
+    /// ("index to be in range"), and the documented invariant is that an
+    /// individual always keeps at least one published prekey.
+    #[test]
+    fn rotation_cycle_keeps_prekeys_nonempty() {
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+        let sk = MemorySigner::generate(&mut csprng);
+
+        // Publish a single prekey.
+        let k1 = AddKeyOp::generate(&mut csprng);
+        let add_op = sk.try_sign_sync(k1.clone()).unwrap();
+        let mut individual = Individual::new(Arc::new(add_op).into());
+        assert_eq!(individual.prekeys.len(), 1);
+
+        // Rotate k1 -> k2.
+        let k2 = ShareKey::generate(&mut csprng);
+        let rot1 = sk
+            .try_sign_sync(RotateKeyOp {
+                old: k1.share_key,
+                new: k2,
+            })
+            .unwrap();
+        individual
+            .receive_prekey_op(KeyOp::Rotate(Arc::new(rot1)))
+            .unwrap();
+        assert_eq!(individual.prekeys.len(), 1);
+
+        // Rotate k2 -> k1: the rotation cycle. The published set must stay
+        // non-empty and pick_prekey must not panic.
+        let rot2 = sk
+            .try_sign_sync(RotateKeyOp {
+                old: k2,
+                new: k1.share_key,
+            })
+            .unwrap();
+        individual
+            .receive_prekey_op(KeyOp::Rotate(Arc::new(rot2)))
+            .unwrap();
+        assert!(
+            !individual.prekeys.is_empty(),
+            "rotation cycle must not empty the published prekey set"
+        );
+        let _ = individual.pick_prekey(DocumentId::generate(&mut csprng));
     }
 }
