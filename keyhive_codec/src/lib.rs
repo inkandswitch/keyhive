@@ -1,8 +1,8 @@
-//! Encoding traits and the [`Encoded<T>`] byte container shared by Keyhive crates.
+//! Encoding traits and the [`encoded::Encoded<T>`] byte container shared by Keyhive crates.
 //!
 //! Keyhive is moving to a bespoke binary codec. This crate holds only the parts
-//! every other crate needs to agree on: the [`Encode`] and [`Decode`] traits and
-//! the [`Encoded<T>`] type that carries a value's bytes tagged with the type they
+//! every other crate needs to agree on: the [`traits::Encode`] and [`traits::Decode`] traits and
+//! the [`encoded::Encoded<T>`] type that carries a value's bytes tagged with the type they
 //! encode. It has no dependencies beyond `alloc` and contains no cryptography;
 //! hashing an `Encoded<T>` is `keyhive_crypto`'s job.
 //!
@@ -27,30 +27,4 @@ extern crate alloc;
 
 pub mod encoded;
 pub mod error;
-
-pub use encoded::Encoded;
-pub use error::DecodeError;
-
-use alloc::vec::Vec;
-
-/// Serialize a value into its canonical byte form.
-pub trait Encode {
-    /// Append the canonical encoding of `self` to `out`.
-    fn encode_into(&self, out: &mut Vec<u8>);
-
-    /// Encode `self` into a fresh [`Encoded<Self>`].
-    fn encode(&self) -> Encoded<Self>
-    where
-        Self: Sized,
-    {
-        let mut bytes = Vec::new();
-        self.encode_into(&mut bytes);
-        Encoded::from_bytes_unchecked(bytes)
-    }
-}
-
-/// Deserialize a value from its canonical byte form, rejecting any other form.
-pub trait Decode: Sized {
-    /// Decode `bytes`, which MUST be exactly the canonical encoding of a value.
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError>;
-}
+pub mod traits;

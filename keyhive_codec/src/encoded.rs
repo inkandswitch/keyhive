@@ -1,6 +1,9 @@
 //! The [`Encoded<T>`] byte container.
 
-use crate::{Decode, DecodeError, Encode};
+use crate::{
+    error::DecodeError,
+    traits::{Decode, Encode},
+};
 use alloc::vec::Vec;
 use core::{
     cmp::Ordering,
