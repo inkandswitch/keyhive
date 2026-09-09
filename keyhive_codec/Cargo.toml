@@ -1,0 +1,20 @@
+[package]
+name = "keyhive_codec"
+version = "0.1.0"
+description = "Encoding traits and the Encoded<T> byte container shared by Keyhive crates"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "1.0", default-features = false, features = [
+  "alloc",
+], optional = true }
+
+[features]
+default = ["std"]
+std = ["serde?/std"]
+serde = ["dep:serde"]
