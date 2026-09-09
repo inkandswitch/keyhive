@@ -327,15 +327,17 @@ keyline/
     certificate.rs  Certificate; Encode/Decode impls for all three
     signed.rs       Signed<T>, Verified<T>
     keyline.rs      the Keyline trait, set_digest
-    memory.rs       MemoryKeyline
-    graph/          eval.rs (stratified evaluator), index.rs
-    conformance.rs  #[cfg(feature = "test_utils")] the shared test suite
+    memory.rs       MemoryKeyline: storage, stratified evaluator, Keyline impl
+    conformance.rs  the shared test suite and the keyline_conformance! macro
+    conformance/    gen.rs (CertSet generator), laws.rs (bolero properties, naive oracle),
+                    scenarios.rs (named cases, generic over K: Keyline)
+    test_utils.rs   deterministic ids, unsigned Verified fixtures
 ```
 
 - `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`.
 - Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`), and `ed25519-dalek` (`VerifyingKey`, `Signature`). Nothing else at runtime.
 - `std` feature (default on): `HashMap`/`HashSet` via `beekem::collections`-style aliases, `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
-- `test_utils` feature: the conformance suite and the unverified `Verified` constructor.
+- `test_utils` feature: the conformance suite, the unverified `Verified` constructor, and `bolero`/`arbitrary`. Also compiled under `cfg(test)` so the crate's own tests run without the feature.
 - `serde` feature: derives on the public types for `keyhive_core`'s internal use (archives). Not the wire format.
 - No `parallel` feature yet. If one comes, it is native-only (`rayon`); Wasm stays single-threaded because `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator is written so the independent units (admin reach per issuer, route search per covered certificate) are plain iterators.
 
@@ -343,20 +345,24 @@ Follows the workspace's `beekem` conventions: `foo.rs` + `foo/`, manual impls in
 
 ## Conformance Suite
 
-Every backend runs the same tests against `impl Keyline`. The suite is exported behind `test_utils` and uses `bolero` for the properties:
+Every backend runs the same tests against `impl Keyline`. The suite is exported behind `test_utils`; `keyline_conformance!(MyBackend)` expands to one `#[test]` per scenario and per law. `MemoryKeyline` runs it on itself.
 
-_Laws._
+_Generator._ `conformance::gen::CertSet` draws from a pool of eight deterministic identities: a root edge per subject (one to three), up to ten free-form delegations over any node in the pool (so some land on roles and some are ungrounded), up to four revocations naming delegations already present, and up to two re-issues past a revocation. Random 32-byte keys would give nothing but ungrounded edges.
 
-- Order independence: for any set and any two insertion orders, every query agrees.
-- Idempotence: inserting a certificate twice leaves every query unchanged.
-- Monotone denial: adding a certificate never revives a delegation that was dead. (Adding a delegation can revive by late binding; adding a _revocation_ never grants.)
-- Attenuation: `effective_access(s, a) ≤ can` for every delegation naming `a`; `effective_access` along any single route equals the min of its hops.
-- Widest path: `effective_access(s, a)` equals the max over routes of min along each, computed independently by brute force on small graphs.
-- Digest stability: same set (any order) gives the same `digest()`; different sets differ.
+_Laws_ (`bolero`, over generated sets):
+
+- Oracle agreement without revocations: `effective_access` over every pair in the pool equals `naive_reaches`, the three stratum-1 rules run as a plain tuple fixpoint that shares no code with any backend; `is_live(h)` iff `iss(h)` reaches `sub(h)`. This is the one independent oracle; it pins the composition and attenuation semantics exactly.
+- Order independence: any permutation of a set gives the same `digest`, the same levels over the pool, the same live set, the same `members`.
+- Idempotence: re-inserting every certificate returns `false` and changes nothing.
+- Revocations only deny: for each revocation in a set, the set without it has levels `≥` everywhere and a live set `⊇`.
+- Digest identifies the set: permutation-invariant; dropping any non-duplicated certificate changes it.
+- Query consistency: `effective_access(s, s) = Some(Admin)` for every `s`; `members(s)` is `effective_access(s, ·)` minus `s`; `contains` holds for everything inserted; `revocations_naming(h)` is exactly the revocations in the set with `revoke = h`.
+
+With revocations, exact agreement is by scenario. A second oracle for that case — the full program transcribed into a Datalog engine (`ascent`) as a dev-dependency — is an open option.
 
 _Scenarios._ The seven findings and the running scenario from [edge-cases], encoded as fixtures: rotation moots but never un-applies; concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; root edge is undeniable, even by Owners' admins; retention of the subject key allows re-rooting; retraction and renunciation are total; a non-admin's cut is confined to their own node; `seen` re-issue heals with the same downstream hashes. Plus the composition and clamping cases from [Evaluation](#evaluation): membership carries whatever the role reaches, including documents added later; a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example). `MemoryKeyline`'s unit tests are the first cut of these fixtures.
 
-_Negative._ A revocation naming an unknown hash is `New` and changes no answer. A duplicate reports the covering revocation if one exists.
+_Negative._ A revocation naming an unknown hash is new and changes no answer. A duplicate returns `false` from `insert` and `revocations_naming` reports what named it.
 
 ## Integration Sketch
 

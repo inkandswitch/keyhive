@@ -48,4 +48,4 @@ std = [
 ]
 serde = ["dep:serde", "keyhive_codec/serde"]
 arbitrary = ["dep:arbitrary", "keyhive_crypto/arbitrary"]
-test_utils = ["dep:bolero"]
+test_utils = ["dep:bolero", "arbitrary"]

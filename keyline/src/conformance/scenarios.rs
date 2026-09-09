@@ -1,0 +1,249 @@
+//! Named scenarios from `design/keyline/{README,edge-cases}.md`, each a
+//! function generic over the backend. Every one MUST pass on every `Keyline`.
+//!
+//! The cast: `DOC` is a document; `OWNERS` and `MEMBERS` are roles; `MODS` is a
+//! role in the clamping example; the rest are people.
+
+use super::{access, build, d, r, ALICE, BOB, CAROL, DAN, DOC, EVE, FRANK, MEMBERS, MODS, OWNERS};
+use crate::{
+    access::Access,
+    delegation::Delegation,
+    keyline::Keyline,
+    test_utils::{cert, id},
+};
+use alloc::vec::Vec;
+
+/// Doc -> Owners (root); Owners administers Members; Bob and Carol are
+/// Owners; Members has Edit over Doc; Alice is a Member, added by Carol.
+///
+/// Returns the graph, Carol's Owners membership, and Alice's Members membership.
+pub fn standard<K: Keyline + Default>() -> (K, Delegation, Delegation) {
+    let carol_owner = d(OWNERS, CAROL, OWNERS, Access::Admin);
+    let alice_member = d(CAROL, ALICE, MEMBERS, Access::Admin);
+    let g = build([
+        d(DOC, OWNERS, DOC, Access::Admin).into(),
+        d(OWNERS, BOB, OWNERS, Access::Admin).into(),
+        carol_owner.into(),
+        d(MEMBERS, OWNERS, MEMBERS, Access::Admin).into(),
+        d(BOB, MEMBERS, DOC, Access::Edit).into(),
+        alice_member.into(),
+    ]);
+    (g, carol_owner, alice_member)
+}
+
+pub fn empty_graph<K: Keyline + Default>() {
+    let g = K::default();
+    assert_eq!(access(&g, DOC, DOC), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, ALICE), None);
+    assert!(g.members(id(DOC)).is_empty());
+}
+
+pub fn attenuation_and_widest_path<K: Keyline + Default>() {
+    let g: K = build([
+        d(DOC, ALICE, DOC, Access::Admin).into(),
+        d(ALICE, BOB, DOC, Access::Read).into(),
+        d(BOB, CAROL, DOC, Access::Admin).into(),
+        d(DOC, CAROL, DOC, Access::Relay).into(),
+    ]);
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, BOB), Some(Access::Read));
+    // min along the chain is Read; the direct Relay route loses to it.
+    assert_eq!(access(&g, DOC, CAROL), Some(Access::Read));
+}
+
+pub fn ungrounded_edges_are_dead<K: Keyline + Default>() {
+    let stray = d(ALICE, BOB, DOC, Access::Admin);
+    let g: K = build([stray.into(), d(BOB, CAROL, DOC, Access::Admin).into()]);
+    assert!(!g.is_live(&stray.digest()));
+    assert!(g.members(id(DOC)).is_empty());
+
+    // An ungrounded cycle does not certify itself.
+    let g: K = build([
+        d(ALICE, BOB, DOC, Access::Admin).into(),
+        d(BOB, ALICE, DOC, Access::Admin).into(),
+    ]);
+    assert!(g.members(id(DOC)).is_empty());
+}
+
+pub fn membership_composes<K: Keyline + Default>() {
+    let (g, _, _) = standard::<K>();
+    assert_eq!(access(&g, DOC, OWNERS), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, BOB), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, MEMBERS), Some(Access::Edit));
+    // Alice: Admin over Members, clamped to Members' Edit over Doc.
+    assert_eq!(access(&g, MEMBERS, ALICE), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+    // Owners administer Members through Members' root edge.
+    assert_eq!(access(&g, MEMBERS, CAROL), Some(Access::Admin));
+
+    let members: Vec<_> = g.members(id(DOC)).into_keys().collect();
+    assert_eq!(members.len(), 5);
+    assert!(!members.contains(&id(DOC)));
+}
+
+pub fn late_binding_grants_new_documents_to_members<K: Keyline + Default>() {
+    let (mut g, _, _) = standard::<K>();
+    let other = 11;
+    assert_eq!(access(&g, other, ALICE), None);
+    g.insert(cert(d(other, MEMBERS, other, Access::Read)));
+    assert_eq!(access(&g, other, ALICE), Some(Access::Read));
+}
+
+pub fn retraction_is_total<K: Keyline + Default>() {
+    let (mut g, _, alice_member) = standard::<K>();
+    g.insert(cert(r(CAROL, &alice_member)));
+    assert!(!g.is_live(&alice_member.digest()));
+    assert_eq!(access(&g, DOC, ALICE), None);
+    assert_eq!(access(&g, MEMBERS, ALICE), None);
+}
+
+pub fn renunciation_is_total<K: Keyline + Default>() {
+    let (mut g, _, alice_member) = standard::<K>();
+    g.insert(cert(r(ALICE, &alice_member)));
+    assert!(!g.is_live(&alice_member.digest()));
+    assert_eq!(access(&g, DOC, ALICE), None);
+}
+
+/// Bob never signed Alice's membership, but Owners is in Bob's admin
+/// reach and Members' only route to Carol grounds through Owners.
+pub fn admin_over_a_transited_node_cuts_deep<K: Keyline + Default>() {
+    let (mut g, _, alice_member) = standard::<K>();
+    g.insert(cert(r(BOB, &alice_member)));
+    assert!(!g.is_live(&alice_member.digest()));
+    assert_eq!(access(&g, DOC, ALICE), None);
+    // Carol herself is untouched.
+    assert_eq!(access(&g, DOC, CAROL), Some(Access::Admin));
+}
+
+/// Dan holds only Read, so Dan's admin reach is {Dan}. Alice's membership
+/// never transits Dan, so Dan's cut of it is inert; Dan's own hop is Dan's to cut.
+pub fn non_admin_cut_is_confined_to_own_node<K: Keyline + Default>() {
+    let dan_grant = d(DAN, ALICE, DOC, Access::Read);
+    let (mut g, _, alice_member) = standard::<K>();
+    g.insert(cert(d(DOC, DAN, DOC, Access::Read)));
+    g.insert(cert(dan_grant));
+    g.insert(cert(r(DAN, &alice_member)));
+    assert!(g.is_live(&alice_member.digest()));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+    g.insert(cert(r(DAN, &dan_grant)));
+    assert!(!g.is_live(&dan_grant.digest()));
+}
+
+/// Bob boots Carol; Carol was Alice's sponsor, so Alice dies implicitly.
+/// Carol's admin reach still holds Owners, so she can cut Bob's re-sponsor.
+pub fn ex_admin_reach_is_frozen<K: Keyline + Default>() {
+    let (mut g, carol_owner, alice_member) = standard::<K>();
+    g.insert(cert(r(BOB, &carol_owner)));
+    assert_eq!(access(&g, DOC, CAROL), None);
+    assert_eq!(access(&g, DOC, ALICE), None);
+
+    let bob_sponsors = d(BOB, ALICE, MEMBERS, Access::Admin);
+    g.insert(cert(bob_sponsors));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+    g.insert(cert(r(CAROL, &bob_sponsors)));
+    assert_eq!(access(&g, DOC, ALICE), None);
+    assert!(!g.is_live(&alice_member.digest()));
+}
+
+pub fn mutual_revocation_leaves_both_cuts_standing<K: Keyline + Default>() {
+    let (mut g, carol_owner, _) = standard::<K>();
+    let bob_owner = d(OWNERS, BOB, OWNERS, Access::Admin);
+    g.insert(cert(r(BOB, &carol_owner)));
+    g.insert(cert(r(CAROL, &bob_owner)));
+    assert_eq!(access(&g, DOC, BOB), None);
+    assert_eq!(access(&g, DOC, CAROL), None);
+    // The apex is bricked: nothing below survives.
+    assert!(g.members(id(DOC)).into_keys().eq([id(OWNERS)]));
+}
+
+/// Doc is in nobody's admin reach and the route to Doc is `[Doc]` alone, so not
+/// even an Owners admin can cut the root edge.
+pub fn root_edge_is_undeniable_by_admins<K: Keyline + Default>() {
+    let (mut g, _, _) = standard::<K>();
+    let root = d(DOC, OWNERS, DOC, Access::Admin);
+    g.insert(cert(r(BOB, &root)));
+    assert!(g.is_live(&root.digest()));
+    assert_eq!(access(&g, DOC, BOB), Some(Access::Admin));
+}
+
+/// Dan administers Mods. Eve is a Mod (Admin over Doc through Mods) and
+/// separately holds Read over Doc from Owners. Eve grants Frank Admin; Dan
+/// revokes it. Frank keeps only what Eve has independently of Mods.
+pub fn covered_edges_are_clamped_not_just_gated<K: Keyline + Default>() {
+    let h = d(EVE, FRANK, DOC, Access::Admin);
+    let mut g: K = build([
+        d(DOC, OWNERS, DOC, Access::Admin).into(),
+        d(OWNERS, MODS, DOC, Access::Admin).into(),
+        d(MODS, DAN, MODS, Access::Admin).into(),
+        d(DAN, EVE, MODS, Access::Admin).into(),
+        d(OWNERS, EVE, DOC, Access::Read).into(),
+        h.into(),
+    ]);
+    assert_eq!(access(&g, DOC, EVE), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, FRANK), Some(Access::Admin));
+
+    g.insert(cert(r(DAN, &h)));
+    assert!(g.is_live(&h.digest()));
+    assert_eq!(access(&g, DOC, EVE), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, FRANK), Some(Access::Read));
+}
+
+pub fn revocation_may_arrive_before_its_target<K: Keyline + Default>() {
+    let (mut g, _, alice_member) = standard::<K>();
+    let mut early = K::default();
+    assert!(early.insert(cert(r(CAROL, &alice_member))));
+    assert!(early.members(id(DOC)).is_empty());
+    for c in [
+        d(DOC, OWNERS, DOC, Access::Admin),
+        d(OWNERS, CAROL, OWNERS, Access::Admin),
+        d(MEMBERS, OWNERS, MEMBERS, Access::Admin),
+        d(BOB, MEMBERS, DOC, Access::Edit),
+        d(OWNERS, BOB, OWNERS, Access::Admin),
+        alice_member,
+    ] {
+        early.insert(cert(c));
+    }
+    g.insert(cert(r(CAROL, &alice_member)));
+    assert_eq!(early.members(id(DOC)), g.members(id(DOC)));
+    assert_eq!(early.digest(), g.digest());
+    assert_eq!(access(&early, DOC, ALICE), None);
+}
+
+pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
+    let (mut g, _, alice_member) = standard::<K>();
+    let before = g.digest();
+    assert!(!g.insert(cert(alice_member)));
+    assert_eq!(g.digest(), before);
+
+    let rev = r(CAROL, &alice_member);
+    g.insert(cert(rev));
+    assert!(!g.insert(cert(alice_member)));
+    assert!(g
+        .revocations_naming(&alice_member.digest())
+        .into_iter()
+        .eq([rev.digest()]));
+}
+
+pub fn reissue_with_seen_heals<K: Keyline + Default>() {
+    let (mut g, _, alice_member) = standard::<K>();
+    let rev = r(CAROL, &alice_member);
+    g.insert(cert(rev));
+    assert_eq!(access(&g, DOC, ALICE), None);
+
+    let healed = alice_member.reissue(rev.digest());
+    assert_ne!(healed.digest(), alice_member.digest());
+    assert!(g.insert(cert(healed)));
+    assert!(g.is_live(&healed.digest()));
+    assert!(!g.is_live(&alice_member.digest()));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+}
+
+/// A revocation naming a hash nobody holds is stored and changes no answer.
+pub fn unknown_revocation_is_inert<K: Keyline + Default>() {
+    let (mut g, _, _) = standard::<K>();
+    let before = g.members(id(DOC));
+    let phantom = d(DAN, EVE, FRANK, Access::Relay);
+    assert!(g.insert(cert(r(BOB, &phantom))));
+    assert_eq!(g.members(id(DOC)), before);
+    assert!(!g.is_live(&phantom.digest()));
+}
