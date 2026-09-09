@@ -6,13 +6,13 @@ Design choices that were considered and rejected, with the reason and the condit
 
 ### A `sub` (jurisdiction) field on `Revocation`
 
-_Proposal._ `{iss, sub, revoke}`: the cut applies only on routes through `sub`, not through every node in the issuer's service record. Earlier drafts called the field `from`, then `via`.
+_Proposal._ `{iss, sub, revoke}`: the cut applies only on routes through `sub`, not through every node in the issuer's admin reach. Earlier drafts called the field `from`, then `via`.
 
 _Would buy._ Narrow denial with one key (ban in room A, keep in room B). Legibility: the certificate names where the act was exercised. Symmetry with `Delegation`. A one-node exclusion set per revocation.
 
-_Rejected because._ Rotation would re-sign the deny list. A cut pinned to `Members` does not cover `Members′` after rotation, so every standing denial must be re-issued after every rotation, forever. Under record scoping a surviving admin's record grows as they are re-rostered, and their old cuts follow automatically; the griefer's record froze, so theirs do not. The explicit field taxes the honest admin on the routine path (rotation is the recommended hygiene) to buy flexibility on a rare one. It also introduces an inert-by-mistake state (naming a node the target never routes through) that record scoping cannot produce, and it is the narrower of the two denials where the design resolves ambiguity toward less authority. Narrow denial is available today by signing with a capacity key per role administered.
+_Rejected because._ Rotation would re-sign the deny list. A cut pinned to `Members` does not cover `Members′` after rotation, so every standing denial must be re-issued after every rotation, forever. Under admin-reach scoping a surviving admin's admin reach grows as they are re-rostered, and their old cuts follow automatically; the griefer's admin reach froze, so theirs do not. The explicit field taxes the honest admin on the routine path (rotation is the recommended hygiene) to buy flexibility on a rare one. It also introduces an inert-by-mistake state (naming a node the target never routes through) that admin-reach scoping cannot produce, and it is the narrower of the two denials where the design resolves ambiguity toward less authority. Narrow denial is available today by signing with a capacity key per role administered.
 
-_Reopen if._ Narrow denial turns out to be common. The compatible extension is `sub: Option<Id>` with `None` meaning the whole record; `None` has one encoding, so the [`seen`](#a-random-nonce-instead-of-seen) invariant carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations--collapsed-into-the-issuer).
+_Reopen if._ Narrow denial turns out to be common. The compatible extension is `sub: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the [`seen`](#a-random-nonce-instead-of-seen) invariant carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations--collapsed-into-the-issuer).
 
 ### A random nonce instead of `seen`
 
@@ -110,7 +110,7 @@ _Reopen if._ Whiteout forces causal metadata into the system anyway. Then this i
 
 _Proposal._ Delete revoked edges from the graph, then compute reachability. One pass.
 
-_Rejected because._ Revocations would then affect each other's authority, and the result would depend on merge order: applying `r1` (Brooke cuts Bob) before checking `r2` (Bob cuts a grant) rejects `r2`; the reverse order lands it. Stratification computes service records where no revocation can see any other. Long form: [README, Why the Strata Are Mandatory](README.md#why-the-strata-are-mandatory).
+_Rejected because._ Revocations would then affect each other's authority, and the result would depend on merge order: applying `r1` (Brooke cuts Bob) before checking `r2` (Bob cuts a grant) rejects `r2`; the reverse order lands it. Stratification computes admin reach where no revocation can see any other. Long form: [README, Why the Strata Are Mandatory](README.md#why-the-strata-are-mandatory).
 
 _Reopen if._ Never; this is a correctness requirement, not a trade.
 
@@ -170,7 +170,7 @@ _Reopen if._ A second backend appears.
 
 ### Parallel evaluation with `rayon`
 
-_Proposal._ Fan out stratum-1 record computation and per-covered-certificate route searches across threads.
+_Proposal._ Fan out stratum-1 admin-reach computation and per-covered-certificate route searches across threads.
 
 _Rejected for now because._ Wasm is a first-class target and `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator keeps the independent units as plain iterators so a native-only `parallel` feature can be added without restructuring.
 
