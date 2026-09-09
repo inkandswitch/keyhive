@@ -64,7 +64,7 @@ pub struct Delegation {
     pub aud:  Id,
     pub sub:  Id,
     pub can:  Access,
-    pub seen: Option<Digest<Delegation>>,
+    pub seen: Option<Digest<Revocation>>,
 }
 ```
 
@@ -74,7 +74,7 @@ pub struct Delegation {
 | `aud`  | Recipient. Gains `min(can, iss's effective level over sub)`.                                                       |
 | `sub`  | Scope. `iss == sub` is a root edge. A role key as `sub` is membership in that role.                                |
 | `can`  | Requested level; clamped, never raised.                                                                             |
-| `seen` | Freshness for re-issuing a grant identical to a revoked one. Evaluation ignores it. Absent means first issuance.   |
+| `seen` | The revocation being re-issued past. Gives a grant identical to a revoked one a fresh hash. Evaluation ignores it. Absent means first issuance. |
 
 A delegation is the Granovetter operator from object capabilities: Alice, who has a reference to Carol, introduces Bob to Carol by handing him that reference. In the classic diagram the arrows are references; here they are authority over a subject.
 
@@ -102,7 +102,9 @@ Compared with the current `keyhive_core::Delegation`, the fields `proof`, `after
 
 #### Why `seen` and not a nonce
 
-A random nonce would remove the need for an issuer to know which certificate it is re-issuing past. It was considered and rejected because it changes the fail direction. Two accidental issuances of the same grant (a retry, a device restore, two devices) would produce two independently live certificates with two hashes; revoking one leaves the other live, and a duplicate nobody noticed is a lingering grant. With `seen`, an identical re-issue produces the identical certificate: same payload, and because Ed25519 is deterministic, the same signature and the same hash. One revocation covers every copy. An issuer who re-mints a revoked grant without knowing it was revoked produces a certificate that silently does not take. That is fail-closed, and it is detectable: [`insert`](#insert) returns `false` and `revocations_naming` reports what named the duplicate, so `keyhive_core` can prompt for a re-issue with `seen`. `seen` also records in the certificate that the issuer re-granted knowing of the revocation. A nonce records nothing.
+A random nonce would remove the need for an issuer to know which certificate it is re-issuing past. It was considered and rejected because it changes the fail direction. Two accidental issuances of the same grant (a retry, a device restore, two devices) would produce two independently live certificates with two hashes; revoking one leaves the other live, and a duplicate nobody noticed is a lingering grant. With `seen`, an identical re-issue produces the identical certificate: same payload, and because Ed25519 is deterministic, the same signature and the same hash. One revocation covers every copy. An issuer who re-mints a revoked grant without knowing it was revoked produces a certificate that silently does not take. That is fail-closed, and it is detectable: [`insert`](#insert) returns `false` and `revocations_naming` reports what named the duplicate, so `keyhive_core` can prompt for a re-issue with `seen` set to one of those revocations. `seen` also records in the certificate that the issuer re-granted knowing of the revocation. A nonce records nothing.
+
+`seen` names the revocation, not the revoked delegation. The revoked delegation's digest is a function of the very fields being re-issued, so it carries no information and a second heal of the same grant would collide with the first; revocations are distinct certificates, so each heal is fresh. And a revocation is the only event that ever poisons a hash (implicit deaths revive by late binding), so it is always the thing one must have seen. See [README, The `seen` Field](README.md#the-seen-field).
 
 ### `Revocation`
 
@@ -205,7 +207,7 @@ A revocation whose target is not (yet) in the set is stored like any other certi
 
 Not yet on the trait: `get(&Digest<Certificate>) -> Option<&Signed<Certificate>>` and iteration over the set. Sync and archiving need them, but their shape depends on how Subduction pulls certificates, and a database-backed implementation may not hold the signed bytes. Decided at integration.
 
-### `AuthGraph`
+### `MemoryKeyline`
 
 The reference implementation: in-memory, `impl Keyline`. Plain maps of plain data; no `Rc`, no `Cell`, so `Send + Sync` hold without effort. It MAY memoize stratum-1 results (records, coverage) between inserts, since those are monotone in the set; any memo is invalidated on `insert` and never requires a write lock to read.
 
@@ -219,29 +221,48 @@ Stratum 0 — facts
   rev(k, h)                      one per revocation
 
 Stratum 1 — positive pass, blind to revocations
-  reaches(s, s, Admin)                                       every subject grounds itself
-  reaches(s, aud, min(l, can)) :- reaches(s, iss, l), del(_, iss, aud, s, can)
-  record(k, n)   :- reaches(n, k, Admin)                     k ever held Admin over n
-  record(k, k)                                                 own node always counts
+  reaches(n, n, Admin)                                                  every node grounds itself
+  reaches(n, aud, min(l, can)) :- reaches(n, iss, l), del(_, iss, aud, n, can)         edge about n
+  reaches(s, x,   min(l₁, l₂)) :- reaches(s, n, l₁), reaches(n, x, l₂), n ≠ s          membership
+
+  direct(n, aud, min(l, can))  :- reaches(n, iss, l), del(_, iss, aud, n, can)         last hop is about n
+  record(k, n)   :- direct(n, k, Admin)                                 k ever held Admin over n
+  record(k, k)                                                          own node always counts
   covered(h, n)  :- rev(k, h), record(k, n)
 
 Stratum 2 — live pass, negation over stratum 1 only
-  live(s, s, Admin)
-  live(s, aud, min(l, can)) :- live(s, iss, l), del(h, iss, aud, s, can),
-                                route(s, iss) avoids every n with covered(h, n)
+  -- existence: least fixed point
+  route(s, s, h)      :- ¬covered(h, s)
+  route(s, aud, h)    :- route(s, iss, h), live(h′), del(h′, iss, aud, s, _), ¬covered(h, aud)
+  route(s, x, h)      :- route(s, n, h), route(n, x, h), n ≠ s
+  live(h)             :- del(h, iss, _, s, _), route(s, iss, h)
+
+  -- level: greatest fixed point, iterated down from cap(h) = can
+  level(s, s, h, Admin)              :- ¬covered(h, s)
+  level(s, aud, h, min(l, cap(h′)))  :- level(s, iss, h, l), live(h′), del(h′, iss, aud, s, _), ¬covered(h, aud)
+  level(s, x, h, min(l₁, l₂))        :- level(s, n, h, l₁), level(n, x, h, l₂), n ≠ s
+  cap(h) = min(can, max l . level(s, iss, h, l))      for del(h, iss, _, s, can)
 ```
 
-`effective_access(s, a)` is the maximum `l` with `live(s, a, l)`. `is_live(h)` is whether `del(h, …)` participates in any `live` derivation.
+`route(s, x, h)` and `level(s, x, h, l)` are "x is reachable from s, through live edges, without touching any node covered for h"; the exclusion set is what `h` parameterises. Write `⊥` for a pseudo-certificate that nothing covers: `route(s, x, ⊥)` is plain live reachability and `level(s, x, ⊥, l)` is the plain live level. Then:
+
+- `effective_access(s, a)` is the maximum `l` with `level(s, a, ⊥, l)`; `Some(Admin)` when `a = s`.
+- `members(s)` is every `x ≠ s` with `route(s, x, ⊥)`, paired with its `effective_access`.
+- `is_live(h)` is `live(h)`.
 
 Notes on the program:
 
-- _Stratum 1 is global; stratum 2 is per-subject._ `record(k, n)` must see every subject, because Bob's Admin over `Members` is what lets him cut things on `Doc`'s routes. `live` is grounded at one subject's root and ranges over that subject's routes.
-- _Both passes are the same rule._ Stratum 2 is stratum 1 plus a guard. The reference implementation is one bounded widest-path search parameterized by an exclusion set; stratum 1 runs it with the empty set.
+- _`sub` composes._ The third `reaches` rule is what makes `sub: Members` mean membership: whatever `Members` reaches, its members reach too, clamped by both hops. Without it `members(Doc)` would name roles and never humans, and the layer above would have to know which nodes are roles — which the crate boundary forbids. Every node with standing over `s` acts as a role for `s`; the rule does not ask what kind of key `n` is. A "route" is therefore a derivation, not a walk along `iss → aud` edges: Alice's membership `{iss: Brooke, aud: Alice, sub: Members}` sits on Doc's route to Alice because Brooke has standing over `Members`, not because Brooke is the previous node.
+- _Records are direct, not composed._ `record(k, n)` requires the last hop to be an edge _about_ `n`. Brooke, an Admin member of `Owners`, reaches `Doc` at Admin, but her record holds `Owners`, not `Doc`; the README's apex analysis depends on this ("nobody ever held Admin over the subject itself"). Only a direct `{…, sub: Doc, can: Admin}` grant puts `Doc` in a record.
+- _Stratum 1 is global; stratum 2 is rooted._ `record(k, n)` must see every subject, because Bob's Admin over `Members` is what lets him cut things on `Doc`'s routes. Stratum 2 is grounded at one subject and ranges over every subject that subject reaches; "per-subject" means rooted at one subject, not confined to one subject's certificates.
+- _Both passes are the same rule._ `reaches` is `level(·, ·, ⊥, ·)` with every edge live and every cap equal to its `can`. The reference implementation is one bounded widest-path search over the composed graph, parameterised by an exclusion set; stratum 1 runs it with the empty set.
+- _Two fixed points, in the safe direction each._ Existence (`route`, `live`) is a least fixed point: revisiting a node assumes dead, so ungrounded cycles cannot certify themselves. Caps are a greatest fixed point iterated down from `can`: caps only ever decrease, and the descent is finite (four levels, finitely many edges). The two are separable because existence never reads a cap.
+- _Covered edges are clamped, not just gated._ A covered edge conveys at most the level its issuer holds _on a derivation that avoids the covered nodes_, not the issuer's global level. Example: `K` is an Admin of role `Mods`; `B` is a Mod (Admin over Doc via `Mods`) and also holds a direct Read over `Doc` from `Owners`; `B` grants `C` Admin over `Doc` (`h`); `K` revokes `h`. `record(K) = {K, Mods}`, so `h` is dead on the derivation through `Mods` and live on the one through `Owners`. `C` gets `min(Read, Admin) = Read`: `B`'s standing as a Mod does not flow through the edge `K` cut, while `B`'s independent Read does. Gating alone (existence via the avoiding derivation, level from `B`'s global Admin) would hand `C` the very authority the cut was about. Clamping yields the same live set and levels `≤` the gated reading everywhere: ambiguity resolves toward less authority.
+- _Clamping is a relaxation of route-consistency._ The exact reading — a single derivation in which every edge's own covered set is avoided by that derivation's prefix — is a path-with-forbidden-pairs problem and is not known to be polynomial; a reference semantics an adversary can make exponential with crafted certificates is a denial-of-service vector. `cap(h)` avoids `h`'s covered set but takes the edges it traverses as already-live facts, each justified by its own derivation. See [alternatives, route-consistent levels](alternatives.md#route-consistent-levels).
 - _Negation appears once, over fully computed lower strata._ Revocations target delegations, never other revocations, so `covered` never depends on `live`. This is what makes the result independent of insertion order.
-- _Cycles resolve to the least fixed point._ Revisiting a node assumes dead. Assuming live would make ungrounded cycles self-certifying.
-- _Aggregation is a bucketed BFS._ Four levels, so the widest-path pass over un-revoked certificates is linear. Each covered certificate pays one route search with its exclusion set.
+- _Aggregation is a bucketed BFS._ Four levels, so the widest-path pass over un-revoked certificates is linear. Each covered certificate pays one route search with its exclusion set, plus one more per cap-descent round.
 - _Un-grounded certificates cost storage only._ Evaluation forward-chains from root edges and never visits them.
-- _Root edges are not special-cased._ `reaches(s, s, Admin)` puts every subject at Admin over itself, so `{iss: Doc, aud: Owners, sub: Doc}` is an ordinary edge whose issuer happens to reach the subject. The evaluator never tests `iss == sub`.
+- _Root edges are not special-cased._ `reaches(n, n, Admin)` puts every node at Admin over itself, so `{iss: Doc, aud: Owners, sub: Doc}` is an ordinary edge whose issuer happens to reach the subject. The evaluator never tests `iss == sub`.
 
 The model document's [Computation] section explains why the shortcut "delete revoked edges, then compute reachability" is wrong, not merely slow.
 
@@ -285,7 +306,7 @@ keyhive_codec        Encode, Decode, Encoded<T>. No dependencies beyond alloc; s
 keyhive_crypto       Digest<T> (bound loosened), Digest::of(&Encoded<T>). Old Signed<T> untouched.
       ▲
 keyline              Id, Access, Delegation, Revocation, Certificate, Signed/Verified over Encoded,
-                     the Keyline trait, AuthGraph, conformance suite.
+                     the Keyline trait, MemoryKeyline, conformance suite.
       ▲
 keyhive_core         consumes keyline (later); never sees raw bytes.
 ```
@@ -305,7 +326,7 @@ keyline/
     certificate.rs  Certificate; Encode/Decode impls for all three
     signed.rs       Signed<T>, Verified<T>
     keyline.rs      the Keyline trait, set_digest
-    graph.rs        AuthGraph
+    memory.rs       MemoryKeyline
     graph/          eval.rs (stratified evaluator), index.rs
     conformance.rs  #[cfg(feature = "test_utils")] the shared test suite
 ```
@@ -340,7 +361,7 @@ _Negative._ A revocation naming an unknown hash is `New` and changes no answer. 
 
 Not part of this branch; recorded so the crate's shape is checked against its one consumer.
 
-- `keyhive_core` holds `Arc<RwLock<AuthGraph>>` (or `Rc<RefCell<_>>` for `Local`) on `Keyhive`.
+- `keyhive_core` holds `Arc<RwLock<MemoryKeyline>>` (or `Rc<RefCell<_>>` for `Local`) on `Keyhive`.
 - `Group::members()`, `Document::members()`, `Membered::transitive_members()` become `keyline.members(id)` with ID conversion.
 - `add_member` builds a `Delegation`, signs it with the active signer, `verify()`s it (cheap, and it exercises the same path as ingest), and `insert`s.
 - `revoke_member` builds one `Revocation` per delegation to cut. Whether to also cut everything the member issued (explicit removal) is a `keyhive_core` policy, per the model document's removal tiers.

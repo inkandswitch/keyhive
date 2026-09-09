@@ -95,7 +95,7 @@ A delegation is a signed statement extending the issuer's own authority over a s
 | Audience  | Ed25519 verifying key         | The recipient (`aud`)                                   |
 | Subject   | Ed25519 verifying key         | The *scope*: which routes this edge may participate in  |
 | Can       | `Relay < Read < Edit < Admin` | Access level                                            |
-| Seen      | `Option<Hash<Delegation>>`    | Freshness + heal provenance; zero semantics (see below) |
+| Seen      | `Option<Hash<Revocation>>`    | Freshness + heal provenance; zero semantics (see below) |
 | Signature | Ed25519 signature             | Over all of the above                                   |
 
 - A delegation reads: *Issuer asserts that the Audience may exercise Can over Subject.*
@@ -115,11 +115,13 @@ Membership edges are also *self-certifying*: their routes chain to the role's ow
 
 Ed25519 is deterministic and certificates are content-addressed, so re-issuing an identical delegation produces the *same certificate* — the same hash, still covered by any revocation that named it. Without a freshness field, healing a mistaken removal on the same terms by the same issuer is literally impossible.
 
-`seen` is essentially a nonce, but set up to be harder to misuse: a re-issuance points at a certificate the issuer has seen — typically the revoked one it is re-issuing past — changing the hash and documenting the heal ("re-granted, knowing of the revocation"). First issuances omit the field.
+`seen` is essentially a nonce, but set up to be harder to misuse: a re-issuance points at the *revocation* the issuer has seen and is re-issuing past, changing the hash and documenting the heal ("re-granted, knowing of the revocation"). First issuances omit the field.
 
-1. *Optional, absence = first issuance.* Absent means "no predecessor claimed," with a single canonical encoding (the key is omitted); present means one named predecessor. No sentinel exists, so absence aliases nothing — the one-meaning-one-encoding invariant holds.
-2. *No semantics, ever.* Evaluation ignores `seen` entirely. It is not supersession (issuing `seen: #d1` does **not** retract `#d1` — retract explicitly), not ordering, not a causal claim anyone verifies. This line is load-bearing: issuer-supplied predecessors must never carry trust, or backdating-by-omission returns.
-3. *Anything goes.* A bogus `seen` value, or one naming a certificate the replica doesn't hold, is harmless; it only perturbs the hash.
+It names the revocation rather than the revoked delegation for three reasons. The revoked delegation's hash is a function of the fields being re-issued, so pointing at it adds no information and a second heal of the same grant would collide with the first; each revocation is a distinct certificate, so each heal gets a fresh hash for free. The only event that ever poisons a hash is a revocation — an implicitly dead delegation revives on its own when its issuer regains standing — so the thing one must have seen to heal is always a revocation. And the tooling loop closes: the collision is surfaced by `revocations_naming`, whose output is exactly the value to put in `seen`.
+
+1. *Optional, absence = first issuance.* Absent means "no revocation acknowledged," with a single canonical encoding (the key is omitted); present means one named revocation. No sentinel exists, so absence aliases nothing — the one-meaning-one-encoding invariant holds.
+2. *No semantics, ever.* Evaluation ignores `seen` entirely. It is not supersession, not ordering, not a causal claim anyone verifies, and it does not retract or un-apply the revocation it names. This line is load-bearing: issuer-supplied predecessors must never carry trust, or backdating-by-omission returns.
+3. *Anything goes.* A bogus `seen` value, or one naming a certificate the replica doesn't hold, is harmless; it only perturbs the hash. When several revocations name the same delegation, any of them serves.
 
 A nonce was considered and rejected on fail-direction. Nonces turn accidental duplicate issuance into independently live certificates, each needing separate coverage at removal time; a missed duplicate is a lingering live grant. That fails open. With `seen`, identical re-issuance deduplicates, and an unaware re-issue is a grant that silently doesn't take: fail-closed, and detectable by tooling. Ambiguity resolves toward less authority.
 
@@ -369,7 +371,7 @@ The evaluator is simpler for it. Denials are terminal facts: there is no "is thi
 
 #### Cost
 
-- *Per-subject scoping.* Every query ranges over one subject's certificate set.
+- *Rooted at one subject.* Every query is grounded at one subject and ranges over the subjects it reaches: `sub: Members` edges are on Doc's routes because Members has standing over Doc. Scoping is by reachability, not by which certificates carry `sub: Doc`.
 - *Stratum 1 is append-only cheap.* Monotone: merges evaluate deltas; records and coverage cache forever.
 - *Pay per dispute.* Un-revoked certificates — the vast majority — evaluate in one shared widest-path pass (four levels ⇒ bucketed BFS, linear). Each covered certificate pays one route search with its exclusion set, plus the cascade of actual deaths. A jurisdiction accumulating cuts is one under dispute, and rotation — already the hygiene response — moots them and restores the fast path.
 - *Junk never enters the fixpoint.* Evaluation forward-chains from root edges, so ungrounded certificates cost storage but no computation. Cycles: *assume dead on revisit* — the least fixed point. Assuming live computes the greatest and makes ungrounded cycles self-certifying: a one-line bug with a security consequence.
@@ -457,9 +459,9 @@ Setup as in [Roles]: Brooke roots Doc, supplies Members, and administers it; Ali
 
 *1. Alice invites Carol, submitted to the role.* Alice mints `M2` and issues `{iss: Alice, aud: M2, sub: Members, can: Edit}` and `#d1 = {iss: Alice, aud: Carol, sub: M2, can: Edit}` ([pinning]). Carol's effective access is Edit: $\min$ along Doc ← Brooke's supply ← Members ← Alice's membership ← M2, clamped by each hop.
 
-*2. Brooke boots Alice.* Brooke issues `{iss: Brooke, revoke: #m_Alice}`. Members is in Brooke's record, and the membership's only route grounds there: total. By liveness recomputation alone: Alice loses Admin over Members; `Alice → M2` dies (pinned to her standing); Carol's Edit dies transitively, though nothing named `#d1`. All three certificates remain in the set: dead, not revoked.
+*2. Brooke boots Alice.* Brooke issues `#r_Alice = {iss: Brooke, revoke: #m_Alice}`. Members is in Brooke's record, and the membership's only route grounds there: total. By liveness recomputation alone: Alice loses Admin over Members; `Alice → M2` dies (pinned to her standing); Carol's Edit dies transitively, though nothing named `#d1`. All three certificates remain in the set: dead, not revoked.
 
-*3a. It was a mistake.* Brooke re-adds Alice: `{iss: Brooke, aud: Alice, sub: Members, can: Admin, seen: #m_Alice}` — a fresh hash pointing at the certificate it heals past. Everything revives by late binding: `M2`, `#d1`, Carol's access — same hashes, same provenance. The mistake cost one certificate.
+*3a. It was a mistake.* Brooke re-adds Alice: `{iss: Brooke, aud: Alice, sub: Members, can: Admin, seen: #r_Alice}` — a fresh hash pointing at the revocation it heals past. Everything revives by late binding: `M2`, `#d1`, Carol's access — same hashes, same provenance. The mistake cost one certificate.
 
 *3b. It was not, and Carol should stay.* Brooke instead re-grants Carol directly (membership in another role, or her own caretaker). `#d1` stays dead with Alice; Carol's new access hangs on Brooke's standing.
 
