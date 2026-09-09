@@ -1,4 +1,22 @@
-# The `keyline` Crate
+| `is_live` | Whether the named delegation survives evaluation.                                                  |
+| `revocations_naming` | Revocations that name the delegation, covering or not. Explains a silent `seen` collision.   |
+# The `keyline` Crate```rust
+pub trait Keyline {
+    fn insert(&mut self, cert: Verified<Certificate>) -> bool;
+    fn contains(&self, cert: &Digest<Certificate>) -> bool;
+
+    fn effective_access(&self, sub: Id, aud: Id) -> Option<Access>;
+    fn members(&self, sub: Id) -> BTreeMap<Id, Access>;
+    fn is_live(&self, cert: &Digest<Delegation>) -> bool;
+    fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<Revocation>>;
+    fn digest(&self) -> Digest<BTreeSet<Certificate>>;
+}
+```
+
+| Method    | Meaning                                                                                            |
+|-----------|----------------------------------------------------------------------------------------------------|
+| `insert`  | Add a certificate. `true` if newly added, as `BTreeSet::insert`. Idempotent. A dedupe signal for gossip, not a membership-change signal. |
+| `contains` | Whether the digest is in the set. Ingest checks this before paying for signature verification.   |
 
 This document specifies the Rust crate that implements the [Keyline model][keyline]. The model document says what authority _is_; this one says what the code exposes, what it assumes, and what it deliberately leaves to the layer above. Decisions recorded here were made before any code was written so that the implementation can be checked against them.
 
@@ -84,7 +102,7 @@ Compared with the current `keyhive_core::Delegation`, the fields `proof`, `after
 
 #### Why `seen` and not a nonce
 
-A random nonce would remove the need for an issuer to know which certificate it is re-issuing past. It was considered and rejected because it changes the fail direction. Two accidental issuances of the same grant (a retry, a device restore, two devices) would produce two independently live certificates with two hashes; revoking one leaves the other live, and a duplicate nobody noticed is a lingering grant. With `seen`, an identical re-issue produces the identical certificate: same payload, and because Ed25519 is deterministic, the same signature and the same hash. One revocation covers every copy. An issuer who re-mints a revoked grant without knowing it was revoked produces a certificate that silently does not take. That is fail-closed, and it is detectable: [`insert`](#inserted) reports the collision and the covering revocation, so `keyhive_core` can prompt for a re-issue with `seen`. `seen` also records in the certificate that the issuer re-granted knowing of the revocation. A nonce records nothing.
+A random nonce would remove the need for an issuer to know which certificate it is re-issuing past. It was considered and rejected because it changes the fail direction. Two accidental issuances of the same grant (a retry, a device restore, two devices) would produce two independently live certificates with two hashes; revoking one leaves the other live, and a duplicate nobody noticed is a lingering grant. With `seen`, an identical re-issue produces the identical certificate: same payload, and because Ed25519 is deterministic, the same signature and the same hash. One revocation covers every copy. An issuer who re-mints a revoked grant without knowing it was revoked produces a certificate that silently does not take. That is fail-closed, and it is detectable: [`insert`](#insert) returns `false` and `revocations_naming` reports what named the duplicate, so `keyhive_core` can prompt for a re-issue with `seen`. `seen` also records in the certificate that the issuer re-granted knowing of the revocation. A nonce records nothing.
 
 ### `Revocation`
 
@@ -154,37 +172,38 @@ These two types live in `keyline` for this branch, marked `TODO(keyhive_types)`.
 
 ```rust
 pub trait Keyline {
-    fn insert(&mut self, cert: Verified<Certificate>) -> Inserted;
+    fn insert(&mut self, cert: Verified<Certificate>) -> bool;
+    fn contains(&self, cert: &Digest<Certificate>) -> bool;
 
-    fn access(&self, sub: Id, aud: Id) -> Option<Access>;
+    fn effective_access(&self, sub: Id, aud: Id) -> Option<Access>;
     fn members(&self, sub: Id) -> BTreeMap<Id, Access>;
     fn is_live(&self, cert: &Digest<Delegation>) -> bool;
-    fn digest(&self) -> SetDigest;
+    fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<Revocation>>;
+    fn digest(&self) -> Digest<BTreeSet<Certificate>>;
 }
 ```
 
-| Method    | Meaning                                                                                            |
-|-----------|----------------------------------------------------------------------------------------------------|
-| `insert`  | Add a certificate to the set. Idempotent.                                                          |
-| `access`  | `aud`'s effective level over `sub`: max over live routes of min along each. `None` if unreachable. |
-| `members` | Every `Id` with a live route to `sub`, with its effective level. The materialized view.            |
-| `is_live` | Whether the named delegation survives evaluation.                                                  |
-| `digest`  | A digest of the set, usable as a cache key: same digest, same answers.                             |
+| Method               | Meaning                                                                                                        |
+|----------------------|----------------------------------------------------------------------------------------------------------------|
+| `insert`             | Add a certificate. `true` if newly added, as `BTreeSet::insert`. Idempotent. A dedupe signal, not a change signal. |
+| `contains`           | Whether the digest is in the set. Ingest checks this before paying for signature verification.                 |
+| `effective_access`   | `aud`'s effective level over `sub`: max over live routes of min along each. `None` if unreachable.             |
+| `members`            | Every `Id` other than `sub` itself with a live route to `sub`, with its effective level. The materialized view. |
+| `is_live`            | Whether the named delegation survives evaluation.                                                              |
+| `revocations_naming` | Revocations that name the delegation, covering or not. Explains a silent `seen` collision.                     |
+| `digest`             | A digest of the set, usable as a cache key: same digest, same answers.                                         |
 
 Every method is defined purely in terms of the set. That is what makes the trait a backend contract: an implementation over DBSP, Postgres, or anything else is correct if and only if it gives the same answers as the reference implementation for the same set. The conformance suite (below) is how a backend proves that.
 
 The trait is `&self` for queries and `&mut self` for `insert`. It is synchronous. There is no `FutureForm` parameter: the evaluator does no I/O, and concurrency is the wrapper's concern. `keyhive_core` holds the implementation behind a `RwLock` (or the `Local` equivalent); readers take the read guard and call `&self` methods in parallel, writers take the write guard briefly.
 
-### `Inserted`
+### Insert
 
-```rust
-pub enum Inserted {
-    New,
-    Duplicate { existing: Digest<Certificate>, revoked_by: Option<Digest<Revocation>> },
-}
-```
+`insert` cannot fail on bad input: the `Verified` witness has already excluded it. It returns whether the certificate was new so that ingest can avoid re-announcing a certificate it already held. It does not say whether any query result changed: a new certificate may be dead on arrival, and a duplicate never changes anything. A caller that must react to membership changes (to drive BeeKEM key rotation) diffs `members(sub)` before and after; an incremental evaluator that reports deltas is a later optimization.
 
-`insert` cannot fail on bad input: the `Verified` witness has already excluded it. `Duplicate` carries enough for the caller to explain a silent collision. A revocation whose target is not (yet) in the set is stored like any other certificate and is `New`; it contributes nothing until the target arrives, and insertion order never matters.
+A revocation whose target is not (yet) in the set is stored like any other certificate and contributes nothing until the target arrives; insertion order never matters.
+
+Not yet on the trait: `get(&Digest<Certificate>) -> Option<&Signed<Certificate>>` and iteration over the set. Sync and archiving need them, but their shape depends on how Subduction pulls certificates, and a database-backed implementation may not hold the signed bytes. Decided at integration.
 
 ### `AuthGraph`
 
@@ -212,7 +231,7 @@ Stratum 2 — live pass, negation over stratum 1 only
                                 route(s, iss) avoids every n with covered(h, n)
 ```
 
-`access(s, a)` is the maximum `l` with `live(s, a, l)`. `is_live(h)` is whether `del(h, …)` participates in any `live` derivation.
+`effective_access(s, a)` is the maximum `l` with `live(s, a, l)`. `is_live(h)` is whether `del(h, …)` participates in any `live` derivation.
 
 Notes on the program:
 
@@ -222,6 +241,7 @@ Notes on the program:
 - _Cycles resolve to the least fixed point._ Revisiting a node assumes dead. Assuming live would make ungrounded cycles self-certifying.
 - _Aggregation is a bucketed BFS._ Four levels, so the widest-path pass over un-revoked certificates is linear. Each covered certificate pays one route search with its exclusion set.
 - _Un-grounded certificates cost storage only._ Evaluation forward-chains from root edges and never visits them.
+- _Root edges are not special-cased._ `reaches(s, s, Admin)` puts every subject at Admin over itself, so `{iss: Doc, aud: Owners, sub: Doc}` is an ordinary edge whose issuer happens to reach the subject. The evaluator never tests `iss == sub`.
 
 The model document's [Computation] section explains why the shortcut "delete revoked edges, then compute reachability" is wrong, not merely slow.
 
@@ -284,7 +304,7 @@ keyline/
     revocation.rs   Revocation
     certificate.rs  Certificate; Encode/Decode impls for all three
     signed.rs       Signed<T>, Verified<T>
-    keyline.rs      the Keyline trait, Inserted
+    keyline.rs      the Keyline trait, set_digest
     graph.rs        AuthGraph
     graph/          eval.rs (stratified evaluator), index.rs
     conformance.rs  #[cfg(feature = "test_utils")] the shared test suite
@@ -308,8 +328,8 @@ _Laws._
 - Order independence: for any set and any two insertion orders, every query agrees.
 - Idempotence: inserting a certificate twice leaves every query unchanged.
 - Monotone denial: adding a certificate never revives a delegation that was dead. (Adding a delegation can revive by late binding; adding a _revocation_ never grants.)
-- Attenuation: `access(s, a) ≤ can` for every delegation naming `a`; `access` along any single route equals the min of its hops.
-- Widest path: `access(s, a)` equals the max over routes of min along each, computed independently by brute force on small graphs.
+- Attenuation: `effective_access(s, a) ≤ can` for every delegation naming `a`; `effective_access` along any single route equals the min of its hops.
+- Widest path: `effective_access(s, a)` equals the max over routes of min along each, computed independently by brute force on small graphs.
 - Digest stability: same set (any order) gives the same `digest()`; different sets differ.
 
 _Scenarios._ The seven findings and the running scenario from [edge-cases], encoded as fixtures: rotation moots but never un-applies; concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen record; root edge is undeniable; retention of the subject key allows re-rooting; renunciation is total; `seen` re-issue heals with the same downstream hashes.
@@ -333,7 +353,7 @@ Not part of this branch; recorded so the crate's shape is checked against its on
 |--------------------------|---------------------------------------------------------------------------------------------------------------|
 | Delegation below Admin   | Anyone may delegate; attenuation is the only rule. Admin matters for service records only.                    |
 | `seen` vs nonce          | `seen`. Rationale above.                                                                                      |
-| Silent collision UX      | `Inserted::Duplicate { revoked_by }` gives the caller what it needs to prompt.                                |
+| Silent collision UX      | `insert == false` plus `revocations_naming` gives the caller what it needs to prompt.                         |
 
 ## Deferred
 

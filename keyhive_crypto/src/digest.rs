@@ -6,6 +6,7 @@ use core::{
     hash::{Hash, Hasher},
     marker::PhantomData,
 };
+use keyhive_codec::encoded::Encoded;
 use serde::{Deserialize, Serialize};
 
 /// A [`blake3::Hash`] tagged with which type it is a hash of.
@@ -21,8 +22,7 @@ use serde::{Deserialize, Serialize};
 /// let array_hash: Digest<[u8; 3]> = Digest::hash(&[1, 2, 3]);
 /// let bytes_hash: Digest<Vec<u8>> = Digest::hash(&vec![42, 99]);
 /// ```
-#[derive(Debug)]
-pub struct Digest<T: Serialize> {
+pub struct Digest<T> {
     /// The underlying, unparameterized [`blake3::Hash`].
     pub raw: blake3::Hash,
 
@@ -30,25 +30,14 @@ pub struct Digest<T: Serialize> {
     pub _phantom: PhantomData<T>,
 }
 
-impl<T: Serialize> Digest<T> {
-    /// Digest a value and retain its type as a phantom parameter.
+impl<T> Digest<T> {
+    /// Digest the canonical bytes of an encoded value.
     ///
-    /// Requires the `std` feature (uses [`bincode`] for serialization).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use keyhive_crypto::digest::Digest;
-    /// #
-    /// let digest = Digest::hash(&vec![1u8, 2, 3]);
-    /// assert_eq!(digest.as_slice().len(), 32);
-    /// ```
-    #[cfg(feature = "std")]
-    pub fn hash(preimage: &T) -> Self {
-        let bytes: Vec<u8> = bincode::serialize(&preimage).expect("unable to serialize to bytes");
-
+    /// This is the constructor for content addressing: the signature over an
+    /// [`Encoded<T>`] and its digest cover the same bytes by construction.
+    pub fn of(encoded: &Encoded<T>) -> Self {
         Self {
-            raw: blake3::hash(bytes.as_slice()),
+            raw: blake3::hash(encoded.as_bytes()),
             _phantom: PhantomData,
         }
     }
@@ -129,9 +118,33 @@ impl<T: Serialize> Digest<T> {
     ///
     /// This is useful for implementing `From` conversions between digest types
     /// that are considered equivalent (e.g. static/dynamic variants of the same type).
-    pub fn coerce<U: Serialize>(&self) -> Digest<U> {
+    pub fn coerce<U>(&self) -> Digest<U> {
         Digest {
             raw: self.raw,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<T: Serialize> Digest<T> {
+    /// Digest a value and retain its type as a phantom parameter.
+    ///
+    /// Requires the `std` feature (uses [`bincode`] for serialization).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use keyhive_crypto::digest::Digest;
+    /// #
+    /// let digest = Digest::hash(&vec![1u8, 2, 3]);
+    /// assert_eq!(digest.as_slice().len(), 32);
+    /// ```
+    #[cfg(feature = "std")]
+    pub fn hash(preimage: &T) -> Self {
+        let bytes: Vec<u8> = bincode::serialize(&preimage).expect("unable to serialize to bytes");
+
+        Self {
+            raw: blake3::hash(bytes.as_slice()),
             _phantom: PhantomData,
         }
     }
@@ -145,7 +158,7 @@ impl<'a, T: arbitrary::Arbitrary<'a> + Serialize> arbitrary::Arbitrary<'a> for D
     }
 }
 
-impl<T: Serialize> Serialize for Digest<T> {
+impl<T> Serialize for Digest<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -154,7 +167,7 @@ impl<T: Serialize> Serialize for Digest<T> {
     }
 }
 
-impl<'de, T: Serialize> serde::Deserialize<'de> for Digest<T> {
+impl<'de, T> serde::Deserialize<'de> for Digest<T> {
     fn deserialize<D>(deserializer: D) -> Result<Digest<T>, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -167,47 +180,53 @@ impl<'de, T: Serialize> serde::Deserialize<'de> for Digest<T> {
     }
 }
 
-impl<T: Serialize> fmt::Display for Digest<T> {
+impl<T> fmt::Debug for Digest<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Digest<{}>({self})", core::any::type_name::<T>())
+    }
+}
+
+impl<T> fmt::Display for Digest<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Digest({})", self.raw.to_hex())
     }
 }
 
-impl<T: Serialize> Copy for Digest<T> {}
+impl<T> Copy for Digest<T> {}
 
-impl<T: Serialize> Clone for Digest<T> {
+impl<T> Clone for Digest<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: Serialize> PartialEq for Digest<T> {
+impl<T> PartialEq for Digest<T> {
     fn eq(&self, other: &Self) -> bool {
         self.raw.as_bytes() == other.raw.as_bytes()
     }
 }
 
-impl<T: Serialize> Eq for Digest<T> {}
+impl<T> Eq for Digest<T> {}
 
-impl<T: Serialize> PartialOrd for Digest<T> {
+impl<T> PartialOrd for Digest<T> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: Serialize> Ord for Digest<T> {
+impl<T> Ord for Digest<T> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.raw.as_bytes().cmp(other.raw.as_bytes())
     }
 }
 
-impl<T: Serialize> Hash for Digest<T> {
+impl<T> Hash for Digest<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.raw.hash(state)
     }
 }
 
-impl<T: Serialize> From<blake3::Hash> for Digest<T> {
+impl<T> From<blake3::Hash> for Digest<T> {
     fn from(hash: blake3::Hash) -> Self {
         Self {
             raw: hash,
@@ -216,7 +235,7 @@ impl<T: Serialize> From<blake3::Hash> for Digest<T> {
     }
 }
 
-impl<T: Serialize> From<[u8; 32]> for Digest<T> {
+impl<T> From<[u8; 32]> for Digest<T> {
     fn from(bytes: [u8; 32]) -> Self {
         Self {
             raw: blake3::Hash::from(bytes),
@@ -225,19 +244,19 @@ impl<T: Serialize> From<[u8; 32]> for Digest<T> {
     }
 }
 
-impl<T: Serialize> From<Digest<T>> for blake3::Hash {
+impl<T> From<Digest<T>> for blake3::Hash {
     fn from(hash: Digest<T>) -> Self {
         hash.raw
     }
 }
 
-impl<T: Serialize> From<Digest<T>> for [u8; 32] {
+impl<T> From<Digest<T>> for [u8; 32] {
     fn from(hash: Digest<T>) -> [u8; 32] {
         hash.raw.into()
     }
 }
 
-impl<T: Serialize> From<Digest<T>> for Vec<u8> {
+impl<T> From<Digest<T>> for Vec<u8> {
     fn from(hash: Digest<T>) -> Vec<u8> {
         hash.raw.as_bytes().to_vec()
     }
