@@ -41,7 +41,7 @@ pub trait Keyline {
     /// Revocations in the set that name this delegation, covering or not.
     ///
     /// Whether a revocation actually covers the delegation depends on the
-    /// issuer's service record; this reports the syntactic fact. Its main use
+    /// issuer's admin reach; this reports the syntactic fact. Its main use
     /// is explaining a silent collision: an issuer who re-mints a grant
     /// byte-identical to a revoked one gets `insert == false`, and this tells
     /// them why and that a re-issue with `seen` is needed.
