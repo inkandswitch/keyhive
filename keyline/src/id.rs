@@ -6,7 +6,10 @@ use core::{
     hash::{Hash, Hasher},
 };
 use ed25519_dalek::VerifyingKey;
-use keyhive_codec::{Decode, DecodeError, Encode};
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{Decode, Encode},
+};
 
 /// A node in the authority graph.
 ///
