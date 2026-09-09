@@ -47,5 +47,8 @@ pub mod keyline;
 pub mod revocation;
 pub mod signed;
 
+#[cfg(any(test, feature = "test_utils"))]
+pub mod test_utils;
+
 #[cfg(feature = "test_utils")]
 pub mod conformance;

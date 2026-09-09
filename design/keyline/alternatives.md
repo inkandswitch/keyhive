@@ -20,7 +20,7 @@ _Proposal._ Replace `seen: Option<Digest<Delegation>>` with random bytes so an i
 
 _Would buy._ No silent-collision UX; no dependency on having synced the revocation.
 
-_Rejected because._ It flips the fail direction. Two accidental issuances of one grant become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering grant. With `seen`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take. The collision is detectable: `insert` reports the duplicate and the covering revocation. Long form: [edge-cases, `nonce` vs `seen`](edge-cases.md#nonce-vs-seen--seen-won-on-fail-direction) and [implementation, why `seen`](implementation.md#why-seen-and-not-a-nonce).
+_Rejected because._ It flips the fail direction. Two accidental issuances of one grant become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering grant. With `seen`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take. The collision is detectable: `insert` returns `false` and `revocations_naming` reports what named the duplicate. Long form: [edge-cases, `nonce` vs `seen`](edge-cases.md#nonce-vs-seen--seen-won-on-fail-direction) and [implementation, why `seen`](implementation.md#why-seen-and-not-a-nonce).
 
 _Reopen if._ Never on its own merits; only if a use case needs many live copies of one grant, which would be a different feature.
 
