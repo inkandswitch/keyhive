@@ -41,7 +41,7 @@ pub mod access;
 pub mod certificate;
 pub mod collections;
 pub mod delegation;
-pub mod graph;
+pub mod memory;
 pub mod id;
 pub mod keyline;
 pub mod revocation;

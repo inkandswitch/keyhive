@@ -2,7 +2,7 @@
 //!
 //! Every method is defined purely in terms of the certificate set, so an
 //! implementation over any store (in memory, DBSP, a database) is correct if and
-//! only if it agrees with the reference [`crate::graph::AuthGraph`] on every
+//! only if it agrees with the reference [`crate::memory::MemoryKeyline`] on every
 //! set. The conformance suite behind the `test_utils` feature is how a backend
 //! proves that.
 
