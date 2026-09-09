@@ -36,6 +36,13 @@ impl Revocation {
     pub fn new(iss: Id, revoke: Digest<Delegation>) -> Self {
         Revocation { iss, revoke }
     }
+
+    /// Content address of the payload: what a re-issued
+    /// [`Delegation::seen`] names. Digest of the revocation's own encoding,
+    /// without the [`crate::certificate::Certificate`] kind tag.
+    pub fn digest(&self) -> Digest<Revocation> {
+        Digest::of(&self.encode())
+    }
 }
 
 // Fixed-width layout: iss ‖ revoke. Placeholder until the bespoke codec lands.
