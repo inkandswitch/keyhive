@@ -33,20 +33,20 @@ Certificate capabilities are already a simulation of an ocap network: each certi
 
 A movie ticket is checked on its own terms at the door. Authority in Keyline is checked by whether it actually arrives: authority flows from the subject outward through the graph, and a grantee has whatever reaches them. Picture daisy-chained power strips: your device works if there is an unbroken chain of strips from it back to the wall socket, and every operation is something you do with your hands.
 
-| Keyline                    | Power strips                                                                                                  |
-|----------------------------|---------------------------------------------------------------------------------------------------------------|
-| Subject                    | The wall socket                                                                                               |
-| Delegation                 | Plugging a strip into another strip, or your device into a strip                                              |
-| Attenuation                | The breaker on each strip: you never draw more than the weakest strip on your chain allows ($\min$ along the route) |
-| Widest path                | Two chains to the wall: you get the better one ($\max$ over routes)                                            |
-| Liveness                   | Current flows only while every strip on the chain is plugged in                                               |
-| Cascade                    | Unplug one strip and everything downstream goes dark; nothing about those devices changed                     |
-| Late binding, healing      | Plug it back in and everything lights up again — same devices, same cords, no rewiring                        |
-| Dead vs. revoked           | A dark device is not a broken device; its chain is interrupted somewhere upstream                             |
-| Revocation, jurisdiction   | Anyone with a key to a room can pull a plug on a cord running through that room, and only through such rooms  |
-| Service record             | You can still pull plugs in any room you ever had a key to                                                    |
-| Rotation                   | Run the cords through a different room; the old room's plugs no longer touch them                             |
-| No proof field             | You carry no wiring diagram; plug into the nearest strip and current finds you if any path exists             |
+| Keyline                  | Power strips                                                                                                                                |
+|--------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| Subject                  | The wall socket                                                                                                                             |
+| Delegation               | Plugging a strip into another strip, or your device into a strip                                                                            |
+| Attenuation              | The breaker on each strip: you never draw more than the weakest strip on your chain allows ($\min$ along the route)                         |
+| Widest path              | Two chains to the wall: you get the better one ($\max$ over routes)                                                                         |
+| Liveness                 | Current flows only while every strip on the chain is plugged in                                                                             |
+| Cascade                  | Unplug one strip and everything downstream goes dark; nothing about those devices changed                                                   |
+| Late binding, healing    | Plug it back in and everything lights up again — same devices, same cords, no rewiring                                                      |
+| Dead vs. revoked         | A dark device is not a broken device; its chain is interrupted somewhere upstream                                                           |
+| Revocation, jurisdiction | You can always unplug what you plugged in. A key to a room lets you pull any cord running through that room, however far downstream it goes |
+| Service record           | You can still pull plugs in any room you ever had a key to                                                                                  |
+| Rotation                 | Run the cords through a different room; the old room's plugs no longer touch them                                                           |
+| No proof field           | You carry no wiring diagram; plug into the nearest strip and current finds you if any path exists                                           |
 
 The direction is the one capabilities want — device to strip to wall, user to resource — and the analogy is honest about the cost: a daisy chain is exactly the arrangement where one yank in a back room darkens the office.
 

@@ -56,7 +56,9 @@ pub struct Delegation {
 | `can`  | Requested level; clamped, never raised.                                                                             |
 | `seen` | Freshness for re-issuing a grant identical to a revoked one. Evaluation ignores it. Absent means first issuance.   |
 
-Anyone MAY issue a delegation over any subject. The issuer's effective level over `sub` clamps the result; no Admin requirement exists on the grant side. This resolves the model document's open question on delegation below Admin: the attenuation rule is the whole rule. Admin matters only for revocation reach (service records).
+Anyone MAY issue a delegation over any subject. The issuer's effective level over `sub` clamps the result; no Admin requirement exists on the grant side. This resolves the model document's open question on delegation below Admin: the attenuation rule is the whole rule.
+
+Admin is not required to grant. It matters for revocation, in two tiers. You can always cut a delegation you issued: the edge below you is yours, and retraction needs no standing. Holding Admin over a node lets you act as that node for revocation: your cuts cover anything on routes through it, all the way down. "Act as" is revocation-side only. Admin over `N` does not let you sign as `N`; you grant authority _over_ `N` by issuing `{iss: you, sub: N, …}`, clamped by your own level.
 
 Compared with the current `keyhive_core::Delegation`, the fields `proof`, `after_revocations`, and `after_content` are gone, and `delegate: Agent` is just `aud: Id`. This is a wire-format break; it lands with the wider API break that follows this branch.
 
