@@ -426,6 +426,8 @@ Mitigations: a single-owner apex has no peers and therefore no duel; edges signe
 
 Roles, pinning, caretakers, rotation, sealing, constitutional flatness, and the memberships-only shape are conventions over the two primitives, not extra mechanism. They live in [patterns](patterns.md).
 
+Design choices that were considered and rejected, each with the condition under which to reopen it, are collected in [alternatives](alternatives.md).
+
 ## Griefing
 
 Anyone upstream can deny access downstream — and "upstream" includes *ever*-admins. The griefer set has an exact characterization: a grantee's access dies iff every live route is cut, and X can cut a route iff it transits X's service record. So:
