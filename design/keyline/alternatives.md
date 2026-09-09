@@ -122,6 +122,26 @@ _Rejected because._ Ungrounded cycles become self-certifying: a ring of keys del
 
 _Reopen if._ Never.
 
+### Gated-only levels on covered edges
+
+_Proposal._ A covered delegation is live iff some derivation to its issuer avoids the covered nodes, and then conveys `min(can, issuer's global level)`. The avoiding derivation decides existence only.
+
+_Would buy._ One widest-path pass for levels; exclusion-set searches return a boolean.
+
+_Rejected because._ It leaks the authority the cut was about. If `B` is Admin over `Doc` through role `Mods` and separately Read through `Owners`, and a `Mods` admin revokes `B`'s grant to `C`, the gated reading hands `C` Admin: `B`'s Mod standing flows through the very edge the Mod admin cut, because only existence consulted the exclusion set. Clamping the edge to the level reachable on the avoiding derivation gives `C` Read, yields the same live set, and is `≤` gated everywhere. Long form: [implementation, Evaluation](implementation.md#evaluation).
+
+_Reopen if._ Never on its own merits; it is strictly more permissive than clamping for the same cost class.
+
+### Route-consistent levels
+
+_Proposal._ Evaluate exactly: a derivation is valid iff, for every edge on it, that derivation's own prefix avoids the edge's covered set; effective access is the max over valid derivations of the min along each.
+
+_Would buy._ No relaxation at all; the model's prose ("dead on every route that transits…") taken literally.
+
+_Rejected because._ Validity of a step depends on the whole prefix, so the search state is a node _and_ the set of nodes visited. This is a path-with-forbidden-pairs problem (the unordered form is NP-complete) and no polynomial algorithm is known for the ordered form either. A reference semantics whose cost an adversary controls by crafting certificates is a denial-of-service vector. Clamping ([implementation, Evaluation](implementation.md#evaluation)) keeps per-edge exclusion sets but treats the edges a derivation traverses as already-live facts, which makes it a pair of polynomial fixed points.
+
+_Reopen if._ A polynomial algorithm for the ordered forbidden-pairs case turns up, or the graphs in practice are small enough that the exact search is bounded and the difference is observable.
+
 ## Crate
 
 ### Async `Keyline` trait
