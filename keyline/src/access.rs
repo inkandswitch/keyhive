@@ -1,7 +1,10 @@
 //! Access levels.
 
 use core::fmt;
-use keyhive_codec::{Decode, DecodeError, Encode};
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{Decode, Encode},
+};
 
 /// What an edge conveys. Totally ordered; each level implies the ones below.
 ///
