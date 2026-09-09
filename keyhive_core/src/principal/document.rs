@@ -188,8 +188,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         owner_sks: ShareKeyMap,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError> {
-        let mut locked_csprng = csprng.lock().await;
-        let (group_result, group_vk) =
+        let (group_result, group_vk) = {
+            let mut locked_csprng = csprng.lock().await;
             EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
                 Group::generate_after_content(
                     signer,
@@ -203,7 +203,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     )]),
                     listener,
                 )
-            });
+            })
+        };
         Self::finish_generate(
             group_result,
             group_vk,
@@ -211,7 +212,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             signer,
             owner_id,
             owner_sks,
-            &mut *locked_csprng,
+            csprng,
         )
         .await
     }
@@ -238,7 +239,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         owner_sks: ShareKeyMap,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError> {
-        let mut locked_csprng = csprng.lock().await;
         let group_vk = reserved_signer.verifying_key();
         let group_result = EphemeralSigner::with_signer_key(reserved_signer, |verifier, signer| {
             Group::generate_after_content(
@@ -261,7 +261,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             signer,
             owner_id,
             owner_sks,
-            &mut *locked_csprng,
+            csprng,
         )
         .await
     }
@@ -277,7 +277,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         signer: &S,
         owner_id: IndividualId,
         owner_sks: ShareKeyMap,
-        locked_csprng: &mut R,
+        csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError>
     where
         R: rand::CryptoRng + rand::RngCore,
@@ -329,15 +329,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         };
         let mut ops = cgka.add_multiple(members, signer).await?;
 
-        let (_pcs_key, update_op, _new_key_pair) = cgka
-            .update(
+        let (_pcs_key, update_op, _new_key_pair) = {
+            let mut locked_csprng = csprng.lock().await;
+            cgka.update(
                 owner_share_key,
                 owner_share_secret_key,
                 signer,
-                locked_csprng,
+                &mut *locked_csprng,
             )
-            .await?;
-
+            .await?
+        };
         ops.push(update_op);
         for op in ops {
             group.listener.on_cgka_op(&Arc::new(op)).await;
