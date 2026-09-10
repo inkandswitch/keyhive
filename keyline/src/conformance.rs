@@ -8,7 +8,11 @@
 //! by writing one `#[test]` per function that calls it with the backend's type.
 //! The test module in `memory.rs` is the reference list.
 
+// The generator and the `bolero` laws need `Arbitrary`, which needs `std`;
+// the scenarios need nothing beyond the crate, so `cargo test` runs them.
+#[cfg(feature = "arbitrary")]
 pub mod gen;
+#[cfg(feature = "arbitrary")]
 pub mod laws;
 pub mod scenarios;
 

@@ -221,6 +221,9 @@
             cargo clippy --workspace --all-targets --features test_utils,debug_events -- -D warnings
           '';
 
+          # `--features test_utils` is load-bearing: without it `keyline`'s
+          # conformance laws and every crate's property tests are compiled out,
+          # and the suite still reports green.
           ci-test = mkCheck "ci-test" ''
             cargo test --workspace --exclude keyhive_wasm --features test_utils
           '';
@@ -452,8 +455,11 @@
           "release:host" = cmd "Build release for ${system}"
             "${cargoPath} build --release";
 
-          "test:all" = cmd "Run all tests"
-            "rust:test && wasm:test:node && test:ts:web";
+          "test:host" = cmd "Run every host test, all features (what CI runs)"
+            ''exec ${ci-checks.ci-test}/bin/keyhive-ci-test "$@"'';
+
+          "test:all" = cmd "Run all tests (host, wasm under node, Playwright)"
+            "test:host && wasm:test:node && test:ts:web";
 
           "test:ts:web" = cmd "Run keyhive_wasm Typescript tests in Playwright"
             ''exec ${ci-e2e}/bin/keyhive-ci-e2e "$@"'';
