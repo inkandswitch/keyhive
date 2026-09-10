@@ -96,14 +96,26 @@ impl<'a> Arbitrary<'a> for CertSet {
 
         // About half the time, plant the shape where clamping bites: a role
         // `m` supplied into `s`; `k` administers `m`; `e` is a member of `m`
-        // and also holds an independent grant over `s`; `e` grants `f`; `k`
-        // revokes that grant. Random wiring produces this rarely.
+        // and also holds an independent, weaker grant over `s`; `e` grants `f`;
+        // `k` revokes that grant. Random wiring produces this rarely. The
+        // levels are chosen so gating and clamping always disagree: the role
+        // route is strictly better than the independent one, the supply is
+        // below Admin (else `s` is in `k`'s reach and the grant is simply dead),
+        // and the grant asks for at least the role level.
         if u.arbitrary::<bool>()? {
             let s = id(u.int_in_range(1..=subjects)?);
             let (m, k, e, f) = (pick_id(u)?, pick_id(u)?, pick_id(u)?, pick_id(u)?);
-            let via_role: Access = u.arbitrary()?;
-            let independent: Access = u.arbitrary()?;
-            let grant = Delegation::new(e, f, s, u.arbitrary()?);
+            let via_role = if u.arbitrary()? {
+                Access::Edit
+            } else {
+                Access::Read
+            };
+            let independent = if via_role == Access::Edit && u.arbitrary()? {
+                Access::Read
+            } else {
+                Access::Relay
+            };
+            let grant = Delegation::new(e, f, s, Access::Admin);
             certs.extend::<[Certificate; 6]>([
                 Delegation::new(s, m, s, via_role).into(),
                 Delegation::new(m, k, m, Access::Admin).into(),
