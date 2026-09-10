@@ -391,14 +391,14 @@ _Generator._ `conformance::gen::CertSet` draws from a pool of eight deterministi
 
 _Laws_ (`bolero`, over generated sets):
 
-- Oracle agreement without revocations: `effective_access` over every pair in the pool equals `naive_reaches`, the three stratum-1 rules run as a plain tuple fixpoint that shares no code with any backend; `is_live(h)` iff `iss(h)` reaches `sub(h)`. This is the one independent oracle; it pins the composition and attenuation semantics exactly.
+- Oracle agreement: without revocations, `effective_access` over every pair in the pool equals `naive_reaches`, the three stratum-1 rules run as a plain tuple fixpoint that shares no code with any backend; `is_live(h)` iff `iss(h)` reaches `sub(h)`. This is the one independent oracle; it pins the composition and attenuation semantics exactly.
 - Order independence: any permutation of a set gives the same `digest`, the same levels over the pool, the same live set, the same `members`.
 - Idempotence: re-inserting every certificate returns `false` and changes nothing.
 - Revocations only deny: for each revocation in a set, the set without it has levels `≥` everywhere and a live set `⊇`.
 - Digest identifies the set: permutation-invariant; dropping any non-duplicated certificate changes it.
 - Query consistency: `effective_access(s, s) = Some(Admin)` for every `s`; `members(s)` is `effective_access(s, ·)` minus `s`; `contains` holds for everything inserted; `revocations_naming(h)` is exactly the revocations in the set with `revoke = h`.
 
-With revocations, exact agreement is by scenario. A second oracle for that case — the full program transcribed into a Datalog engine (`ascent`) as a dev-dependency — is an open option.
+With revocations, `matches_naive_oracle_with_revocations` checks the same pairs and `is_live` against `laws::naive::evaluate`, a Jacobi-iteration transcription of the whole program (reach, coverage, LFP live set with renunciation, GFP caps) that shares no code with any backend. The generator plants the shapes that distinguish wrong readings (clamping vs gating; party-signed revocations) often enough that dropping renunciation, composing reach incorrectly, or gating instead of clamping fails within the default budget.
 
 _Scenarios._ Named cases derived from the [edge-cases] findings and the model document: concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; an apex admin of an Admin-rooted document can deny the root edge, while an Edit-rooted document's root edge is undeniable; retraction and renunciation are total; a non-admin's cut is confined to their own node; `seen` re-issue heals with the same downstream hashes. Plus the composition and reach cases from [Evaluation](#evaluation): membership carries whatever the role reaches, including documents added later; a senior role's admin cuts inside a junior role without an explicit grant; supplying a role into a document gives power over the supply edge and none over the roster; a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example). `MemoryKeyline` runs each as its own `#[test]`.
 
