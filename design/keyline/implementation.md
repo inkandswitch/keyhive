@@ -1,22 +1,4 @@
-| `is_live` | Whether the named delegation survives evaluation.                                                  |
-| `revocations_naming` | Revocations that name the delegation, covering or not. Explains a silent `seen` collision.   |
-# The `keyline` Crate```rust
-pub trait Keyline {
-    fn insert(&mut self, cert: Verified<Certificate>) -> bool;
-    fn contains(&self, cert: &Digest<Certificate>) -> bool;
-
-    fn effective_access(&self, sub: Id, aud: Id) -> Option<Access>;
-    fn members(&self, sub: Id) -> BTreeMap<Id, Access>;
-    fn is_live(&self, cert: &Digest<Delegation>) -> bool;
-    fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<Revocation>>;
-    fn digest(&self) -> Digest<BTreeSet<Certificate>>;
-}
-```
-
-| Method    | Meaning                                                                                            |
-|-----------|----------------------------------------------------------------------------------------------------|
-| `insert`  | Add a certificate. `true` if newly added, as `BTreeSet::insert`. Idempotent. A dedupe signal for gossip, not a membership-change signal. |
-| `contains` | Whether the digest is in the set. Ingest checks this before paying for signature verification.   |
+# The `keyline` Crate
 
 This document specifies the Rust crate that implements the [Keyline model][keyline]. The model document says what authority _is_; this one says what the code exposes, what it assumes, and what it deliberately leaves to the layer above. Decisions recorded here were made before any code was written so that the implementation can be checked against them.
 
