@@ -778,6 +778,9 @@ pub enum EncryptInEnvelopeError<T: ContentRef> {
 #[derive(Debug, Error)]
 pub enum GenerateDocError {
     #[error(transparent)]
+    NotFound(#[from] not_found::NotFound),
+
+    #[error(transparent)]
     DelegationError(#[from] DelegationError),
 
     #[error(transparent)]

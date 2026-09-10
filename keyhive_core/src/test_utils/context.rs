@@ -7,10 +7,12 @@ use crate::{
     crypto::signed_ext::SignedSubjectId,
     error::not_found::NotFound,
     event::static_event::StaticEvent,
-    keyhive::{CausalDecryptError, EncryptContentError, Keyhive, ReceiveStaticEventError},
+    keyhive::{
+        CausalDecryptError, EncryptContentError, GenerateGroupError, Keyhive,
+        ReceiveStaticEventError,
+    },
     listener::no_listener::NoListener,
     principal::{
-        agent::Agent,
         document::{
             id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError, EncryptError,
             GenerateDocError,
@@ -22,7 +24,6 @@ use crate::{
         identifier::Identifier,
         individual::{id::IndividualId, op::KeyOp, Individual, ReceivePrekeyOpError},
         membered::{id::MemberedId, Membered},
-        peer::Peer,
         public::Public,
     },
     stats::Stats,
@@ -173,12 +174,25 @@ macro_rules! other_from {
     )+};
 }
 
-other_from!(
-    CgkaError,
-    SigningError,
-    GenerateDocError,
-    ReceivePrekeyOpError,
-);
+other_from!(CgkaError, SigningError, ReceivePrekeyOpError);
+
+impl From<GenerateDocError> for TestError {
+    fn from(e: GenerateDocError) -> Self {
+        match e {
+            GenerateDocError::NotFound(inner) => inner.into(),
+            other => TestError::Other(other.to_string()),
+        }
+    }
+}
+
+impl From<GenerateGroupError> for TestError {
+    fn from(e: GenerateGroupError) -> Self {
+        match e {
+            GenerateGroupError::NotFound(inner) => inner.into(),
+            other => TestError::Other(other.to_string()),
+        }
+    }
+}
 
 impl From<EncryptError> for TestError {
     fn from(e: EncryptError) -> Self {
@@ -474,11 +488,11 @@ impl TestContext {
         self.claim_name(name)?;
         let mut peers = Vec::with_capacity(coparents.len());
         for coparent in coparents {
-            let group = owner
+            owner
                 .get_group(*coparent)
                 .await
                 .ok_or("that coparent is not a group this instance knows")?;
-            peers.push(Peer::Group(*coparent, group));
+            peers.push(Identifier::from(*coparent));
         }
         let id = owner.generate_doc(peers, nonempty![[0u8; 32]]).await?;
         self.names.insert(id.into(), name.into());
@@ -529,9 +543,7 @@ impl TestContext {
 
     /// Sends `to` everything the public agent may see, like a sync server.
     pub async fn sync_as_public(&mut self, from: &Instance, to: &Instance) -> TestResult<usize> {
-        let individual = Public.individual();
-        let public = Agent::Individual(individual.id(), Arc::new(Mutex::new(individual)));
-        let events = self.events_for(from, &public).await?;
+        let events = self.events_for(from, Public.id()).await;
         self.deliver(to, events).await
     }
 
@@ -906,36 +918,27 @@ impl TestContext {
         from: &Instance,
         to: &Instance,
     ) -> TestResult<Vec<([u8; 32], StaticEvent<[u8; 32]>)>> {
-        let to_agent = from
-            .get_agent(to.id().into())
+        // `from` cannot work out what `to` may see until it has heard of `to`.
+        from.get_agent(to.id().into())
             .await
             .ok_or_else(|| TestError::NotSynced(Box::new(to.id().into())))?;
-        let public_individual = Public.individual();
-        let public = Agent::Individual(
-            public_individual.id(),
-            Arc::new(Mutex::new(public_individual)),
-        );
 
-        let mut events: BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> = self
-            .events_for(from, &to_agent)
-            .await?
-            .into_iter()
-            .collect();
-        events.extend(self.events_for(from, &public).await?);
+        let mut events: BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
+            self.events_for(from, to.id()).await.into_iter().collect();
+        events.extend(self.events_for(from, Public.id()).await);
         Ok(events.into_iter().collect())
     }
 
     async fn events_for(
         &self,
         from: &Instance,
-        agent: &Agent<Sendable, MemorySigner>,
-    ) -> TestResult<Vec<([u8; 32], StaticEvent<[u8; 32]>)>> {
-        Ok(from
-            .static_events_for_agent(agent)
+        who: impl Into<Identifier>,
+    ) -> Vec<([u8; 32], StaticEvent<[u8; 32]>)> {
+        from.static_events_for_agent(who)
             .await
             .into_iter()
             .map(|(digest, event)| (*digest.raw.as_bytes(), event))
-            .collect())
+            .collect()
     }
 
     /// Deliver events and return how many are still waiting on a dependency.

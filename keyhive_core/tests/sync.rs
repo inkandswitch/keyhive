@@ -375,28 +375,29 @@ async fn all_agent_events_agrees_with_the_per_agent_walk() -> Result<()> {
     assert!(all.event_count() > 0, "there is something to send");
 
     for who in [&alice, &bob] {
-        let agent = alice
-            .get_agent(who.id().into())
+        let who_id = who.id();
+        alice
+            .get_agent(who_id.into())
             .await
             .ok_or("alice knows this agent")?;
 
         let mut per_agent: BTreeSet<[u8; 32]> = BTreeSet::new();
-        for (digest, _) in alice.membership_ops_for_agent(&agent).await {
+        for (digest, _) in alice.membership_ops_for_agent(who_id).await {
             per_agent.insert(*digest.raw.as_bytes());
         }
-        for key_ops in alice.reachable_prekey_ops_for_agent(&agent).await.values() {
+        for key_ops in alice.reachable_prekey_ops_for_agent(who_id).await.values() {
             for key_op in key_ops.iter() {
                 let event: Ev = Event::from(key_op.as_ref().clone());
                 per_agent.insert(*Digest::hash(&event).raw.as_bytes());
             }
         }
-        for cgka_op in alice.cgka_ops_reachable_by_agent(&agent).await {
+        for cgka_op in alice.cgka_ops_reachable_by_agent(who_id).await {
             let event: Ev = Event::from(cgka_op);
             per_agent.insert(*Digest::hash(&event).raw.as_bytes());
         }
 
         let single: BTreeSet<[u8; 32]> = alice
-            .event_digests_for_agent(&agent)
+            .event_digests_for_agent(who_id)
             .await
             .into_iter()
             .map(|d| *d.raw.as_bytes())

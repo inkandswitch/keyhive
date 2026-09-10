@@ -1,30 +1,13 @@
 use future_form::Local;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use dupe::Dupe;
-use futures::lock::Mutex;
 use keyhive_core::{
     access::Access, event::static_event::StaticEvent, keyhive::Keyhive, listener::log::Log,
-    principal::agent::Agent, store::ciphertext::memory::MemoryCiphertextStore,
+    principal::public::Public, store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::{digest::Digest, signer::memory::MemorySigner};
 use nonempty::nonempty;
 use testresult::TestResult;
-
-/// Build the well-known `Public` principal as an [`Agent`].
-fn public_agent<F, S, T, L>() -> Agent<F, S, T, L>
-where
-    F: future_form::FutureForm,
-    S: keyhive_crypto::signer::async_signer::AsyncSigner<F>,
-    T: keyhive_crypto::content::reference::ContentRef,
-    L: keyhive_core::listener::membership::MembershipListener<F, S, T>,
-{
-    let public_individual = keyhive_core::principal::public::Public.individual();
-    Agent::Individual(
-        public_individual.id(),
-        Arc::new(Mutex::new(public_individual)),
-    )
-}
 
 #[allow(clippy::type_complexity)]
 async fn make_keyhive() -> Keyhive<
@@ -87,14 +70,12 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
     let init_content = b"log-based sync test".to_vec();
     let init_hash: [u8; 32] = *blake3::hash(&init_content).as_bytes();
 
-    let public_agent: Agent<_, _, _, _> = public_agent();
-
     // The first instance makes the document public, revokes that, and grants it again, so
     // there are revocations in the graph the second instance has to apply.
     let doc_id = alice.generate_doc(vec![], nonempty![init_hash]).await?;
 
     alice
-        .add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+        .add_member(Public.id(), doc_id, Access::Read, &[])
         .await?;
 
     alice
@@ -106,14 +87,14 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
         .await?;
 
     alice
-        .add_member(public_agent.dupe().id(), doc_id, Access::Read, &[])
+        .add_member(Public.id(), doc_id, Access::Read, &[])
         .await?;
 
     alice.force_pcs_update(doc_id).await?;
 
     // The first instance's events to the second.
-    let alice_active_agent: Agent<_, _, _, _> = alice.active().lock().await.clone().into();
-    let alice_events = alice.static_events_for_agent(&alice_active_agent).await;
+    let alice_id = { alice.active().lock().await.id() };
+    let alice_events = alice.static_events_for_agent(alice_id).await;
 
     // Emptied first, so the log holds only what this ingestion fires.
     while worker_log.pop().await.is_some() {}
@@ -139,7 +120,7 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
     }
 
     // Bob gets the first instance's events and the second's log events together.
-    let alice_events_for_bob = alice.static_events_for_agent(&public_agent).await;
+    let alice_events_for_bob = alice.static_events_for_agent(Public.id()).await;
 
     // One set collected from state, the other from the log.
     let mut all_events: HashMap<Digest<StaticEvent<[u8; 32]>>, StaticEvent<[u8; 32]>> =

@@ -967,3 +967,47 @@ async fn revoking_a_group_takes_the_key_from_a_member_who_only_relays_directly()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn content_from_another_document_is_signed_into_the_delegation() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let budget_doc = ctx.doc(&alice, "budget_doc").await?;
+
+    let update = alice
+        .add_member(bob.id(), design_doc, Read, &[budget_doc])
+        .await?;
+
+    assert!(
+        update
+            .delegation
+            .payload()
+            .after()
+            .content
+            .contains_key(&budget_doc),
+        "a document named as relevant is one the delegation is signed against"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_document_that_was_never_received_cannot_be_named_as_relevant() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let bobs_own_doc = ctx.doc(&bob, "bobs_own_doc").await?;
+
+    assert!(
+        matches!(
+            alice
+                .add_member(bob.id(), design_doc, Read, &[bobs_own_doc])
+                .await,
+            Err(AddMemberError::NotFound(_))
+        ),
+        "alice was never sent the document she is passing in as relevant"
+    );
+    Ok(())
+}

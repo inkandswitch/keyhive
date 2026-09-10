@@ -384,9 +384,7 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
         .await?;
 
     // Alice shares events to Bob
-    let events_for_bob = alice
-        .events_for_agent(&Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()))
-        .await;
+    let events_for_bob = alice.events_for_agent(bob_on_alice_id).await;
     let cgka_count = events_for_bob
         .values()
         .filter(|e| matches!(e, keyhive_core::event::Event::CgkaOperation(_)))
@@ -423,9 +421,7 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
     );
 
     // Bob shares events back to Alice
-    let events_for_alice = bob
-        .events_for_agent(&Agent::Individual(alice_on_bob_id, alice_on_bob.dupe()))
-        .await;
+    let events_for_alice = bob.events_for_agent(alice_on_bob_id).await;
     alice.ingest_event_table(events_for_alice).await?;
 
     // Verify Public can reach doc_b on Alice's keyhive
@@ -482,9 +478,7 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
         .await?;
 
     // Share ALL events (including CGKA) to Bob so his CGKA is initialized
-    let events_for_bob = alice
-        .events_for_agent(&Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()))
-        .await;
+    let events_for_bob = alice.events_for_agent(bob_on_alice_id).await;
     bob.ingest_event_table(events_for_bob).await?;
 
     // Now both have the doc with CGKA initialized.
@@ -517,12 +511,8 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
         .await?;
 
     // Now sync: Alice sends to Bob, Bob sends to Alice
-    let events_alice_to_bob = alice
-        .events_for_agent(&Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()))
-        .await;
-    let events_bob_to_alice = bob
-        .events_for_agent(&Agent::Individual(alice_on_bob_id, alice_on_bob.dupe()))
-        .await;
+    let events_alice_to_bob = alice.events_for_agent(bob_on_alice_id).await;
+    let events_bob_to_alice = bob.events_for_agent(alice_on_bob_id).await;
 
     bob.ingest_event_table(events_alice_to_bob).await?;
     alice.ingest_event_table(events_bob_to_alice).await?;
@@ -602,9 +592,7 @@ async fn test_competing_cgka_init_adds() -> TestResult {
         .await?;
 
     // Share only delegation events (no CGKA) to Bob
-    let events_for_bob = alice
-        .events_for_agent(&Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()))
-        .await;
+    let events_for_bob = alice.events_for_agent(bob_on_alice_id).await;
     let events_without_cgka: std::collections::HashMap<_, _> = events_for_bob
         .into_iter()
         .filter(|(_, event)| !matches!(event, keyhive_core::event::Event::CgkaOperation(_)))
@@ -635,9 +623,7 @@ async fn test_competing_cgka_init_adds() -> TestResult {
     }
 
     // Now Alice sends her CGKA ops to Bob (including Alice's init add)
-    let all_events_for_bob = alice
-        .events_for_agent(&Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()))
-        .await;
+    let all_events_for_bob = alice.events_for_agent(bob_on_alice_id).await;
     let cgka_only: std::collections::HashMap<_, _> = all_events_for_bob
         .into_iter()
         .filter(|(_, event)| matches!(event, keyhive_core::event::Event::CgkaOperation(_)))
@@ -691,8 +677,8 @@ async fn test_document_delegate_before_defining_event_reified_as_document() -> T
 
     // Collect all of Alice's events, then split out Doc A's defining (root)
     // delegation, i.e. the one issued by Doc A itself, so it is delivered last.
-    let alice_agent: Agent<_, _, _, _> = alice.active().lock().await.clone().into();
-    let all_events = alice.static_events_for_agent(&alice_agent).await;
+    let alice_id = { alice.active().lock().await.id() };
+    let all_events = alice.static_events_for_agent(alice_id).await;
 
     let doc_a_ident: Identifier = doc_a_id.into();
     let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];
@@ -770,8 +756,8 @@ async fn test_group_delegate_before_defining_event_reified_as_group() -> TestRes
         .await?;
 
     // Split out Group G's defining (root) delegation, issued by G itself.
-    let alice_agent: Agent<_, _, _, _> = alice.active().lock().await.clone().into();
-    let all_events = alice.static_events_for_agent(&alice_agent).await;
+    let alice_id = { alice.active().lock().await.id() };
+    let all_events = alice.static_events_for_agent(alice_id).await;
 
     let group_ident: Identifier = group_id.into();
     let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];

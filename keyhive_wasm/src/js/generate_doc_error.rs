@@ -5,6 +5,7 @@ use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Display, Error, From)]
 pub enum JsGenerateDocError {
+    /// Generating the document failed.
     #[display("{_0}")]
     GenerateDoc(GenerateDocError),
 

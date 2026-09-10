@@ -128,6 +128,7 @@ impl JsKeyhive {
             })
     }
 
+    /// Generate a group.
     #[wasm_bindgen(js_name = generateGroup)]
     pub async fn generate_group(
         &self,
@@ -135,7 +136,7 @@ impl JsKeyhive {
     ) -> Result<JsGroup, JsGenerateGroupError> {
         let coparents = js_coparents
             .into_iter()
-            .map(|js_peer| JsPeer::from_js_ref(&js_peer).0)
+            .map(|js_peer| JsPeer::from_js_ref(&js_peer).0.id())
             .collect::<Vec<_>>();
 
         let group_id = self.0.generate_group(coparents).await?;
@@ -148,6 +149,7 @@ impl JsKeyhive {
         Ok(JsGroup { group_id, inner })
     }
 
+    /// Generate a document.
     #[wasm_bindgen(js_name = generateDocument)]
     pub async fn generate_doc(
         &self,
@@ -161,7 +163,7 @@ impl JsKeyhive {
             .generate_doc(
                 coparents
                     .into_iter()
-                    .map(|js_peer| JsPeer::from_js_ref(&js_peer).0)
+                    .map(|js_peer| JsPeer::from_js_ref(&js_peer).0.id())
                     .collect::<Vec<_>>(),
                 NonEmpty {
                     head: initial_content_ref_head.clone(),
@@ -259,6 +261,7 @@ impl JsKeyhive {
         Ok(JsDecryptedKeyed::new(plaintext, key.as_slice().to_vec()))
     }
 
+    /// Delegate access over `membered` to `to_add`.
     #[wasm_bindgen(js_name = addMember)]
     pub async fn add_member(
         &self,
@@ -268,12 +271,10 @@ impl JsKeyhive {
         other_relevant_docs: Vec<JsDocumentRef>,
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
         init_span!("JsKeyhive::add_member");
-        let other_docs_refs: Vec<_> = other_relevant_docs
+        let other_docs: Vec<_> = other_relevant_docs
             .iter()
-            .map(|js_doc| JsDocument::from_js_ref(js_doc).inner)
+            .map(|js_doc| JsDocument::from_js_ref(js_doc).doc_id)
             .collect();
-
-        let other_docs: Vec<_> = other_docs_refs.into_iter().collect();
 
         let res = self
             .0
@@ -436,9 +437,10 @@ impl JsKeyhive {
     ) -> Result<js_sys::Map, JsSerializationError> {
         init_span!("JsKeyhive::events_for_agent");
 
-        let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
-        let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(&agent.0).await;
-        let cgka_ops = self.0.cgka_ops_reachable_by_agent(&agent.0).await;
+        let who = agent.0.id();
+        let membership_ops = self.0.membership_ops_for_agent(who).await;
+        let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(who).await;
+        let cgka_ops = self.0.cgka_ops_reachable_by_agent(who).await;
 
         let map = js_sys::Map::new();
 
@@ -485,7 +487,7 @@ impl JsKeyhive {
     pub async fn event_hashes_for_agent(&self, agent: &JsAgent) -> js_sys::Array {
         init_span!("JsKeyhive::event_hashes_for_agent");
         let arr = js_sys::Array::new();
-        for digest in self.0.event_digests_for_agent(&agent.0).await {
+        for digest in self.0.event_digests_for_agent(agent.0.id()).await {
             arr.push(&js_sys::Uint8Array::from(digest.as_slice()).into());
         }
         arr
@@ -558,7 +560,7 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = membershipOpsForAgent)]
     pub async fn membership_ops_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
         init_span!("JsKeyhive::membership_ops_for_agent");
-        let membership_ops = self.0.membership_ops_for_agent(&agent.0).await;
+        let membership_ops = self.0.membership_ops_for_agent(agent.0.id()).await;
         let map = js_sys::Map::new();
         for (digest, op) in membership_ops {
             let hash = js_sys::Uint8Array::from(digest.as_slice());

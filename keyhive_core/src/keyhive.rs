@@ -243,16 +243,22 @@ impl<
         &self.docs
     }
 
+    /// Generate a group.
     #[allow(clippy::type_complexity)]
     #[instrument(skip_all)]
     pub async fn generate_group(
         &self,
-        coparents: Vec<Peer<F, S, T, L>>,
-    ) -> Result<GroupId, SigningError> {
+        coparents: Vec<Identifier>,
+    ) -> Result<GroupId, GenerateGroupError> {
+        let mut tail = Vec::with_capacity(coparents.len());
+        for id in coparents {
+            tail.push(self.agent_by_id(id).await?);
+        }
+
         let group = Group::generate(
             NonEmpty {
                 head: Agent::Active(self.active.lock().await.id(), self.active.dupe()),
-                tail: coparents.into_iter().map(Into::into).collect(),
+                tail,
             },
             self.delegations.dupe(),
             self.revocations.dupe(),
@@ -273,13 +279,12 @@ impl<
     #[instrument(skip_all)]
     pub async fn generate_doc(
         &self,
-        coparents: Vec<Peer<F, S, T, L>>,
+        coparents: Vec<Identifier>,
         initial_content_heads: NonEmpty<T>,
     ) -> Result<DocumentId, GenerateDocError> {
-        for peer in coparents.iter() {
-            if self.get_agent(peer.id()).await.is_none() {
-                self.register_peer(peer.dupe()).await;
-            }
+        let mut tail = Vec::with_capacity(coparents.len());
+        for id in coparents {
+            tail.push(self.agent_by_id(id).await?);
         }
 
         let signer = {
@@ -291,7 +296,7 @@ impl<
         let new_doc = Document::generate(
             NonEmpty {
                 head: Agent::Active(active_id, self.active.dupe()),
-                tail: coparents.into_iter().map(Into::into).collect(),
+                tail,
             },
             initial_content_heads,
             self.delegations.dupe(),
@@ -439,17 +444,26 @@ impl<
 
     /// Delegate `to_add` `can` access to `resource`.
     ///
-    /// Returns an error if we have never heard of `to_add` or `resource`.
+    /// Returns an error if we have never heard of `to_add`, `resource`, or one of
+    /// `other_relevant_docs`.
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,
         to_add: impl Into<Identifier>,
         resource: impl Into<MemberedId>,
         can: Access,
-        other_relevant_docs: &[Arc<Mutex<Document<F, S, T, L>>>], // TODO make this automatic
+        other_relevant_docs: &[DocumentId], // TODO make this automatic
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
         let to_add = self.agent_by_id(to_add.into()).await?;
         let resource = self.membered_by_id(resource.into()).await?;
+
+        let other_relevant_docs = {
+            let docs = self.docs.lock().await;
+            other_relevant_docs
+                .iter()
+                .map(|doc_id| docs.get(doc_id).duped().ok_or(NotFound::new(*doc_id)))
+                .collect::<Result<Vec<_>, _>>()?
+        };
 
         let signer = { self.active.lock().await.signer.clone() };
         let update = match &resource {
@@ -457,7 +471,7 @@ impl<
                 let mut update = group
                     .lock()
                     .await
-                    .add_member(to_add, can, &signer, other_relevant_docs)
+                    .add_member(to_add, can, &signer, &other_relevant_docs)
                     .await
                     .map_err(AddMemberError::from)?;
 
@@ -510,7 +524,7 @@ impl<
             Membered::Document(_, doc) => {
                 let mut locked = doc.lock().await;
                 locked
-                    .add_member(to_add, can, &signer, other_relevant_docs)
+                    .add_member(to_add, can, &signer, &other_relevant_docs)
                     .await?
             }
         };
@@ -990,23 +1004,24 @@ impl<
     #[instrument(skip_all)]
     pub async fn events_for_agent(
         &self,
-        agent: &Agent<F, S, T, L>,
+        who: impl Into<Identifier>,
     ) -> HashMap<Digest<Event<F, S, T, L>>, Event<F, S, T, L>> {
+        let who = who.into();
         let mut ops: HashMap<_, _> = self
-            .membership_ops_for_agent(agent)
+            .membership_ops_for_agent(who)
             .await
             .into_iter()
             .map(|(op_digest, op)| (op_digest.coerce(), op.into()))
             .collect();
 
-        for key_ops in self.reachable_prekey_ops_for_agent(agent).await.values() {
+        for key_ops in self.reachable_prekey_ops_for_agent(who).await.values() {
             for key_op in key_ops.iter() {
                 let op = Event::<F, S, T, L>::from(key_op.as_ref().dupe());
                 ops.insert(Digest::hash(&op), op);
             }
         }
 
-        for cgka_op in self.cgka_ops_reachable_by_agent(agent).await {
+        for cgka_op in self.cgka_ops_reachable_by_agent(who).await {
             let op = Event::<F, S, T, L>::from(cgka_op);
             ops.insert(Digest::hash(&op), op);
         }
@@ -1017,9 +1032,9 @@ impl<
     #[instrument(skip_all)]
     pub async fn static_events_for_agent(
         &self,
-        agent: &Agent<F, S, T, L>,
+        who: impl Into<Identifier>,
     ) -> HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> {
-        self.events_for_agent(agent)
+        self.events_for_agent(who.into())
             .await
             .into_iter()
             .map(|(k, v)| (k.coerce(), v.into()))
@@ -1029,10 +1044,10 @@ impl<
     #[instrument(skip_all)]
     pub async fn cgka_ops_reachable_by_agent(
         &self,
-        agent: &Agent<F, S, T, L>,
+        who: impl Into<Identifier>,
     ) -> Vec<Arc<Signed<CgkaOperation>>> {
         let mut ops = Vec::new();
-        let reachable = self.doc_handles_reachable_by(agent.id()).await;
+        let reachable = self.doc_handles_reachable_by(who.into()).await;
         for (doc_id, (doc, _)) in reachable {
             let epochs = match doc.lock().await.cgka_ops() {
                 Ok(epochs) => epochs,
@@ -1071,8 +1086,9 @@ impl<
     #[instrument(skip_all)]
     pub async fn membership_ops_for_agent(
         &self,
-        agent: &Agent<F, S, T, L>,
+        who: impl Into<Identifier>,
     ) -> HashMap<Digest<MembershipOperation<F, S, T, L>>, MembershipOperation<F, S, T, L>> {
+        let who = who.into();
         let mut ops = HashMap::new();
         let mut visited_hashes = HashSet::new();
 
@@ -1082,11 +1098,7 @@ impl<
             MembershipOperation<F, S, T, L>,
         )> = Vec::new();
 
-        for (mem_rc, _) in self
-            .membered_handles_reachable_by(agent.id())
-            .await
-            .values()
-        {
+        for (mem_rc, _) in self.membered_handles_reachable_by(who).await.values() {
             for (hash, dlg_head) in mem_rc.delegation_heads().await.iter() {
                 heads.push((hash.coerce(), dlg_head.dupe().into()));
             }
@@ -1096,18 +1108,18 @@ impl<
             }
         }
 
-        // Include any revocations for this agent that were missed
-        if let Some(agent_revocations) = self
-            .revocations
-            .lock()
-            .await
-            .get_revocations_for_agent(&agent.agent_id())
-        {
-            for rev in agent_revocations {
-                let hash: Digest<MembershipOperation<F, S, T, L>> =
-                    Digest::hash(rev.as_ref()).coerce();
-                heads.push((hash, rev.into()));
-            }
+        // Include any revocations for this agent that were missed.
+        let agent_revocations = match self.get_agent(who).await {
+            Some(agent) => self
+                .revocations
+                .lock()
+                .await
+                .get_revocations_for_agent(&agent.agent_id()),
+            None => None,
+        };
+        for rev in agent_revocations.into_iter().flatten() {
+            let hash: Digest<MembershipOperation<F, S, T, L>> = Digest::hash(rev.as_ref()).coerce();
+            heads.push((hash, rev.into()));
         }
 
         while let Some((hash, op)) = heads.pop() {
@@ -1240,8 +1252,9 @@ impl<
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
-        agent: &Agent<F, S, T, L>,
+        who: impl Into<Identifier>,
     ) -> HashMap<Identifier, Vec<Arc<KeyOp>>> {
+        let who = who.into();
         fn add_many_keys(
             map: &mut HashMap<Identifier, CaMap<KeyOp>>,
             agent_id: Identifier,
@@ -1259,8 +1272,10 @@ impl<
         };
         add_many_keys(&mut map, active_id, prekeys);
 
-        // Add the agents own keys
-        add_many_keys(&mut map, agent.id(), agent.key_ops().await);
+        // Add the agent's own keys.
+        if let Some(agent) = self.get_agent(who).await {
+            add_many_keys(&mut map, who, agent.key_ops().await);
+        }
 
         let groups = {
             self.groups
@@ -1275,7 +1290,7 @@ impl<
                 let locked = group.lock().await;
                 (locked.group_id(), locked.transitive_members().await)
             };
-            if transitive.contains_key(&agent.id()) {
+            if transitive.contains_key(&who) {
                 add_many_keys(
                     &mut map,
                     group_id.into(),
@@ -1296,7 +1311,7 @@ impl<
                 let locked = doc.lock().await;
                 (locked.doc_id(), locked.transitive_members().await)
             };
-            if transitive.contains_key(&agent.id()) {
+            if transitive.contains_key(&who) {
                 add_many_keys(
                     &mut map,
                     doc_id.into(),
@@ -1505,20 +1520,21 @@ impl<
     /// Every event `agent` can reach, under the digests they are sent by.
     pub async fn event_digests_for_agent(
         &self,
-        agent: &Agent<F, S, T, L>,
+        agent: impl Into<Identifier>,
     ) -> HashSet<EventDigest<F, S, T, L>> {
+        let who = agent.into();
         let mut digests = HashSet::new();
 
-        for (digest, _) in self.membership_ops_for_agent(agent).await {
+        for (digest, _) in self.membership_ops_for_agent(who).await {
             digests.insert(digest.coerce());
         }
-        for key_ops in self.reachable_prekey_ops_for_agent(agent).await.values() {
+        for key_ops in self.reachable_prekey_ops_for_agent(who).await.values() {
             for key_op in key_ops.iter() {
                 let event: Event<F, S, T, L> = Event::from(key_op.as_ref().clone());
                 digests.insert(Digest::hash(&event));
             }
         }
-        for cgka_op in self.cgka_ops_reachable_by_agent(agent).await {
+        for cgka_op in self.cgka_ops_reachable_by_agent(who).await {
             let event: Event<F, S, T, L> = Event::from(cgka_op);
             digests.insert(Digest::hash(&event));
         }
@@ -3018,6 +3034,16 @@ pub enum TryFromArchiveError<
     MissingAgent(Box<Identifier>),
 }
 
+/// Why generating a group failed.
+#[derive(Debug, Error)]
+pub enum GenerateGroupError {
+    #[error(transparent)]
+    NotFound(#[from] NotFound),
+
+    #[error(transparent)]
+    SigningError(#[from] SigningError),
+}
+
 #[derive(Debug, Error)]
 pub enum ReceiveCgkaOpError {
     #[error(transparent)]
@@ -3121,16 +3147,13 @@ mod tests {
         .unwrap()
     }
 
-    /// Register a peer keyhive as an individual on `owner` and return the ID and Arc.
-    async fn register_peer(
-        owner: &TestKeyhive,
-        peer: &TestKeyhive,
-    ) -> (IndividualId, Arc<Mutex<Individual>>) {
+    /// Register a peer keyhive as an individual on `owner` and return its id.
+    async fn register_peer(owner: &TestKeyhive, peer: &TestKeyhive) -> IndividualId {
         let add_op = peer.expand_prekeys().await.unwrap();
         let indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(add_op))));
         let id = indie.lock().await.id();
-        assert!(owner.register_individual(indie.clone()).await);
-        (id, indie)
+        assert!(owner.register_individual(indie).await);
+        id
     }
 
     #[tokio::test]
@@ -3148,11 +3171,11 @@ mod tests {
         let indie = Arc::new(Mutex::new(
             Individual::generate::<Sendable, _, _>(&indie_sk, &mut csprng).await?,
         ));
-        let indie_peer = Peer::Individual(indie.lock().await.id(), indie.dupe());
+        let indie_id = { indie.lock().await.id() };
 
         hive.register_individual(indie.dupe()).await;
-        hive.generate_group(vec![indie_peer.dupe()]).await?;
-        hive.generate_doc(vec![indie_peer.dupe()], nonempty![[1u8; 32], [2u8; 32]])
+        hive.generate_group(vec![indie_id.into()]).await?;
+        hive.generate_doc(vec![indie_id.into()], nonempty![[1u8; 32], [2u8; 32]])
             .await?;
 
         assert!(!hive
@@ -3263,16 +3286,14 @@ mod tests {
         let hive2_on_hive1 = Arc::new(Mutex::new(
             hive2.active.lock().await.individual.lock().await.clone(),
         ));
+        let hive2_on_hive1_id = { hive2_on_hive1.lock().await.id() };
         hive1.register_individual(hive2_on_hive1.dupe()).await;
         let hive1_on_hive2 = Arc::new(Mutex::new(
             hive1.active.lock().await.individual.lock().await.clone(),
         ));
         hive2.register_individual(hive1_on_hive2.dupe()).await;
         let group1_on_hive1_id = hive1
-            .generate_group(vec![Peer::Individual(
-                hive2_on_hive1.lock().await.id(),
-                hive2_on_hive1.dupe(),
-            )])
+            .generate_group(vec![hive2_on_hive1_id.into()])
             .await
             .unwrap();
         let group1_on_hive1 = hive1.get_group(group1_on_hive1_id).await.unwrap();
@@ -3327,13 +3348,7 @@ mod tests {
 
         // 2 delegations (you & public)
         let left_doc = left
-            .generate_doc(
-                vec![Peer::Individual(
-                    Public.individual().id(),
-                    Arc::new(Mutex::new(Public.individual())),
-                )],
-                nonempty![[0u8; 32]],
-            )
+            .generate_doc(vec![Public.id()], nonempty![[0u8; 32]])
             .await
             .unwrap();
         // 1 delegation (you)
@@ -3362,7 +3377,7 @@ mod tests {
         assert!(left_membered.contains_key(&left_doc.into()));
         assert!(!left_membered.contains_key(&left_group_id.into())); // not included because Public is not a member
 
-        let left_to_mid_ops = left.events_for_agent(&Public.individual().into()).await;
+        let left_to_mid_ops = left.events_for_agent(Public.id()).await;
         assert_eq!(left_to_mid_ops.len(), 14);
 
         middle.ingest_event_table(left_to_mid_ops).await.unwrap();
@@ -3397,7 +3412,7 @@ mod tests {
             2
         );
 
-        let mid_to_right_ops = middle.events_for_agent(&Public.individual().into()).await;
+        let mid_to_right_ops = middle.events_for_agent(Public.id()).await;
         assert_eq!(mid_to_right_ops.len(), 21);
 
         right.ingest_event_table(mid_to_right_ops).await.unwrap();
@@ -3430,27 +3445,23 @@ mod tests {
 
         assert_eq!(
             middle
-                .events_for_agent(&Public.individual().into())
+                .events_for_agent(Public.id())
                 .await
                 .iter()
                 .collect::<Vec<_>>()
                 .sort_by_key(|(k, _v)| **k),
             right
-                .events_for_agent(&Public.individual().into())
+                .events_for_agent(Public.id())
                 .await
                 .iter()
                 .collect::<Vec<_>>()
                 .sort_by_key(|(k, _v)| **k),
         );
 
-        let left_doc_handle = left.get_document(left_doc).await.expect("just created");
-        right
-            .generate_group(vec![Peer::Document(left_doc, left_doc_handle)])
-            .await
-            .unwrap();
+        right.generate_group(vec![left_doc.into()]).await.unwrap();
 
         // Check transitivity
-        let transitive_right_to_mid_ops = right.events_for_agent(&Public.individual().into()).await;
+        let transitive_right_to_mid_ops = right.events_for_agent(Public.id()).await;
         assert_eq!(transitive_right_to_mid_ops.len(), 23);
 
         middle
@@ -3470,13 +3481,7 @@ mod tests {
 
         let keyhive = make_keyhive().await;
         let doc = keyhive
-            .generate_doc(
-                vec![Peer::Individual(
-                    Public.individual().id(),
-                    Arc::new(Mutex::new(Public.individual())),
-                )],
-                nonempty![[0u8; 32]],
-            )
+            .generate_doc(vec![Public.id()], nonempty![[0u8; 32]])
             .await
             .unwrap();
         let dlg = keyhive
@@ -3494,18 +3499,17 @@ mod tests {
         // Create a keyhive and a doc
         let hive1 = make_keyhive().await;
         let group_id = hive1.generate_group(vec![]).await.unwrap();
-        let group = hive1.get_group(group_id).await.unwrap();
         let doc = hive1
-            .generate_doc(vec![Peer::Group(group_id, group)], nonempty![[0u8; 32]])
+            .generate_doc(vec![group_id.into()], nonempty![[0u8; 32]])
             .await
             .unwrap();
 
         // Create two more keyhives
         let hive2 = make_keyhive().await;
-        let (hive2_on_hive1_id, hive2_on_hive1) = register_peer(&hive1, &hive2).await;
+        let hive2_on_hive1_id = register_peer(&hive1, &hive2).await;
 
         let hive3 = make_keyhive().await;
-        let (hive3_on_hive1_id, _hive3_on_hive1) = register_peer(&hive1, &hive3).await;
+        let hive3_on_hive1_id = register_peer(&hive1, &hive3).await;
 
         // Add hive2 as a member of the doc
         hive1
@@ -3529,12 +3533,10 @@ mod tests {
         );
 
         // Register hive3 with hive2
-        let (hive3_on_hive2_id, _hive3_on_hive2) = register_peer(&hive2, &hive3).await;
+        let hive3_on_hive2_id = register_peer(&hive2, &hive3).await;
 
         // Send keyhive events from hive1 to hive2
-        let events_for_hive2_from_hive1 = hive1
-            .events_for_agent(&Agent::Individual(hive2_on_hive1_id, hive2_on_hive1.dupe()))
-            .await;
+        let events_for_hive2_from_hive1 = hive1.events_for_agent(hive2_on_hive1_id).await;
         hive2
             .ingest_event_table(events_for_hive2_from_hive1)
             .await
@@ -3576,9 +3578,7 @@ mod tests {
             .unwrap();
 
         // Now receive alices events
-        let events = alice
-            .events_for_agent(&Agent::Individual(bob_on_alice_id, bob_on_alice.dupe()))
-            .await;
+        let events = alice.events_for_agent(bob_on_alice_id).await;
 
         // ensure that we are able to process the add op
         bob.ingest_event_table(events).await.unwrap();
@@ -3600,17 +3600,13 @@ mod tests {
             .await
             .unwrap();
 
-        let events = charlie
-            .events_for_agent(&Agent::Individual(bob_on_charlie_id, bob_on_charlie.dupe()))
-            .await;
+        let events = charlie.events_for_agent(bob_on_charlie_id).await;
 
         bob.ingest_event_table(events).await.unwrap();
     }
 
-    /// Test that reachable_prekey_ops_for_agent merges prekeys from multiple sources
-    /// rather than overwriting them.
     #[tokio::test]
-    async fn test_reachable_prekey_ops_merges_not_overwrites() {
+    async fn prekey_rotations_received_after_a_delegation_are_all_reachable() {
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -3641,46 +3637,25 @@ mod tests {
             .await
             .unwrap();
 
-        let mut bob_individual_with_rotations = Individual::new(KeyOp::Add(bob_add_op.clone()));
-        bob_individual_with_rotations
-            .receive_prekey_op(KeyOp::Rotate(bob_rotate_op1))
+        // Alice learns about the rotations the way she would in practice, by receiving the ops.
+        alice
+            .receive_prekey_op(&KeyOp::Rotate(bob_rotate_op1))
+            .await
             .unwrap();
-        bob_individual_with_rotations
-            .receive_prekey_op(KeyOp::Rotate(bob_rotate_op2))
+        alice
+            .receive_prekey_op(&KeyOp::Rotate(bob_rotate_op2))
+            .await
             .unwrap();
-        let bob_on_alice_with_rotations = Arc::new(Mutex::new(bob_individual_with_rotations));
 
+        let prekey_ops = alice.reachable_prekey_ops_for_agent(bob_id).await;
+
+        let bob_prekeys = prekey_ops
+            .get(&bob_id.into())
+            .expect("bob's prekeys are reachable");
         assert_eq!(
-            bob_on_alice_with_rotations.lock().await.prekey_ops().len(),
+            bob_prekeys.len(),
             3,
-            "bob_on_alice_with_rotations should have 3 prekey ops"
-        );
-
-        assert_eq!(
-            bob_on_alice_for_delegation.lock().await.prekey_ops().len(),
-            1,
-            "bob_on_alice_for_delegation should have 1 prekey op"
-        );
-
-        let prekey_ops = alice
-            .reachable_prekey_ops_for_agent(&Agent::Individual(
-                bob_id,
-                bob_on_alice_with_rotations.dupe(),
-            ))
-            .await;
-
-        let bob_prekeys_in_result = prekey_ops.get(&bob_id.into());
-        assert!(
-            bob_prekeys_in_result.is_some(),
-            "Bob's prekeys should be in the result"
-        );
-
-        let bob_prekey_vec = bob_prekeys_in_result.unwrap();
-        assert_eq!(
-            bob_prekey_vec.len(),
-            3,
-            "all 3 of Bob's prekey ops should be present, but got {}",
-            bob_prekey_vec.len()
+            "the add and both rotations are reachable"
         );
     }
 
@@ -3718,7 +3693,7 @@ mod tests {
         assert!(alice.register_individual(carol_indie.clone()).await);
         let carol_id = carol_indie.lock().await.id();
 
-        let (dan_id, dan_indie) = register_peer(&alice, &dan).await;
+        let dan_id = register_peer(&alice, &dan).await;
 
         let eve_add_op = eve.expand_prekeys().await?;
         let eve_rot1 = eve.rotate_prekey(eve_add_op.payload.share_key).await?;
@@ -3779,7 +3754,7 @@ mod tests {
             active_all_ops.is_some(),
             "active agent should be in all_results"
         );
-        let active_per_agent_ops = alice.reachable_prekey_ops_for_agent(&active_agent).await;
+        let active_per_agent_ops = alice.reachable_prekey_ops_for_agent(active_id).await;
         let active_indexed_ids = &all_results.index[&active_id];
         let mut active_all_keys: Vec<_> = active_indexed_ids.iter().collect();
         active_all_keys.sort();
@@ -3793,23 +3768,15 @@ mod tests {
         // For each agent in the index, compare with per-agent result
         let mut expected_checked: HashSet<Identifier> = HashSet::new();
         expected_checked.insert(active_id);
-        let agents: Vec<(IndividualId, Arc<Mutex<Individual>>)> = vec![
-            (bob_id, bob_indie),
-            (carol_id, carol_indie),
-            (dan_id, dan_indie),
-            (eve_id, eve_indie),
-            (frank_id, frank_indie),
-        ];
-        for (id, indie) in &agents {
+        let agents: Vec<IndividualId> = vec![bob_id, carol_id, dan_id, eve_id, frank_id];
+        for id in &agents {
             let agent_id: Identifier = (*id).into();
             expected_checked.insert(agent_id);
 
             let all_ops = all_results.ops_for_agent(&agent_id);
             assert!(all_ops.is_some(), "agent {:?} should be in all_results", id);
 
-            let per_agent_ops = alice
-                .reachable_prekey_ops_for_agent(&Agent::Individual(*id, indie.dupe()))
-                .await;
+            let per_agent_ops = alice.reachable_prekey_ops_for_agent(*id).await;
 
             // Same identifier keys in index vs per-agent
             let indexed_ids = &all_results.index[&agent_id];
@@ -3849,10 +3816,8 @@ mod tests {
             if expected_checked.contains(agent_id) {
                 continue; // already verified above
             }
-            if let Some(indie) = alice.get_individual((*agent_id).into()).await {
-                let per_agent_ops = alice
-                    .reachable_prekey_ops_for_agent(&Agent::Individual((*agent_id).into(), indie))
-                    .await;
+            if alice.get_individual((*agent_id).into()).await.is_some() {
+                let per_agent_ops = alice.reachable_prekey_ops_for_agent(*agent_id).await;
                 let indexed_ids = &all_results.index[agent_id];
                 let mut all_keys: Vec<_> = indexed_ids.iter().collect();
                 all_keys.sort();
@@ -3880,10 +3845,10 @@ mod tests {
         let eve = make_keyhive().await;
 
         // Register all on alice
-        let (bob_id, bob_indie) = register_peer(&alice, &bob).await;
-        let (carol_id, carol_indie) = register_peer(&alice, &carol).await;
-        let (dave_id, dave_indie) = register_peer(&alice, &dave).await;
-        let (eve_id, _eve_indie) = register_peer(&alice, &eve).await;
+        let bob_id = register_peer(&alice, &bob).await;
+        let carol_id = register_peer(&alice, &carol).await;
+        let dave_id = register_peer(&alice, &dave).await;
+        let eve_id = register_peer(&alice, &eve).await;
 
         // doc1: bob and carol are direct members
         let doc1_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
@@ -3927,16 +3892,11 @@ mod tests {
         );
 
         // For each agent, compare with per-agent result
-        let agents: Vec<(IndividualId, Arc<Mutex<Individual>>)> = vec![
-            (bob_id, bob_indie),
-            (carol_id, carol_indie),
-            (dave_id, dave_indie),
-        ];
-        for (id, indie) in &agents {
-            let agent = Agent::Individual(*id, indie.dupe());
+        let agents: Vec<IndividualId> = vec![bob_id, carol_id, dave_id];
+        for id in &agents {
             let agent_id: Identifier = (*id).into();
 
-            let per_agent_ops = alice.membership_ops_for_agent(&agent).await;
+            let per_agent_ops = alice.membership_ops_for_agent(agent_id).await;
             let per_agent_digests: HashSet<_> = per_agent_ops.keys().copied().collect();
 
             // Collect all digests for this agent across all sources
@@ -3968,10 +3928,10 @@ mod tests {
         let eve = make_keyhive().await;
 
         // Register all on alice
-        let (bob_id, bob_indie) = register_peer(&alice, &bob).await;
-        let (carol_id, carol_indie) = register_peer(&alice, &carol).await;
-        let (dave_id, dave_indie) = register_peer(&alice, &dave).await;
-        let (eve_id, eve_indie) = register_peer(&alice, &eve).await;
+        let bob_id = register_peer(&alice, &bob).await;
+        let carol_id = register_peer(&alice, &carol).await;
+        let dave_id = register_peer(&alice, &dave).await;
+        let eve_id = register_peer(&alice, &eve).await;
 
         // doc1: bob and carol are direct members
         // generate_doc creates initial CGKA ops; each add_member creates a CGKA Add op
@@ -4040,7 +4000,7 @@ mod tests {
         // Helper macro to get sorted per-agent CGKA digests
         macro_rules! per_agent_digests {
             ($agent:expr) => {{
-                let ops = alice.cgka_ops_reachable_by_agent(&$agent).await;
+                let ops = alice.cgka_ops_reachable_by_agent($agent).await;
                 let mut digests: Vec<_> = ops.iter().map(|op| Digest::hash(op.as_ref())).collect();
                 digests.sort();
                 digests
@@ -4053,7 +4013,7 @@ mod tests {
             !all_results.index.contains_key(&eve_identifier),
             "eve should not be in all_results since she is not a member of any doc"
         );
-        let eve_per_agent = per_agent_digests!(Agent::Individual(eve_id, eve_indie.dupe()));
+        let eve_per_agent = per_agent_digests!(eve_id);
         assert!(
             eve_per_agent.is_empty(),
             "eve per-agent should also be empty"
@@ -4062,7 +4022,7 @@ mod tests {
         // Bob: revoked from doc1, no other docs and should have zero CGKA ops
         let bob_identifier: Identifier = bob_id.into();
         let bob_all = all_digests_for(&bob_identifier);
-        let bob_per_agent = per_agent_digests!(Agent::Individual(bob_id, bob_indie.dupe()));
+        let bob_per_agent = per_agent_digests!(bob_id);
         assert_eq!(
             bob_all, bob_per_agent,
             "revoked bob should match (both empty)"
@@ -4072,7 +4032,7 @@ mod tests {
         // Carol: on doc1 directly + doc2 via group and should see ops from both
         let carol_identifier: Identifier = carol_id.into();
         let carol_all = all_digests_for(&carol_identifier);
-        let carol_per_agent = per_agent_digests!(Agent::Individual(carol_id, carol_indie.dupe()));
+        let carol_per_agent = per_agent_digests!(carol_id);
         assert_eq!(
             carol_all, carol_per_agent,
             "CGKA op digests should match for carol (multi-doc)"
@@ -4087,7 +4047,7 @@ mod tests {
         // Dave: only on doc2 via group
         let dave_identifier: Identifier = dave_id.into();
         let dave_all = all_digests_for(&dave_identifier);
-        let dave_per_agent = per_agent_digests!(Agent::Individual(dave_id, dave_indie.dupe()));
+        let dave_per_agent = per_agent_digests!(dave_id);
         assert_eq!(
             dave_all, dave_per_agent,
             "CGKA op digests should match for dave (group-transitive)"
@@ -4103,7 +4063,7 @@ mod tests {
         let active_agent: Agent<_, _, _> = alice.active().lock().await.clone().into();
         let active_id: Identifier = active_agent.id();
         let active_all = all_digests_for(&active_id);
-        let active_per_agent = per_agent_digests!(active_agent);
+        let active_per_agent = per_agent_digests!(active_id);
         assert_eq!(
             active_all, active_per_agent,
             "CGKA op digests should match for active agent"
@@ -4116,7 +4076,7 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob_kh = make_keyhive().await;
-        let (bob_id, _bob_indie) = register_peer(&alice, &bob_kh).await;
+        let bob_id = register_peer(&alice, &bob_kh).await;
 
         let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
         alice.add_member(bob_id, doc, Access::Read, &[]).await?;
@@ -4149,8 +4109,8 @@ mod tests {
         let alice = make_keyhive().await;
         let dave_kh = make_keyhive().await;
         let eve_kh = make_keyhive().await;
-        let (dave_id, _dave_indie) = register_peer(&alice, &dave_kh).await;
-        let (eve_id, _eve_indie) = register_peer(&alice, &eve_kh).await;
+        let dave_id = register_peer(&alice, &dave_kh).await;
+        let eve_id = register_peer(&alice, &eve_kh).await;
 
         let inner_id = alice.generate_group(vec![]).await?;
         for who in [dave_id, eve_id] {
@@ -4194,7 +4154,7 @@ mod tests {
 
         let alice = make_keyhive().await;
         let frank_kh = make_keyhive().await;
-        let (frank_id, _frank_indie) = register_peer(&alice, &frank_kh).await;
+        let frank_id = register_peer(&alice, &frank_kh).await;
 
         let group_id = alice.generate_group(vec![]).await?;
         alice
@@ -4240,7 +4200,7 @@ mod tests {
 
         let alice = make_keyhive().await;
         let bob = make_keyhive().await;
-        let (bob_id, bob_indie) = register_peer(&alice, &bob).await;
+        let bob_id = register_peer(&alice, &bob).await;
         register_peer(&bob, &alice).await;
 
         let account_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
@@ -4255,9 +4215,7 @@ mod tests {
 
         // Bob receives the delegations that describe both documents and none of the CGKA
         // operations that would let him rekey one.
-        let mut for_bob = alice
-            .events_for_agent(&Agent::Individual(bob_id, bob_indie.dupe()))
-            .await;
+        let mut for_bob = alice.events_for_agent(bob_id).await;
         for_bob.retain(|_, event| !matches!(event, Event::CgkaOperation(_)));
         bob.ingest_event_table(for_bob).await?;
 
@@ -4298,16 +4256,18 @@ mod tests {
         )
         .await?;
 
-        let alice: Peer<Sendable, MemorySigner, [u8; 32], NoListener> =
-            Peer::Individual(alice_indie.id(), Arc::new(Mutex::new(alice_indie)));
+        let alice_id = alice_indie.id();
+        let alice = Arc::new(Mutex::new(alice_indie));
 
         {
             let locked_trunk = trunk.lock().await;
+            locked_trunk.register_individual(alice.dupe()).await;
+
             locked_trunk
-                .generate_doc(vec![alice.dupe()], nonempty![[0u8; 32]])
+                .generate_doc(vec![alice_id.into()], nonempty![[0u8; 32]])
                 .await?;
 
-            locked_trunk.generate_group(vec![alice.dupe()]).await?;
+            locked_trunk.generate_group(vec![alice_id.into()]).await?;
 
             assert_eq!(
                 locked_trunk
@@ -4352,16 +4312,17 @@ mod tests {
                 .await
                 .unwrap();
 
-                let bob: Peer<Sendable, MemorySigner, [u8; 32], Log<Sendable, MemorySigner>> =
-                    Peer::Individual(bob_indie.id(), Arc::new(Mutex::new(bob_indie)));
+                let bob = bob_indie.id();
+                fork.register_individual(Arc::new(Mutex::new(bob_indie)))
+                    .await;
 
-                fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
-                fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
-                fork.generate_group(vec![bob.dupe()]).await.unwrap(); // 2 events (dlgs)
+                fork.generate_group(vec![bob.into()]).await.unwrap(); // 2 events (dlgs)
+                fork.generate_group(vec![bob.into()]).await.unwrap(); // 2 events (dlgs)
+                fork.generate_group(vec![bob.into()]).await.unwrap(); // 2 events (dlgs)
                 assert_eq!(fork.groups.lock().await.len(), 4);
 
                 // 2 events (dlgs)
-                fork.generate_doc(vec![bob], nonempty![[1u8; 32]])
+                fork.generate_doc(vec![bob.into()], nonempty![[1u8; 32]])
                     .await
                     .unwrap();
                 assert_eq!(fork.docs.lock().await.len(), init_doc_count + 1);
@@ -4399,7 +4360,7 @@ mod tests {
         {
             let locked_trunk = trunk.lock().await;
             locked_trunk
-                .generate_doc(vec![alice.dupe()], nonempty![[2u8; 32]])
+                .generate_doc(vec![alice_id.into()], nonempty![[2u8; 32]])
                 .await
                 .unwrap();
 
@@ -4425,7 +4386,7 @@ mod tests {
             assert_eq!(locked_trunk.groups.lock().await.len(), 4);
 
             locked_trunk
-                .generate_doc(vec![alice.dupe()], nonempty![[3u8; 32]])
+                .generate_doc(vec![alice_id.into()], nonempty![[3u8; 32]])
                 .await
                 .unwrap();
 

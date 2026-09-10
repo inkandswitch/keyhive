@@ -2,18 +2,15 @@
 #[allow(dead_code)]
 mod bench_utils;
 
-use dupe::Dupe;
 use future_form::Sendable;
-use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
     listener::no_listener::NoListener,
-    principal::{individual::id::IndividualId, membered::Membered, peer::Peer, public::Public},
+    principal::{individual::id::IndividualId, membered::Membered, public::Public},
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
 use nonempty::nonempty;
-use std::sync::Arc;
 
 fn main() {
     divan::main();
@@ -40,9 +37,6 @@ async fn setup_many_docs_nested(
     n_docs: usize,
 ) -> (bench_utils::BenchKeyhive, BenchMembered, IndividualId) {
     let alice = make_simple_keyhive().await.unwrap();
-
-    let public_indie = Public.individual();
-    let public_peer = Peer::Individual(public_indie.id(), Arc::new(Mutex::new(public_indie)));
 
     // Create a chain of 3 nested groups: g_bottom → g_mid → g_top
     let g_bottom_id = alice.generate_group(vec![]).await.unwrap();
@@ -75,7 +69,7 @@ async fn setup_many_docs_nested(
         let mut content = [0u8; 32];
         content[..8].copy_from_slice(&(i as u64).to_le_bytes());
         let doc_id = alice
-            .generate_doc(vec![public_peer.dupe()], nonempty![content])
+            .generate_doc(vec![Public.id()], nonempty![content])
             .await
             .unwrap();
         // Only the first and last docs contain the group chain

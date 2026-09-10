@@ -17,8 +17,13 @@ fn per_agent_calls(bencher: divan::Bencher, n_peers: usize) {
 
     bencher.bench_local(|| {
         rt.block_on(async {
-            for agent in &scenario.agents {
-                std::hint::black_box(scenario.keyhive.reachable_prekey_ops_for_agent(agent).await);
+            for agent_id in &scenario.agents {
+                std::hint::black_box(
+                    scenario
+                        .keyhive
+                        .reachable_prekey_ops_for_agent(*agent_id)
+                        .await,
+                );
             }
         });
     });
