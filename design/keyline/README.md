@@ -416,7 +416,7 @@ The evaluator is simpler for it. Denials are terminal facts: there is no "is thi
 
 - *Rooted at one subject.* Every query is grounded at one subject and ranges over the subjects it reaches: `sub: Members` edges are on Doc's routes because Members has standing over Doc. Scoping is by reachability, not by which certificates carry `sub: Doc`.
 - *Stratum 1 is append-only cheap.* Monotone: merges evaluate deltas; admin reach and coverage cache forever.
-- *Pay per dispute.* Un-revoked certificates — the vast majority — evaluate in one shared widest-path pass (four levels ⇒ bucketed BFS, linear). Each covered certificate pays one route search with its exclusion set, plus the cascade of actual deaths. A jurisdiction accumulating cuts is one under dispute, and rotation — already the hygiene response — moots them and restores the fast path.
+- *Pay per dispute.* Un-revoked certificates — the vast majority — evaluate in one shared widest-path pass (four levels ⇒ bucketed BFS, linear). Each distinct exclusion set — one per revoker, not one per revoked certificate — pays one route search, plus the cascade of actual deaths. A jurisdiction accumulating cuts is one under dispute, and rotation — already the hygiene response — moots them and restores the fast path.
 - *Junk never enters the fixpoint.* Evaluation forward-chains from root edges, so ungrounded certificates cost storage but no computation. Cycles: *assume dead on revisit* — the least fixed point. Assuming live computes the greatest and makes ungrounded cycles self-certifying: a one-line bug with a security consequence.
 - *Timeless is the cheap option.* Ordering-aware revocation would require temporal reachability over historical graphs plus causal metadata on every certificate. Here there is one graph, ever; results are a pure function of the set, and the set digest is a perfect cache key.
 
@@ -479,6 +479,8 @@ Mitigations: a single-owner apex has no peers and therefore no duel; in an Edit-
 Roles, pinning, caretakers, rotation, sealing, constitutional flatness, and the memberships-only shape are conventions over the two primitives, not extra mechanism. They live in [patterns](patterns.md).
 
 Design choices that were considered and rejected, each with the condition under which to reopen it, are collected in [alternatives](alternatives.md).
+
+For implementers of an evaluator — why it is a fixed point and not a graph search, what SQL can and cannot express, evaluation cost as an attack surface — see [evaluation notes](evaluation-notes.md).
 
 ## Griefing
 

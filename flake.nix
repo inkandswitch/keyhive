@@ -258,6 +258,9 @@
           # them. Add `-p beekem` here once `bincode` is replaced.
           ci-no-std = mkCheck "ci-no-std" ''
             cargo check -p keyhive_codec -p keyhive_crypto -p keyline --no-default-features
+            # keyline's unit tests against the no_std crate code: the harness is
+            # std, the crate never links it.
+            cargo test -p keyline --no-default-features
           '';
 
           ci-deny = mkCheck "ci-deny" ''

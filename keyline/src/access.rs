@@ -15,7 +15,7 @@ use keyhive_codec::{
 // TODO(keyhive_types): `keyhive_core::Access` is the same type; unify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[repr(u8)]
 pub enum Access {
     /// Sync and forward ciphertext; cannot decrypt.

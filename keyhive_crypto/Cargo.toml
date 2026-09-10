@@ -65,7 +65,7 @@ std = [
   "thiserror",
   "tracing/std",
 ]
-arbitrary = ["dep:arbitrary"]
+arbitrary = ["dep:arbitrary", "std"]
 
 [lints.clippy]
 doc_overindented_list_items = "allow"

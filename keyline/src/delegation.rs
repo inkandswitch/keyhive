@@ -159,7 +159,7 @@ impl Decode for Delegation {
     }
 }
 
-#[cfg(any(test, feature = "arbitrary"))]
+#[cfg(feature = "arbitrary")]
 impl<'a> arbitrary::Arbitrary<'a> for Delegation {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let seen: Option<[u8; 32]> = u.arbitrary()?;
@@ -226,6 +226,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "arbitrary")]
     fn codec_laws() {
         bolero::check!()
             .with_arbitrary::<Delegation>()

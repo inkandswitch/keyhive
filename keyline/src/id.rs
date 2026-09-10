@@ -119,7 +119,7 @@ impl<'de> serde::Deserialize<'de> for Id {
     }
 }
 
-#[cfg(any(test, feature = "arbitrary"))]
+#[cfg(feature = "arbitrary")]
 impl<'a> arbitrary::Arbitrary<'a> for Id {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let seed: [u8; 32] = u.arbitrary()?;
@@ -149,6 +149,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "arbitrary")]
     fn round_trips_through_verifying_key() {
         bolero::check!().with_arbitrary::<Id>().for_each(|id| {
             assert_eq!(Id::new(id.verifying_key()), *id);
