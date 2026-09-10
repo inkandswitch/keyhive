@@ -44,6 +44,7 @@ jobs:
             ci-fmt,
             ci-clippy,
             ci-test,
+            ci-bolero,
             ci-doc,
             ci-wasm,
             ci-wasm-mut,
