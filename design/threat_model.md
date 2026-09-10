@@ -133,8 +133,8 @@ The root key of a group or document is malicious or leaked at creation.
 
 - Independent review of the synthetic-nonce and key-commitment construction.
 - Test coverage for T4 and T5.
-- Whether [Keyline]'s jurisdiction-scoped revocation changes T4.
+- Whether [Keyline]'s admin-reach-scoped revocation changes T4.
 
 <!-- External Links -->
-[Keyline]: https://github.com/inkandswitch/keyhive/tree/keyline/design/keyline
+[Keyline]: ./keyline/README.md
 [subduction threats]: https://github.com/inkandswitch/subduction/blob/main/design/security/threats.md
