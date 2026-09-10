@@ -730,20 +730,15 @@ impl<
     }
 
     /// The hash of `doc`'s current PCS key. Returns `None` if it has no key to hash.
-    ///
-    /// Returns an error if we have never heard of `doc`.
-    pub async fn try_pcs_key_hash(
-        &self,
-        doc: DocumentId,
-    ) -> Result<Option<Digest<PcsKey>>, NotFound> {
-        let handle = self.document_by_id(doc).await?;
+    pub async fn try_pcs_key_hash(&self, doc: DocumentId) -> Option<Digest<PcsKey>> {
+        let handle = self.get_document(doc).await?;
         let hash = handle
             .lock()
             .await
             .cgka_mut()
             .ok()
             .and_then(|cgka| cgka.try_pcs_key_hash().ok());
-        Ok(hash)
+        hash
     }
 
     /// Try causal decrypt from more than one entrypoint at once.
@@ -865,71 +860,62 @@ impl<
 
     /// The documents `who` reaches and at what access level.
     ///
-    /// Errors if we have never heard of `who`.
+    /// Empty for an agent we have not heard of.
     #[instrument(skip_all)]
     pub async fn docs_reachable_by_agent(
         &self,
         who: impl Into<Identifier>,
-    ) -> Result<BTreeMap<DocumentId, Access>, NotFound> {
-        let who = self.check_received(who.into()).await?;
-        Ok(self
-            .doc_handles_reachable_by(who)
+    ) -> BTreeMap<DocumentId, Access> {
+        self.doc_handles_reachable_by(who.into())
             .await
             .into_iter()
             .map(|(doc_id, (_, can))| (doc_id, can))
-            .collect())
+            .collect()
     }
 
     /// The groups and documents `who` reaches and at what access level.
     ///
-    /// Errors if we have never heard of `who`.
+    /// Empty for an agent we have not heard of.
     #[instrument(skip_all)]
     pub async fn membered_reachable_by_agent(
         &self,
         who: impl Into<Identifier>,
-    ) -> Result<BTreeMap<MemberedId, Access>, NotFound> {
-        let who = self.check_received(who.into()).await?;
-        Ok(self
-            .membered_handles_reachable_by(who)
+    ) -> BTreeMap<MemberedId, Access> {
+        self.membered_handles_reachable_by(who.into())
             .await
             .into_iter()
             .map(|(id, (_, can))| (id, can))
-            .collect())
+            .collect()
     }
 
     /// Everyone who reaches `membered`, including through nested groups.
     ///
-    /// Errors if we have never heard of `membered`.
+    /// Empty for a `membered` we have not heard of.
     #[instrument(skip_all)]
     pub async fn reachable_members(
         &self,
         membered: impl Into<MemberedId>,
-    ) -> Result<BTreeMap<Identifier, Access>, NotFound> {
-        Ok(self
-            .transitive_members_of(membered.into())
-            .await?
+    ) -> BTreeMap<Identifier, Access> {
+        self.transitive_members_of(membered.into())
+            .await
             .into_iter()
             .map(|(id, (_agent, can))| (id, can))
-            .collect())
+            .collect()
     }
 
+    /// Everyone who reaches `membered`.
+    ///
+    /// Empty for a `membered` we have not heard of.
     #[allow(clippy::type_complexity)]
     async fn transitive_members_of(
         &self,
         membered: MemberedId,
-    ) -> Result<HashMap<Identifier, (Agent<F, S, T, L>, Access)>, NotFound> {
-        Ok(match self.membered_by_id(membered).await? {
-            Membered::Group(_, group) => group.lock().await.transitive_members().await,
-            Membered::Document(_, doc) => doc.lock().await.transitive_members().await,
-        })
-    }
-
-    /// Returns `who` if we have heard of it. Otherwise returns an error.
-    async fn check_received(&self, who: Identifier) -> Result<Identifier, NotFound> {
-        self.has_received(who)
-            .await
-            .then_some(who)
-            .ok_or_else(|| NotFound::new(who))
+    ) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
+        match self.membered_by_id(membered).await {
+            Ok(Membered::Group(_, group)) => group.lock().await.transitive_members().await,
+            Ok(Membered::Document(_, doc)) => doc.lock().await.transitive_members().await,
+            Err(_) => HashMap::new(),
+        }
     }
 
     /// The documents `who` reaches.
@@ -2690,39 +2676,31 @@ impl<
 
     /// What access `who` has for `doc`. Returns `None` for no access.
     ///
-    /// Errors if we have never heard of `who` or `doc`.
+    /// `None` for an agent or document we have not heard of.
     pub async fn access_for_doc(
         &self,
         who: impl Into<Identifier>,
         doc: DocumentId,
-    ) -> Result<Option<Access>, NotFound> {
-        let who = self.check_received(who.into()).await?;
-        Ok(self
-            .transitive_members_of(doc.into())
-            .await?
-            .get(&who)
-            .map(|(_agent, can)| *can))
+    ) -> Option<Access> {
+        self.transitive_members_of(doc.into())
+            .await
+            .get(&who.into())
+            .map(|(_agent, can)| *can)
     }
 
     /// The higher of `who`'s access to `doc` and public's access to `doc`.
     ///
-    /// Errors if we have never heard of `who` or `doc`.
+    /// `None` for an agent or document we have not heard of.
     pub async fn best_access_for_doc(
         &self,
         who: impl Into<Identifier>,
         doc: DocumentId,
-    ) -> Result<Option<Access>, NotFound> {
-        let who = self.check_received(who.into()).await?;
-        let members = self.reachable_members(doc).await?;
-        let direct = members.get(&who).copied();
+    ) -> Option<Access> {
+        let members = self.reachable_members(doc).await;
+        let direct = members.get(&who.into()).copied();
         let public = members.get(&Public.id()).copied();
         // `None` sorts below `Some`, so this is "the better of the two, if either".
-        Ok(direct.max(public))
-    }
-
-    /// Whether this instance has received the events that describe `who`.
-    pub async fn has_received(&self, who: impl Into<Identifier>) -> bool {
-        self.get_agent(who.into()).await.is_some()
+        direct.max(public)
     }
 
     pub(crate) async fn agent_by_id(&self, id: Identifier) -> Result<Agent<F, S, T, L>, NotFound> {
@@ -3378,7 +3356,7 @@ mod tests {
         assert!(left.groups.lock().await.contains_key(&left_group_id));
 
         // Not the group.
-        let left_membered = left.membered_reachable_by_agent(Public.id()).await.unwrap();
+        let left_membered = left.membered_reachable_by_agent(Public.id()).await;
 
         assert_eq!(left_membered.len(), 1);
         assert!(left_membered.contains_key(&left_doc.into()));

@@ -22,19 +22,19 @@ async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Resu
         .await?;
     ctx.sync_all_unsent().await?;
 
-    let members_before = ctx.named(alice.reachable_members(design_doc).await?);
+    let members_before = ctx.named(alice.reachable_members(design_doc).await);
     let archive = alice.into_archive().await;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
 
     assert_eq!(
-        ctx.named(alice.reachable_members(design_doc).await?),
+        ctx.named(alice.reachable_members(design_doc).await),
         members_before,
         "the same people, at the same levels"
     );
     for who in [&bob, &carol] {
         assert_eq!(
-            restored.access_for_doc(who, design_doc).await?,
-            alice.access_for_doc(who, design_doc).await?,
+            restored.access_for_doc(who, design_doc).await,
+            alice.access_for_doc(who, design_doc).await,
             "the restored instance disagrees about {}",
             who.name()
         );
@@ -64,7 +64,7 @@ async fn a_restored_instance_can_still_issue_delegations() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.access_for_doc(dave.id(), design_doc).await?,
+        alice.access_for_doc(dave.id(), design_doc).await,
         Some(Edit),
         "the original instance honors what the restored one signed"
     );
@@ -90,7 +90,7 @@ async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
         .rebuild_from_archive(&old, "alice-from-old-archive")
         .await?;
     assert_eq!(
-        restored.access_for_doc(carol.id(), design_doc).await?,
+        restored.access_for_doc(carol.id(), design_doc).await,
         None,
         "the archive predates carol's delegation"
     );
@@ -98,12 +98,12 @@ async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        restored.access_for_doc(carol.id(), design_doc).await?,
-        alice.access_for_doc(carol.id(), design_doc).await?
+        restored.access_for_doc(carol.id(), design_doc).await,
+        alice.access_for_doc(carol.id(), design_doc).await
     );
     assert_eq!(
-        restored.access_for_doc(bob.id(), design_doc).await?,
-        alice.access_for_doc(bob.id(), design_doc).await?,
+        restored.access_for_doc(bob.id(), design_doc).await,
+        alice.access_for_doc(bob.id(), design_doc).await,
         "including the revocation it never saw"
     );
     Ok(())
@@ -125,12 +125,12 @@ async fn ingesting_an_archive_merges_into_a_live_instance() -> Result<()> {
 
     assert_eq!(pending, 0, "nothing in bob's archive was unusable to alice");
     assert_eq!(
-        alice.access_for_doc(alice.id(), notes).await?,
+        alice.access_for_doc(alice.id(), notes).await,
         Some(Read),
         "alice learned about bob's document"
     );
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await?,
+        alice.access_for_doc(bob.id(), design_doc).await,
         Some(Read),
         "and kept what she already knew"
     );
@@ -149,7 +149,7 @@ async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()
 
     let restored = ctx.rebuild_from_archive(&early, "alice-restored").await?;
     assert!(
-        !restored.has_received(design_doc).await,
+        restored.get_document(design_doc).await.is_none(),
         "the archive predates the document"
     );
 
@@ -224,7 +224,7 @@ async fn ingesting_an_archive_carries_the_key_state_as_well_as_the_graph() -> Re
 
     assert_eq!(pending, 0, "the archive was ingested completely");
     assert_eq!(
-        restored.access_for_doc(alice.id(), design_doc).await?,
+        restored.access_for_doc(alice.id(), design_doc).await,
         Some(Admin),
         "and it believes it is an admin of the document"
     );

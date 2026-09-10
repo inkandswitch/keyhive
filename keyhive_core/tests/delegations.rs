@@ -93,9 +93,6 @@ async fn a_delegation_keeps_its_identity_as_the_graph_grows() -> Result<()> {
         for_design_doc.contains(&to_bob),
         "bob's delegation should be unchanged: {to_bob:?} is not in {for_design_doc:?}"
     );
-    assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await?,
-        Some(Edit)
-    );
+    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await, Some(Edit));
     Ok(())
 }

@@ -2,7 +2,6 @@
 
 use keyhive_core::{
     access::Access::{self, Admin, Edit, Read, Relay},
-    error::not_found::NotFound,
     principal::document::AddMemberError,
     test_utils::{TestContext, TestError, TestResult as Result},
 };
@@ -44,10 +43,7 @@ async fn a_group_member_reaches_the_groups_documents() -> Result<()> {
     alice.add_member(engineering, design_doc, Edit, &[]).await?;
     alice.add_member(bob.id(), engineering, Read, &[]).await?;
 
-    assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await?,
-        Some(Read)
-    );
+    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await, Some(Read));
 
     // The graph saying Read is not the same as the key agreement having reached him.
     let ct = ctx
@@ -73,7 +69,7 @@ async fn members_are_listed_with_their_effective_level() -> Result<()> {
     alice.add_member(bob.id(), design_doc, Edit, &[]).await?;
     alice.add_member(carol.id(), design_doc, Read, &[]).await?;
 
-    let members = ctx.named(alice.reachable_members(design_doc).await?);
+    let members = ctx.named(alice.reachable_members(design_doc).await);
     assert_eq!(members.get("bob"), Some(&Edit));
     assert_eq!(members.get("carol"), Some(&Read));
     Ok(())
@@ -96,7 +92,7 @@ async fn attenuation_is_the_minimum_along_the_route() -> Result<()> {
                 alice.add_member(bob.id(), inner, c, &[]).await?;
 
                 assert_eq!(
-                    alice.access_for_doc(bob.id(), design_doc).await?,
+                    alice.access_for_doc(bob.id(), design_doc).await,
                     Some(a.min(b).min(c)),
                     "bob -{c:?}-> inner -{b:?}-> outer -{a:?}-> design_doc"
                 );
@@ -158,7 +154,7 @@ async fn multi_route_resolution_is_deterministic() -> Result<()> {
         // Route 2: design_doc -Read-> bob, giving Read.
         alice.add_member(bob.id(), design_doc, Read, &[]).await?;
 
-        let access = alice.access_for_doc(bob.id(), design_doc).await?;
+        let access = alice.access_for_doc(bob.id(), design_doc).await;
         answers.entry(access).or_insert(round);
     }
     assert_eq!(
@@ -193,7 +189,7 @@ async fn a_revoked_member_cannot_read_new_content() -> Result<()> {
     let after = ctx.encrypt(&alice, design_doc, b"second").await?;
     ctx.sync_all_unsent().await?;
 
-    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await?, None);
+    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await, None);
     assert!(
         !bob.can_decrypt_content(design_doc, &after).await?,
         "cannot read new content"
@@ -219,7 +215,7 @@ async fn two_replicas_agree_on_access_for_a_doc() -> Result<()> {
 
     for observer in [&alice, &bob, &carol] {
         assert_eq!(
-            observer.access_for_doc(bob.id(), design_doc).await?,
+            observer.access_for_doc(bob.id(), design_doc).await,
             Some(Read),
             "{} disagrees about bob",
             observer.name()
@@ -268,8 +264,8 @@ async fn admin_on_a_parent_doc_reaches_the_child_doc() -> Result<()> {
     alice.add_member(account, project, Admin, &[]).await?;
     alice.add_member(bob.id(), account, Admin, &[]).await?;
 
-    assert_eq!(alice.access_for_doc(bob.id(), account).await?, Some(Admin));
-    assert_eq!(alice.access_for_doc(bob.id(), project).await?, Some(Admin));
+    assert_eq!(alice.access_for_doc(bob.id(), account).await, Some(Admin));
+    assert_eq!(alice.access_for_doc(bob.id(), project).await, Some(Admin));
     Ok(())
 }
 
@@ -289,7 +285,7 @@ async fn what_an_agent_reaches_covers_groups_as_well_as_documents() -> Result<()
         .await?;
     ctx.sync_all_unsent().await?;
 
-    let bob_reaches = ctx.named(alice.membered_reachable_by_agent(bob.id()).await?);
+    let bob_reaches = ctx.named(alice.membered_reachable_by_agent(bob.id()).await);
     assert_eq!(
         bob_reaches.get("engineering"),
         Some(&Read),
@@ -301,14 +297,14 @@ async fn what_an_agent_reaches_covers_groups_as_well_as_documents() -> Result<()
         "and the document it holds"
     );
     assert_eq!(
-        ctx.named(bob.docs_reachable_by_agent(bob.id()).await?)
+        ctx.named(bob.docs_reachable_by_agent(bob.id()).await)
             .get("design_doc"),
         Some(&Read),
         "and bob agrees"
     );
 
     assert_eq!(
-        ctx.named(alice.membered_reachable_by_agent(carol.id()).await?)
+        ctx.named(alice.membered_reachable_by_agent(carol.id()).await)
             .get("engineering"),
         Some(&Admin),
         "at the level each member was given, not one level for everyone"
@@ -352,31 +348,31 @@ async fn a_transitive_admin_through_a_document_can_delegate() -> Result<()> {
     alice.add_member(bob.id(), account, Admin, &[]).await?;
     ctx.sync_all_unsent().await?;
     assert_eq!(
-        alice.access_for_doc(bob.id(), project).await?,
+        alice.access_for_doc(bob.id(), project).await,
         Some(Admin),
         "bob reaches project through account"
     );
     assert_eq!(
-        alice.access_for_doc(bob.id(), account).await?,
+        alice.access_for_doc(bob.id(), account).await,
         Some(Admin),
         "and account, which is where he holds it"
     );
 
     bob.add_member(carol.id(), project, Edit, &[]).await?;
     assert_eq!(
-        bob.access_for_doc(carol.id(), project).await?,
+        bob.access_for_doc(carol.id(), project).await,
         Some(Edit),
         "bob delegated based on a route (through a doc) he does not hold directly"
     );
 
     ctx.sync_all_unsent().await?;
     assert_eq!(
-        alice.access_for_doc(carol.id(), project).await?,
+        alice.access_for_doc(carol.id(), project).await,
         Some(Edit),
         "and alice, who owns the document, honors it"
     );
     assert_eq!(
-        alice.access_for_doc(carol.id(), account).await?,
+        alice.access_for_doc(carol.id(), account).await,
         None,
         "carol was let into project, and that does not reach back up to account"
     );
@@ -411,8 +407,8 @@ async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
     alice.add_member(engineering, project, Admin, &[]).await?;
     alice.add_member(bob.id(), engineering, Admin, &[]).await?;
     ctx.sync_all_unsent().await?;
-    assert_eq!(alice.access_for_doc(bob.id(), project).await?, Some(Admin));
-    let members_of_the_group = ctx.named(alice.reachable_members(engineering).await?);
+    assert_eq!(alice.access_for_doc(bob.id(), project).await, Some(Admin));
+    let members_of_the_group = ctx.named(alice.reachable_members(engineering).await);
     assert_eq!(members_of_the_group.get("bob"), Some(&Admin));
     assert_eq!(
         members_of_the_group.get("carol"),
@@ -422,19 +418,19 @@ async fn a_transitive_admin_through_a_group_can_delegate() -> Result<()> {
 
     bob.add_member(carol.id(), project, Edit, &[]).await?;
     assert_eq!(
-        bob.access_for_doc(carol.id(), project).await?,
+        bob.access_for_doc(carol.id(), project).await,
         Some(Edit),
         "bob delegated on the strength of a route he does not hold directly"
     );
 
     ctx.sync_all_unsent().await?;
     assert_eq!(
-        alice.access_for_doc(carol.id(), project).await?,
+        alice.access_for_doc(carol.id(), project).await,
         Some(Edit),
         "bob delegated based on a route (through a group) he does not hold directly"
     );
     assert_eq!(
-        ctx.named(alice.reachable_members(engineering).await?)
+        ctx.named(alice.reachable_members(engineering).await)
             .get("carol"),
         None,
         "and being let into project does not put her in the group that holds it"
@@ -483,12 +479,9 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
     alice.add_member(engineering, design_doc, Read, &[]).await?;
     alice.add_member(design_doc, engineering, Read, &[]).await?;
 
-    assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await?,
-        Some(Read)
-    );
+    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await, Some(Read));
 
-    let of_the_document = ctx.named(alice.reachable_members(design_doc).await?);
+    let of_the_document = ctx.named(alice.reachable_members(design_doc).await);
     assert_eq!(
         of_the_document.get("bob"),
         Some(&Read),
@@ -500,7 +493,7 @@ async fn a_membership_cycle_still_resolves() -> Result<()> {
         "and the group is still a member of the document"
     );
 
-    let of_the_group = ctx.named(alice.reachable_members(engineering).await?);
+    let of_the_group = ctx.named(alice.reachable_members(engineering).await);
     assert_eq!(
         of_the_group.get("bob"),
         Some(&Read),
@@ -527,7 +520,7 @@ async fn an_attenuated_second_route_does_not_lower_reported_access() -> Result<(
         let design_doc = ctx.doc(&alice, "design_doc").await?;
 
         assert_eq!(
-            ctx.named(alice.reachable_members(engineering).await?)
+            ctx.named(alice.reachable_members(engineering).await)
                 .get("alice"),
             Some(&Admin),
             "alice created the group"
@@ -536,7 +529,7 @@ async fn an_attenuated_second_route_does_not_lower_reported_access() -> Result<(
         alice.add_member(design_doc, engineering, Read, &[]).await?;
 
         assert_eq!(
-            ctx.named(alice.reachable_members(engineering).await?)
+            ctx.named(alice.reachable_members(engineering).await)
                 .get("alice"),
             Some(&Admin),
             "the weaker route took precedence over her own"
@@ -569,7 +562,7 @@ async fn a_reader_cannot_delegate_above_read() -> Result<()> {
             other => panic!("expected an escalation refusal, got {other:?}"),
         }
     }
-    assert_eq!(alice.access_for_doc(carol.id(), design_doc).await?, None);
+    assert_eq!(alice.access_for_doc(carol.id(), design_doc).await, None);
     Ok(())
 }
 
@@ -609,7 +602,7 @@ async fn a_transitive_reader_cannot_delegate_above_read() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.access_for_doc(bob.id(), project).await?,
+        alice.access_for_doc(bob.id(), project).await,
         Some(Read),
         "bob holds Read on account, which attenuates his route to project"
     );
@@ -630,25 +623,25 @@ async fn a_transitive_reader_cannot_delegate_above_read() -> Result<()> {
             other => panic!("expected an escalation refusal, got {other:?}"),
         }
     }
-    assert_eq!(alice.access_for_doc(carol.id(), project).await?, None);
+    assert_eq!(alice.access_for_doc(carol.id(), project).await, None);
 
     // The refusal is about the level, not about the route being transitive: the same
     // delegation at bob's own level goes through.
     bob.add_member(carol.id(), project, Read, &[]).await?;
     assert_eq!(
-        bob.access_for_doc(carol.id(), project).await?,
+        bob.access_for_doc(carol.id(), project).await,
         Some(Read),
         "bob delegated at the level he holds"
     );
 
     ctx.sync_all_unsent().await?;
     assert_eq!(
-        alice.access_for_doc(carol.id(), project).await?,
+        alice.access_for_doc(carol.id(), project).await,
         Some(Read),
         "and alice, who owns the document, honors it"
     );
     assert_eq!(
-        alice.access_for_doc(carol.id(), account).await?,
+        alice.access_for_doc(carol.id(), account).await,
         None,
         "being let into project does not reach back up to the document that holds it"
     );
@@ -703,25 +696,19 @@ async fn revoking_a_group_removes_only_those_who_needed_it() -> Result<()> {
     alice.add_member(carol.id(), engineering, Edit, &[]).await?;
     alice.add_member(carol.id(), design_doc, Read, &[]).await?;
 
-    assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await?,
-        Some(Edit)
-    );
+    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await, Some(Edit));
     // Carol has two routes here, Edit through the group and Read directly. Her exact level
     // therefore depends on the rule for combining multiple routes, which has its own test.
     // This test is about revocation, so it only checks that she has some access, not which
     // level.
-    assert!(alice
-        .access_for_doc(carol.id(), design_doc)
-        .await?
-        .is_some());
+    assert!(alice.access_for_doc(carol.id(), design_doc).await.is_some());
 
     // Bob and carol have to receive the document before it is taken away again, or the
     // "cannot read" assertions below hold because they were never sent it rather than
     // because they were removed.
     ctx.sync_all_unsent().await?;
     assert!(
-        bob.has_received(design_doc).await,
+        bob.get_document(design_doc).await.is_some(),
         "bob holds the document while he is still a member"
     );
 
@@ -730,14 +717,14 @@ async fn revoking_a_group_removes_only_those_who_needed_it() -> Result<()> {
     let after = ctx.encrypt(&alice, design_doc, b"post-revocation").await?;
     ctx.sync_all_unsent().await?;
 
-    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await?, None);
+    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await, None);
     assert!(
         !bob.can_decrypt_content(design_doc, &after).await?,
         "bob had only the group route"
     );
 
     assert_eq!(
-        alice.access_for_doc(carol.id(), design_doc).await?,
+        alice.access_for_doc(carol.id(), design_doc).await,
         Some(Read)
     );
     assert!(
@@ -747,12 +734,8 @@ async fn revoking_a_group_removes_only_those_who_needed_it() -> Result<()> {
     Ok(())
 }
 
-/// A resource argument is typed, so naming the wrong kind of thing does not compile:
-/// `try_decrypt_content(engineering, ..)` wants a `DocumentId` and a `GroupId` will not pass,
-/// and `reachable_members(bob.id())` wants a `MemberedId`. What is left for runtime is the
-/// one thing the types cannot rule out, which is an identifier this instance never received.
 #[tokio::test]
-async fn an_identifier_that_was_never_received_says_so() -> Result<()> {
+async fn an_unknown_id_causes_empty_query_and_failed_operation() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -760,25 +743,25 @@ async fn an_identifier_that_was_never_received_says_so() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
     assert!(
-        matches!(bob.reachable_members(engineering).await, Err(NotFound(_))),
-        "bob has never been told the group exists"
+        bob.reachable_members(engineering).await.is_empty(),
+        "bob has never been told the group exists, so he doesn't know anyone who reaches it"
     );
 
-    // The two access queries agree about that, rather than one of them reporting "no
-    // access" for a document the instance was never sent.
-    assert!(
-        matches!(
-            bob.access_for_doc(bob.id(), design_doc).await,
-            Err(NotFound(_))
-        ),
-        "not being sent a document is not the same as having no access to it"
+    assert_eq!(
+        bob.access_for_doc(bob.id(), design_doc).await,
+        None,
+        "bob doesn't know the doc, so he doesn't know of any access level he might have to it"
     );
+    assert_eq!(
+        bob.best_access_for_doc(bob.id(), design_doc).await,
+        None,
+        "bob doesn't know the doc, so he doesn't know of any access level he might have to it /
+        , even if it's public"
+    );
+
     assert!(
-        matches!(
-            bob.best_access_for_doc(bob.id(), design_doc).await,
-            Err(NotFound(_))
-        ),
-        "and best_access_for_doc says the same"
+        bob.get_document(design_doc).await.is_none(),
+        "bob was never sent the document, so he can't get it"
     );
 
     assert!(
@@ -794,7 +777,7 @@ async fn an_identifier_that_was_never_received_says_so() -> Result<()> {
             bob.add_member(engineering, bobs_own_doc, Read, &[]).await,
             Err(AddMemberError::NotFound(_))
         ),
-        "and over his own document, bob cannot add a group he has never heard of"
+        "bob cannot add a group he has never heard of to a document he knows"
     );
     Ok(())
 }
@@ -935,7 +918,7 @@ async fn relaying_a_group_relays_its_documents_without_a_key() -> Result<()> {
     alice.add_member(engineering, design_doc, Edit, &[]).await?;
 
     assert_eq!(
-        alice.access_for_doc(carol.id(), design_doc).await?,
+        alice.access_for_doc(carol.id(), design_doc).await,
         Some(Relay),
         "carol relays engineering, so she relays design_doc"
     );

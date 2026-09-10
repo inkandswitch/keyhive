@@ -63,8 +63,9 @@ events rather than introductions.
 
 * `sync_all_unsent()` delivers every outstanding event to every keyhive instance.
   This will be the most common way to sync events in tests.
-* `ctx.sync(&from, &to)` sends everything `to` is entitled to in one direction.
-* `ctx.sync_as_public(&from, &to)` sends what a public reader may see.
+* `ctx.sync(&from, &to)` sends, in one direction, what `to`'s own memberships entitle
+  it to plus what is public.
+* `ctx.sync_as_public(&from, &to)` sends only what a public reader may see.
 * `ctx.sync_without(&from, &to, kind)` withholds one `EventKind` from what it
   delivers (e.g., to simulate a case where no CGKA ops were received yet).
 * `ctx.sync_in_batches(..)` delivers in partial batches.

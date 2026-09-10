@@ -48,7 +48,7 @@ async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
         for who in [&bob, &carol] {
             believes.push((
                 who.name().to_string(),
-                observer.access_for_doc(who, design_doc).await?,
+                observer.access_for_doc(who, design_doc).await,
             ));
         }
         answers.push(believes);
@@ -85,17 +85,17 @@ async fn a_revocation_inside_a_group_reaches_a_peer_of_the_parent() -> Result<()
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await?,
+        alice.access_for_doc(bob.id(), design_doc).await,
         None,
         "alice, who issued the revocation, has it right"
     );
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await?,
+        bob.access_for_doc(bob.id(), design_doc).await,
         None,
         "and so does bob, who was sent it"
     );
     assert_eq!(
-        dave.access_for_doc(bob.id(), design_doc).await?,
+        dave.access_for_doc(bob.id(), design_doc).await,
         None,
         "dave must agree: he holds every delegation that built this graph"
     );
@@ -122,7 +122,7 @@ async fn partial_delivery_leaves_events_pending_and_they_apply_later() -> Result
     );
     assert_eq!(bob.stats().await.pending_total(), 0);
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await?,
+        bob.access_for_doc(bob.id(), design_doc).await,
         Some(Edit),
         "bob converged on the same answer alice has"
     );
@@ -255,7 +255,7 @@ async fn redelivering_known_events_changes_nothing() -> Result<()> {
     );
     assert_eq!(bob.stats().await.pending_total(), 0);
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await?,
+        bob.access_for_doc(bob.id(), design_doc).await,
         Some(Read),
         "the second delivery changed what bob believes"
     );
@@ -280,7 +280,7 @@ async fn withholding_key_agreement_leaves_a_member_who_cannot_read() -> Result<(
         .await?;
 
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await?,
+        bob.access_for_doc(bob.id(), design_doc).await,
         Some(Read),
         "the graph says bob is a reader"
     );
@@ -312,14 +312,14 @@ async fn a_member_without_the_key_tree_derives_no_pcs_key() -> Result<()> {
         .await?;
 
     assert!(
-        bob.try_pcs_key_hash(design_doc).await?.is_none(),
+        bob.try_pcs_key_hash(design_doc).await.is_none(),
         "bob knows the document but holds no key tree to derive from"
     );
 
     ctx.sync(&alice, &bob).await?;
 
     assert!(
-        bob.try_pcs_key_hash(design_doc).await?.is_some(),
+        bob.try_pcs_key_hash(design_doc).await.is_some(),
         "the key agreement operations let him derive one"
     );
     Ok(())

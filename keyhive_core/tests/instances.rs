@@ -21,7 +21,7 @@ async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
 
     bob.add_member(alice.id(), design_doc, Read, &[]).await?;
 
-    let raw = bob.reachable_members(design_doc).await?;
+    let raw = bob.reachable_members(design_doc).await;
     assert_eq!(
         raw.len(),
         2,
@@ -31,7 +31,7 @@ async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
     let members = ctx.named(raw);
     assert_eq!(members.get("alice"), Some(&Read));
     assert_eq!(
-        bob.access_for_doc(alice_worker.id(), design_doc).await?,
+        bob.access_for_doc(alice_worker.id(), design_doc).await,
         Some(Read),
         "a delegation to one instance is a delegation to the identity"
     );
@@ -52,20 +52,20 @@ async fn either_instance_signs_as_the_identity() -> Result<()> {
         .await?;
 
     assert_eq!(
-        alice_worker.access_for_doc(carol.id(), design_doc).await?,
+        alice_worker.access_for_doc(carol.id(), design_doc).await,
         Some(Admin)
     );
 
     // Instances are separate replicas, so the first one learns of the delegation by sync like
     // anyone else.
     assert_eq!(
-        alice.access_for_doc(carol.id(), design_doc).await?,
+        alice.access_for_doc(carol.id(), design_doc).await,
         None,
         "the first instance doesn't know about the delegation yet"
     );
     ctx.sync_all_unsent().await?;
     assert_eq!(
-        alice.access_for_doc(carol.id(), design_doc).await?,
+        alice.access_for_doc(carol.id(), design_doc).await,
         Some(Admin),
         "the first instance honours what the second signed"
     );
@@ -85,9 +85,9 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     ctx.sync_all_unsent().await?;
 
     // Both instances know the document and both are members.
-    assert!(alice_worker.has_received(design_doc).await);
+    assert!(alice_worker.get_document(design_doc).await.is_some());
     assert_eq!(
-        bob.access_for_doc(alice_worker.id(), design_doc).await?,
+        bob.access_for_doc(alice_worker.id(), design_doc).await,
         Some(Read)
     );
 
@@ -161,11 +161,11 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
     ctx.sync(&alice_worker, &alice).await?;
 
     assert!(
-        alice.has_received(from_worker).await,
+        alice.get_document(from_worker).await.is_some(),
         "alice learned about the document the worker made"
     );
     assert!(
-        alice_worker.has_received(from_alice).await,
+        alice_worker.get_document(from_alice).await.is_some(),
         "and the worker about alice's"
     );
     assert_eq!(alice.stats().await.pending_total(), 0);
@@ -180,8 +180,8 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
         .encrypt(&alice_worker, from_worker, b"from the worker")
         .await?;
 
-    ctx.sync_as_public(&alice, &reader).await?;
-    ctx.sync_as_public(&alice_worker, &reader).await?;
+    ctx.sync(&alice, &reader).await?;
+    ctx.sync(&alice_worker, &reader).await?;
 
     assert_eq!(
         reader.try_decrypt_content(from_alice, &alice_wrote).await?,
@@ -226,7 +226,7 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
         "the worker applied the revocation and the delegation that followed it"
     );
     assert_eq!(
-        alice_worker.access_for_doc(Public.id(), design_doc).await?,
+        alice_worker.access_for_doc(Public.id(), design_doc).await,
         Some(Read),
         "and ended on the re-delegation rather than the revocation"
     );
@@ -234,8 +234,8 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
     let worker_wrote = ctx
         .encrypt(&alice_worker, design_doc, b"after the re-delegation")
         .await?;
-    ctx.sync_as_public(&alice, &reader).await?;
-    ctx.sync_as_public(&alice_worker, &reader).await?;
+    ctx.sync(&alice, &reader).await?;
+    ctx.sync(&alice_worker, &reader).await?;
 
     assert_eq!(
         reader
@@ -271,7 +271,7 @@ async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
     // Everything alice has, which is everything except the worker's write.
     ctx.sync(&alice, &bob).await?;
     assert!(
-        bob.has_received(design_doc).await,
+        bob.get_document(design_doc).await.is_some(),
         "bob has the document itself"
     );
     assert!(
@@ -331,7 +331,7 @@ async fn a_keyhive_built_outside_the_context_can_join_the_cast() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.access_for_doc(outsider.id(), design_doc).await?,
+        alice.access_for_doc(outsider.id(), design_doc).await,
         Some(Read),
         "alice treats it as a member"
     );
@@ -341,7 +341,7 @@ async fn a_keyhive_built_outside_the_context_can_join_the_cast() -> Result<()> {
         "and it reads what it was given, so it is fully in the sync arrangement"
     );
     assert_eq!(
-        ctx.named(alice.reachable_members(design_doc).await?)
+        ctx.named(alice.reachable_members(design_doc).await)
             .get("outsider"),
         Some(&Read),
         "and it is named in assertions like anyone else"
@@ -435,10 +435,10 @@ async fn a_public_reader_reads_what_the_second_instance_wrote() -> Result<()> {
     let ct = ctx
         .encrypt(&alice_worker, design_doc, b"announcement from the worker")
         .await?;
-    ctx.sync_as_public(&alice_worker, &bob).await?;
+    ctx.sync(&alice_worker, &bob).await?;
 
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await?,
+        alice.access_for_doc(bob.id(), design_doc).await,
         None,
         "bob is not a member and never becomes one"
     );
@@ -473,7 +473,7 @@ async fn a_relay_carries_the_second_instances_write_to_a_public_reader() -> Resu
     // anything by either instance directly.
     ctx.sync(&alice, &relay).await?;
     ctx.sync(&alice_worker, &relay).await?;
-    ctx.sync_as_public(&relay, &bob).await?;
+    ctx.sync(&relay, &bob).await?;
 
     assert_eq!(
         bob.try_decrypt_content(design_doc, &ct).await?,

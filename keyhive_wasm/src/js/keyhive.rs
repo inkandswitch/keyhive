@@ -346,12 +346,11 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = tryPcsKeyHash)]
-    pub async fn try_pcs_key_hash(&self, doc: &JsDocument) -> Result<Option<Vec<u8>>, JsNotFound> {
-        Ok(self
-            .0
+    pub async fn try_pcs_key_hash(&self, doc: &JsDocument) -> Option<Vec<u8>> {
+        self.0
             .try_pcs_key_hash(doc.doc_id)
-            .await?
-            .map(|d| d.as_slice().to_vec()))
+            .await
+            .map(|d| d.as_slice().to_vec())
     }
 
     #[wasm_bindgen(js_name = rotatePrekey)]

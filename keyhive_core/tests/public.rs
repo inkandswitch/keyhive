@@ -3,7 +3,7 @@
 use keyhive_core::{
     access::Access::{Admin, Edit, Read, Relay},
     principal::public::Public,
-    test_utils::{TestContext, TestError, TestResult as Result},
+    test_utils::{TestContext, TestResult as Result},
 };
 use std::collections::BTreeMap;
 
@@ -16,12 +16,12 @@ async fn delegating_to_public_creates_a_public_delegation() -> Result<()> {
     for level in [Read, Edit, Admin] {
         let design_doc = ctx.doc(&alice, &format!("design_doc-{level:?}")).await?;
 
-        assert_eq!(alice.access_for_doc(public, design_doc).await?, None);
+        assert_eq!(alice.access_for_doc(public, design_doc).await, None);
         alice.add_member(public, design_doc, level, &[]).await?;
 
-        assert_eq!(alice.access_for_doc(public, design_doc).await?, Some(level));
+        assert_eq!(alice.access_for_doc(public, design_doc).await, Some(level));
         assert_eq!(
-            ctx.named(alice.reachable_members(design_doc).await?)
+            ctx.named(alice.reachable_members(design_doc).await)
                 .get("public"),
             Some(&level),
             "the public delegation should add public as a member"
@@ -41,12 +41,12 @@ async fn a_public_delegation_raises_best_access_for_doc_and_not_access_for_doc()
     alice.add_member(public, design_doc, Read, &[]).await?;
 
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await?,
+        alice.access_for_doc(bob.id(), design_doc).await,
         None,
         "nobody delegated anything to bob"
     );
     assert_eq!(
-        alice.best_access_for_doc(bob.id(), design_doc).await?,
+        alice.best_access_for_doc(bob.id(), design_doc).await,
         Some(Read),
         "the document is public"
     );
@@ -66,12 +66,12 @@ async fn a_direct_delegation_and_a_public_delegation_take_the_higher() -> Result
     alice.add_member(bob.id(), design_doc, Admin, &[]).await?;
 
     assert_eq!(
-        alice.best_access_for_doc(bob.id(), design_doc).await?,
+        alice.best_access_for_doc(bob.id(), design_doc).await,
         Some(Admin),
         "bob's own delegation is the better one"
     );
     assert_eq!(
-        alice.best_access_for_doc(carol.id(), design_doc).await?,
+        alice.best_access_for_doc(carol.id(), design_doc).await,
         Some(Read),
         "carol has only the public delegation"
     );
@@ -89,10 +89,10 @@ async fn a_public_reader_reads_what_a_member_wrote() -> Result<()> {
     alice.force_pcs_update(design_doc).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"announcement").await?;
 
-    ctx.sync_as_public(&alice, &bob).await?;
+    ctx.sync(&alice, &bob).await?;
 
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await?,
+        alice.access_for_doc(bob.id(), design_doc).await,
         None,
         "bob is not a member and never becomes one"
     );
@@ -133,8 +133,8 @@ async fn two_public_readers_meet_through_the_document() -> Result<()> {
 
     alice.add_member(Public.id(), design_doc, Read, &[]).await?;
     alice.force_pcs_update(design_doc).await?;
-    ctx.sync_as_public(&alice, &bob).await?;
-    ctx.sync_as_public(&alice, &carol).await?;
+    ctx.sync(&alice, &bob).await?;
+    ctx.sync(&alice, &carol).await?;
 
     // Neither of them is a member. Both write and read as public.
     let from_bob = ctx.encrypt(&bob, design_doc, b"from bob").await?;
@@ -162,7 +162,7 @@ async fn another_member_does_not_displace_the_public_reader() -> Result<()> {
     alice.force_pcs_update(design_doc).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"relayed").await?;
 
-    let pending = ctx.sync_as_public(&alice, &bob).await?;
+    let pending = ctx.sync(&alice, &bob).await?;
 
     assert_eq!(pending, 0, "bob could apply every event he was sent");
     assert_eq!(
@@ -205,23 +205,23 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
         "the server has something to relay, so the assertions below are not on an empty delivery"
     );
 
-    let pending = ctx.sync_as_public(&server, &bob).await?;
+    let pending = ctx.sync(&server, &bob).await?;
 
     assert_eq!(pending, 0, "bob could apply everything the server relayed");
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await?,
+        bob.access_for_doc(bob.id(), design_doc).await,
         None,
         "asking about himself does not find the document"
     );
     ctx.sync(&alice, &bob).await?;
     assert_eq!(
-        ctx.named(bob.docs_reachable_by_agent(bob.id()).await?),
+        ctx.named(bob.docs_reachable_by_agent(bob.id()).await),
         BTreeMap::from([("notes".to_string(), Read)]),
         "the documents he reaches because of his personal access are notes and only \
         notes, so the public one is excluded rather than there being nothing to exclude it from"
     );
     assert_eq!(
-        bob.access_for_doc(Public.id(), design_doc).await?,
+        bob.access_for_doc(Public.id(), design_doc).await,
         Some(Read),
         "asking about public does"
     );
@@ -229,35 +229,6 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
         bob.try_decrypt_content(design_doc, &ct).await?,
         b"announcement".to_vec(),
         "and he can read it"
-    );
-    Ok(())
-}
-
-// `has_received` and `can_decrypt_content` answer different questions, and this is
-// where the difference shows.
-#[tokio::test]
-async fn a_public_delegation_does_not_deliver_the_document() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-
-    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
-    let ct = ctx.encrypt(&alice, design_doc, b"announcement").await?;
-    ctx.sync_all_unsent().await?;
-
-    assert!(
-        !bob.has_received(design_doc).await,
-        "bob was never sent the document"
-    );
-    assert!(
-        matches!(
-            bob.can_decrypt_content(design_doc, &ct)
-                .await
-                .map_err(TestError::from),
-            Err(TestError::NotSynced(_))
-        ),
-        "so asking whether he can decrypt it reports that, rather than a plain no"
     );
     Ok(())
 }

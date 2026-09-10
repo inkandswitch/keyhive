@@ -253,7 +253,7 @@ async fn a_non_member_is_not_even_sent_the_document() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert!(
-        !mallory.has_received(design_doc).await,
+        mallory.get_document(design_doc).await.is_none(),
         "a non-member is never told the document exists"
     );
     // So the question "can she derive the key" cannot be reached, and asking is an error
@@ -264,6 +264,16 @@ async fn a_non_member_is_not_even_sent_the_document() -> Result<()> {
             Err(TestError::NotSynced(_))
         ),
         "asking about a document she does not have is not the same as holding no key"
+    );
+    assert!(
+        matches!(
+            mallory
+                .can_decrypt_content(design_doc, &ct)
+                .await
+                .map_err(TestError::from),
+            Err(TestError::NotSynced(_))
+        ),
+        "and can_decrypt_content says the same"
     );
     Ok(())
 }

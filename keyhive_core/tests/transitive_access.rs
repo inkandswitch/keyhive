@@ -79,7 +79,7 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     }
 
     // Verify Carol can reach Doc B
-    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await?;
+    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await;
     assert_eq!(
         carol_reachable.len(),
         1,
@@ -101,7 +101,7 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     }
 
     // Verify Carol can no longer reach Doc B
-    let carol_reachable_after = alice.docs_reachable_by_agent(carol_id).await?;
+    let carol_reachable_after = alice.docs_reachable_by_agent(carol_id).await;
     assert_eq!(
         carol_reachable_after.len(),
         0,
@@ -176,7 +176,7 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
     }
 
     // Verify Carol can no longer reach Doc B
-    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await?;
+    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await;
     assert_eq!(
         carol_reachable.len(),
         0,
@@ -415,7 +415,7 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
         .await?;
 
     // Verify Public can reach doc_b on Bob's keyhive
-    let public_reachable_bob = bob.docs_reachable_by_agent(Public.id()).await?;
+    let public_reachable_bob = bob.docs_reachable_by_agent(Public.id()).await;
     assert_eq!(
         public_reachable_bob.len(),
         1,
@@ -429,7 +429,7 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
     alice.ingest_event_table(events_for_alice).await?;
 
     // Verify Public can reach doc_b on Alice's keyhive
-    let public_reachable_alice = alice.docs_reachable_by_agent(Public.id()).await?;
+    let public_reachable_alice = alice.docs_reachable_by_agent(Public.id()).await;
     assert_eq!(
         public_reachable_alice.len(),
         1,
@@ -528,21 +528,21 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
     alice.ingest_event_table(events_bob_to_alice).await?;
 
     // Both should see Carol and Public on the doc
-    let alice_reachable = alice.docs_reachable_by_agent(carol_on_alice_id).await?;
+    let alice_reachable = alice.docs_reachable_by_agent(carol_on_alice_id).await;
     assert_eq!(
         alice_reachable.len(),
         1,
         "Alice should see Carol on the doc"
     );
 
-    let alice_public_reachable = alice.docs_reachable_by_agent(Public.id()).await?;
+    let alice_public_reachable = alice.docs_reachable_by_agent(Public.id()).await;
     assert_eq!(
         alice_public_reachable.len(),
         1,
         "Alice should see Public on the doc after ingesting Bob's events"
     );
 
-    let bob_public_reachable = bob.docs_reachable_by_agent(Public.id()).await?;
+    let bob_public_reachable = bob.docs_reachable_by_agent(Public.id()).await;
     assert_eq!(
         bob_public_reachable.len(),
         1,
@@ -656,7 +656,7 @@ async fn test_competing_cgka_init_adds() -> TestResult {
     );
 
     // Check: can Bob still see the doc's transitive members?
-    let bob_public_reachable = bob.docs_reachable_by_agent(Public.id()).await?;
+    let bob_public_reachable = bob.docs_reachable_by_agent(Public.id()).await;
     eprintln!(
         "Public reachable on Bob after competing init adds: {}",
         bob_public_reachable.len()

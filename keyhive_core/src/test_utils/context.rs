@@ -832,7 +832,7 @@ impl TestContext {
         }
     }
 
-    /// What `from` would send `to`, by kind, without sending it.
+    /// What `from` would send `to`, by kind, without sending it (including public events).
     ///
     /// This is what `to`'s memberships entitle it to hear about. A sync client wants the
     /// events themselves, from [`Hive::static_events_for_agent`]; a test wants to count them
@@ -899,6 +899,8 @@ impl TestContext {
         self.deliver(to, events).await
     }
 
+    /// What `from` would send `to`: what `to`'s own memberships entitle it to, plus what is
+    /// public.
     async fn static_events_for_instance(
         &self,
         from: &Instance,
@@ -908,7 +910,19 @@ impl TestContext {
             .get_agent(to.id().into())
             .await
             .ok_or_else(|| TestError::NotSynced(Box::new(to.id().into())))?;
-        self.events_for(from, &to_agent).await
+        let public_individual = Public.individual();
+        let public = Agent::Individual(
+            public_individual.id(),
+            Arc::new(Mutex::new(public_individual)),
+        );
+
+        let mut events: BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> = self
+            .events_for(from, &to_agent)
+            .await?
+            .into_iter()
+            .collect();
+        events.extend(self.events_for(from, &public).await?);
+        Ok(events.into_iter().collect())
     }
 
     async fn events_for(
