@@ -633,6 +633,11 @@ mod tests {
     }
 
     #[test]
+    fn rotation_escapes_frozen_reach() {
+        scenarios::rotation_escapes_frozen_reach::<MemoryKeyline>();
+    }
+
+    #[test]
     fn unknown_revocation_is_inert() {
         scenarios::unknown_revocation_is_inert::<MemoryKeyline>();
     }
