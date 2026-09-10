@@ -6,6 +6,7 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
+use keyhive_crypto::verifiable::Verifiable;
 
 /// A node in the authority graph.
 ///
@@ -26,7 +27,7 @@ impl Id {
         Id(key.to_bytes())
     }
 
-    /// Construct from raw bytes, checking that they are a valid public key.
+    /// Construct from raw bytes, checking that they are a valid verifying key.
     pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, InvalidId> {
         VerifyingKey::from_bytes(&bytes)
             .map(|_| Id(bytes))
@@ -56,6 +57,12 @@ impl From<VerifyingKey> for Id {
 impl From<Id> for VerifyingKey {
     fn from(id: Id) -> Self {
         id.verifying_key()
+    }
+}
+
+impl Verifiable for Id {
+    fn verifying_key(&self) -> VerifyingKey {
+        Id::verifying_key(self)
     }
 }
 
@@ -92,17 +99,10 @@ impl Decode for Id {
     }
 }
 
-/// The bytes are not a valid Ed25519 public key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The bytes are not a valid Ed25519 verifying key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("bytes are not a valid Ed25519 verifying key")]
 pub struct InvalidId;
-
-impl fmt::Display for InvalidId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("bytes are not a valid Ed25519 public key")
-    }
-}
-
-impl core::error::Error for InvalidId {}
 
 #[cfg(feature = "serde")]
 impl serde::Serialize for Id {
