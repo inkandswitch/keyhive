@@ -29,6 +29,7 @@ arbitrary = { workspace = true, optional = true }
 bolero = { workspace = true, optional = true }
 
 [dev-dependencies]
+divan = "0.1.15"
 arbitrary = { workspace = true }
 bolero = { workspace = true }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
@@ -47,5 +48,11 @@ std = [
   "tracing?/std",
 ]
 serde = ["dep:serde", "keyhive_codec/serde"]
-arbitrary = ["dep:arbitrary", "keyhive_crypto/arbitrary"]
+# `derive(Arbitrary)` needs `std` (see keyhive_crypto).
+arbitrary = ["dep:arbitrary", "keyhive_crypto/arbitrary", "std"]
 test_utils = ["dep:bolero", "arbitrary"]
+
+[[bench]]
+name = "bench_evaluate"
+harness = false
+required-features = ["test_utils"]

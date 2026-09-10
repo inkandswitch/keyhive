@@ -94,6 +94,26 @@ impl<'a> Arbitrary<'a> for CertSet {
             certs.push(d.into());
         }
 
+        // About half the time, plant the shape where clamping bites: a role
+        // `m` supplied into `s`; `k` administers `m`; `e` is a member of `m`
+        // and also holds an independent grant over `s`; `e` grants `f`; `k`
+        // revokes that grant. Random wiring produces this rarely.
+        if u.arbitrary::<bool>()? {
+            let s = id(u.int_in_range(1..=subjects)?);
+            let (m, k, e, f) = (pick_id(u)?, pick_id(u)?, pick_id(u)?, pick_id(u)?);
+            let via_role: Access = u.arbitrary()?;
+            let independent: Access = u.arbitrary()?;
+            let grant = Delegation::new(e, f, s, u.arbitrary()?);
+            certs.extend::<[Certificate; 6]>([
+                Delegation::new(s, m, s, via_role).into(),
+                Delegation::new(m, k, m, Access::Admin).into(),
+                Delegation::new(k, e, m, Access::Admin).into(),
+                Delegation::new(s, e, s, independent).into(),
+                grant.into(),
+                Revocation::new(k, grant.digest()).into(),
+            ]);
+        }
+
         // Revocations naming delegations already present.
         for _ in 0..u.int_in_range(0..=4)? {
             let dels: Vec<Delegation> = certs
