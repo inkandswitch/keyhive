@@ -371,7 +371,7 @@ keyline/
     test_utils.rs   deterministic ids, unsigned Verified fixtures
 ```
 
-- `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`.
+- `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`. The claim is source-level: the crate compiles without `std` and never links it, but a `wasm32-unknown-unknown` or bare-metal build fails today in `getrandom`, reached through `keyhive_crypto → chacha20poly1305`. `keyline` uses two items from `keyhive_crypto` — `Digest<T>` and `Verifiable` — and neither needs any of that. The fix is to move those two down (to `keyhive_codec`, or a crate beneath it: the layering argument that put `Encode`/`Decode` at the bottom applies to `Digest` identically) or to gate `keyhive_crypto`'s AEAD and key-exchange modules behind a default-on feature. Deferred to the `keyhive_core` integration, when `keyhive_crypto` is being touched anyway; `ci-no-std` checks the host target in the meantime.
 - Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`, `Verifiable`), `ed25519-dalek` (`VerifyingKey`, `Signature`), `blake3` (`set_digest`), `tracing`, and `thiserror` 2 (`no_std`-capable; pinned locally until the workspace moves off 1). Optional: `serde`, `arbitrary`.
 - `std` feature (default on): `HashMap`/`HashSet` via `beekem::collections`-style aliases, plus the `std` features of `tracing` and `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
 - `test_utils` feature: the conformance suite, the unverified `Verified` constructor, and `bolero`/`arbitrary`. Implies `arbitrary`, which implies `std` (`derive(Arbitrary)` expands to a `thread_local!`).
