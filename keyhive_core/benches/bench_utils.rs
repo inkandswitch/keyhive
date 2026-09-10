@@ -1,14 +1,12 @@
-use std::sync::Arc;
-
 use dupe::Dupe;
 use future_form::Sendable;
-use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
     keyhive::Keyhive,
     listener::no_listener::NoListener,
     principal::{
-        agent::Agent, individual::op::KeyOp, membered::Membered, peer::Peer, public::Public,
+        individual::{id::IndividualId, op::KeyOp},
+        public::Public,
     },
     store::ciphertext::memory::MemoryCiphertextStore,
     test_utils::make_simple_keyhive,
@@ -25,11 +23,9 @@ pub type BenchKeyhive = Keyhive<
     NoListener,
     rand::rngs::OsRng,
 >;
-pub type BenchAgent = Agent<Sendable, MemorySigner, [u8; 32], NoListener>;
-
 pub struct Scenario {
     pub keyhive: BenchKeyhive,
-    pub agents: Vec<BenchAgent>,
+    pub agents: Vec<IndividualId>,
 }
 
 /// Set up a scenario with `n_peers` peers, each added to 2 docs.
@@ -43,16 +39,12 @@ pub struct Scenario {
 pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) -> Scenario {
     let alice = make_simple_keyhive().await.unwrap();
 
-    let public_indie = Public.individual();
-    let public_peer = Peer::Individual(public_indie.id(), Arc::new(Mutex::new(public_indie)));
-
     // Create peers (with optional prekey rotations)
     let mut peers_on_alice = Vec::with_capacity(n_peers);
     for _ in 0..n_peers {
         let peer = make_simple_keyhive().await.unwrap();
-        let peer_contact = peer.contact_card().await.unwrap();
-        let peer_on_alice = alice.receive_contact_card(&peer_contact).await.unwrap();
-        let peer_id = { peer_on_alice.lock().await.id() };
+        let peer_contact = peer.generate_contact_card().await.unwrap();
+        let peer_id = alice.receive_contact_card(&peer_contact).await.unwrap();
 
         for _ in 0..prekey_rotations_per_peer {
             let add_op = peer.expand_prekeys().await.unwrap();
@@ -71,77 +63,49 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
                 .unwrap();
         }
 
-        peers_on_alice.push((peer_id, peer_on_alice));
+        peers_on_alice.push(peer_id);
     }
 
     // doc1: all peers are direct members
-    let doc1 = alice
-        .generate_doc(vec![public_peer.dupe()], nonempty![[0u8; 32]])
+    let doc1_id = alice
+        .generate_doc(vec![Public.id()], nonempty![[0u8; 32]])
         .await
         .unwrap();
-    let doc1_id = doc1.lock().await.doc_id();
-    for (peer_id, peer_on_alice) in &peers_on_alice {
+    for peer_id in &peers_on_alice {
         alice
-            .add_member(
-                Agent::Individual(*peer_id, peer_on_alice.dupe()),
-                &Membered::Document(doc1_id, doc1.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(*peer_id, doc1_id, Access::Edit, &[])
             .await
             .unwrap();
     }
 
     // doc2: first half are direct members
-    let doc2 = alice
-        .generate_doc(vec![public_peer.dupe()], nonempty![[1u8; 32]])
+    let doc2_id = alice
+        .generate_doc(vec![Public.id()], nonempty![[1u8; 32]])
         .await
         .unwrap();
-    let doc2_id = doc2.lock().await.doc_id();
     let half = n_peers / 2;
-    for (peer_id, peer_on_alice) in &peers_on_alice[..half] {
+    for peer_id in &peers_on_alice[..half] {
         alice
-            .add_member(
-                Agent::Individual(*peer_id, peer_on_alice.dupe()),
-                &Membered::Document(doc2_id, doc2.dupe()),
-                Access::Read,
-                &[],
-            )
+            .add_member(*peer_id, doc2_id, Access::Read, &[])
             .await
             .unwrap();
     }
 
     // group: second half of peers, then group added to doc2
-    let group = alice.generate_group(vec![]).await.unwrap();
-    let group_id = group.lock().await.group_id();
-    for (peer_id, peer_on_alice) in &peers_on_alice[half..] {
+    let group_id = alice.generate_group(vec![]).await.unwrap();
+    for peer_id in &peers_on_alice[half..] {
         alice
-            .add_member(
-                Agent::Individual(*peer_id, peer_on_alice.dupe()),
-                &Membered::Group(group_id, group.dupe()),
-                Access::Edit,
-                &[],
-            )
+            .add_member(*peer_id, group_id, Access::Edit, &[])
             .await
             .unwrap();
     }
     alice
-        .add_member(
-            Agent::Group(group_id, group.dupe()),
-            &Membered::Document(doc2_id, doc2.dupe()),
-            Access::Read,
-            &[],
-        )
+        .add_member(group_id, doc2_id, Access::Read, &[])
         .await
         .unwrap();
 
-    let agents: Vec<BenchAgent> = peers_on_alice
-        .iter()
-        .map(|(id, indie)| Agent::Individual(*id, indie.dupe()))
-        .collect();
-
     Scenario {
         keyhive: alice,
-        agents,
+        agents: peers_on_alice,
     }
 }

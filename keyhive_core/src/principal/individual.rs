@@ -130,6 +130,14 @@ impl Individual {
         self.prekey_state.ops()
     }
 
+    /// The live prekeys, after applying every op in the prekey state.
+    ///
+    /// A key that has been rotated away is absent, and the iteration order is not
+    /// meaningful. Use [`Individual::prekey_ops`] for the log that produced them.
+    pub fn prekeys(&self) -> &HashSet<ShareKey> {
+        &self.prekeys
+    }
+
     #[instrument]
     pub fn rebuild(&mut self) {
         self.prekeys = self.prekey_state.build();

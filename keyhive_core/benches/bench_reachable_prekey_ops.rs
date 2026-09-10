@@ -1,24 +1,14 @@
-use future_form::Sendable;
-use std::sync::Arc;
-
 use dupe::Dupe;
-use futures::lock::Mutex;
 use keyhive_core::{
     access::Access,
-    listener::no_listener::NoListener,
-    principal::{
-        agent::Agent, individual::op::KeyOp, membered::Membered, peer::Peer, public::Public,
-    },
+    principal::{individual::op::KeyOp, public::Public},
     test_utils::make_simple_keyhive,
 };
-use keyhive_crypto::signer::memory::MemorySigner;
 use nonempty::nonempty;
 
 fn main() {
     divan::main();
 }
-
-type BenchAgent = Agent<Sendable, MemorySigner, [u8; 32], NoListener>;
 
 /// Number of extra prekey expand+ rotate cycles per peer.
 ///
@@ -39,29 +29,24 @@ fn reachable_prekey_ops_for_agent(
 ) {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let (keyhive, agent) = rt.block_on(async {
+    let (keyhive, peer_id) = rt.block_on(async {
         let alice = make_simple_keyhive().await.unwrap();
-
-        let public_indie = Public.individual();
-        let public_peer: Peer<Sendable, _, _, _> =
-            Peer::Individual(public_indie.id(), Arc::new(Mutex::new(public_indie)));
 
         let mut docs = Vec::with_capacity(n_public_docs);
         for i in 0..n_public_docs {
             let hash: [u8; 32] = blake3::hash(&(i as u64).to_le_bytes()).into();
             let doc = alice
-                .generate_doc(vec![public_peer.dupe()], nonempty![hash])
+                .generate_doc(vec![Public.id()], nonempty![hash])
                 .await
                 .unwrap();
             docs.push(doc);
         }
 
-        let mut last_peer_on_alice = None;
+        let mut last_peer_id = None;
         for _ in 0..n_peers {
             let peer = make_simple_keyhive().await.unwrap();
-            let peer_contact = peer.contact_card().await.unwrap();
-            let peer_on_alice = alice.receive_contact_card(&peer_contact).await.unwrap();
-            let peer_id = { peer_on_alice.lock().await.id() };
+            let peer_contact = peer.generate_contact_card().await.unwrap();
+            let peer_id = alice.receive_contact_card(&peer_contact).await.unwrap();
 
             // Accumulate prekey ops: expand then rotate, propagating each to Alice.
             for _ in 0..PREKEY_ROTATIONS_PER_PEER {
@@ -81,31 +66,24 @@ fn reachable_prekey_ops_for_agent(
                     .unwrap();
             }
 
-            for doc in &docs {
-                let doc_id = { doc.lock().await.doc_id() };
+            for doc_id in &docs {
                 alice
-                    .add_member(
-                        Agent::Individual(peer_id, peer_on_alice.dupe()),
-                        &Membered::Document(doc_id, doc.dupe()),
-                        Access::Edit,
-                        &[],
-                    )
+                    .add_member(peer_id, *doc_id, Access::Edit, &[])
                     .await
                     .unwrap();
             }
 
-            last_peer_on_alice = Some((peer_id, peer_on_alice));
+            last_peer_id = Some(peer_id);
         }
 
-        let (peer_id, peer_on_alice) = last_peer_on_alice.expect("need at least 1 peer");
-        let agent: BenchAgent = Agent::Individual(peer_id, peer_on_alice);
+        let peer_id = last_peer_id.expect("need at least 1 peer");
 
-        (alice, agent)
+        (alice, peer_id)
     });
 
     bencher.bench_local(|| {
         rt.block_on(async {
-            keyhive.reachable_prekey_ops_for_agent(&agent).await;
+            keyhive.reachable_prekey_ops_for_agent(peer_id).await;
         });
     });
 }

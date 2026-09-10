@@ -10,6 +10,7 @@ pub mod state;
 
 use self::{
     delegation::{Delegation, StaticDelegation},
+    error::AddError,
     membership_operation::MembershipOperation,
     revocation::Revocation,
     state::GroupState,
@@ -23,6 +24,7 @@ use super::{
 };
 use crate::{
     access::Access,
+    error::not_found,
     listener::{membership::MembershipListener, no_listener::NoListener},
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
@@ -489,10 +491,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         } else if let Some(p) = self.get_capability(&signer.verifying_key().into()) {
             // Signer is a direct member of this group.
             if can > p.payload.can {
-                return Err(AddGroupMemberError::AccessEscalation {
+                return Err(AddError::Escalation {
                     wanted: can,
-                    have: p.payload().can,
-                });
+                    held: p.payload().can,
+                }
+                .into());
             }
             Some(p.dupe())
         } else {
@@ -525,10 +528,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             if let Some(proof) = best_proof {
                 Some(proof)
             } else if let Some(access) = best_access {
-                return Err(AddGroupMemberError::AccessEscalation {
+                return Err(AddError::Escalation {
                     wanted: can,
-                    have: access,
-                });
+                    held: access,
+                }
+                .into());
             } else {
                 return Err(AddGroupMemberError::NoProof);
             }
@@ -963,9 +967,6 @@ pub enum AddGroupMemberError {
     #[error("No proof found")]
     NoProof,
 
-    #[error("Access escalation. Wanted {wanted}, only have {have}.")]
-    AccessEscalation { wanted: Access, have: Access },
-
     #[error(transparent)]
     AddError(#[from] error::AddError),
 
@@ -975,6 +976,10 @@ pub enum AddGroupMemberError {
 
 #[derive(Debug, Error)]
 pub enum RevokeMemberError {
+    /// The identifier was not found.
+    #[error(transparent)]
+    NotFound(#[from] not_found::NotFound),
+
     #[error(transparent)]
     AddError(#[from] error::AddError),
 
@@ -1770,10 +1775,10 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(AddGroupMemberError::AccessEscalation {
+                Err(AddGroupMemberError::AddError(AddError::Escalation {
                     wanted: Access::Admin,
-                    have: Access::Read
-                })
+                    held: Access::Read
+                }))
             ),
             "a reader made someone else an admin: {:?}",
             result.map(|_| "delegation created")

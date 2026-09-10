@@ -1,0 +1,466 @@
+//! Reading a chain of content by walking back through the ancestors each write lists.
+
+use keyhive_core::{
+    access::Access::Read,
+    principal::document::id::DocumentId,
+    test_utils::{
+        decrypt_with_key, CausalDecryptionExt, Instance, TestContext, TestResult as Result,
+    },
+};
+use std::{collections::BTreeSet, sync::Arc};
+
+async fn setup_writer_and_reader() -> Result<(TestContext, Instance, Instance, DocumentId)> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    ctx.sync_all_unsent().await?;
+    Ok((ctx, alice, bob, design_doc))
+}
+
+fn contents(of: &[&[u8]]) -> BTreeSet<Vec<u8>> {
+    of.iter().map(|c| c.to_vec()).collect()
+}
+
+#[tokio::test]
+async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+
+    // genesis, then two writes with it as their predecessor, then one with both of those.
+    let genesis = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"genesis")
+        .await?;
+    let left = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&genesis], b"left")
+        .await?;
+    let right = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&genesis], b"right")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&left, &right], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    for ct in [&genesis, &left, &right, &head] {
+        ctx.give_content(&bob, ct).await?;
+    }
+    let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
+
+    assert_eq!(
+        walked.recovered(),
+        contents(&[b"genesis", b"left", b"right"]),
+        "the walk reaches the root by both paths"
+    );
+    assert_eq!(
+        walked.recovered_count(),
+        3,
+        "and reads the shared ancestor once rather than once per path"
+    );
+    assert_eq!(walked.missing(), 0, "bob holds every ancestor");
+    Ok(())
+}
+
+/// A later member reads earlier content by walking back from a write made after they
+/// joined. This is the shape `automerge-repo-keyhive` uses to admit someone to a document
+/// that already has history. Rotate, then write something that lists what came before.
+#[tokio::test]
+async fn a_later_member_recovers_earlier_content_by_walking_back() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    let history = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"written before bob")
+        .await?;
+
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    ctx.sync_all_unsent().await?;
+    alice.force_pcs_update(design_doc).await?;
+
+    let entry_point = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&history], b"written after bob")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    assert!(
+        !bob.can_decrypt_content(design_doc, &history).await?,
+        "bob cannot derive the key for content written before he joined"
+    );
+    assert!(
+        bob.can_decrypt_content(design_doc, &entry_point).await?,
+        "he can open the write that came after"
+    );
+
+    ctx.give_content(&bob, &history).await?;
+    ctx.give_content(&bob, &entry_point).await?;
+    let walked = bob
+        .try_causal_decrypt_content(design_doc, &entry_point)
+        .await?;
+
+    assert_eq!(
+        walked.recovered(),
+        contents(&[b"written before bob"]),
+        "and the write he can open carries the key to the one he cannot"
+    );
+    Ok(())
+}
+
+/// Every other test here has one writer, who holds the key to each ancestor from having
+/// encrypted it. This one has the second writer name content they only ever read, which is
+/// the only way an ancestor key can reach an envelope written by anyone but the author.
+#[tokio::test]
+async fn a_reader_can_name_an_ancestor_they_decrypted_rather_than_wrote() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    ctx.sync_all_unsent().await?;
+
+    let genesis = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"genesis")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    // Bob reads it. Decrypting is the only way he learns its key, since he did not write it.
+    ctx.give_content(&bob, &genesis).await?;
+    assert!(
+        bob.can_decrypt_content(design_doc, &genesis).await?,
+        "bob can open the genesis write"
+    );
+
+    // Carol joins afterwards, so she cannot derive that key for herself.
+    alice.add_member(carol.id(), design_doc, Read, &[]).await?;
+    ctx.sync_all_unsent().await?;
+    alice.force_pcs_update(design_doc).await?;
+
+    // Bob writes a successor naming the genesis, which means putting its key in the envelope.
+    let head = ctx
+        .encrypt_in_envelope(&bob, design_doc, &[&genesis], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    ctx.give_content(&carol, &genesis).await?;
+    ctx.give_content(&carol, &head).await?;
+    assert!(
+        !carol.can_decrypt_content(design_doc, &genesis).await?,
+        "carol cannot open the genesis write on her own"
+    );
+
+    let walked = carol.try_causal_decrypt_content(design_doc, &head).await?;
+    assert_eq!(
+        walked.recovered(),
+        contents(&[b"genesis"]),
+        "so the key can only have come from the envelope bob wrote"
+    );
+    assert_eq!(walked.missing(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+
+    let genesis = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"genesis")
+        .await?;
+    let middle = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&genesis], b"middle")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&middle], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    // Everything except the root of the chain.
+    ctx.give_content(&bob, &head).await?;
+    ctx.give_content(&bob, &middle).await?;
+    let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
+
+    assert_eq!(
+        walked.recovered(),
+        contents(&[b"middle"]),
+        "the walk gets as far as it can"
+    );
+    assert_eq!(
+        walked.missing(),
+        1,
+        "and says something is outstanding rather than failing"
+    );
+    let key = walked
+        .key_for_missing(&genesis)
+        .ok_or("the walk did not say which content is outstanding")?;
+    assert!(
+        decrypt_with_key(&genesis, key).is_ok(),
+        "and the key it reported for it is the one that opens it, so fetching is enough"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+
+    //   first_root              second_root
+    //      │  └────────┐   ┌──────┘
+    //      ▼           ▼   ▼
+    //    left           right
+    //      │  └────────┐   │  └──────┐
+    //      ▼           ▼   ▼         ▼
+    //  left_head     head_above   right_head
+    //
+    // The walk starts at left_head and right_head, so it never reaches head_above, which
+    // sits above both middles. first_root is reachable through left and through right,
+    // which is what makes it the shared ancestor.
+    let first_root = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"first root")
+        .await?;
+    let second_root = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"second root")
+        .await?;
+    let left = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&first_root], b"left")
+        .await?;
+    let right = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&second_root, &first_root], b"right")
+        .await?;
+    let left_head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&left], b"left head")
+        .await?;
+    let right_head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&right], b"right head")
+        .await?;
+    let head_above = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&left, &right], b"the head above")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    for held in [
+        &first_root,
+        &second_root,
+        &left,
+        &right,
+        &left_head,
+        &right_head,
+        &head_above,
+    ] {
+        ctx.give_content(&bob, held).await?;
+    }
+    // Walking from several heads at once needs the key for each entrypoint, which the
+    // reader derives the same way it would for a single one.
+    let mut heads = Vec::new();
+    for head in [&left_head, &right_head] {
+        let key = ctx
+            .derived_key(&bob, design_doc, head)
+            .await?
+            .ok_or("the reader cannot derive the key for an entrypoint")?;
+        heads.push((Arc::new(head.clone()), key));
+    }
+    let walked = bob.try_causal_decrypt_from(&heads).await?;
+
+    assert_eq!(
+        walked.recovered(),
+        contents(&[
+            b"left head",
+            b"right head",
+            b"left",
+            b"right",
+            b"first root",
+            b"second root",
+        ]),
+        "both entrypoints, both middles and both roots, and not the head above them"
+    );
+    assert_eq!(
+        walked.recovered_count(),
+        6,
+        "first root is reached through left and through right, and read once"
+    );
+    assert_eq!(walked.missing(), 0, "bob holds everything the walk reaches");
+
+    let key = walked
+        .key_for_recovered(&first_root)
+        .ok_or("the walk did not report the key it read the shared root under")?;
+    assert!(
+        decrypt_with_key(&first_root, key).is_ok(),
+        "and that key is the one that opens it"
+    );
+    assert!(
+        walked.key_for_recovered(&head_above).is_none(),
+        "no key is reported for content the walk never reached"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn content_that_is_not_an_ancestor_is_not_captured_in_the_walk() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+
+    let genesis = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"genesis")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&genesis], b"head")
+        .await?;
+    // Held by bob, in the same document, and on no path from the head.
+    let unrelated = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"unrelated")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    for held in [&head, &genesis, &unrelated] {
+        ctx.give_content(&bob, held).await?;
+    }
+    let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
+
+    assert_eq!(
+        walked.recovered(),
+        contents(&[b"genesis"]),
+        "the walk follows ancestry from the entrypoint rather than reading what is at hand"
+    );
+    assert_eq!(walked.missing(), 0, "nothing is outstanding");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn two_missing_ancestors_are_each_reported_with_their_own_key() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+
+    // Two roots, each under its own branch, and a head that joins them.
+    let first_root = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"first root")
+        .await?;
+    let second_root = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"second root")
+        .await?;
+    let left = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&first_root], b"left")
+        .await?;
+    let right = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&second_root], b"right")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&left, &right], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    // Everything except the two roots.
+    for held in [&head, &left, &right] {
+        ctx.give_content(&bob, held).await?;
+    }
+    let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
+
+    assert_eq!(
+        walked.recovered(),
+        contents(&[b"left", b"right"]),
+        "both branches are walked, not just the first"
+    );
+    assert_eq!(
+        walked.missing(),
+        2,
+        "one root outstanding per branch, reported separately"
+    );
+
+    let first_key = walked
+        .key_for_missing(&first_root)
+        .ok_or("the walk did not report the first root")?;
+    let second_key = walked
+        .key_for_missing(&second_root)
+        .ok_or("the walk did not report the second root")?;
+    assert_ne!(
+        first_key, second_key,
+        "each outstanding root has its own key, not one key reported twice"
+    );
+    assert!(decrypt_with_key(&first_root, first_key).is_ok());
+    assert!(
+        decrypt_with_key(&second_root, second_key).is_ok(),
+        "and each key opens the content it was reported for"
+    );
+
+    Ok(())
+}
+
+/// `Document::try_causal_decrypt_content` collects the entrypoint's missing ancestors into
+/// a local `CausalDecryptionState` and then returns the store walk's own state instead,
+/// dropping what it collected. So a reader passed a write before the content it points at
+/// is told there is nothing outstanding when what it needs is exactly that list and the
+/// keys in it.
+#[tokio::test]
+#[ignore = "an ancestor the entrypoint lists is dropped from the report when it is missing"]
+async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+
+    let history = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"history")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&history], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    // Only the entrypoint. Bob is not given the ancestor it lists.
+    ctx.give_content(&bob, &head).await?;
+    let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
+
+    assert_eq!(
+        walked.recovered(),
+        contents(&[]),
+        "there is nothing to walk"
+    );
+    assert_eq!(
+        walked.missing(),
+        1,
+        "but bob needs to be told which content to go and fetch"
+    );
+    assert!(
+        walked.key_for_missing(&history).is_some(),
+        "with the key to open it once he has it"
+    );
+    Ok(())
+}
+
+/// `CiphertextStore` must stop serving content once it has been decrypted, whether by
+/// removing it or by tracking what has been read.
+///
+/// The second walk does not report the consumed content as outstanding, because the
+/// entrypoint lists it directly. `an_ancestor_the_entrypoint_lists_is_reported_when_missing`
+/// covers that case.
+#[tokio::test]
+async fn a_walk_consumes_the_content_it_reads() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+
+    let genesis = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[], b"genesis")
+        .await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&genesis], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    ctx.give_content(&bob, &genesis).await?;
+    ctx.give_content(&bob, &head).await?;
+
+    let first = bob.try_causal_decrypt_content(design_doc, &head).await?;
+    assert_eq!(first.recovered(), contents(&[b"genesis"]));
+
+    let second = bob.try_causal_decrypt_content(design_doc, &head).await?;
+    assert_eq!(
+        second.recovered(),
+        contents(&[]),
+        "the first walk took it out of the store"
+    );
+
+    ctx.give_content(&bob, &genesis).await?;
+    let third = bob.try_causal_decrypt_content(design_doc, &head).await?;
+    assert_eq!(
+        third.recovered(),
+        contents(&[b"genesis"]),
+        "delivering it again is enough to read it again"
+    );
+    Ok(())
+}

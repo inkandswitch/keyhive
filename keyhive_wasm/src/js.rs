@@ -19,6 +19,7 @@ pub mod encrypted_keyed;
 pub mod event;
 pub mod event_handler;
 pub mod generate_doc_error;
+pub mod generate_group_error;
 pub mod group;
 pub mod group_id;
 pub mod history;

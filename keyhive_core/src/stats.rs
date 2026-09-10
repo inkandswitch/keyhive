@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stats {
     pub individuals: u64,
     pub groups: u64,
@@ -21,4 +21,15 @@ pub struct Stats {
     pub pending_delegated_by_active: u64,
     pub pending_revoked: u64,
     pub pending_revoked_by_active: u64,
+}
+
+impl Stats {
+    /// How many events this instance holds but cannot yet apply.
+    pub fn pending_total(&self) -> u64 {
+        self.pending_prekeys_expanded
+            + self.pending_prekey_rotated
+            + self.pending_cgka_operation
+            + self.pending_delegated
+            + self.pending_revoked
+    }
 }

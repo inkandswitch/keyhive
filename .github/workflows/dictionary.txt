@@ -18,6 +18,7 @@ Cohn-Gordon
 Crypto
 Cryptree
 CSPRNG
+derefs
 Diffie-Hellman
 DCGKA
 DCGKA's
@@ -35,6 +36,7 @@ JS-imported
 KDF
 JS-representation
 Keyhive
+keyhives
 Keyoxide
 LCA
 MLS
@@ -50,6 +52,7 @@ PQC
 PeerId
 PoLA
 README
+replicable
 RLE
 RPC
 SChaCha
