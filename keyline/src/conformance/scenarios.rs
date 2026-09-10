@@ -9,7 +9,7 @@ use crate::{
     access::Access,
     delegation::Delegation,
     keyline::Keyline,
-    test_utils::{cert, id},
+    test_utils::{cert, id, signed},
 };
 use alloc::vec::Vec;
 
@@ -336,4 +336,31 @@ pub fn unknown_revocation_is_inert<K: Keyline + Default>() {
     assert!(g.insert(cert(r(BOB, &phantom))));
     assert_eq!(g.members(id(DOC)), before);
     assert!(!g.is_live(&phantom.digest()));
+}
+
+/// The fixtures skip signing (`Verified::assume`). This is the one scenario
+/// that goes through `Signed::try_sign` and `Signed::verify` for every
+/// certificate, so a backend cannot depend on anything the shortcut leaves out.
+pub fn signed_certificates_agree_with_fixtures<K: Keyline + Default>() {
+    let (fixtures, carol_owner, alice_member) = standard::<K>();
+    let mut real = K::default();
+    for c in [
+        d(DOC, OWNERS, DOC, Access::Admin),
+        d(OWNERS, BOB, OWNERS, Access::Admin),
+        carol_owner,
+        d(MEMBERS, OWNERS, MEMBERS, Access::Admin),
+        d(BOB, MEMBERS, DOC, Access::Edit),
+        alice_member,
+    ] {
+        assert!(real.insert(signed(c)));
+    }
+    assert!(real.insert(signed(r(CAROL, &alice_member))));
+    assert!(!real.insert(signed(r(CAROL, &alice_member))));
+
+    assert_eq!(real.members(id(DOC)), {
+        let mut g = fixtures;
+        g.insert(cert(r(CAROL, &alice_member)));
+        g.members(id(DOC))
+    });
+    assert_eq!(access(&real, DOC, ALICE), None);
 }

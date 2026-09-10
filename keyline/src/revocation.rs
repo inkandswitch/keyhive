@@ -6,7 +6,7 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 
 /// A signed statement that a delegation no longer holds.
 ///
@@ -43,6 +43,12 @@ impl Revocation {
     /// without the [`crate::certificate::Certificate`] kind tag.
     pub fn digest(&self) -> Digest<Revocation> {
         Digest::of(&self.encode())
+    }
+}
+
+impl Verifiable for Revocation {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.iss.verifying_key()
     }
 }
 

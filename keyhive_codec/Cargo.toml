@@ -13,8 +13,11 @@ rust-version.workspace = true
 serde = { version = "1.0", default-features = false, features = [
   "alloc",
 ], optional = true }
+# TODO(thiserror-2): the workspace pins thiserror 1, which is std-only. Pin 2 here
+# (no_std-capable) until the rest of the workspace migrates; then use `workspace = true`.
+thiserror = { version = "2", default-features = false }
 
 [features]
 default = ["std"]
-std = ["serde?/std"]
+std = ["serde?/std", "thiserror/std"]
 serde = ["dep:serde"]

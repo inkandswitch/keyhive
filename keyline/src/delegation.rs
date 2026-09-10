@@ -6,7 +6,7 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 
 /// An edge in the authority graph.
 ///
@@ -84,6 +84,12 @@ impl Delegation {
     /// [`crate::certificate::Certificate`] wrapper (which carries a kind tag).
     pub fn digest(&self) -> Digest<Delegation> {
         Digest::of(&self.encode())
+    }
+}
+
+impl Verifiable for Delegation {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.iss.verifying_key()
     }
 }
 

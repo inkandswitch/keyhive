@@ -26,8 +26,9 @@
 //!
 //! # `no_std` support
 //!
-//! `no_std` with `alloc`. The `std` feature (default) enables `HashMap`-backed
-//! collections, `thiserror`, and `tracing`.
+//! `no_std` with `alloc`. The `std` feature (default) switches the collections to
+//! `HashMap`/`HashSet` and enables the `std` features of `tracing` and `thiserror`;
+//! both crates are used in every configuration.
 
 #![no_std]
 #![forbid(unsafe_code)]

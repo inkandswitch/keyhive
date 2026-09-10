@@ -10,28 +10,27 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+arbitrary = { workspace = true, optional = true }
 blake3 = { version = "1.5", default-features = false }
+bolero = { workspace = true, optional = true }
 ed25519-dalek = { version = "2.1", default-features = false }
 keyhive_codec = { version = "0.1.0", path = "../keyhive_codec", default-features = false }
 keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", default-features = false }
-
-# std-only dependencies
-thiserror = { workspace = true, optional = true }
-tracing = { version = "0.1.40", default-features = false, features = [
-  "attributes",
-], optional = true }
-
 serde = { version = "1.0", default-features = false, features = [
   "alloc",
   "derive",
 ], optional = true }
-arbitrary = { workspace = true, optional = true }
-bolero = { workspace = true, optional = true }
+# TODO(thiserror-2): the workspace pins thiserror 1, which is std-only. Pin 2 here
+# (no_std-capable) until the rest of the workspace migrates; then use `workspace = true`.
+thiserror = { version = "2", default-features = false }
+tracing = { version = "0.1.40", default-features = false, features = [
+  "attributes",
+] }
 
 [dev-dependencies]
-divan = "0.1.15"
 arbitrary = { workspace = true }
 bolero = { workspace = true }
+divan = "0.1.15"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand = { workspace = true }
 
@@ -43,13 +42,12 @@ std = [
   "keyhive_codec/std",
   "keyhive_crypto/std",
   "serde?/std",
-  "thiserror",
-  "tracing",
-  "tracing?/std",
+  "thiserror/std",
+  "tracing/std",
 ]
-serde = ["dep:serde", "keyhive_codec/serde"]
 # `derive(Arbitrary)` needs `std` (see keyhive_crypto).
 arbitrary = ["dep:arbitrary", "keyhive_crypto/arbitrary", "std"]
+serde = ["dep:serde", "ed25519-dalek/serde", "keyhive_codec/serde"]
 test_utils = ["dep:bolero", "arbitrary"]
 
 [[bench]]

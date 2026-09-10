@@ -131,22 +131,26 @@ pub struct Encoded<T> {
 ```rust
 pub struct Signed<T> {
     encoded:   Encoded<T>,
-    issuer:    Id,
     signature: ed25519_dalek::Signature,   // over encoded.as_bytes()
 }
 
 pub struct Verified<T> {
     payload: T,          // decoded exactly once, canonical form checked
-    digest:  Digest<T>,
     signed:  Signed<T>,  // retained so the certificate can be forwarded as received
 }
 
-impl<T: Decode> Signed<T> {
+impl<T: Encode + Verifiable> Signed<T> {
+    pub fn try_sign(value: &T, key: &SigningKey) -> Result<Self, SignError>;
+}
+
+impl<T: Decode + Verifiable> Signed<T> {
     pub fn verify(self) -> Result<Verified<T>, VerifyError>;
 }
 ```
 
-`verify` is the only public constructor of `Verified<T>`. It checks the signature over the encoded bytes, decodes, and rejects non-canonical input (below). Because the digest is taken from the same bytes the signature covers, nothing re-encodes a payload to identify it. Two digests exist per delegation: the set is keyed by `Digest<Certificate>` (over the tagged bytes), while `revoke` and `seen` name the payload digest (`Delegation::digest()`, `Revocation::digest()`, over the untagged bytes); both are functions of the same canonical bytes. A `test_utils`-gated constructor exists for the conformance suite so that tests do not pay for signing.
+There is no issuer field. The payload names its own issuer (`Delegation.iss`, `Revocation.iss`), exposed through `keyhive_crypto::verifiable::Verifiable`, and `verify` MUST check the signature against that key and no other: decode first (rejecting non-canonical bytes, below), then `verify_strict` over the encoded bytes with `payload.verifying_key()`. A certificate that names one issuer and is signed by another does not verify. Storing the signer separately would be a redundant field that the transport controls, and checking the signature against it instead of the payload would admit exactly that forgery. `try_sign` refuses a key that is not the payload's issuer for the same reason.
+
+`verify` is the only public constructor of `Verified<T>`. Because the digest is taken from the same bytes the signature covers, nothing re-encodes a payload to identify it. Two digests exist per delegation: the set is keyed by `Digest<Certificate>` (over the tagged bytes), while `revoke` and `seen` name the payload digest (`Delegation::digest()`, `Revocation::digest()`, over the untagged bytes); both are functions of the same canonical bytes. A `test_utils`-gated constructor exists for the conformance suite so that tests do not pay for signing; one scenario goes through `try_sign`/`verify` so the shortcut cannot hide a discrepancy.
 
 These two types live in `keyline` (`TODO(keyhive_types)`). `keyhive_crypto`'s serde-based `Signed<T>` is unchanged and remains what `keyhive_core` uses; the codec migration unifies them.
 
@@ -368,14 +372,16 @@ keyline/
 ```
 
 - `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`.
-- Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`), and `ed25519-dalek` (`VerifyingKey`, `Signature`). `blake3` for `set_digest`. Optional, behind features: `thiserror` and `tracing` (`std`), `serde`, `arbitrary`.
-- `std` feature (default on): `HashMap`/`HashSet` via `beekem::collections`-style aliases, `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
+- Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`, `Verifiable`), `ed25519-dalek` (`VerifyingKey`, `Signature`), `blake3` (`set_digest`), `tracing`, and `thiserror` 2 (`no_std`-capable; pinned locally until the workspace moves off 1). Optional: `serde`, `arbitrary`.
+- `std` feature (default on): `HashMap`/`HashSet` via `beekem::collections`-style aliases, plus the `std` features of `tracing` and `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
 - `test_utils` feature: the conformance suite, the unverified `Verified` constructor, and `bolero`/`arbitrary`. Implies `arbitrary`, which implies `std` (`derive(Arbitrary)` expands to a `thread_local!`).
 - Testing is split by feature so `std` and `no_std` are exercised separately: `cargo test -p keyline --no-default-features` runs the unit tests against the `no_std` crate code (the crate never links `std`; only the harness does); `cargo test -p keyline --features test_utils` adds the conformance scenarios, the `bolero` laws, and the property tests that need `Arbitrary`. `ci-no-std` runs the former; `ci-test` the latter.
 - `serde` feature: derives on the public types for `keyhive_core`'s internal use (archives). Not the wire format.
 - No `parallel` feature yet. If one comes, it is native-only (`rayon`); Wasm stays single-threaded because `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator is written so the independent units (admin reach per issuer, route search per covered certificate) are plain iterators.
 
-The crate follows the workspace's `beekem` conventions: `foo.rs` + `foo/`, manual impls instead of `derivative`, `tracing` behind `std`.
+The crate follows the workspace's `beekem` conventions: `foo.rs` + `foo/`, manual impls instead of `derivative`, `tracing` in every configuration with its `std` feature behind ours.
+
+Instrumentation: `insert` logs each certificate at `debug` (kind, endpoints, whether the revocation target is known, duplicates); `evaluate` is a `debug` span reporting set size, contexts, live/dead counts and clamped edges; the two fixpoint loops emit a `trace` line per round; queries are `trace` spans. `Signed::verify` logs failures at `debug` with the digest. Nothing is logged at `info` or above: the crate has no events a deployment must see.
 
 ## Conformance Suite
 
