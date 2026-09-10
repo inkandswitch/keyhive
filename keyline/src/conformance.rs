@@ -91,6 +91,7 @@ macro_rules! keyline_conformance {
                 insert_is_idempotent_and_reports_duplicates,
                 reissue_with_seen_heals,
                 unknown_revocation_is_inert,
+                signed_certificates_agree_with_fixtures,
             );
 
             $crate::keyline_conformance!(@laws $backend;

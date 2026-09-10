@@ -1,32 +1,21 @@
 //! Decoding errors.
 
-use core::fmt;
-
 /// Why a byte string is not the canonical encoding of the expected type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DecodeError {
     /// The input was shorter than the format requires.
+    #[error("unexpected end of input")]
     UnexpectedEnd,
 
     /// The input had bytes beyond the end of the encoding.
+    #[error("trailing bytes after encoding")]
     TrailingBytes,
 
     /// A tag or enum discriminant was out of range.
+    #[error("invalid tag {0}")]
     InvalidTag(u8),
 
     /// A field's bytes were not a valid value of its type (e.g. not a curve point).
+    #[error("invalid value for field `{0}`")]
     InvalidField(&'static str),
 }
-
-impl fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DecodeError::UnexpectedEnd => write!(f, "unexpected end of input"),
-            DecodeError::TrailingBytes => write!(f, "trailing bytes after encoding"),
-            DecodeError::InvalidTag(t) => write!(f, "invalid tag {t}"),
-            DecodeError::InvalidField(name) => write!(f, "invalid value for field `{name}`"),
-        }
-    }
-}
-
-impl core::error::Error for DecodeError {}

@@ -40,6 +40,7 @@ use alloc::{
     vec::Vec,
 };
 use keyhive_crypto::digest::Digest;
+use tracing::{debug, instrument, trace};
 
 /// The in-memory reference [`Keyline`].
 ///
@@ -89,11 +90,30 @@ impl MemoryKeyline {
     }
 
     /// Run both strata. Pure in the set.
+    #[instrument(level = "debug", skip(self), fields(
+        delegations = self.delegations.len(),
+        revocations = self.revocations.len(),
+    ))]
     fn evaluate(&self) -> Evaluation {
         let contexts = self.contexts(self.coverage());
         let live = self.live_set(&contexts);
         let cap = self.caps(&contexts, &live);
+        debug!(
+            contexts = contexts.len(),
+            live = live.len(),
+            dead = self.delegations.len() - live.len(),
+            clamped = cap.values().filter(|c| **c < Access::Admin).count(),
+            "evaluated"
+        );
         Evaluation { live, cap }
+    }
+
+    /// The live level of every node over `sub`, including `sub` itself.
+    fn levels(&self, sub: Id) -> Map<Id, Access> {
+        let Evaluation { live, cap } = self.evaluate();
+        self.search([sub], &Params::live(None, &live, Some(&cap)))
+            .remove(&sub)
+            .unwrap_or_default()
     }
 
     /// Group covered delegations by exclusion set. `covered(h, ·)` depends
@@ -199,6 +219,11 @@ impl MemoryKeyline {
             if newly_live.is_empty() {
                 return live;
             }
+            trace!(
+                newly_live = newly_live.len(),
+                live = live.len(),
+                "live fixpoint round"
+            );
             live.extend(newly_live);
         }
     }
@@ -260,6 +285,7 @@ impl MemoryKeyline {
             if lowered.is_empty() {
                 return cap;
             }
+            trace!(lowered = lowered.len(), "cap descent round");
             cap.extend(lowered);
         }
     }
@@ -357,9 +383,11 @@ impl MemoryKeyline {
 }
 
 impl Keyline for MemoryKeyline {
+    #[instrument(level = "debug", skip(self, cert), fields(digest = %cert.digest()))]
     fn insert(&mut self, cert: Verified<Certificate>) -> bool {
         let digest = cert.digest();
         if self.certificates.contains_key(&digest) {
+            debug!("duplicate certificate; not inserted");
             return false;
         }
 
@@ -367,6 +395,7 @@ impl Keyline for MemoryKeyline {
         match payload {
             Certificate::Delegation(d) => {
                 let h = d.digest();
+                debug!(iss = %d.iss, aud = %d.aud, sub = %d.sub, can = %d.can, seen = d.seen.is_some(), "delegation inserted");
                 self.edges
                     .entry(d.sub)
                     .or_default()
@@ -377,6 +406,12 @@ impl Keyline for MemoryKeyline {
             }
             Certificate::Revocation(r) => {
                 let k = r.digest();
+                debug!(
+                    iss = %r.iss,
+                    revoke = %r.revoke,
+                    target_known = self.delegations.contains_key(&r.revoke),
+                    "revocation inserted"
+                );
                 self.denials.entry(r.revoke).or_default().insert(k);
                 self.revocations.insert(k, r);
             }
@@ -396,10 +431,12 @@ impl Keyline for MemoryKeyline {
             .unwrap_or_default()
     }
 
+    #[instrument(level = "trace", skip(self), fields(%sub, %aud))]
     fn effective_access(&self, sub: Id, aud: Id) -> Option<Access> {
         self.levels(sub).get(&aud).copied()
     }
 
+    #[instrument(level = "trace", skip(self), fields(%sub))]
     fn members(&self, sub: Id) -> BTreeMap<Id, Access> {
         self.levels(sub)
             .into_iter()
@@ -407,22 +444,13 @@ impl Keyline for MemoryKeyline {
             .collect()
     }
 
+    #[instrument(level = "trace", skip(self), fields(%cert))]
     fn is_live(&self, cert: &Digest<Delegation>) -> bool {
         self.delegations.contains_key(cert) && self.evaluate().live.contains(cert)
     }
 
     fn digest(&self) -> Digest<BTreeSet<Certificate>> {
         set_digest(self.certificates.keys().copied())
-    }
-}
-
-impl MemoryKeyline {
-    /// The live level of every node over `sub`, including `sub` itself.
-    fn levels(&self, sub: Id) -> Map<Id, Access> {
-        let Evaluation { live, cap } = self.evaluate();
-        self.search([sub], &Params::live(None, &live, Some(&cap)))
-            .remove(&sub)
-            .unwrap_or_default()
     }
 }
 

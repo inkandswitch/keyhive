@@ -6,6 +6,7 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
+use keyhive_crypto::verifiable::Verifiable;
 
 /// Either kind of certificate. This is what [`crate::keyline::Keyline::insert`]
 /// takes and what the set holds.
@@ -52,6 +53,12 @@ impl From<Delegation> for Certificate {
 impl From<Revocation> for Certificate {
     fn from(r: Revocation) -> Self {
         Certificate::Revocation(r)
+    }
+}
+
+impl Verifiable for Certificate {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.issuer().verifying_key()
     }
 }
 
