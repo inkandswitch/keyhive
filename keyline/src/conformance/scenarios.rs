@@ -316,9 +316,17 @@ pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
 
 pub fn reissue_with_seen_heals<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
+    // Alice sponsors Eve, so the heal has something downstream to revive.
+    let eve_member = d(ALICE, EVE, MEMBERS, Access::Edit);
+    g.insert(cert(eve_member));
+    assert_eq!(access(&g, DOC, EVE), Some(Access::Edit));
+
     let rev = r(CAROL, &alice_member);
     g.insert(cert(rev));
     assert_eq!(access(&g, DOC, ALICE), None);
+    // Eve dies implicitly: nothing named her certificate.
+    assert!(!g.is_live(&eve_member.digest()));
+    assert_eq!(access(&g, DOC, EVE), None);
 
     let healed = alice_member.reissue(rev.digest());
     assert_ne!(healed.digest(), alice_member.digest());
@@ -326,6 +334,57 @@ pub fn reissue_with_seen_heals<K: Keyline + Default>() {
     assert!(g.is_live(&healed.digest()));
     assert!(!g.is_live(&alice_member.digest()));
     assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+    // Everything below revives as the same certificate: same hash, no re-issue.
+    assert!(g.is_live(&eve_member.digest()));
+    assert_eq!(access(&g, DOC, EVE), Some(Access::Edit));
+}
+
+/// Rotation is escape. Dan administers `Members`, so `Members` is in his admin
+/// reach forever and his cuts inside it stand. Minting a successor role,
+/// supplying it and re-rostering into it puts the survivors somewhere his
+/// frozen reach does not name: his cuts there are inert.
+pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
+    let supply = d(BOB, MEMBERS, DOC, Access::Edit);
+    let alice_member = d(DAN, ALICE, MEMBERS, Access::Admin);
+    let mut g: K = build([
+        d(DOC, OWNERS, DOC, Access::Admin).into(),
+        d(OWNERS, BOB, OWNERS, Access::Admin).into(),
+        supply.into(),
+        d(MEMBERS, DAN, MEMBERS, Access::Admin).into(),
+        alice_member.into(),
+    ]);
+    assert_eq!(access(&g, MEMBERS, DAN), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+
+    // Members is in Dan's reach, so his cut lands.
+    g.insert(cert(r(DAN, &alice_member)));
+    assert!(!g.is_live(&alice_member.digest()));
+    assert_eq!(access(&g, DOC, ALICE), None);
+
+    // Rotate: mint the successor, supply it, re-roster Alice, retract the old
+    // supply. `MODS` here is `Members'`.
+    let alice_successor = d(BOB, ALICE, MODS, Access::Admin);
+    let new_supply = d(BOB, MODS, DOC, Access::Edit);
+    for c in [
+        d(MODS, BOB, MODS, Access::Admin),
+        new_supply,
+        alice_successor,
+    ] {
+        g.insert(cert(c));
+    }
+    g.insert(cert(r(BOB, &supply)));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+    assert_eq!(access(&g, DOC, DAN), None);
+
+    // Dan's reach froze at `{Dan, Members}`: nothing in the successor names it.
+    g.insert(cert(r(DAN, &alice_successor)));
+    g.insert(cert(r(DAN, &new_supply)));
+    assert!(g.is_live(&alice_successor.digest()));
+    assert!(g.is_live(&new_supply.digest()));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+
+    // Permanence: the cut he made while in office is still applied.
+    assert!(!g.is_live(&alice_member.digest()));
 }
 
 /// A revocation naming a hash nobody holds is stored and changes no answer.

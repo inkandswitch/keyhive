@@ -1,9 +1,14 @@
 name: Bolero Tests
 
-# Property-test sweep. There are no `bolero::check!` harnesses in the workspace
-# yet, so today this is the host test suite under another name; it runs on a
-# schedule (not per PR) until the first harness lands. When it does, add
-# `pull_request:` back and move `ci-bolero` into the `ci` aggregate in flake.nix.
+# Heavy property-test sweep. The per-PR gate is `ci-bolero` in ci.yml, which
+# runs every harness at 1000 iterations on Linux; this workflow exists for the
+# two things that gate cannot afford: a much longer sweep, and macOS.
+#
+# All 15 harnesses live in `keyline` — codec round-trip and canonicality for
+# every certificate type, and the conformance laws, which check `MemoryKeyline`
+# against a naive transcription of the evaluation program (with and without
+# revocations), plus order independence, idempotence, monotone denial, digest
+# stability, and query consistency.
 
 on:
   schedule:
@@ -29,10 +34,10 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            iterations: 1000
+            iterations: 50000
             label: Thorough
           - os: macos-latest
-            iterations: 100
+            iterations: 10000
             label: Quick
 
     runs-on: ${{ matrix.os }}
@@ -55,4 +60,7 @@ jobs:
         env:
           BOLERO_RANDOM_ITERATIONS: ${{ matrix.iterations }}
           RUST_BACKTRACE: 1
-        run: cargo test --workspace --exclude keyhive_wasm --features test_utils --tests
+        # Release: the conformance oracle is ~40x faster optimised, which is
+        # what makes a 50k-iteration sweep affordable. The harnesses assert
+        # with `assert_eq!`, not `debug_assert!`, so nothing is compiled out.
+        run: cargo test --release --workspace --exclude keyhive_wasm --features test_utils --tests

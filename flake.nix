@@ -285,21 +285,19 @@
             '';
           };
 
-        };
+          # Property tests. BOLERO_RANDOM_ITERATIONS bounds each harness (bolero
+          # also reads BOLERO_RANDOM_TEST_TIME_MS); hosted CI runs this quick
+          # sweep per PR and a thorough one nightly (see test-bolero.yml).
+          # Harnesses live in `keyline`: codec round-trip and canonicality, and
+          # the two conformance laws that check `MemoryKeyline` against the
+          # naive transcription of the evaluation program.
+          ci-bolero = mkCheck "ci-bolero" ''
+            export BOLERO_RANDOM_ITERATIONS="''${BOLERO_RANDOM_ITERATIONS:-1000}"
+            export RUST_BACKTRACE=1
+            cargo test --workspace --exclude keyhive_wasm --features test_utils --tests
+          '';
 
-        # Property tests. BOLERO_RANDOM_ITERATIONS bounds each bolero harness
-        # (bolero also reads BOLERO_RANDOM_TEST_TIME_MS); hosted CI runs a quick
-        # and a thorough sweep (see test-bolero.yml).
-        #
-        # NOT in the `ci` aggregate: there are no `bolero::check!` harnesses in
-        # the workspace yet (bolero is only a workspace dependency), so today
-        # this is `ci-test` under another name. It exists so the wiring is in
-        # place when the first harness lands; move it into `ci-checks` then.
-        ci-bolero = mkCheck "ci-bolero" ''
-          export BOLERO_RANDOM_ITERATIONS="''${BOLERO_RANDOM_ITERATIONS:-100}"
-          export RUST_BACKTRACE=1
-          cargo test --workspace --exclude keyhive_wasm --features test_utils --tests
-        '';
+        };
 
         # Executes the wasm-bindgen-test suites under Node. `.cargo/config.toml`
         # sets `wasm-bindgen-test-runner` as the wasm32 runner; the CLI must
@@ -433,13 +431,14 @@
             # away, so without these a green board reads as full coverage
             # while the wasm suites went unexecuted.
             echo
-            echo "NOT RUN here (hosted CI runs them in ci.yml / test-bolero.yml): ci-wasm-node, ci-browser, ci-e2e, ci-mutants, ci-bolero"
+            echo "NOT RUN here (hosted CI runs them in ci.yml / test-bolero.yml): ci-wasm-node, ci-browser, ci-e2e, ci-mutants"
             echo "  nix run .#ci-wasm-node  # wasm-bindgen-test suites under Node"
             echo "  nix run .#ci-browser    # same suites in Chromium + Firefox"
             echo "  nix run .#ci-e2e        # Playwright against the web build"
             echo "  nix run .#ci-mutants    # full-workspace mutation testing (slow;"
             echo "                          # CI runs it scoped to the PR diff)"
-            echo "  nix run .#ci-bolero     # property tests (no harnesses yet; == ci-test)"
+            echo
+            echo "ci-bolero ran above at 1000 iterations per harness; test-bolero.yml sweeps harder nightly."
           '';
         };
 
@@ -588,7 +587,7 @@
           })
           (ci-checks // {
             ci = ci-all;
-            inherit ci-bolero ci-browser ci-e2e ci-mutants ci-wasm-node;
+            inherit ci-browser ci-e2e ci-mutants ci-wasm-node;
           });
 
         formatter = pkgs.alejandra;
