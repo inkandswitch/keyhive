@@ -524,13 +524,16 @@ fn pop_highest(buckets: &mut [Vec<Id>; 4]) -> Option<(Id, Access)> {
         .find_map(|l| buckets[*l as usize].pop().map(|id| (id, *l)))
 }
 
-#[cfg(all(test, feature = "test_utils"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        conformance::{d, laws, scenarios, scenarios::standard, DOC, OWNERS},
+        conformance::{d, scenarios, scenarios::standard, DOC, OWNERS},
         test_utils::cert,
     };
+
+    #[cfg(feature = "arbitrary")]
+    use crate::conformance::laws;
 
     // One test per scenario and law. Add new ones to `scenarios.rs` / `laws.rs`
     // and list them here; a second backend copies this block.
@@ -639,36 +642,43 @@ mod tests {
         scenarios::signed_certificates_agree_with_fixtures::<MemoryKeyline>();
     }
 
+    #[cfg(feature = "arbitrary")]
     #[test]
     fn matches_naive_oracle_without_revocations() {
         laws::matches_naive_oracle_without_revocations::<MemoryKeyline>();
     }
 
+    #[cfg(feature = "arbitrary")]
     #[test]
     fn matches_naive_oracle_with_revocations() {
         laws::matches_naive_oracle_with_revocations::<MemoryKeyline>();
     }
 
+    #[cfg(feature = "arbitrary")]
     #[test]
     fn order_independent() {
         laws::order_independent::<MemoryKeyline>();
     }
 
+    #[cfg(feature = "arbitrary")]
     #[test]
     fn idempotent() {
         laws::idempotent::<MemoryKeyline>();
     }
 
+    #[cfg(feature = "arbitrary")]
     #[test]
     fn revocations_only_deny() {
         laws::revocations_only_deny::<MemoryKeyline>();
     }
 
+    #[cfg(feature = "arbitrary")]
     #[test]
     fn digest_identifies_the_set() {
         laws::digest_identifies_the_set::<MemoryKeyline>();
     }
 
+    #[cfg(feature = "arbitrary")]
     #[test]
     fn queries_are_consistent() {
         laws::queries_are_consistent::<MemoryKeyline>();
