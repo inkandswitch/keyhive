@@ -645,6 +645,11 @@ mod tests {
     }
 
     #[test]
+    fn matches_naive_oracle_with_revocations() {
+        laws::matches_naive_oracle_with_revocations::<MemoryKeyline>();
+    }
+
+    #[test]
     fn order_independent() {
         laws::order_independent::<MemoryKeyline>();
     }

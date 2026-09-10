@@ -1,16 +1,19 @@
 //! Properties every `Keyline` must satisfy on every set, checked with `bolero`
 //! over generated [`CertSet`]s.
 //!
-//! The revocation-free case has an independent oracle: [`naive_reaches`] is
-//! the three stratum-1 rules run as a plain tuple fixpoint, sharing no code
-//! with any backend. With revocations, the laws pin down monotonicity and
-//! consistency; exact agreement is by scenario (see `scenarios`).
-
+//! The oracle is [`naive`]: the normative program from
+//! `design/keyline/implementation.md` § Evaluation transcribed as plain tuple
+//! fixpoints (Jacobi iteration over `BTreeMap`s), sharing no code with any
+//! backend. It is slow and obviously correct; `MemoryKeyline` must agree with
+//! it on every generated set, with and without revocations.
 use super::{
     build,
     gen::{ids, CertSet},
 };
-use crate::{access::Access, delegation::Delegation, id::Id, keyline::Keyline, test_utils::cert};
+use crate::{
+    access::Access, certificate::Certificate, delegation::Delegation, id::Id, keyline::Keyline,
+    revocation::Revocation, test_utils::cert,
+};
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
@@ -38,48 +41,176 @@ pub fn observe<K: Keyline>(k: &K, set: &CertSet) -> Observed {
     Observed { levels, live }
 }
 
-/// Stratum 1 as a tuple fixpoint: the three `reaches` rules over the pool,
-/// nothing else.
-pub fn naive_reaches(dels: &[Delegation]) -> BTreeMap<(Id, Id), Access> {
-    let nodes: BTreeSet<Id> = ids()
-        .chain(dels.iter().flat_map(|d| [d.iss, d.aud, d.sub]))
-        .collect();
+/// The normative program, executed naively.
+pub mod naive {
+    use super::*;
 
-    let mut reaches: BTreeMap<(Id, Id), Access> =
-        nodes.iter().map(|n| ((*n, *n), Access::Admin)).collect();
+    /// `(subject, node) -> level`.
+    pub type Levels = BTreeMap<(Id, Id), Access>;
 
-    loop {
-        let mut next = reaches.clone();
-        let mut raise = |key: (Id, Id), l: Access| {
-            let e = next.entry(key).or_insert(l);
-            *e = (*e).max(l);
-        };
+    /// What the oracle derives from a set.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Evaluation {
+        pub live: BTreeSet<Digest<Delegation>>,
+        pub levels: Levels,
+    }
 
-        for d in dels {
-            if let Some(l) = reaches.get(&(d.sub, d.iss)) {
-                raise((d.sub, d.aud), (*l).min(d.can));
+    struct Facts {
+        nodes: BTreeSet<Id>,
+        dels: BTreeMap<Digest<Delegation>, Delegation>,
+        revs: Vec<Revocation>,
+    }
+
+    fn raise(m: &mut Levels, key: (Id, Id), l: Access) -> bool {
+        match m.get(&key) {
+            Some(current) if *current >= l => false,
+            _ => {
+                m.insert(key, l);
+                true
             }
         }
-        for &s in &nodes {
-            for &n in &nodes {
+    }
+
+    /// `level(s, x, h, l)` for one exclusion set: rules 1-3 over `usable`
+    /// edges weighted by `cap`, every node in `exclude` refused. With
+    /// `exclude = ∅`, every edge usable and `cap = can`, this is stratum 1.
+    fn level(
+        f: &Facts,
+        exclude: &BTreeSet<Id>,
+        usable: &dyn Fn(&Digest<Delegation>) -> bool,
+        cap: &dyn Fn(&Digest<Delegation>, &Delegation) -> Access,
+    ) -> Levels {
+        let mut m: Levels = f
+            .nodes
+            .iter()
+            .filter(|n| !exclude.contains(n))
+            .map(|n| ((*n, *n), Access::Admin))
+            .collect();
+
+        loop {
+            let mut changed = false;
+            let snapshot = m.clone();
+
+            for (h, d) in &f.dels {
+                if !usable(h) || exclude.contains(&d.aud) {
+                    continue;
+                }
+                if let Some(l) = snapshot.get(&(d.sub, d.iss)) {
+                    changed |= raise(&mut m, (d.sub, d.aud), (*l).min(cap(h, d)));
+                }
+            }
+            for ((s, n), l1) in &snapshot {
                 if n == s {
                     continue;
                 }
-                let Some(l1) = reaches.get(&(s, n)) else {
-                    continue;
-                };
-                for &x in &nodes {
-                    if let Some(l2) = reaches.get(&(n, x)) {
-                        raise((s, x), (*l1).min(*l2));
+                for ((n2, x), l2) in &snapshot {
+                    if n2 == n {
+                        changed |= raise(&mut m, (*s, *x), (*l1).min(*l2));
                     }
                 }
             }
+
+            if !changed {
+                return m;
+            }
+        }
+    }
+
+    fn facts(set: &CertSet) -> Facts {
+        let mut nodes: BTreeSet<Id> = ids().collect();
+        let mut dels = BTreeMap::new();
+        let mut revs = Vec::new();
+        for c in &set.certs {
+            match c {
+                Certificate::Delegation(d) => {
+                    nodes.extend([d.iss, d.aud, d.sub]);
+                    dels.insert(d.digest(), *d);
+                }
+                Certificate::Revocation(r) => {
+                    nodes.insert(r.iss);
+                    revs.push(*r);
+                }
+            }
+        }
+        Facts { nodes, dels, revs }
+    }
+
+    /// Stratum 1 alone: `reaches` over the pool, blind to revocations.
+    pub fn reaches(set: &CertSet) -> Levels {
+        level(&facts(set), &BTreeSet::new(), &|_| true, &|_, d| d.can)
+    }
+
+    /// Both strata: the live set (LFP) and caps (GFP), then the live levels.
+    pub fn evaluate(set: &CertSet) -> Evaluation {
+        let f = facts(set);
+        let none = BTreeSet::new();
+
+        let reaches = level(&f, &none, &|_| true, &|_, d| d.can);
+        let admin_reach = |k: Id| -> BTreeSet<Id> {
+            let mut s: BTreeSet<Id> = f
+                .nodes
+                .iter()
+                .copied()
+                .filter(|n| reaches.get(&(*n, k)) == Some(&Access::Admin))
+                .collect();
+            s.insert(k);
+            s
+        };
+        let mut covered: BTreeMap<Digest<Delegation>, BTreeSet<Id>> = BTreeMap::new();
+        for r in &f.revs {
+            covered
+                .entry(r.revoke)
+                .or_default()
+                .extend(admin_reach(r.iss));
+        }
+        let renounced =
+            |h: &Digest<Delegation>, aud: Id| f.revs.iter().any(|r| r.revoke == *h && r.iss == aud);
+
+        let mut live: BTreeSet<Digest<Delegation>> = BTreeSet::new();
+        loop {
+            let added: Vec<Digest<Delegation>> = f
+                .dels
+                .iter()
+                .filter(|(h, d)| !live.contains(*h) && !renounced(h, d.aud))
+                .filter(|(h, d)| {
+                    let exclude = covered.get(*h).cloned().unwrap_or_default();
+                    level(&f, &exclude, &|x| live.contains(x), &|_, d| d.can)
+                        .contains_key(&(d.sub, d.iss))
+                })
+                .map(|(h, _)| *h)
+                .collect();
+            if added.is_empty() {
+                break;
+            }
+            live.extend(added);
         }
 
-        if next == reaches {
-            return reaches;
+        let mut cap: BTreeMap<Digest<Delegation>, Access> =
+            f.dels.iter().map(|(h, d)| (*h, d.can)).collect();
+        loop {
+            let mut changed = false;
+            for (h, d) in &f.dels {
+                if !live.contains(h) {
+                    continue;
+                }
+                let exclude = covered.get(h).cloned().unwrap_or_default();
+                let current = cap.clone();
+                let at_iss = level(&f, &exclude, &|x| live.contains(x), &|x, d| {
+                    current[x].min(d.can)
+                })[&(d.sub, d.iss)];
+                let next = d.can.min(at_iss);
+                if next < cap[h] {
+                    cap.insert(*h, next);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
         }
-        reaches = next;
+
+        let levels = level(&f, &none, &|x| live.contains(x), &|x, d| cap[x].min(d.can));
+        Evaluation { live, levels }
     }
 }
 
@@ -90,8 +221,7 @@ pub fn matches_naive_oracle_without_revocations<K: Keyline + Default>() {
         .with_arbitrary::<CertSet>()
         .for_each(|set| {
             let set = set.without_revocations();
-            let dels: Vec<Delegation> = set.delegations().copied().collect();
-            let expected = naive_reaches(&dels);
+            let expected = naive::reaches(&set);
             let k: K = build(set.certs.iter().copied());
 
             for s in ids() {
@@ -103,10 +233,39 @@ pub fn matches_naive_oracle_without_revocations<K: Keyline + Default>() {
                     );
                 }
             }
-            for d in &dels {
+            for d in set.delegations() {
                 assert_eq!(
                     k.is_live(&d.digest()),
                     expected.contains_key(&(d.sub, d.iss)),
+                    "is_live({d:?})"
+                );
+            }
+        });
+}
+
+/// With revocations, every query agrees with the normative program: admin
+/// reach, coverage, the live set as a least fixed point with renunciation,
+/// and clamped levels.
+pub fn matches_naive_oracle_with_revocations<K: Keyline + Default>() {
+    bolero::check!()
+        .with_arbitrary::<CertSet>()
+        .for_each(|set| {
+            let expected = naive::evaluate(set);
+            let k: K = build(set.certs.iter().copied());
+
+            for s in ids() {
+                for x in ids() {
+                    assert_eq!(
+                        k.effective_access(s, x),
+                        expected.levels.get(&(s, x)).copied(),
+                        "effective_access({s}, {x})"
+                    );
+                }
+            }
+            for d in set.delegations() {
+                assert_eq!(
+                    k.is_live(&d.digest()),
+                    expected.live.contains(&d.digest()),
                     "is_live({d:?})"
                 );
             }
