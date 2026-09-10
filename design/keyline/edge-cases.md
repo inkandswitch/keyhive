@@ -1,6 +1,6 @@
 # Keyline Edge Cases
 
-Companion to the [Keyline design][keyline]. These notes record the adversarial analysis that produced the current design, in two convergences: first the revocation rule (one scenario worked end to end, Findings 1–7 and the candidate repairs), then the certificate format itself (the field eliminations, at the end of this document). The findings are kept as the arguments-of-record, and terminology mid-document reflects whichever superseded generation is under analysis: "blocks" carrying an explicit jurisdiction field (called `from`, then `via`) that the [second convergence][the second convergence: field elimination] eliminated. In the final design there is one revocation type, no jurisdiction field, and scope is derived from the issuer's admin reach — see the [README](README.md).
+Companion to the [Keyline design][keyline]. These notes record the adversarial analysis that produced the current design, in two convergences: first the revocation rule (one scenario worked end to end, Findings 1–7 and the candidate repairs), then the certificate format itself (the field eliminations, at the end of this document). The findings are kept as the arguments-of-record, and terminology mid-document reflects whichever superseded generation is under analysis: "blocks" carrying an explicit jurisdiction field (called `from`, then `via`) that the [second convergence][the second convergence: field elimination] eliminated. In the final design there is one revocation type, no jurisdiction field, and scope is derived from the issuer's admin reach — "record" throughout this file is that admin reach; see the [README](README.md).
 
 ## The Running Scenario
 
@@ -92,7 +92,7 @@ Peer admins of `mods1` can tombstone each other's memberships, and mutual invisi
 But below the apex, MAD is _adjudicated_: destruction is survivable by rotation, and the senior decides the re-roster. This changes the game in three ways:
 
 - _Deterrence is diluted._ An admin who expects the senior's favor may strike deliberately — the duel is an appeal to authority, trial by combat with Alice as judge. Apex MAD is absolute precisely because there is no judge.
-- _Flatness disarms the judge's scalpel._ Under constitutional flatness Alice holds supply over `doc1`, not `sub: mods1` — she _cannot re-add anyone_ to a bricked `mods1`. The main document's "the branch's senior adjudicates, re-adding whichever party" is wrong for flat topologies: the senior's only repair is rotation. A total duel bricks the node exactly like apex MAD, one layer down.
+- _Flatness disarms the judge's scalpel._ Under constitutional flatness Alice holds supply over `doc1`, not `sub: mods1` — she _cannot re-add anyone_ to a bricked `mods1`. Under flatness the senior cannot adjudicate by re-adding; the only repair is rotation (the main document now says so). A total duel bricks the node exactly like apex MAD, one layer down.
 - _Any single admin can force a rotation at will_ — revoke all peers, absorb the retaliation, node bricked. Deny-only and attributable, but it makes rotation frequency partly adversary-controlled.
 
 ## Finding 7: Offline and Adversarial Are Indistinguishable
@@ -109,7 +109,7 @@ So deep cuts have a second job beyond surgical precision: they make removal a du
 
 ## Candidate Repairs
 
-Three rules were explored for keeping Bob-cuts-Eve while containing Mallory. The first two work but cost heavily; the third is the current leading candidate.
+Three rules were explored for keeping Bob-cuts-Eve while containing Mallory. The first two work but cost heavily; the third was adopted, then simplified by the [second convergence][the second convergence: field elimination].
 
 ### Option 1: Path-Scoped Revocation with Retraction Strata ("Epochal Permanence")
 
@@ -180,7 +180,7 @@ The two-strata semantics survives unchanged in shape and gets slightly cleaner. 
 
 #### Residue
 
-Within-epoch grief is unchanged — Mallory blocks routes through `mods1` until the rotation lands; rotation remains the response. MAD at flat roles is unchanged (Finding 6). Ever-apex admins can block everything, since every route transits Owners — the apex being the apex; keep it minimal. Nesting expands anchorability transitively, so constitutional flatness stays load-bearing — but the failure is bounded even then: contamination reaches nested child roles, never `doc1`, because no topology can put anyone in a position to anchor at the subject.
+Within-epoch grief is unchanged — Mallory blocks routes through `mods1` until the rotation lands; rotation remains the response. MAD at flat roles is unchanged (Finding 6). Ever-apex admins can block everything, since every route transits Owners — the apex being the apex; keep it minimal. Nesting expands anchorability transitively, so constitutional flatness stays load-bearing — but the failure is bounded even then: contamination reaches nested child roles and — for an Admin-rooted document — the subject itself (see the NOTE under Finding 1); an Edit-rooted document keeps `doc1` out of everyone's reach.
 
 ## The Junction
 
@@ -199,7 +199,7 @@ Unconditional denials buy durable removal and cost permanent grief. Conditional 
 
 ## The Second Convergence: Field Elimination
 
-A second pass interrogated every certificate field. Each elimination follows the same move: where a certificate format wants a *mode*, the graph wants a *vertex*.
+A second pass interrogated every certificate field. Each elimination follows the same move: where a certificate format wants a _mode_, the graph wants a _vertex_.
 
 ### `from` on delegations — eliminated
 
@@ -211,40 +211,37 @@ The field did three jobs; each has a node-based replacement that is structurally
 | Pinning (act dies with my standing in a jurisdiction, regardless of my other routes) | Sub-scoped intermediary (`M2`): route the grant through a node whose inbound is `sub`-pinned | The pin is topological — leakage onto the issuer's other standings is inexpressible, not just forbidden |
 | Capacity filing ("what did Dan do as a mod") | Capacity key (`D_m`): a dedicated keypair whose only inbound is a pinned membership | Enumeration is `iss: D_m`; collective kill is one cut on the capacity key's inbound; leakage onto personal standing is topologically impossible |
 
-The decisive argument against keeping `from`: rotation. Certificates anchored by a field die when the anchor rotates and must be enumerated and re-signed — the sweep exists *because* the field exists (the field creates the breakage, then sells the tool to fix it). With no anchor field, member grants ride whatever membership is live: rotation re-issues exactly the roster, and everything survivors issued re-grounds automatically. Rotation cost fell from $O(\text{certs at the node})$ to $O(\text{roster})$, and the spine pattern became unnecessary — every grant is spine-like natively.
+The decisive argument against keeping `from`: rotation. Certificates anchored by a field die when the anchor rotates and must be enumerated and re-signed — the sweep exists _because_ the field exists (the field creates the breakage, then sells the tool to fix it). With no anchor field, member grants ride whatever membership is live: rotation re-issues exactly the roster, and everything survivors issued re-grounds automatically. Rotation cost fell from $O(\text{certs at the node})$ to $O(\text{roster})$, and the spine pattern became unnecessary — every grant is spine-like natively.
 
-What was checked before cutting: the total-kill guarantee (a block on an unpinned cert is per-route and future-open — the issuer gaining a new route revives the target silently; answered by pinning-via-`sub` for certs that want total killability), and the multi-hatted issuer case (Dan with a personal route: his `sub`-pinned acts still die with the pinned standing). An *optional* `from` (pin bit) was considered and rejected: required or cut, period.
+What was checked before cutting: the total-kill guarantee (a block on an unpinned cert is per-route and future-open — the issuer gaining a new route revives the target silently; answered by pinning-via-`sub` for certs that want total killability), and the multi-hatted issuer case (Dan with a personal route: his `sub`-pinned acts still die with the pinned standing). An _optional_ `from` (pin bit) was considered and rejected: required or cut, period.
 
 ### `nonce` vs `seen` — `seen` won on fail-direction
 
 (This field was called `after` when the argument was first made; it was later renamed `seen` to shed the temporal implication — the field is an awareness claim, not an ordering claim.)
 
-Ed25519 is deterministic and certs are content-addressed: an identical re-issuance is byte-identical — the *same certificate*, still covered by any revocation naming it. Healing a mistaken removal on the same terms by the same issuer is impossible without a freshness field. The candidates:
+Ed25519 is deterministic and certs are content-addressed: an identical re-issuance is byte-identical — the _same certificate_, still covered by any revocation naming it. Healing a mistaken removal on the same terms by the same issuer is impossible without a freshness field. The candidates:
 
-- *Nonce:* unconditional freshness. Failure mode: accidental duplicates are independently live certs, each needing separate coverage at removal — a missed one is a lingering live grant. **Fails open.**
-- *`seen: Hash<Delegation>`* (optional; omitted on first issuance): freshness on demand, dedup by default, and the heal is an accountable act ("re-granted, knowing of the revocation"). Failure mode: an issuer unaware of a revoked twin re-mints the same hash and the grant silently doesn't take — visible on sync, fixed by re-chaining. **Fails closed.**
+- _Nonce:_ unconditional freshness. Failure mode: accidental duplicates are independently live certs, each needing separate coverage at removal — a missed one is a lingering live grant. _Fails open._
+- _`seen: Hash<Revocation>`_ (optional; omitted on first issuance): freshness on demand, dedup by default, and the heal is an accountable act ("re-granted, knowing of the revocation"). Failure mode: an issuer unaware of a revoked twin re-mints the same hash and the grant silently doesn't take — visible on sync, fixed by re-chaining. _Fails closed._
 
-"Ambiguity resolves toward less authority" decides it. Constraints: optional, where absence means "no predecessor claimed" — the anti-optionality rule bans absence *aliasing* a present value (the `{from: None} ≡ {from: iss}` bug), and with no sentinel, `seen`'s absence has no present-value twin: one meaning, one encoding; zero semantics (not supersession, not ordering — issuer-supplied predecessors must never carry trust, or backdating-by-omission returns); bogus values harmless.
+"Ambiguity resolves toward less authority" decides it. Constraints: optional, where absence means "no predecessor claimed" — the anti-optionality rule bans absence _aliasing_ a present value (the `{from: None} ≡ {from: iss}` bug), and with no sentinel, `seen`'s absence has no present-value twin: one meaning, one encoding; zero semantics (not supersession, not ordering — issuer-supplied predecessors must never carry trust, or backdating-by-omission returns); bogus values harmless.
 
 ### `via` on revocations — collapsed into the issuer
 
 Option 3's block named its jurisdiction explicitly. Two refinements removed the field:
 
-1. *Node, not hash.* A `via` naming a specific delegation hash fails "edges are certificates": the drawn edge Members→Dan may be several certs plus future re-adds, and hash-via covers exactly one — whack-a-mole against ordinary roster churn. Blocks speak about *venues*, so `via` must be a node.
-2. *Any node I control, not one I name.* Scoping the effect to the issuer's whole *admin reach* — every node they were ever Admin-anchorable at — matches the actual intent ("out of everything I govern"), and dissolves option 3's residual cost: a surviving admin's record grows as they are re-rostered into successor nodes, so their old revocations cover the successors automatically. **The carry-over deny-list liturgy stopped existing.** A griefer's record froze at ejection, so their cuts stay pinned to dead nodes. Coverage drift exists but only grows — fail-closed. Narrow denial (ban in room A, not room B) is signing with the narrow capacity key: the field became the identity slot.
+1. _Node, not hash._ A `via` naming a specific delegation hash fails "edges are certificates": the drawn edge Members→Dan may be several certs plus future re-adds, and hash-via covers exactly one — whack-a-mole against ordinary roster churn. Blocks speak about _venues_, so `via` must be a node.
+2. _Any node I control, not one I name._ Scoping the effect to the issuer's whole _admin reach_ — every node they were ever Admin-anchorable at — matches the actual intent ("out of everything I govern"), and dissolves option 3's residual cost: a surviving admin's record grows as they are re-rostered into successor nodes, so their old revocations cover the successors automatically. _The carry-over deny-list liturgy stopped existing._ A griefer's record froze at ejection, so their cuts stay pinned to dead nodes. Coverage drift exists but only grows — fail-closed. Narrow denial (ban in room A, not room B) is signing with the narrow capacity key: the field became the identity slot.
 
 With the scope derivable from `iss`, the revocation is `{iss, revoke, sig}`.
 
 ### The self-axiom — tombstones become corollaries
 
-Add `record(K) ⊇ {K}` (every key governs its own node) and note that a cert's endpoints are on all of its routes. Then a revocation by the target's issuer or recipient is automatically *total* — retraction and renunciation stop being special cases with their own validity rule; one rule covers everything. Granted in passing: any intermediate, at any level, can refuse to let their own standing carry a third party's cert — deny-only, hop-confined, and strictly weaker than renouncing, which anyone could already do.
-
-> [!NOTE]
-> Only the issuer is on a cert's routes. A route runs from the subject to the _issuer_; the recipient is where it delivers, not a node it transits. If the recipient counted with reach coverage, every ever-admin of `Owners` could cut `Doc → Owners` and brick the document. Retraction is therefore a corollary of the self-axiom; renunciation is an explicit clause, by signature (`¬rev(aud, h)`). See [implementation, Evaluation](implementation.md#evaluation).
+Add `record(K) ⊇ {K}` (every key governs its own node). A cert's route runs from the subject to its _issuer_, and the issuer is in its own record, so a revocation by the target's issuer is automatically _total_: retraction stops being a special case. The recipient is where a route delivers, not a node it transits, so renunciation does not fall out the same way; it is the one explicit clause, by the recipient's signature (`¬rev(aud, h)`). Counting the recipient with record coverage was rejected because it would let every ever-admin of `Owners` cut `Doc → Owners` regardless of rooting level. Granted in passing: any intermediate, at any level, can refuse to let their own standing carry a third party's cert — deny-only, hop-confined, and strictly weaker than renouncing, which anyone could already do.
 
 ### Probed and kept: the Admin gate
 
-"Should Edit members revoke others at ≤ their level?" was tested and rejected. Delegating ≤ your level is constructive and self-scoped; revoking a third party's cert is an act on the graph — governance, categorically. Level-relative revocation would have destroyed the headline containment theorem (*inviting a thousand editors adds zero grief surface*), created editor-tier MAD among a large unvetted population, and made every conveyance level a governance level. The tier structure stands: anyone over their own hop, signers over their own certs, ever-admins over their estates.
+"Should Edit members revoke others at ≤ their level?" was tested and rejected. Delegating ≤ your level is constructive and self-scoped; revoking a third party's cert is an act on the graph — governance, categorically. Level-relative revocation would have destroyed the headline containment theorem (_inviting a thousand editors adds zero grief surface_), created editor-tier MAD among a large unvetted population, and made every conveyance level a governance level. The tier structure stands: anyone over their own hop, signers over their own certs, ever-admins over their estates.
 
 ### The evaluator
 
@@ -261,20 +258,17 @@ Records computed on the raw graph preserve permanence, mutual invisibility, and 
 ### Final certificate shapes
 
 ```
-Delegation: {iss, aud, sub, can, seen: Option<Hash>, sig}
+Delegation: {iss, aud, sub, can, seen: Option<Hash<Revocation>>, sig}
 Revocation: {iss, revoke, sig}
 ```
 
-Every scoping mechanism is a key or a node — capacities are dedicated keys, jurisdictions are rosters, pinning is `sub`, denial scope is the signer's record. Each surviving field defeated an elimination attempt; each eliminated field's jobs moved into the graph.
-
-> [!NOTE]
-> `seen` is `Option<Hash<Revocation>>`: the revoked delegation's hash is a function of the fields being re-issued, so it carries no information and a second heal would collide; a revocation is the only event that poisons a hash. "Record" in this file is what the design calls _admin reach_. See [README, The `seen` Field](README.md#the-seen-field).
+Every scoping mechanism is a key or a node — capacities are dedicated keys, jurisdictions are rosters, pinning is `sub`, denial scope is the signer's record (admin reach). Each surviving field defeated an elimination attempt; each eliminated field's jobs moved into the graph. `seen` names the revocation being re-issued past rather than the revoked delegation: the latter's hash is a function of the fields being re-issued, so it would carry no information and a second heal would collide.
 
 <!-- Links -->
 
 [keyline]: README.md
-[keyline-flat]: README.md#constitutional-flatness
-[keyline-memberships]: README.md#memberships-as-the-only-shape
+[keyline-flat]: patterns.md#constitutional-flatness
+[keyline-memberships]: patterns.md#memberships-as-the-only-shape
 [keyline-open]: README.md#open-questions
 [keyline-renounce]: README.md#renunciation
 [the second convergence: field elimination]: #the-second-convergence-field-elimination

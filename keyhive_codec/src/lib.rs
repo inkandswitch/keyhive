@@ -1,7 +1,6 @@
 //! Encoding traits and the [`encoded::Encoded<T>`] byte container shared by Keyhive crates.
 //!
-//! Keyhive is moving to a bespoke binary codec. This crate holds only the parts
-//! every other crate needs to agree on: the [`traits::Encode`] and [`traits::Decode`] traits and
+//! This crate holds only the parts every Keyhive crate needs to agree on: the [`traits::Encode`] and [`traits::Decode`] traits and
 //! the [`encoded::Encoded<T>`] type that carries a value's bytes tagged with the type they
 //! encode. It has no dependencies beyond `alloc` and contains no cryptography;
 //! hashing an `Encoded<T>` is `keyhive_crypto`'s job.

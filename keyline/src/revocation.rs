@@ -18,7 +18,8 @@ use keyhive_crypto::digest::Digest;
 ///
 /// There is no `sub`: effect is scoped by the admin reach, not by the issuer's
 /// choice. A jurisdiction field was rejected because every rotation would then
-/// invalidate every standing denial; see `design/keyline/alternatives.md`.
+/// moot every standing denial, forcing the deny list to be re-signed; see
+/// `design/keyline/alternatives.md`.
 ///
 /// The type of `revoke` makes revoking a revocation unwritable. Repair is by
 /// re-granting with [`Delegation::reissue`], never by un-denying.

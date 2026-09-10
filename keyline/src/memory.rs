@@ -203,7 +203,7 @@ impl MemoryKeyline {
         }
     }
 
-    /// Whether the recipient of `h` has revoked it themself. The recipient is
+    /// Whether the recipient of `h` has signed a revocation of it. The recipient is
     /// not on the route to the issuer, so this is the one place a revocation's
     /// effect is decided by the signer's identity rather than their admin reach.
     fn renounced(&self, h: &Digest<Delegation>, aud: Id) -> bool {

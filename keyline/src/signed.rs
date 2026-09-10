@@ -9,8 +9,8 @@
 //! [`Signed::verify`], so an unchecked certificate cannot reach
 //! [`crate::keyline::Keyline::insert`].
 //!
-//! `keyhive_crypto` has an older serde-based `Signed<T>` that `keyhive_core`
-//! still uses. The two unify when the bespoke codec lands.
+//! `keyhive_crypto` has a serde-based `Signed<T>` that `keyhive_core` uses; this
+//! type is its `Encoded`-based counterpart.
 
 // TODO(keyhive_types): lift `Signed` and `Verified` out of keyline once beekem migrates.
 
