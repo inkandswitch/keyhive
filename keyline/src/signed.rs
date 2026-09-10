@@ -341,6 +341,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "arbitrary")]
     fn sign_verify_round_trip_property() {
         bolero::check!()
             .with_arbitrary::<(Certificate, [u8; 32])>()

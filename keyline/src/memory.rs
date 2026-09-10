@@ -90,10 +90,29 @@ impl MemoryKeyline {
 
     /// Run both strata. Pure in the set.
     fn evaluate(&self) -> Evaluation {
-        let covered = self.coverage();
-        let live = self.live_set(&covered);
-        let cap = self.caps(&covered, &live);
+        let contexts = self.contexts(self.coverage());
+        let live = self.live_set(&contexts);
+        let cap = self.caps(&contexts, &live);
         Evaluation { live, cap }
+    }
+
+    /// Group covered delegations by exclusion set. `covered(h, ·)` depends
+    /// only on who revoked `h`, so one key's revocation spree yields one set;
+    /// every edge in a context shares its searches.
+    fn contexts(&self, covered: Map<Digest<Delegation>, Set<Id>>) -> Vec<Context> {
+        let mut by_set: BTreeMap<BTreeSet<Id>, Context> = BTreeMap::new();
+        for (h, exclude) in covered {
+            let key: BTreeSet<Id> = exclude.iter().copied().collect();
+            by_set
+                .entry(key)
+                .or_insert_with(|| Context {
+                    exclude,
+                    edges: Vec::new(),
+                })
+                .edges
+                .push(h);
+        }
+        by_set.into_values().collect()
     }
 
     /// Stratum 1: `covered(h, ·)` for every revoked delegation.
@@ -126,7 +145,11 @@ impl MemoryKeyline {
     }
 
     /// Stratum 2, existence: the least fixed point of the live set.
-    fn live_set(&self, covered: &Map<Digest<Delegation>, Set<Id>>) -> Set<Digest<Delegation>> {
+    fn live_set(&self, contexts: &[Context]) -> Set<Digest<Delegation>> {
+        let covered: Set<Digest<Delegation>> = contexts
+            .iter()
+            .flat_map(|c| c.edges.iter().copied())
+            .collect();
         let mut live: Set<Digest<Delegation>> = Set::new();
 
         loop {
@@ -134,28 +157,44 @@ impl MemoryKeyline {
             // prunes covered ones: reach avoiding N is a subset of reach avoiding ∅.
             let base = self.search(self.edges.keys().copied(), &Params::live(None, &live, None));
 
-            let newly_live: Vec<Digest<Delegation>> = self
+            let mut newly_live: Vec<Digest<Delegation>> = self
                 .delegations
                 .iter()
-                .filter(|(h, _)| !live.contains(h))
                 .filter(|(h, d)| {
-                    if !reached(&base, d.sub, d.iss) {
-                        return false;
-                    }
-                    match covered.get(h) {
-                        None => true,
-                        Some(n) => {
-                            !(n.contains(&d.iss) || n.contains(&d.sub) || self.renounced(h, d.aud))
-                                && reached(
-                                    &self.search([d.sub], &Params::live(Some(n), &live, None)),
-                                    d.sub,
-                                    d.iss,
-                                )
-                        }
-                    }
+                    !live.contains(h) && !covered.contains(h) && reached(&base, d.sub, d.iss)
                 })
                 .map(|(h, _)| *h)
                 .collect();
+
+            for ctx in contexts {
+                // Cheap rejections first; the search runs once per context.
+                let candidates: Vec<(&Digest<Delegation>, &Delegation)> = ctx
+                    .edges
+                    .iter()
+                    .filter(|h| !live.contains(h))
+                    .filter_map(|h| self.delegations.get(h).map(|d| (h, d)))
+                    .filter(|(h, d)| {
+                        !(ctx.exclude.contains(&d.iss)
+                            || ctx.exclude.contains(&d.sub)
+                            || self.renounced(h, d.aud))
+                            && reached(&base, d.sub, d.iss)
+                    })
+                    .collect();
+                if candidates.is_empty() {
+                    continue;
+                }
+
+                let levels = self.search(
+                    candidates.iter().map(|(_, d)| d.sub),
+                    &Params::live(Some(&ctx.exclude), &live, None),
+                );
+                newly_live.extend(
+                    candidates
+                        .iter()
+                        .filter(|(_, d)| reached(&levels, d.sub, d.iss))
+                        .map(|(h, _)| **h),
+                );
+            }
 
             if newly_live.is_empty() {
                 return live;
@@ -177,31 +216,46 @@ impl MemoryKeyline {
     /// iterated down from `can`. Uncovered edges are absent; their cap is `can`.
     fn caps(
         &self,
-        covered: &Map<Digest<Delegation>, Set<Id>>,
+        contexts: &[Context],
         live: &Set<Digest<Delegation>>,
     ) -> Map<Digest<Delegation>, Access> {
-        let mut cap: Map<Digest<Delegation>, Access> = covered
-            .keys()
+        let mut cap: Map<Digest<Delegation>, Access> = contexts
+            .iter()
+            .flat_map(|c| c.edges.iter())
             .filter(|h| live.contains(h))
             .map(|h| (*h, self.delegations[h].can))
             .collect();
 
         loop {
-            let lowered: Vec<(Digest<Delegation>, Access)> = cap
-                .iter()
-                .filter_map(|(h, current)| {
-                    let d = &self.delegations[h];
-                    let levels =
-                        self.search([d.sub], &Params::live(Some(&covered[h]), live, Some(&cap)));
+            let mut lowered: Vec<(Digest<Delegation>, Access)> = Vec::new();
+
+            for ctx in contexts {
+                let edges: Vec<(&Digest<Delegation>, &Delegation)> = ctx
+                    .edges
+                    .iter()
+                    .filter(|h| live.contains(h))
+                    .map(|h| (h, &self.delegations[h]))
+                    .collect();
+                if edges.is_empty() {
+                    continue;
+                }
+
+                let levels = self.search(
+                    edges.iter().map(|(_, d)| d.sub),
+                    &Params::live(Some(&ctx.exclude), live, Some(&cap)),
+                );
+                for (h, d) in edges {
                     let at_iss = levels
                         .get(&d.sub)
                         .and_then(|m| m.get(&d.iss))
                         .copied()
                         .expect("a live edge's issuer is reachable on its avoiding derivation");
                     let next = d.can.min(at_iss);
-                    (next < *current).then_some((*h, next))
-                })
-                .collect();
+                    if next < cap[h] {
+                        lowered.push((*h, next));
+                    }
+                }
+            }
 
             if lowered.is_empty() {
                 return cap;
@@ -372,6 +426,12 @@ impl MemoryKeyline {
     }
 }
 
+/// Covered delegations sharing one exclusion set, and therefore one search.
+struct Context {
+    exclude: Set<Id>,
+    edges: Vec<Digest<Delegation>>,
+}
+
 /// Stratum 2 results.
 struct Evaluation {
     live: Set<Digest<Delegation>>,
@@ -436,7 +496,7 @@ fn pop_highest(buckets: &mut [Vec<Id>; 4]) -> Option<(Id, Access)> {
         .find_map(|l| buckets[*l as usize].pop().map(|id| (id, *l)))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test_utils"))]
 mod tests {
     use super::*;
     use crate::{

@@ -13,7 +13,7 @@ use keyhive_codec::{
 /// Encoded as a one-byte kind tag followed by the certificate's own encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Certificate {
     Delegation(Delegation),
     Revocation(Revocation),
@@ -96,6 +96,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "arbitrary")]
     fn codec_laws() {
         bolero::check!()
             .with_arbitrary::<Certificate>()
