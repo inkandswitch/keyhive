@@ -528,11 +528,146 @@ fn pop_highest(buckets: &mut [Vec<Id>; 4]) -> Option<(Id, Access)> {
 mod tests {
     use super::*;
     use crate::{
-        conformance::{d, scenarios::standard, DOC, OWNERS},
+        conformance::{d, laws, scenarios, scenarios::standard, DOC, OWNERS},
         test_utils::cert,
     };
 
-    crate::keyline_conformance!(MemoryKeyline);
+    // One test per scenario and law. Add new ones to `scenarios.rs` / `laws.rs`
+    // and list them here; a second backend copies this block.
+    #[test]
+    fn empty_graph() {
+        scenarios::empty_graph::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn attenuation_and_widest_path() {
+        scenarios::attenuation_and_widest_path::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn ungrounded_edges_are_dead() {
+        scenarios::ungrounded_edges_are_dead::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn membership_composes() {
+        scenarios::membership_composes::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn late_binding_grants_new_documents_to_members() {
+        scenarios::late_binding_grants_new_documents_to_members::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn retraction_is_total() {
+        scenarios::retraction_is_total::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn renunciation_is_total() {
+        scenarios::renunciation_is_total::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn admin_over_a_transited_node_cuts_deep() {
+        scenarios::admin_over_a_transited_node_cuts_deep::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn non_admin_cut_is_confined_to_own_node() {
+        scenarios::non_admin_cut_is_confined_to_own_node::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn ex_admin_reach_is_frozen() {
+        scenarios::ex_admin_reach_is_frozen::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn mutual_revocation_leaves_both_cuts_standing() {
+        scenarios::mutual_revocation_leaves_both_cuts_standing::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn apex_admin_can_deny_the_root_edge() {
+        scenarios::apex_admin_can_deny_the_root_edge::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn edit_rooted_root_edge_is_undeniable() {
+        scenarios::edit_rooted_root_edge_is_undeniable::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn senior_role_admin_cuts_inside_junior_role() {
+        scenarios::senior_role_admin_cuts_inside_junior_role::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn supply_is_daisy_chained() {
+        scenarios::supply_is_daisy_chained::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn covered_edges_are_clamped_not_just_gated() {
+        scenarios::covered_edges_are_clamped_not_just_gated::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn revocation_may_arrive_before_its_target() {
+        scenarios::revocation_may_arrive_before_its_target::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn insert_is_idempotent_and_reports_duplicates() {
+        scenarios::insert_is_idempotent_and_reports_duplicates::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn reissue_with_seen_heals() {
+        scenarios::reissue_with_seen_heals::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn unknown_revocation_is_inert() {
+        scenarios::unknown_revocation_is_inert::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn signed_certificates_agree_with_fixtures() {
+        scenarios::signed_certificates_agree_with_fixtures::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn matches_naive_oracle_without_revocations() {
+        laws::matches_naive_oracle_without_revocations::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn order_independent() {
+        laws::order_independent::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn idempotent() {
+        laws::idempotent::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn revocations_only_deny() {
+        laws::revocations_only_deny::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn digest_identifies_the_set() {
+        laws::digest_identifies_the_set::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn queries_are_consistent() {
+        laws::queries_are_consistent::<MemoryKeyline>();
+    }
 
     #[test]
     fn inherent_accessors() {
