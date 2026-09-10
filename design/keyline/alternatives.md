@@ -142,6 +142,26 @@ _Rejected because._ Validity of a step depends on the whole prefix, so the searc
 
 _Reopen if._ A polynomial algorithm for the ordered forbidden-pairs case turns up, or the graphs in practice are small enough that the exact search is bounded and the difference is observable.
 
+### Direct (last-hop) admin reach
+
+_Proposal._ `admin_reach(k, n)` only when the last hop of `k`'s Admin standing over `n` is an edge _about_ `n` (`sub: n`); Admin inherited through a role does not count.
+
+_Would buy._ An Admin-rooted document's root edge is undeniable by construction: apex admins hold `Owners`, never `Doc`. Reach is answerable from a node's own certificates.
+
+_Rejected because._ Nested roles stop working as governance expects: an Admin of `Owners`, where `Owners` is Admin over `Members`, could not cut inside `Members` without a separate `sub: Members` grant. And the protection it buys is one self-signed certificate from false: an apex admin signs `{iss: me, aud: me, sub: Doc, can: Admin}` (their standing over `Doc` is Admin, so the grant is direct) and `Doc` is in their reach permanently. Composed reach makes the rule uniform, and the same protection is available as a pattern with no rule: root the document at Edit ([patterns, Rooting Level](patterns.md#rooting-level)). Bricking an Admin-rooted document is not a new power — a root admin can already eject every peer and lose their key.
+
+_Reopen if._ Never on the protection argument; possibly if a use case needs reach to be locally computable per node.
+
+### Root edges answer only to the subject key
+
+_Proposal._ Keep composed reach but exempt root edges (`iss = sub`) from third-party coverage: the subject's own node is excluded from a derivation only when the revoker is the subject itself.
+
+_Would buy._ Undeniable root edges for every rooting level; re-rooting with a retained key always escapes old admins.
+
+_Rejected because._ It is a special case in a design that has none, and it buys nothing that Edit-rooting does not: a ceremony that wants an undeniable apex roots at Edit. The power it would remove from Admin-rooted apex admins — ending the document in one certificate — is equivalent to what they already hold (eject everyone, lose the key); protecting against it protects nothing.
+
+_Reopen if._ Never.
+
 ## Crate
 
 ### Async `Keyline` trait
