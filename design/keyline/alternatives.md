@@ -16,7 +16,7 @@ _Reopen if._ Narrow denial turns out to be common. The compatible extension is `
 
 ### A random nonce instead of `seen`
 
-_Proposal._ Replace `seen: Option<Digest<Delegation>>` with random bytes so an issuer need not know which revoked certificate it is re-issuing past.
+_Proposal._ Replace `seen: Option<Digest<Revocation>>` with random bytes so an issuer need not know which revoked certificate it is re-issuing past.
 
 _Would buy._ No silent-collision UX; no dependency on having synced the revocation.
 
@@ -110,7 +110,7 @@ _Reopen if._ Whiteout forces causal metadata into the system anyway. Then this i
 
 _Proposal._ Delete revoked edges from the graph, then compute reachability. One pass.
 
-_Rejected because._ Revocations would then affect each other's authority, and the result would depend on merge order: applying `r1` (Brooke cuts Bob) before checking `r2` (Bob cuts a grant) rejects `r2`; the reverse order lands it. Stratification computes admin reach where no revocation can see any other. Long form: [README, Why the Strata Are Mandatory](README.md#why-the-strata-are-mandatory).
+_Rejected because._ Revocations would then affect each other's authority, and the result would depend on merge order: applying `r1` (Dan cuts Bob) before checking `r2` (Bob cuts a grant) rejects `r2`; the reverse order lands it. Stratification computes admin reach where no revocation can see any other. Long form: [README, Why the Strata Are Mandatory](README.md#why-the-strata-are-mandatory).
 
 _Reopen if._ Never; this is a correctness requirement, not a trade.
 
@@ -128,7 +128,7 @@ _Proposal._ A covered delegation is live iff some derivation to its issuer avoid
 
 _Would buy._ One widest-path pass for levels; exclusion-set searches return a boolean.
 
-_Rejected because._ It leaks the authority the cut was about. If `B` is Admin over `Doc` through role `Mods` and separately Read through `Owners`, and a `Mods` admin revokes `B`'s grant to `C`, the gated reading hands `C` Admin: `B`'s Mod standing flows through the very edge the Mod admin cut, because only existence consulted the exclusion set. Clamping the edge to the level reachable on the avoiding derivation gives `C` Read, yields the same live set, and is `≤` gated everywhere. Long form: [implementation, Evaluation](implementation.md#evaluation).
+_Rejected because._ It leaks the authority the cut was about. Dan administers `Mods`, which is supplied into `Doc` at Edit (so `Doc` is not in Dan's reach); Eve is a Mod (Edit over `Doc` through `Mods`) and separately holds Read over `Doc` from `Owners`; Eve grants Frank Admin; Dan revokes it. The gated reading hands Frank Edit: Eve's Mod standing flows through the very edge Dan cut, because only existence consulted the exclusion set. Clamping the edge to the level reachable on the avoiding derivation gives Frank Read, yields the same live set, and is `≤` gated everywhere. Long form: [implementation, Evaluation](implementation.md#evaluation).
 
 _Reopen if._ Never on its own merits; it is strictly more permissive than clamping for the same cost class.
 
@@ -176,7 +176,7 @@ _Reopen if._ A backend needs to page the certificate set in from storage during 
 
 _Proposal._ `Keyline::insert` verifies the Ed25519 signature and rejects bad certificates.
 
-_Rejected because._ It duplicates verification `keyhive_core` does at ingest and puts `ed25519-dalek`'s verifier in the evaluator's dependency set. `insert` takes a `Verified<Certificate>` witness whose only public constructor is `Signed::verify`, so unchecked certificates cannot reach the set. Decided in [implementation, `Verified<T>`](implementation.md#verifiedt).
+_Rejected because._ It duplicates verification `keyhive_core` does at ingest and puts `ed25519-dalek`'s verifier in the evaluator's dependency set. `insert` takes a `Verified<Certificate>` witness whose only public constructor is `Signed::verify`, so unchecked certificates cannot reach the set. Decided in [implementation, `Verified<T>`](implementation.md#signedt-and-verifiedt).
 
 _Reopen if._ A backend is used without `keyhive_core` in front of it and needs to be safe standalone. Then add a verifying wrapper, not a trait change.
 
@@ -192,7 +192,7 @@ _Reopen if._ A second backend appears.
 
 _Proposal._ Fan out stratum-1 admin-reach computation and per-covered-certificate route searches across threads.
 
-_Rejected for now because._ Wasm is a first-class target and `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator keeps the independent units as plain iterators so a native-only `parallel` feature can be added without restructuring.
+_Rejected because._ Wasm is a first-class target and `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator keeps the independent units as plain iterators so a native-only `parallel` feature can be added without restructuring.
 
 _Reopen if._ Native evaluation cost becomes a problem on real graphs.
 

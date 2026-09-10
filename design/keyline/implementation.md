@@ -1,6 +1,6 @@
 # The `keyline` Crate
 
-This document specifies the Rust crate that implements the [Keyline model][keyline]. The model document says what authority _is_; this one says what the code exposes, what it assumes, and what it deliberately leaves to the layer above. Decisions recorded here were made before any code was written so that the implementation can be checked against them.
+This document specifies the Rust crate that implements the [Keyline model][keyline]. The model document says what authority _is_; this one says what the code exposes, what it assumes, and what it deliberately leaves to the layer above. It is the contract the implementation is checked against.
 
 ## Language
 
@@ -28,7 +28,7 @@ The crate sits beside `beekem`: both are engines over untyped keys, both are wra
 
 A newtype over `ed25519_dalek::VerifyingKey`. Every principal, role, document, and group is an `Id`. `keyline` attaches no meaning to which is which.
 
-`keyhive_core` has `Identifier` for the same thing; `keyline` defines its own for now and `keyhive_core` converts at the boundary, as it does for `beekem::MemberId`. Unifying shared types into a `keyhive_types` crate is a follow-up; the code carries `TODO(keyhive_types)` markers where it applies.
+`keyhive_core` has `Identifier` for the same thing; `keyline` defines its own and `keyhive_core` converts at the boundary, as it does for `beekem::MemberId`. Shared types are slated for a `keyhive_types` crate; `TODO(keyhive_types)` marks the sites.
 
 ### `Access`
 
@@ -36,7 +36,7 @@ A newtype over `ed25519_dalek::VerifyingKey`. Every principal, role, document, a
 pub enum Access { Relay, Read, Edit, Admin }
 ```
 
-Totally ordered, `Relay < Read < Edit < Admin`. Attenuation along a route is `min`; combination across routes is `max`. The type moves down from `keyhive_core` (which re-exports it) because the ordering is part of the graph semantics, not of the API layer.
+Totally ordered, `Relay < Read < Edit < Admin`. Attenuation along a route is `min`; combination across routes is `max`. The type belongs here rather than in `keyhive_core` because the ordering is part of the graph semantics, not of the API layer; `keyhive_core` will re-export it at integration.
 
 ### `Delegation`
 
@@ -80,7 +80,7 @@ Anyone MAY issue a delegation over any subject. The issuer's effective level ove
 
 Admin is not required to grant. It matters for revocation, in two tiers. You can always cut a delegation you issued: the edge below you is yours, and retraction needs no standing. Holding Admin over a node lets you act as that node for revocation: your cuts cover anything on routes through it, all the way down. "Act as" is revocation-side only. Admin over `N` does not let you sign as `N`; you grant authority _over_ `N` by issuing `{iss: you, sub: N, …}`, clamped by your own level.
 
-Compared with the current `keyhive_core::Delegation`, the fields `proof`, `after_revocations`, and `after_content` are gone, and `delegate: Agent` is just `aud: Id`. This is a wire-format break; it lands with the wider API break that follows this branch.
+Compared with the current `keyhive_core::Delegation`, the fields `proof`, `after_revocations`, and `after_content` are gone, and `delegate: Agent` is just `aud: Id`. This is a wire-format break, absorbed by the pending API break.
 
 #### Why `seen` and not a nonce
 
@@ -97,7 +97,7 @@ pub struct Revocation {
 }
 ```
 
-The type of `revoke` makes revoking a revocation unwritable. There is no `sub`: effect is scoped by the issuer's admin reach, not by the issuer's choice. A jurisdiction field was considered and rejected because it would make every rotation invalidate every standing denial; see [alternatives](alternatives.md#a-sub-jurisdiction-field-on-revocation).
+The type of `revoke` makes revoking a revocation unwritable. There is no `sub`: effect is scoped by the issuer's admin reach, not by the issuer's choice. A jurisdiction field was considered and rejected because every rotation would moot every standing denial, forcing the deny list to be re-signed; see [alternatives](alternatives.md#a-sub-jurisdiction-field-on-revocation).
 
 ### `Certificate`
 
@@ -118,7 +118,7 @@ pub struct Encoded<T> {
 }
 ```
 
-`Encoded::new(&T)` is the only way in from a value. Equality, `Hash`, and `Ord` are byte equality, which is certificate identity, so a set of `Encoded<Certificate>` needs no separate digest index. It serializes as a byte string behind a `serde` feature so that `keyhive_core` can carry it through its existing serde paths for now.
+`Encoded::new(&T)` is the only way in from a value. Equality, `Hash`, and `Ord` are byte equality, which is certificate identity, so a set of `Encoded<Certificate>` needs no separate digest index. It serializes as a byte string behind a `serde` feature so that `keyhive_core` can carry it through its existing serde paths.
 
 `Encoded<T>` and the `Encode` / `Decode` traits live in a new `keyhive_codec` crate (see [Crates](#crates)). Digest and signature are both computed over `Encoded::as_bytes()`, so they cover the same bytes by construction; nothing re-encodes a payload to check it.
 
@@ -146,9 +146,9 @@ impl<T: Decode> Signed<T> {
 }
 ```
 
-`verify` is the only public constructor of `Verified<T>`. It checks the signature over the encoded bytes, decodes, and rejects non-canonical input (below). Because the digest is taken from the same bytes the signature covers, the identity a revocation names and the identity the set stores can never disagree. A `test_utils`-gated constructor exists for the conformance suite so that tests do not pay for signing.
+`verify` is the only public constructor of `Verified<T>`. It checks the signature over the encoded bytes, decodes, and rejects non-canonical input (below). Because the digest is taken from the same bytes the signature covers, nothing re-encodes a payload to identify it. Two digests exist per delegation: the set is keyed by `Digest<Certificate>` (over the tagged bytes), while `revoke` and `seen` name the payload digest (`Delegation::digest()`, `Revocation::digest()`, over the untagged bytes); both are functions of the same canonical bytes. A `test_utils`-gated constructor exists for the conformance suite so that tests do not pay for signing.
 
-These two types live in `keyline` for this branch, marked `TODO(keyhive_types)`. `keyhive_crypto`'s existing serde-based `Signed<T>` is untouched and remains what `keyhive_core` uses until the codec migration unifies them.
+These two types live in `keyline` (`TODO(keyhive_types)`). `keyhive_crypto`'s serde-based `Signed<T>` is unchanged and remains what `keyhive_core` uses; the codec migration unifies them.
 
 `keyline` does not verify signatures anywhere else. It depends on `ed25519-dalek` for `VerifyingKey`, `Signature`, and `verify_strict`.
 
@@ -252,7 +252,7 @@ The model document's [Computation] section explains why the shortcut "delete rev
 
 ### The Same Program in Threshold Form
 
-The program above carries levels as values and needs a greatest fixed point for caps. The following is the same semantics as a single stratified Datalog¬ program with no aggregation and no GFP: levels are decomposed into thresholds (a fact at `L` means "standing `≥ L`"; `Access` is a finite total order, so four boolean passes recover the exact level), and each covered certificate's exclusion set is a *context* the search runs in. It is the form that drops directly into a Datalog engine, or into SQL as one statement per fixpoint round. The AND/OR reading of the graph, the complexity argument, and the SQL and DBSP hosting options are worked out in [evaluation notes](evaluation-notes.md).
+The program above carries levels as values and needs a greatest fixed point for caps. The following is the same semantics as a single stratified Datalog¬ program with no aggregation and no GFP: levels are decomposed into thresholds (a fact at `L` means "standing `≥ L`"; `Access` is a finite total order, so four boolean passes recover the exact level), and each covered certificate's exclusion set is a _context_ the search runs in. It is the form that drops directly into a Datalog engine, or into SQL as one statement per fixpoint round. The AND/OR reading of the graph, the complexity argument, and the SQL and DBSP hosting options are worked out in [evaluation notes](evaluation-notes.md).
 
 ```prolog
 % stratum 0 — facts
@@ -289,7 +289,7 @@ effective(S, N, L) :- live(empty, L, S, N), not shadowed(S, N, L).
 shadowed(S, N, L)  :- live(empty, L2, S, N), le(L, L2), L != L2.
 ```
 
-`is_live(C)` is `live(O, _, Sub, Iss)` for `own_ctx(C, O)` and `delegation(C, Iss, _, Sub, _)`, together with `not covered_total(C)`. Contexts whose exclusion sets coincide (one key's revocation spree) may share a single context; that is the dedup obligation in `alternatives`/TODO, an optimisation that does not change the answers.
+`is_live(C)` is `live(O, _, Sub, Iss)` for `own_ctx(C, O)` and `delegation(C, Iss, _, Sub, _)`, together with `not covered_total(C)`. Contexts whose exclusion sets coincide (one key's revocation spree) may share a single context; `MemoryKeyline` does this; it is an optimisation that does not change the answers (see [evaluation notes, §7](evaluation-notes.md#7-threat-model-evaluation-cost-as-a-dos-surface)).
 
 How it corresponds to the normative program:
 
@@ -297,7 +297,7 @@ How it corresponds to the normative program:
 - `live(O, L, Sub, Iss)` in the hop's own context, rooted at `Sub`, is `route(sub, iss, h)` and `cap(h)` at once: existence at some `L` is liveness, the largest such `L` is the cap. Rooting it at `Sub` rather than at the querying `S` is the daisy-chain rule.
 - The GFP disappears because thresholds are monotone: "iss holds `≥ L` avoiding `covered(h)`" is a positive fact, and every stratum-2 rule is positive in `live`, so the whole stratum is a least fixed point. The two formulations agree because caps only ever clamp and levels are always grounded at a subject; a cap can never raise the level at its own issuer.
 
-One property of this program matters for every backend: the recursive rule has **two** premises in the relation being defined. That is non-linear recursion. SQL's `WITH RECURSIVE` (SQLite, PostgreSQL) admits exactly one reference to the relation under construction, so the fixpoint cannot be a single recursive CTE; it is one plain statement per round plus a loop that stops when a round adds nothing. Stratification and the negation are the easy part (chained CTEs, anti-joins); the loop is the only non-declarative ingredient, and it is inherent — role indirection is RT₀/SDSI chain discovery, which is P-complete, while linear recursion is `NL`. This is why the `Keyline` trait is synchronous and `MemoryKeyline` has a driver loop, and why a Datalog engine (`ascent`, Soufflé, DBSP) hosts the program natively where SQL needs a stored procedure.
+One property of this program matters for every backend: the recursive rule has _two_ premises in the relation being defined. That is non-linear recursion. SQL's `WITH RECURSIVE` (SQLite, PostgreSQL) admits exactly one reference to the relation under construction, so the fixpoint cannot be a single recursive CTE; it is one plain statement per round plus a loop that stops when a round adds nothing. Stratification and the negation are the easy part (chained CTEs, anti-joins); the loop is the only non-declarative ingredient, and it is inherent — role indirection is RT₀/SDSI chain discovery, which is P-complete, while linear recursion is `NL`. This is why the `Keyline` trait is synchronous and `MemoryKeyline` has a driver loop, and why a Datalog engine (`ascent`, Soufflé, DBSP) hosts the program natively where SQL needs a stored procedure.
 
 ## Encoding
 
@@ -320,16 +320,17 @@ Every implementation MUST satisfy two laws:
 
 The second is a security requirement, not tidiness. Certificates travel as `Encoded<T>` and the receiver verifies and hashes the bytes it received; nothing re-encodes. If the codec admitted two byte forms for one value, a peer could ship the same delegation twice with two digests, producing two live certificates for one grant of which a revocation covers only one — the [nonce failure mode](alternatives.md#a-random-nonce-instead-of-seen) through the back door. `decode` MUST therefore reject any non-canonical input, either because the format admits exactly one encoding per value or by re-encoding and comparing. A corollary: absent `seen` has exactly one encoding, distinct from every present value.
 
-For this branch, `keyline` implements the traits for its own types with a fixed-width layout:
+`keyline` implements the traits for its own types with a fixed-width layout:
 
 ```
+Certificate: kind:u8 ‖ payload
 Delegation:  iss ‖ aud ‖ sub ‖ can:u8 ‖ seen_tag:u8 ‖ seen?
 Revocation:  iss ‖ revoke
 ```
 
 where `seen_tag` is `0` with no following bytes when `seen` is absent and `1` followed by 32 bytes when present. Fixed-width layouts are canonical by construction, so `decode` only has to check length and enum ranges.
 
-This layout is a placeholder. Keyhive is moving to a bespoke codec after this branch; when it lands, these `Encode` / `Decode` impls are replaced (possibly by derive macros in `keyhive_codec`), every hash changes, and the API break already in progress absorbs that. `Encoded<T>`, `Signed<T>`, `Verified<T>`, and the `Keyline` trait do not change. The placeholder exists so that the crate is `no_std` from the start (no `bincode`) and so that the evaluator and its tests have stable hashes to build against.
+This layout is a placeholder for the bespoke codec. When that lands, these `Encode` / `Decode` impls are replaced (possibly by derive macros in `keyhive_codec`), every hash changes, and the pending API break absorbs it. `Encoded<T>`, `Signed<T>`, `Verified<T>`, and the `Keyline` trait do not change. The placeholder exists so that the crate is `no_std` from the start (no `bincode`) and so that the evaluator and its tests have stable hashes to build against.
 
 ## Crates
 
@@ -341,7 +342,7 @@ keyhive_crypto       Digest<T> (bound loosened), Digest::of(&Encoded<T>). Old Si
 keyline              Id, Access, Delegation, Revocation, Certificate, Signed/Verified over Encoded,
                      the Keyline trait, MemoryKeyline, conformance suite.
       ▲
-keyhive_core         consumes keyline (later); never sees raw bytes.
+keyhive_core         consumes keyline; never sees raw bytes.
 ```
 
 `keyhive_codec` exists now, with only the traits and `Encoded<T>`, because the dependency direction is only right if it sits at the bottom: `beekem` will implement the same traits when it migrates, and `beekem → keyline` would be wrong. It contains no BLAKE3; hashing an `Encoded<T>` is `keyhive_crypto`'s job.
@@ -367,20 +368,20 @@ keyline/
 ```
 
 - `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`.
-- Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`), and `ed25519-dalek` (`VerifyingKey`, `Signature`). Nothing else at runtime.
+- Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`), and `ed25519-dalek` (`VerifyingKey`, `Signature`). `blake3` for `set_digest`. Optional, behind features: `thiserror` and `tracing` (`std`), `serde`, `arbitrary`.
 - `std` feature (default on): `HashMap`/`HashSet` via `beekem::collections`-style aliases, `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
 - `test_utils` feature: the conformance suite, the unverified `Verified` constructor, and `bolero`/`arbitrary`. Implies `arbitrary`, which implies `std` (`derive(Arbitrary)` expands to a `thread_local!`).
 - Testing is split by feature so `std` and `no_std` are exercised separately: `cargo test -p keyline --no-default-features` runs the unit tests against the `no_std` crate code (the crate never links `std`; only the harness does); `cargo test -p keyline --features test_utils` adds the conformance scenarios, the `bolero` laws, and the property tests that need `Arbitrary`. `ci-no-std` runs the former; `ci-test` the latter.
 - `serde` feature: derives on the public types for `keyhive_core`'s internal use (archives). Not the wire format.
 - No `parallel` feature yet. If one comes, it is native-only (`rayon`); Wasm stays single-threaded because `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator is written so the independent units (admin reach per issuer, route search per covered certificate) are plain iterators.
 
-Follows the workspace's `beekem` conventions: `foo.rs` + `foo/`, manual impls instead of `derivative`, `tracing` behind `std`.
+The crate follows the workspace's `beekem` conventions: `foo.rs` + `foo/`, manual impls instead of `derivative`, `tracing` behind `std`.
 
 ## Conformance Suite
 
 Every backend runs the same tests against `impl Keyline`. The suite is exported behind `test_utils`; `keyline_conformance!(MyBackend)` expands to one `#[test]` per scenario and per law. `MemoryKeyline` runs it on itself.
 
-_Generator._ `conformance::gen::CertSet` draws from a pool of eight deterministic identities: a root edge per subject (one to three), up to ten free-form delegations over any node in the pool (so some land on roles and some are ungrounded), up to four revocations naming delegations already present, and up to two re-issues past a revocation. Random 32-byte keys would give nothing but ungrounded edges.
+_Generator._ `conformance::gen::CertSet` draws from a pool of eight deterministic identities: a root edge per subject (one to three), up to ten free-form delegations over any node in the pool (so some land on roles and some are ungrounded), up to four revocations naming delegations already present, up to two re-issues past a revocation, and, about half the time, the clamping shape (a role supplied into a subject, an admin of it, a member of it with an independent grant over the subject, that member's grant to a third party, and the admin's revocation of it). Random 32-byte keys would give nothing but ungrounded edges.
 
 _Laws_ (`bolero`, over generated sets):
 
@@ -393,13 +394,13 @@ _Laws_ (`bolero`, over generated sets):
 
 With revocations, exact agreement is by scenario. A second oracle for that case — the full program transcribed into a Datalog engine (`ascent`) as a dev-dependency — is an open option.
 
-_Scenarios._ The seven findings and the running scenario from [edge-cases], encoded as fixtures: rotation moots but never un-applies; concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; an apex admin of an Admin-rooted document can deny the root edge, while an Edit-rooted document's root edge is undeniable; retraction and renunciation are total; a non-admin's cut is confined to their own node; `seen` re-issue heals with the same downstream hashes. Plus the composition and reach cases from [Evaluation](#evaluation): membership carries whatever the role reaches, including documents added later; a senior role's admin cuts inside a junior role without an explicit grant; supplying a role into a document gives power over the supply edge and none over the roster; a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example). `MemoryKeyline` runs these via `keyline_conformance!`.
+_Scenarios._ Named cases derived from the [edge-cases] findings and the model document: concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; an apex admin of an Admin-rooted document can deny the root edge, while an Edit-rooted document's root edge is undeniable; retraction and renunciation are total; a non-admin's cut is confined to their own node; `seen` re-issue heals with the same downstream hashes. Plus the composition and reach cases from [Evaluation](#evaluation): membership carries whatever the role reaches, including documents added later; a senior role's admin cuts inside a junior role without an explicit grant; supplying a role into a document gives power over the supply edge and none over the roster; a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example). `MemoryKeyline` runs these via `keyline_conformance!`.
 
 _Negative._ A revocation naming an unknown hash is new and changes no answer. A duplicate returns `false` from `insert` and `revocations_naming` reports what named it.
 
 ## Integration Sketch
 
-Not part of this branch; recorded so the crate's shape is checked against its one consumer.
+Not implemented here; recorded so the crate's shape is checked against its one consumer.
 
 - `keyhive_core` holds `Arc<RwLock<MemoryKeyline>>` (or `Rc<RefCell<_>>` for `Local`) on `Keyhive`.
 - `Group::members()`, `Document::members()`, `Membered::transitive_members()` become `keyline.members(id)` with ID conversion.
@@ -419,7 +420,7 @@ Not part of this branch; recorded so the crate's shape is checked against its on
 ## Deferred
 
 - Whiteout and the `Relay`/BeeKEM rotation coupling: unchanged, content-layer and integration questions respectively.
-- The bespoke codec: last task on this branch, or the branch after.
+- The bespoke codec.
 - Incremental evaluation and memoization beyond stratum 1: only once the conformance suite pins semantics.
 - A second backend and a `keyline` / `keyline_memory` crate split: only if a second backend appears.
 
