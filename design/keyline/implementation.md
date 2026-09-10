@@ -268,6 +268,55 @@ Notes on the program:
 
 The model document's [Computation] section explains why the shortcut "delete revoked edges, then compute reachability" is wrong, not merely slow.
 
+### The Same Program in Threshold Form
+
+The program above carries levels as values and needs a greatest fixed point for caps. The following is the same semantics as a single stratified Datalog¬ program with no aggregation and no GFP: levels are decomposed into thresholds (a fact at `L` means "standing `≥ L`"; `Access` is a finite total order, so four boolean passes recover the exact level), and each covered certificate's exclusion set is a *context* the search runs in. It is the form that drops directly into a Datalog engine, or into SQL as one statement per fixpoint round. (Adapted from an evaluator study in `.ignore/keyline-explainer-notes/`, corrected for the route-root and reach decisions above.)
+
+```prolog
+% stratum 0 — facts
+%   delegation(C, Iss, Aud, Sub, Can)   revocation(R, Iss, C)   node(N)   level(L)   le(L1, L2)
+
+% stratum 1 — positive pass. The two recursive premises are rules 2 and 3 folded together.
+reaches(L, S, S)   :- node(S), level(L).
+reaches(L, S, Aud) :- delegation(_, Iss, Aud, Sub, Can), le(L, Can),
+                      reaches(L, S, Sub), reaches(L, Sub, Iss).
+
+% stratum 1b — reach and coverage; no recursion
+admin_reach(K, N)  :- reaches(admin, N, K).
+covered_total(C)   :- revocation(_, I, C), delegation(C, I, _, _, _).      % retraction
+covered_total(C)   :- revocation(_, I, C), delegation(C, _, I, _, _).      % renunciation
+covered(C, N)      :- revocation(_, I, C), delegation(C, Di, Da, _, _),
+                      I != Di, I != Da, admin_reach(I, N).
+
+% contexts: the empty one, plus one per covered certificate
+ctx(empty).            excl(empty, _) is false.
+ctx(C)             :- covered(C, _).
+excl(C, N)         :- covered(C, N).
+own_ctx(C, C)      :- covered(C, _).
+own_ctx(C, empty)  :- delegation(C, _, _, _, _), not covered(C, _).
+
+% stratum 2 — live pass in every context; negation only over strata 0–1b
+live(X, L, S, S)   :- ctx(X), node(S), level(L), not excl(X, S).
+live(X, L, S, Aud) :- delegation(C, Iss, Aud, Sub, Can), le(L, Can), ctx(X),
+                      live(X, L, S, Sub), live(X, L, Sub, Iss),          % feeds, in the query's context
+                      own_ctx(C, O),      live(O, L, Sub, Iss),          % the hop, in its own context, rooted at its own subject
+                      not covered_total(C), not excl(X, Iss), not excl(O, Iss).
+
+% stratum 3 — read off the maximum threshold
+effective(S, N, L) :- live(empty, L, S, N), not shadowed(S, N, L).
+shadowed(S, N, L)  :- live(empty, L2, S, N), le(L, L2), L != L2.
+```
+
+`is_live(C)` is `live(O, _, Sub, Iss)` for `own_ctx(C, O)` and `delegation(C, Iss, _, Sub, _)`, together with `not covered_total(C)`. Contexts whose exclusion sets coincide (one key's revocation spree) may share a single context; that is the dedup obligation in `alternatives`/TODO, an optimisation that does not change the answers.
+
+How it corresponds to the normative program:
+
+- `reaches(L, S, Aud) :- … reaches(L, S, Sub), reaches(L, Sub, Iss)` is rules 2 and 3 in one: with `Sub = S` the first premise is the axiom and the rule is "edge about `S`"; with `Sub ≠ S` it is membership composition.
+- `live(O, L, Sub, Iss)` in the hop's own context, rooted at `Sub`, is `route(sub, iss, h)` and `cap(h)` at once: existence at some `L` is liveness, the largest such `L` is the cap. Rooting it at `Sub` rather than at the querying `S` is the daisy-chain rule.
+- The GFP disappears because thresholds are monotone: "iss holds `≥ L` avoiding `covered(h)`" is a positive fact, and every stratum-2 rule is positive in `live`, so the whole stratum is a least fixed point. The two formulations agree because caps only ever clamp and levels are always grounded at a subject; a cap can never raise the level at its own issuer.
+
+One property of this program matters for every backend: the recursive rule has **two** premises in the relation being defined. That is non-linear recursion. SQL's `WITH RECURSIVE` (SQLite, PostgreSQL) admits exactly one reference to the relation under construction, so the fixpoint cannot be a single recursive CTE; it is one plain statement per round plus a loop that stops when a round adds nothing. Stratification and the negation are the easy part (chained CTEs, anti-joins); the loop is the only non-declarative ingredient, and it is inherent — role indirection is RT₀/SDSI chain discovery, which is P-complete, while linear recursion is `NL`. This is why the `Keyline` trait is synchronous and `MemoryKeyline` has a driver loop, and why a Datalog engine (`ascent`, Soufflé, DBSP) hosts the program natively where SQL needs a stored procedure.
+
 ## Encoding
 
 ```rust
