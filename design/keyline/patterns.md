@@ -102,7 +102,20 @@ A record contains every node its holder ever reached *as a subject* with Admin. 
 
 > Never grant Admin over a child role to an upstream role. Parents govern children by controlling their supplies (total, coarse: cut and re-grant to a successor), not by entering their constitutions. Constitutional membership is permanent contamination; supply control is not.
 
-Transit-level nesting (a child role holding an Edit-level membership in a parent) is safe: only holding Admin over a node enters records, so an Edit membership adds nothing. With flat constitutions, ever-Admin is non-transitive by construction, and an ex-admin's record is exactly the rosters they sat on. No topology mistake can reach the subject itself ([the root edge protects itself][the root edge protects itself]).
+Transit-level nesting (a child role holding an Edit-level membership in a parent) is safe: only holding Admin over a node enters records, so an Edit membership adds nothing. With flat constitutions, ever-Admin is non-transitive by construction, and an ex-admin's record is exactly the rosters they sat on. The same logic applied at the top is the [rooting level][rooting level] choice: a document supplied at Admin puts itself in every apex admin's record; supplied at Edit, it is in nobody's.
+
+## Rooting Level
+
+Admin over a document gates exactly one thing: reach over the document's routes. Delegation needs no level, and membership is governed by Admin over the _role_, so the level the ceremony's root edge carries is a choice about who can destroy the document, and nothing else.
+
+| Root edge                                       | Doc is in the admin reach of       | Root edge                                                   | Retained subject key                                                                     |
+|-------------------------------------------------|------------------------------------|-------------------------------------------------------------|------------------------------------------------------------------------------------------|
+| `{iss: Doc, aud: Owners, sub: Doc, can: Admin}` | every Admin member of Owners, ever | deniable by any of them; one revocation bricks the document | cannot escape: old admins' reach covers `Doc → Owners′` too                              |
+| `{iss: Doc, aud: Owners, sub: Doc, can: Edit}`  | nobody                             | undeniable                                                  | re-roots cleanly: old admins' reach holds Owners, which the new hierarchy never transits |
+
+Edit-rooting costs nothing in capability: humans reach the document at Edit, which is all the conveyance there is, and govern it through Admin over its roles. It is the shape for a document whose owners should be able to leave without taking it with them. Admin-rooting is the shape when the owners _are_ the document — a personal document, a two-party agreement — and being able to end it unilaterally is the point. The power it grants is not new: a root admin can already eject every peer and lose their own key.
+
+A document's rooting level is fixed at the ceremony (the root edge cannot be replaced without the subject key) and is visible to anyone holding the set, so it is a published fact about the document rather than a policy.
 
 ## Memberships as the Only Shape
 
@@ -141,4 +154,4 @@ Two costs, honestly: invitation is an admin act (a membership is a constitutiona
 [rotating a role]: #rotating-a-role
 [sub is a scope, not an endpoint]: README.md#sub-is-a-scope-not-an-endpoint
 [the ex-admin sharp edge]: README.md#the-ex-admin-sharp-edge
-[the root edge protects itself]: README.md#the-root-edge-protects-itself
+[rooting level]: #rooting-level

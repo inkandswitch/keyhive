@@ -159,7 +159,7 @@ There is one revocation rule for third parties and one for the parties themselve
 Where the admin reach doesn't touch the target's routes and the issuer is neither party, the revocation is *inert*: a no-op, not an error. Validity is unconditional; any well-signed revocation is admissible. A revocation has no authority of its own, only coverage. One that breaks a certificate far below the issuer's jurisdiction is a *deep cut*.
 
 - *Retraction* (`iss = target.iss`) needs no second rule: the issuer is the final node on every route of their own certificate and in their own admin reach. Unmake what you signed.
-- *Renunciation* (`iss = target.aud`) is why the second rule exists. Routes end at the issuer, so no admin reach — not even the recipient's own — reaches a certificate through its `aud`; if it did, every ever-admin of `Owners` could cut `Doc → Owners` ([The Root Edge Protects Itself][apex]). Shed what names you, by signature rather than by reach.
+- *Renunciation* (`iss = target.aud`) is why the second rule exists. Routes end at the issuer, so no admin reach — not even the recipient's own — reaches a certificate through its `aud`; if it did, every admin of a role could cut the supply edges _into_ that role, which they never issued and hold no reach over on the supplier's side. Shed what names you, by signature rather than by reach.
 
 The full tier structure, each tier matched to its trust basis:
 
@@ -216,10 +216,10 @@ Routes attenuate to the *lowest* power along them. If Alice holds `Admin`, deleg
 
 A revocation signed by K breaks its target on routes that pass through:
 
-1. any node K ever held Admin over, and
+1. any node K ever held Admin over — directly, or through a role K was Admin in — and
 2. K's own node.
 
-This set is K's *admin reach*. "Ever" means exactly that: we compute it from the delegations alone, as if no revocations existed. A role K was kicked out of still counts. A role K resigned from still counts. Admin reach only grows; nothing that happens later shrinks it.
+This set is K's *admin reach*. Admin standing composes like any other: an Admin member of `Owners`, where `Owners` is Admin over `Members`, holds Admin over `Members` and has it in reach. Seniors adjudicate inside junior roles without a separate grant. "Ever" means exactly that: we compute it from the delegations alone, as if no revocations existed. A role K was kicked out of still counts. A role K resigned from still counts. Admin reach only grows; nothing that happens later shrinks it.
 
 Computing it while ignoring revocations looks strange at first. There are three reasons, and they are one reason from three angles:
 
@@ -328,7 +328,7 @@ You cannot un-know someone; you can only move to where they have never been. Und
 
 - *The boundary is frozen, by construction.* A fresh node post-dates the ex-admin on every graph; no fact will ever put it in his admin reach. Rotation is permanent escape, and it costs one roster, not a subtree.
 - *Visibility does not matter.* He can sync every certificate ever minted; cuts covering only dead routes are inert. (An earlier draft leaned on hash-visibility to bound griefing; that bound is fiction under set-reconciliation sync, which enumerates missing hashes to any peer. Admin-reach scoping replaces it with something that holds.)
-- *The subject is out of reach, for everyone.* Every admin who ever served could *reach* the subject — that is what supply chains are for. The subject is also the one node that cannot rotate. This is why admin reach is built from holding Admin *over* a node, not from reaching it *through* the graph: nobody ever held Admin over the subject itself, so no admin reach can name it. Built on reach instead, every ever-admin would hold a permanent whole-document kill.
+- *The subject is the one node that cannot rotate — and it is in reach.* Every admin who ever held Admin over the subject, directly or through the apex role, has the subject in their frozen admin reach and can cover every certificate on it, the root edge included. That is a permanent whole-document kill, and it is accepted: it is not a new power. A root admin can already revoke every peer's membership and then lose their own key, and the document is equally dead. One certificate instead of many changes the ergonomics, not the trust model. A document that wants its root edge undeniable roots at Edit instead ([Root Edges and the Apex][apex]); nothing about Admin over a document is needed for anything but this.
 - *Legitimate denials need no maintenance.* Because admin reach grows with its holder's career, a surviving admin's old revocations automatically cover the successor nodes they are re-rostered into. Wanted denials follow the living through every rotation; the griefer's stay pinned to dead nodes. There is no carry-over deny-list to re-sign.
 
 One correction to the tempting intuition that rotation leaves the old node harmlessly dead: it leaves it *dormant*. See [Reconnection and Sealing][sealing].
@@ -394,9 +394,16 @@ Subjects bootstrap their own authority. At creation, the subject key signs exact
          signing this one cert    rotatable…        …all the way down
 ```
 
-### The Root Edge Protects Itself
+### Who Can Revoke the Root Edge
 
-Who can revoke `Doc → Owners`? The edge's route is itself, grounded at Doc — so a covering revocation needs Doc in its issuer's admin reach. Nobody's admin reach can ever contain Doc: no constitutional certificate for Doc exists beyond the root edge itself, and the only key that could mint one is destroyed. Retraction is equally impossible, for the same reason. The apex edge is structurally undeniable — a consequence of the record rule, not a special case.
+The route of `Doc → Owners` is itself, grounded at Doc, so a covering revocation needs Doc in its issuer's admin reach. Whether anyone's does is decided by the ceremony, not by a rule:
+
+| Root edge | Who holds Admin over Doc | Root edge deniable by |
+|---|---|---|
+| `{iss: Doc, aud: Owners, sub: Doc, can: Admin}` | every Admin member of Owners, ever | every ever-apex-admin: one revocation bricks the document permanently |
+| `{iss: Doc, aud: Owners, sub: Doc, can: Edit}` | nobody (the subject key is destroyed) | nobody |
+
+Admin over a document gates nothing except reach over it — delegation is open, and membership is governed by Admin over the _role_ — so the Edit-rooted document loses no capability. It gains an undeniable apex, and a retained subject key can re-root it out from under old admins ([below](#the-apex-is-append-only-unless-the-subject-key-survives)). The Admin-rooted document gives every apex admin the power to destroy it, which is the power they already hold by other means (eject every peer, lose the key); it is the right shape when the owners _are_ the document. See [patterns, Rooting Level][rooting level].
 
 > [!IMPORTANT]
 > Destroy the subject key after the ceremony, or guard it as the recovery instrument it is: a retained subject key can retract the root edge and re-root the document (below) — total power, in both directions.
@@ -410,7 +417,7 @@ Rotation works at every layer except the top. Rotating Owners requires a new roo
 | Apex role (Owners) | Append-only trust — membership can grow; ejection is never durable |
 | Every layer below | Fully rotatable — durable ejection via mint-and-re-roster |
 
-A *retained* subject key (cold storage, threshold-split) changes this: it can retract the old root edge and mint `Doc → Owners′` — and the old apex admins' admin reach contains Owners, which the new hierarchy's routes never transit. True apex rotation, durable ejection included, at the custody cost of a key that can do the same *to* you. The ceremony's choice is between an append-only apex (destroy the key) and a re-rootable document (guard the key); there is no third option.
+A *retained* subject key (cold storage, threshold-split) changes this for an Edit-rooted document: it can retract the old root edge and mint `Doc → Owners′`, and the old apex admins' admin reach contains Owners, which the new hierarchy's routes never transit. True apex rotation, durable ejection included, at the custody cost of a key that can do the same *to* you. For an Admin-rooted document the retained key buys nothing durable: the old admins' reach contains Doc itself, so `Doc → Owners′` is as deniable as its predecessor. The ceremony's choices are therefore rooting level and key custody; there is no third lever.
 
 ### Mutual Assured Destruction at the Apex
 
@@ -418,7 +425,7 @@ Apex peers can cut each other's memberships (Owners is in every apex admin's adm
 
 At the apex there is no senior. If all apex members revoke one another, every human's standing dies in the cascade, and no one can ever mint new apex members (that requires *live* Admin over the apex). The graph is permanently bricked: replicas keep their data, but no new grant will ever be live again.
 
-Mitigations: a single-owner apex has no peers and therefore no duel; edges signed by the ephemeral role key at the ceremony ground through the undeniable root edge and outlive apex destruction; a retained subject key enables repair (or re-rooting), at its custody cost. Keeping the apex minimal is RECOMMENDED — one key per human owner, or just the creator — with all churn conducted in second-layer roles, where rotation works. The apex is a root CA / recovery key. Choose it once, exercise it rarely, treat it as permanent.
+Mitigations: a single-owner apex has no peers and therefore no duel; in an Edit-rooted document, edges signed by the ephemeral role key at the ceremony ground through the undeniable root edge and outlive apex destruction, and a retained subject key enables repair (or re-rooting), at its custody cost. Keeping the apex minimal is RECOMMENDED — one key per human owner, or just the creator — with all churn conducted in second-layer roles, where rotation works. The apex is a root CA / recovery key. Choose it once, exercise it rarely, treat it as permanent.
 
 [^mad]: "Mutual assured destruction," from Cold War deterrence theory. The analogy is structural: symmetric annihilation capability *is* the governance mechanism among peer admins (retaliation is guaranteed — a cut admin's revocations still validate, since admin reach ignores revocations — so first strikes gain nothing durable), and the apex, having no higher authority, remains in a state of nature. Below the apex, deterrence is *adjudicated*: destruction is survivable by rotation, so a duel is an appeal to the senior — trial by combat with the supply-holder as judge.
 
@@ -508,5 +515,6 @@ Resolved in this draft: concurrent mutual revocation (both stand; the parent adj
 [ucan]: https://github.com/ucan-wg/spec
 [the seen field]: #the-seen-field
 [the ex-admin sharp edge]: #the-ex-admin-sharp-edge
-[the root edge protects itself]: #the-root-edge-protects-itself
+[rooting level]: patterns.md#rooting-level
+[who can revoke the root edge]: #who-can-revoke-the-root-edge
 [subject]: #nodes

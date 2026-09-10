@@ -156,35 +156,125 @@ pub fn mutual_revocation_leaves_both_cuts_standing<K: Keyline + Default>() {
     assert!(g.members(id(DOC)).into_keys().eq([id(OWNERS)]));
 }
 
-/// Doc is in nobody's admin reach and the route to Doc is `[Doc]` alone, so not
-/// even an Owners admin can cut the root edge.
-pub fn root_edge_is_undeniable_by_admins<K: Keyline + Default>() {
+/// `standard()` roots Doc at Admin, so Doc is in every Owners admin's reach
+/// and any of them can revoke the root edge. One certificate bricks the
+/// document; nothing below survives.
+pub fn apex_admin_can_deny_the_root_edge<K: Keyline + Default>() {
     let (mut g, _, _) = standard::<K>();
     let root = d(DOC, OWNERS, DOC, Access::Admin);
-    g.insert(cert(r(BOB, &root)));
-    assert!(g.is_live(&root.digest()));
     assert_eq!(access(&g, DOC, BOB), Some(Access::Admin));
+    g.insert(cert(r(BOB, &root)));
+    assert!(!g.is_live(&root.digest()));
+    assert!(g.members(id(DOC)).is_empty());
+    // Owners itself is untouched: Bob is still an Owner, of a role that no
+    // longer reaches anything.
+    assert_eq!(access(&g, OWNERS, BOB), Some(Access::Admin));
 }
 
-/// Dan administers Mods. Eve is a Mod (Admin over Doc through Mods) and
-/// separately holds Read over Doc from Owners. Eve grants Frank Admin; Dan
-/// revokes it. Frank keeps only what Eve has independently of Mods.
+/// Root Doc at Edit instead and nobody ever holds Admin over Doc, so Doc is in
+/// nobody's reach: the root edge is undeniable, and Owners' admins keep every
+/// power they had over the roles below.
+pub fn edit_rooted_root_edge_is_undeniable<K: Keyline + Default>() {
+    let root = d(DOC, OWNERS, DOC, Access::Edit);
+    let alice_member = d(CAROL, ALICE, MEMBERS, Access::Admin);
+    let mut g: K = build([
+        root.into(),
+        d(OWNERS, BOB, OWNERS, Access::Admin).into(),
+        d(OWNERS, CAROL, OWNERS, Access::Admin).into(),
+        d(MEMBERS, OWNERS, MEMBERS, Access::Admin).into(),
+        d(BOB, MEMBERS, DOC, Access::Edit).into(),
+        alice_member.into(),
+    ]);
+    assert_eq!(access(&g, DOC, BOB), Some(Access::Edit));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+
+    g.insert(cert(r(BOB, &root)));
+    assert!(g.is_live(&root.digest()));
+    assert_eq!(access(&g, DOC, BOB), Some(Access::Edit));
+
+    // Governance is Admin over the roles, which Edit-rooting leaves intact.
+    g.insert(cert(r(BOB, &alice_member)));
+    assert_eq!(access(&g, DOC, ALICE), None);
+}
+
+/// Bob is an Owner and Owners is Admin over Members, but Bob holds no
+/// `sub: Members` grant of his own. Composed reach still puts Members in his
+/// reach, so he can cut inside it.
+pub fn senior_role_admin_cuts_inside_junior_role<K: Keyline + Default>() {
+    // Members is rooted at Dan, who then makes Owners an admin of Members via
+    // an ordinary (non-root) edge. Bob's only path to Members is through Owners.
+    let alice_member = d(DAN, ALICE, MEMBERS, Access::Admin);
+    let mut g: K = build([
+        d(DOC, OWNERS, DOC, Access::Admin).into(),
+        d(OWNERS, BOB, OWNERS, Access::Admin).into(),
+        d(MEMBERS, DAN, MEMBERS, Access::Admin).into(),
+        d(DAN, OWNERS, MEMBERS, Access::Admin).into(),
+        d(BOB, MEMBERS, DOC, Access::Edit).into(),
+        alice_member.into(),
+    ]);
+    assert_eq!(access(&g, MEMBERS, BOB), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+
+    g.insert(cert(r(BOB, &alice_member)));
+    assert!(!g.is_live(&alice_member.digest()));
+    assert_eq!(access(&g, DOC, ALICE), None);
+    assert_eq!(access(&g, MEMBERS, ALICE), None);
+}
+
+/// Dan supplies Members into Doc. That gives him power over his own plug —
+/// retract the supply and every Member loses Doc at once — and none over
+/// Members' roster, which never routes through him. Even though Dan reaches
+/// Doc at Admin (through Mods), Members is not in his reach.
+pub fn supply_is_daisy_chained<K: Keyline + Default>() {
+    let supply = d(DAN, MEMBERS, DOC, Access::Edit);
+    let alice_member = d(CAROL, ALICE, MEMBERS, Access::Admin);
+    let mut g: K = build([
+        d(DOC, OWNERS, DOC, Access::Admin).into(),
+        d(OWNERS, BOB, OWNERS, Access::Admin).into(),
+        d(BOB, MODS, DOC, Access::Admin).into(),
+        d(MODS, DAN, MODS, Access::Admin).into(),
+        supply.into(),
+        d(MEMBERS, CAROL, MEMBERS, Access::Admin).into(),
+        alice_member.into(),
+    ]);
+    assert_eq!(access(&g, DOC, DAN), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, MEMBERS), Some(Access::Edit));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+    assert_eq!(access(&g, MEMBERS, DAN), None);
+
+    // Inert: Members is not in Dan's reach.
+    g.insert(cert(r(DAN, &alice_member)));
+    assert!(g.is_live(&alice_member.digest()));
+    assert_eq!(access(&g, DOC, ALICE), Some(Access::Edit));
+
+    // Total, for the whole strip: Dan retracts his own supply edge.
+    g.insert(cert(r(DAN, &supply)));
+    assert_eq!(access(&g, DOC, MEMBERS), None);
+    assert_eq!(access(&g, DOC, ALICE), None);
+    assert_eq!(access(&g, MEMBERS, ALICE), Some(Access::Admin));
+}
+
+/// Dan administers Mods, which is supplied into Doc at Edit (so Doc is not in
+/// Dan's reach). Eve is a Mod (Edit over Doc through Mods) and separately holds
+/// Read over Doc from Owners. Eve grants Frank Admin; Dan revokes it. The edge
+/// stays live via Eve's independent route, but conveys only what Eve holds
+/// independently of Mods: Read, not Edit.
 pub fn covered_edges_are_clamped_not_just_gated<K: Keyline + Default>() {
     let h = d(EVE, FRANK, DOC, Access::Admin);
     let mut g: K = build([
         d(DOC, OWNERS, DOC, Access::Admin).into(),
-        d(OWNERS, MODS, DOC, Access::Admin).into(),
+        d(OWNERS, MODS, DOC, Access::Edit).into(),
         d(MODS, DAN, MODS, Access::Admin).into(),
         d(DAN, EVE, MODS, Access::Admin).into(),
         d(OWNERS, EVE, DOC, Access::Read).into(),
         h.into(),
     ]);
-    assert_eq!(access(&g, DOC, EVE), Some(Access::Admin));
-    assert_eq!(access(&g, DOC, FRANK), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, EVE), Some(Access::Edit));
+    assert_eq!(access(&g, DOC, FRANK), Some(Access::Edit));
 
     g.insert(cert(r(DAN, &h)));
     assert!(g.is_live(&h.digest()));
-    assert_eq!(access(&g, DOC, EVE), Some(Access::Admin));
+    assert_eq!(access(&g, DOC, EVE), Some(Access::Edit));
     assert_eq!(access(&g, DOC, FRANK), Some(Access::Read));
 }
 
