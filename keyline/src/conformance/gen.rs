@@ -103,8 +103,21 @@ impl<'a> Arbitrary<'a> for CertSet {
         // below Admin (else `s` is in `k`'s reach and the grant is simply dead),
         // and the grant asks for at least the role level.
         if u.arbitrary::<bool>()? {
-            let s = id(u.int_in_range(1..=subjects)?);
-            let (m, k, e, f) = (pick_id(u)?, pick_id(u)?, pick_id(u)?, pick_id(u)?);
+            let s_n = u.int_in_range(1..=subjects)?;
+            let s = id(s_n);
+            // Four distinct identities other than `s`; a collision would
+            // collapse the shape into something else.
+            let mut rest: Vec<u8> = (1..=POOL).filter(|n| *n != s_n).collect();
+            let mut pick_distinct = |u: &mut Unstructured<'a>| -> Result<Id> {
+                let i = u.choose_index(rest.len())?;
+                Ok(id(rest.swap_remove(i)))
+            };
+            let (m, k, e, f) = (
+                pick_distinct(u)?,
+                pick_distinct(u)?,
+                pick_distinct(u)?,
+                pick_distinct(u)?,
+            );
             let via_role = if u.arbitrary()? {
                 Access::Edit
             } else {
@@ -134,7 +147,14 @@ impl<'a> Arbitrary<'a> for CertSet {
                 .copied()
                 .collect();
             let target = dels[u.choose_index(dels.len())?];
-            certs.push(Revocation::new(pick_id(u)?, target.digest()).into());
+            // A third of revocations are by a party to the target (retraction or
+            // renunciation), which random revokers rarely produce.
+            let revoker = match u.int_in_range(0..=2)? {
+                0 => target.iss,
+                1 => target.aud,
+                _ => pick_id(u)?,
+            };
+            certs.push(Revocation::new(revoker, target.digest()).into());
         }
 
         // Re-issues past a revocation, so heals and `seen` collisions happen.
