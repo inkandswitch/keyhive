@@ -210,6 +210,51 @@ flowchart TD
 
 Routes attenuate to the *lowest* power along them. If Alice holds `Admin`, delegates `Edit` to Bob, and Bob delegates `Admin` to Carol, Carol's effective access is `Edit`: the meet (minimum) of every hop. When multiple routes exist, effective access is the best available — the maximum over routes of the minimum along each (widest-path/bottleneck).
 
+### Two Graphs, One Stored
+
+The picture above — nodes, edges, paths — is the right intuition for routes that stay inside one subject's certificates. It is worth being precise about what it abstracts, because the abstraction leaks the moment `sub` names a role.
+
+There are two graphs. The *message graph* is the certificate set: who signed what, to whom, about what. It is stored, append-only, and unconditional — any key may sign any edge about any subject. The *authority graph* is what the evaluator derives from it: who actually holds standing over what. It is stored nowhere and recomputed from the message graph at every evaluation. Everything this document calls late binding, implicit death, healing, and resurrection is the authority graph changing while the message graph only grows.
+
+The authority graph is not a plain graph. It alternates between two kinds of node with different combination rules:
+
+| Node              | Kind    | Rule                                                                                                                             |
+|-------------------|---------|----------------------------------------------------------------------------------------------------------------------------------|
+| Principal (a key) | **OR**  | Standing arrives by *any* certificate that conducts to it; effective level is the `max` over arrivals. This is redundant routes. |
+| Certificate       | **AND** | Conducts only when *every* feed into it is live; output is the `min` of its feeds and its own `can`. This is attenuation.        |
+
+A certificate about the subject itself (`sub: Doc`) has one feed — its issuer's standing over `Doc` — and a chain of such certificates is a path. A certificate about a role (`sub: Members`) has **two** feeds of different kinds, and this is where the path picture breaks:
+
+```mermaid
+flowchart LR
+    classDef cert fill:#eee,stroke:#333
+
+    Doc((Doc))
+    Members((Members))
+    Alice((Alice))
+    Carol((Carol))
+
+    supply["{iss: Bob, aud: Members, sub: Doc, can: Edit}"]:::cert
+    roster["{iss: Members, aud: Alice, sub: Members, can: Admin}"]:::cert
+    sponsor["{iss: Alice, aud: Carol, sub: Members, can: Edit}"]:::cert
+
+    Doc ==> supply ==> Members
+    Members ==> roster ==> Alice
+    Members ==>|"feed 1: the role's standing over Doc"| sponsor
+    Alice ==>|"feed 2: the issuer's standing in the role"| sponsor
+    sponsor ==> Carol
+```
+
+Alice's sponsorship of Carol conducts `Doc`-standing to Carol only if *both* `Members` has standing over `Doc` *and* Alice has standing in `Members` — and both of those are themselves derived facts. A justification is therefore a tree, not a path; "route" throughout this document means a derivation in this AND/OR graph, and "transits a node" means the node appears anywhere in the derivation. The evaluator never walks `iss → aud` edges as such: Alice's certificate sits on `Doc`'s route to Carol because Alice has standing in `Members`, not because Alice is the previous node.
+
+Three things fall out of the AND/OR view directly:
+
+- *Dead certificates are visible at a glance.* A certificate box with no live feed conducts nothing — inert, not invalid. An ungrounded island (a role nobody ever supplied) is a fragment of the authority graph that never touches a subject.
+- *Cycles resolve to dead.* The authority graph is the *least* fixed point: nothing conducts until a feed from a subject reaches it. A ring of certificates vouching for each other with no path to a subject derives nothing.
+- *Griefing is a cut on this graph.* A grantee survives iff some derivation avoids every node the cutter's [admin reach][admin reach] covers; redundant routes defend only when they are disjoint at the AND-nodes, i.e. through distinct roles.
+
+The two-feed AND-node is also the reason evaluation is a fixed point rather than a graph search: which edges *exist* in the authority graph is an output of the computation, not an input. See [implementation, Evaluation](implementation.md#evaluation) for the program.
+
 ### Revocation Semantics
 
 #### Admin Reach
