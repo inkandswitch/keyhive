@@ -3,14 +3,10 @@
 //! A backend is correct iff it agrees with the reference implementation on
 //! every set. This module makes that checkable: [`scenarios`] are the named
 //! cases from the design documents, [`laws`] are `bolero` properties over
-//! generated sets, and [`gen`] produces the sets. Run the whole suite against
-//! a backend with one line:
-//!
-//! ```ignore
-//! keyline::keyline_conformance!(MyBackend);
-//! ```
-//!
-//! which expands to one `#[test]` per scenario and per law.
+//! generated sets, and [`gen`] produces the sets. Every scenario and law is a
+//! plain function generic over `K: Keyline + Default`; a backend runs the suite
+//! by writing one `#[test]` per function that calls it with the backend's type.
+//! The test module in `memory.rs` is the reference list.
 
 pub mod gen;
 pub mod laws;
@@ -57,69 +53,4 @@ pub fn build<K: Keyline + Default, I: IntoIterator<Item = Certificate>>(certs: I
 
 pub fn access<K: Keyline>(k: &K, sub: u8, aud: u8) -> Option<Access> {
     k.effective_access(id(sub), id(aud))
-}
-
-/// Instantiate every scenario and law as a `#[test]` for a backend.
-///
-/// Internal rule: `@tests` takes the backend and the module paths, so the list
-/// of test names lives in one place.
-#[macro_export]
-macro_rules! keyline_conformance {
-    ($backend:ty) => {
-        mod keyline_conformance {
-            #[allow(unused_imports)]
-            use super::*;
-
-            $crate::keyline_conformance!(@scenarios $backend;
-                empty_graph,
-                attenuation_and_widest_path,
-                ungrounded_edges_are_dead,
-                membership_composes,
-                late_binding_grants_new_documents_to_members,
-                retraction_is_total,
-                renunciation_is_total,
-                admin_over_a_transited_node_cuts_deep,
-                non_admin_cut_is_confined_to_own_node,
-                ex_admin_reach_is_frozen,
-                mutual_revocation_leaves_both_cuts_standing,
-                apex_admin_can_deny_the_root_edge,
-                edit_rooted_root_edge_is_undeniable,
-                senior_role_admin_cuts_inside_junior_role,
-                supply_is_daisy_chained,
-                covered_edges_are_clamped_not_just_gated,
-                revocation_may_arrive_before_its_target,
-                insert_is_idempotent_and_reports_duplicates,
-                reissue_with_seen_heals,
-                unknown_revocation_is_inert,
-                signed_certificates_agree_with_fixtures,
-            );
-
-            $crate::keyline_conformance!(@laws $backend;
-                matches_naive_oracle_without_revocations,
-                order_independent,
-                idempotent,
-                revocations_only_deny,
-                digest_identifies_the_set,
-                queries_are_consistent,
-            );
-        }
-    };
-
-    (@scenarios $backend:ty; $($name:ident),* $(,)?) => {
-        $(
-            #[test]
-            fn $name() {
-                $crate::conformance::scenarios::$name::<$backend>();
-            }
-        )*
-    };
-
-    (@laws $backend:ty; $($name:ident),* $(,)?) => {
-        $(
-            #[test]
-            fn $name() {
-                $crate::conformance::laws::$name::<$backend>();
-            }
-        )*
-    };
 }

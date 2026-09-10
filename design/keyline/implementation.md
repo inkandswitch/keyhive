@@ -365,7 +365,7 @@ keyline/
     signed.rs       Signed<T>, Verified<T>
     keyline.rs      the Keyline trait, set_digest
     memory.rs       MemoryKeyline: storage, stratified evaluator, Keyline impl
-    conformance.rs  the shared test suite and the keyline_conformance! macro
+    conformance.rs  the shared test suite: cast, helpers
     conformance/    gen.rs (CertSet generator), laws.rs (bolero properties, naive oracle),
                     scenarios.rs (named cases, generic over K: Keyline)
     test_utils.rs   deterministic ids, unsigned Verified fixtures
@@ -385,7 +385,7 @@ Instrumentation: `insert` logs each certificate at `debug` (kind, endpoints, whe
 
 ## Conformance Suite
 
-Every backend runs the same tests against `impl Keyline`. The suite is exported behind `test_utils`; `keyline_conformance!(MyBackend)` expands to one `#[test]` per scenario and per law. `MemoryKeyline` runs it on itself.
+Every backend runs the same tests against `impl Keyline`. The suite is exported behind `test_utils` as plain functions generic over `K: Keyline + Default`; a backend writes one `#[test]` per scenario and law that calls the function with its type. `MemoryKeyline`'s test module is the reference list.
 
 _Generator._ `conformance::gen::CertSet` draws from a pool of eight deterministic identities: a root edge per subject (one to three), up to ten free-form delegations over any node in the pool (so some land on roles and some are ungrounded), up to four revocations naming delegations already present, up to two re-issues past a revocation, and, about half the time, the clamping shape (a role supplied into a subject, an admin of it, a member of it with an independent grant over the subject, that member's grant to a third party, and the admin's revocation of it). Random 32-byte keys would give nothing but ungrounded edges.
 
@@ -400,7 +400,7 @@ _Laws_ (`bolero`, over generated sets):
 
 With revocations, exact agreement is by scenario. A second oracle for that case — the full program transcribed into a Datalog engine (`ascent`) as a dev-dependency — is an open option.
 
-_Scenarios._ Named cases derived from the [edge-cases] findings and the model document: concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; an apex admin of an Admin-rooted document can deny the root edge, while an Edit-rooted document's root edge is undeniable; retraction and renunciation are total; a non-admin's cut is confined to their own node; `seen` re-issue heals with the same downstream hashes. Plus the composition and reach cases from [Evaluation](#evaluation): membership carries whatever the role reaches, including documents added later; a senior role's admin cuts inside a junior role without an explicit grant; supplying a role into a document gives power over the supply edge and none over the roster; a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example). `MemoryKeyline` runs these via `keyline_conformance!`.
+_Scenarios._ Named cases derived from the [edge-cases] findings and the model document: concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; an apex admin of an Admin-rooted document can deny the root edge, while an Edit-rooted document's root edge is undeniable; retraction and renunciation are total; a non-admin's cut is confined to their own node; `seen` re-issue heals with the same downstream hashes. Plus the composition and reach cases from [Evaluation](#evaluation): membership carries whatever the role reaches, including documents added later; a senior role's admin cuts inside a junior role without an explicit grant; supplying a role into a document gives power over the supply edge and none over the roster; a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example). `MemoryKeyline` runs each as its own `#[test]`.
 
 _Negative._ A revocation naming an unknown hash is new and changes no answer. A duplicate returns `false` from `insert` and `revocations_naming` reports what named it.
 
