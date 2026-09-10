@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! stratum 1   reaches   = search(all subjects, exclude ∅, every edge, cap = can)
-//!             admin_reach(k) = { n : last hop onto k is an Admin edge about n } ∪ {k}
+//!             admin_reach(k) = { n : k reaches n at Admin } ∪ {k}
 //!             covered(h) = ⋃ admin_reach(k) for every k revoking h
 //!
 //! stratum 2   live      = least fixed point:  h joins when iss(h) is reachable
@@ -100,19 +100,12 @@ impl MemoryKeyline {
     fn coverage(&self) -> Map<Digest<Delegation>, Set<Id>> {
         let reaches = self.search(self.edges.keys().copied(), &Params::positive());
 
-        // admin_reach(k, n): the last hop onto k is an Admin edge about n.
+        // admin_reach(k, n): k reaches n at Admin, however derived.
         let mut reach: Map<Id, Set<Id>> = Map::new();
-        for (n, by_iss) in &self.edges {
-            let Some(levels) = reaches.get(n) else {
-                continue;
-            };
-            for (iss, edges) in by_iss {
-                let Some(l) = levels.get(iss) else { continue };
-                for h in edges {
-                    let d = &self.delegations[h];
-                    if (*l).min(d.can) == Access::Admin {
-                        reach.entry(d.aud).or_default().insert(*n);
-                    }
+        for (n, levels) in &reaches {
+            for (k, l) in levels {
+                if *l == Access::Admin {
+                    reach.entry(*k).or_default().insert(*n);
                 }
             }
         }
