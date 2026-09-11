@@ -1,5 +1,3 @@
-use crate::js::membered::JsMembered;
-
 use super::{
     agent::JsAgent,
     capability::Capability,
@@ -18,7 +16,6 @@ use futures::lock::Mutex;
 use keyhive_core::principal::{
     agent::Agent,
     group::{id::GroupId, Group},
-    membered::Membered,
     peer::Peer,
 };
 use std::sync::Arc;
@@ -83,10 +80,5 @@ impl JsGroup {
     pub fn to_agent(&self) -> JsAgent {
         tracing::debug!("JsGroup::to_agent");
         JsAgent(Agent::Group(self.group_id, self.inner.dupe()))
-    }
-
-    #[wasm_bindgen(js_name = toMembered)]
-    pub fn to_membered(&self) -> JsMembered {
-        JsMembered(Membered::Group(self.group_id, self.inner.dupe()))
     }
 }

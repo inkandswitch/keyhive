@@ -1,3 +1,4 @@
+use crate::js::identifier::JsIdentifier;
 use keyhive_core::principal::{group::id::GroupId, identifier::Identifier};
 use std::fmt::{Display, Formatter};
 use thiserror::Error;
@@ -25,6 +26,11 @@ impl JsGroupId {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_js_string(&self) -> String {
         self.0.to_string()
+    }
+
+    #[wasm_bindgen(js_name = toIdentifier)]
+    pub fn to_identifier(&self) -> JsIdentifier {
+        JsIdentifier(Identifier::from(self.0))
     }
 }
 

@@ -1,4 +1,5 @@
-use keyhive_core::principal::individual::id::IndividualId;
+use crate::js::identifier::JsIdentifier;
+use keyhive_core::principal::{identifier::Identifier, individual::id::IndividualId};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = IndividualId)]
@@ -10,6 +11,11 @@ impl JsIndividualId {
     #[wasm_bindgen(getter)]
     pub fn bytes(&self) -> Box<[u8]> {
         Box::new(self.0.to_bytes())
+    }
+
+    #[wasm_bindgen(js_name = toIdentifier)]
+    pub fn to_identifier(&self) -> JsIdentifier {
+        JsIdentifier(Identifier::from(self.0))
     }
 }
 
