@@ -18,9 +18,10 @@ Install Playwright's browser binaries:
 npx playwright install
 ```
 
-Run tests:
+Run tests. This builds the Wasm package and copies it where the test server
+serves it from, so it picks up Rust changes:
 ```
-npx playwright test
+pnpm test
 ```
 
 View Playwright report:

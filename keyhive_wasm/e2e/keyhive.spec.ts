@@ -42,35 +42,28 @@ test.describe("Keyhive", async () => {
       const vk = sk.verifyingKey;
       const store = CiphertextStore.newInMemory();
       const keyhive = await Keyhive.init(sk, store, console.log);
-      return { id: keyhive.id.bytes, vk };
+      return { id: keyhive.id.toBytes(), vk };
     });
 
     expect(out.id).toStrictEqual(out.vk);
   });
 
-  test.describe("idString", async () => {
-    const scenario = async () => {
+  test("idString is 0x followed by 64 hex digits", async ({ page }) => {
+    const out = await page.evaluate(async () => {
       const { Keyhive, Signer, CiphertextStore } = window.keyhive;
       const key = await Signer.generate();
-      const vKey = key.verifyingKey;
       const store = CiphertextStore.newInMemory();
       const keyhive = await Keyhive.init(key, store, console.log);
-      return { idString: keyhive.idString, vKey };
-    };
-
-    test("is >= 66 charecters", async ({ page }) => {
-      const out = await page.evaluate(scenario);
-      expect(out.idString.length).toBeLessThanOrEqual(66);
+      return { idString: keyhive.idString };
     });
 
-    test("is a hex string starting with 0x", async ({ page }) => {
-      const out = await page.evaluate(scenario);
-      expect(out.idString).toMatch(/0x[0-9a-fA-F]+/);
-    });
+    expect(out.idString).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
-  test.describe("generateGroup", async () => {
-    const scenario = async () => {
+  test("generateGroup returns the id of a group whose sole member is an admin", async ({
+    page,
+  }) => {
+    const out = await page.evaluate(async () => {
       const { Keyhive, Signer, CiphertextStore } = window.keyhive;
       const store = CiphertextStore.newInMemory();
       const keyhive = await Keyhive.init(
@@ -79,41 +72,36 @@ test.describe("Keyhive", async () => {
         (_) => {},
       );
 
-      const group = await keyhive.generateGroup([]);
-      const { groupId } = group;
+      const groupId = await keyhive.generateGroup([]);
+      const group = await keyhive.getGroup(groupId);
       const members = await group.members();
-      const canStr = members[0].can.toString();
-      return { group, groupId, members, canStr };
-    };
-
-    test("makes a new group", async ({ page }) => {
-      const out = await page.evaluate(scenario);
-      expect(out.group).toBeDefined();
+      return {
+        groupId: groupId.toString(),
+        fetchedGroupId: group.groupId.toString(),
+        members,
+        canStr: members[0].can.toString(),
+      };
     });
 
-    test("the associated group has an groupId (is an actual group)", async ({
-      page,
-    }) => {
-      const out = await page.evaluate(scenario);
-      expect(out.groupId).toBeDefined();
-    });
-
-    test("group has exacty one member", async ({ page }) => {
-      const out = await page.evaluate(scenario);
-      expect(out.members).toHaveLength(1);
-    });
-
-    test("the sole group member is an admin", async ({ page }) => {
-      const out = await page.evaluate(scenario);
-      expect(out.canStr).toStrictEqual("Admin");
-    });
+    expect(out.fetchedGroupId).toBe(out.groupId);
+    expect(out.members).toHaveLength(1);
+    expect(out.canStr).toStrictEqual("Admin");
   });
 
-  test.describe("archive", async () => {
-    const testContactCardJson = getTestContactCard();
-    const scenario = async (contactCardJson) => {
-      const { Keyhive, Signer, Access, Archive, ChangeId, CiphertextStore, ContactCard, Individual } =
-        window.keyhive
+  test("an archive serializes to bytes and round trips back to a keyhive", async ({
+    page,
+  }) => {
+    const out = await page.evaluate(async (contactCardJson) => {
+      const {
+        Keyhive,
+        Signer,
+        Access,
+        Archive,
+        ChangeId,
+        CiphertextStore,
+        ContactCard,
+        MemberedId,
+      } = window.keyhive;
       const testContactCard = ContactCard.fromJson(contactCardJson);
 
       const signer = await Signer.generate();
@@ -121,81 +109,110 @@ test.describe("Keyhive", async () => {
       const kh = await Keyhive.init(signer, ciphertextStore, () => {});
       const changeId = new ChangeId(new Uint8Array([1, 2, 3]));
 
-      const g1 = await kh.generateGroup([]);
-      const arr = [g1.toPeer()];
-      const g2 = await kh.generateGroup(arr);
+      const g1Id = await kh.generateGroup([]);
+      const arr = [g1Id.toIdentifier()];
+      const g2Id = await kh.generateGroup(arr);
       const _ = await kh.generateGroup(arr);
-      const d1 = await kh.generateDocument([g2.toPeer()], changeId, []);
-      await kh.generateGroup([d1.toPeer()]);
-      await kh.generateGroup([g2.toPeer(), d1.toPeer()]);
+      const d1Id = await kh.generateDocument(
+        [g2Id.toIdentifier()],
+        changeId,
+        [],
+      );
+      await kh.generateGroup([d1Id.toIdentifier()]);
+      await kh.generateGroup([g2Id.toIdentifier(), d1Id.toIdentifier()]);
 
-      const individual = await kh.receiveContactCard(testContactCard)
+      const individualId = await kh.receiveContactCard(testContactCard);
       const access = Access.tryFromString("edit");
-      await kh.addMember(individual.toAgent(), g2.toMembered(), access, []);
+      await kh.addMember(
+        individualId.toIdentifier(),
+        MemberedId.group(g2Id),
+        access,
+        [],
+      );
 
-      const archive = await kh.intoArchive();
+      const archive = await kh.toArchive();
       const archiveBytes = archive.toBytes();
       const archiveBytesIsUint8Array = archiveBytes instanceof Uint8Array;
       const newStore = CiphertextStore.newInMemory();
       const archive2 = new Archive(archiveBytes);
-      const roundTrip = await archive2.tryToKeyhive(
-        newStore,
-        signer
-      );
+      const roundTrip = await archive2.tryToKeyhive(newStore, signer);
       return {
         archive,
         archiveBytes,
         keyhive: kh,
         roundTrip,
-        archiveBytesIsUint8Array
+        archiveBytesIsUint8Array,
       };
-    }
+    }, getTestContactCard());
 
-    test("makes a new group", async ({ page }) => {
-      const out = await page.evaluate(scenario, testContactCardJson);
-      expect(out.keyhive).toBeDefined();
-    });
-
-    test("serializes to bytes", async ({ page }) => {
-      const out = await page.evaluate(scenario, testContactCardJson);
-      expect(out.archiveBytesIsUint8Array).toBe(true);
-    });
-
-    test("round trip", async ({ page }) => {
-      const out = await page.evaluate(scenario, testContactCardJson);
-      expect(out.keyhive.id).toBe(out.roundTrip.id);
-    });
+    expect(out.archiveBytesIsUint8Array).toBe(true);
+    expect(out.keyhive.id).toBe(out.roundTrip.id);
   });
 
-  test.describe("event listener", async () => {
-    const scenario = async () => {
+  test("receiveContactCard returns the id for the card", async ({ page }) => {
+    const out = await page.evaluate(async (contactCardJson) => {
+      const { Keyhive, Signer, CiphertextStore, ContactCard } = window.keyhive;
+      const card = ContactCard.fromJson(contactCardJson);
+      const kh = await Keyhive.init(
+        await Signer.generate(),
+        CiphertextStore.newInMemory(),
+        () => {},
+      );
+      const individualId = await kh.receiveContactCard(card);
+      return {
+        received: individualId.toString(),
+        expected: card.individualId.toString(),
+      };
+    }, getTestContactCard());
+
+    expect(out.received).toBe(out.expected);
+  });
+
+  test("a listener records a prekey rotation", async ({ page }) => {
+    const out = await page.evaluate(async () => {
       const { Keyhive, Signer, CiphertextStore } = window.keyhive;
       const events = [];
-      const ciphertextStore = CiphertextStore.newInMemory();
       const keyhive = await Keyhive.init(
         await Signer.generate(),
-        ciphertextStore,
+        CiphertextStore.newInMemory(),
         (event) => {
-          console.log(event);
           events.push(event.variant);
         },
       );
 
       await keyhive.expandPrekeys();
       return { events };
-    };
-
-    test("records a prekey rotation", async ({ page }) => {
-      const out = await page.evaluate(scenario);
-      expect(out.events).toHaveLength(1);
-      expect(out.events[0]).toBe("PREKEYS_EXPANDED");
     });
+
+    expect(out.events).toHaveLength(1);
+    expect(out.events[0]).toBe("PREKEYS_EXPANDED");
+  });
+
+  test("a listener that throws leaves the keyhive usable", async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      const { Keyhive, Signer, CiphertextStore } = window.keyhive;
+      const keyhive = await Keyhive.init(
+        await Signer.generate(),
+        CiphertextStore.newInMemory(),
+        () => {
+          throw new Error("listener failed");
+        },
+      );
+
+      await keyhive.expandPrekeys();
+      return { idString: keyhive.idString };
+    });
+
+    expect(out.idString).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
   test.describe("archive ingestion across keyhives", async () => {
-    test("different keyhive can ingest archive with document", async ({ page }) => {
+    test("different keyhive can ingest archive with document", async ({
+      page,
+    }) => {
       const out = await page.evaluate(async () => {
-        const { Keyhive, Signer, ChangeId, CiphertextStore, Archive } = window.keyhive;
+        const { Keyhive, Signer, ChangeId, CiphertextStore, Archive } =
+          window.keyhive;
 
         // Create first keyhive and a document
         const signer1 = await Signer.generate();
@@ -244,7 +261,16 @@ test.describe("Keyhive", async () => {
     test("can load archive after revoking a delegation", async ({ page }) => {
       const testContactCardJson = getTestContactCard();
       const out = await page.evaluate(async (contactCardJson) => {
-        const { Keyhive, Signer, ChangeId, CiphertextStore, Archive, ContactCard, Access } = window.keyhive;
+        const {
+          Keyhive,
+          Signer,
+          ChangeId,
+          CiphertextStore,
+          Archive,
+          ContactCard,
+          Access,
+          MemberedId,
+        } = window.keyhive;
 
         const testContactCard = ContactCard.fromJson(contactCardJson);
 
@@ -252,15 +278,17 @@ test.describe("Keyhive", async () => {
         const store = CiphertextStore.newInMemory();
         const kh = await Keyhive.init(signer, store, () => {});
         const changeId = new ChangeId(new Uint8Array([1, 2, 3]));
-        const doc = await kh.generateDocument([], changeId, []);
+        const docId = await kh.generateDocument([], changeId, []);
 
         // Delegate to an individual
-        const individual = await kh.receiveContactCard(testContactCard);
+        const individualId = await kh.receiveContactCard(testContactCard);
+        const member = individualId.toIdentifier();
+        const membered = MemberedId.document(docId);
         const access = Access.tryFromString("edit");
-        await kh.addMember(individual.toAgent(), doc.toMembered(), access, []);
+        await kh.addMember(member, membered, access, []);
 
         // Revoke that individual
-        await kh.revokeMember(individual.toAgent(), true, doc.toMembered());
+        await kh.revokeMember(member, true, membered);
 
         // Create an archive
         const archive = await kh.toArchive();
@@ -272,10 +300,7 @@ test.describe("Keyhive", async () => {
         try {
           const freshStore = CiphertextStore.newInMemory();
           const archiveToLoad = new Archive(archiveBytes);
-          const freshKh = await archiveToLoad.tryToKeyhive(
-            freshStore,
-            signer,
-          );
+          const freshKh = await archiveToLoad.tryToKeyhive(freshStore, signer);
           loadSuccess = true;
         } catch (e) {
           loadError = {
@@ -292,7 +317,10 @@ test.describe("Keyhive", async () => {
       }, testContactCardJson);
 
       if (!out.loadSuccess) {
-        console.log("Load failed with error:", JSON.stringify(out.loadError, null, 2));
+        console.log(
+          "Load failed with error:",
+          JSON.stringify(out.loadError, null, 2),
+        );
       }
 
       expect(out.loadSuccess).toBe(true);

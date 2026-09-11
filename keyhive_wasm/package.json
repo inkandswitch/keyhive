@@ -9,7 +9,8 @@
     "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release",
     "build-web": "wasm-pack build --out-dir pkg-web --target web --release",
     "build-slim": "node build_slim.js",
-    "copy-e2e": "cp -r pkg-slim/* e2e/server/pkg/"
+    "copy-e2e": "mkdir -p pkg && cp -r pkg-slim/* e2e/server/pkg/",
+    "test": "pnpm run build-slim && pnpm run copy-e2e && playwright test --project=chromium"
   },
   "keywords": [],
   "author": "",

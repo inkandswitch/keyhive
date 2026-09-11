@@ -708,7 +708,7 @@ async fn revoking_a_group_removes_only_those_who_needed_it() -> Result<()> {
     // because they were removed.
     ctx.sync_all_unsent().await?;
     assert!(
-        bob.get_document(design_doc).await.is_some(),
+        bob.has_document(design_doc).await,
         "bob holds the document while he is still a member"
     );
 

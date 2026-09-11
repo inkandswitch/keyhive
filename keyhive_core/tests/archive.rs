@@ -149,7 +149,7 @@ async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()
 
     let restored = ctx.rebuild_from_archive(&early, "alice-restored").await?;
     assert!(
-        restored.get_document(design_doc).await.is_none(),
+        !restored.has_document(design_doc).await,
         "the archive predates the document"
     );
 
