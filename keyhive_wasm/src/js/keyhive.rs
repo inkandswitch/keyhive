@@ -811,7 +811,7 @@ mod tests {
         #[allow(unused)]
         async fn test_length() {
             let bh = setup().await;
-            assert_eq!(bh.id().bytes().len(), 32);
+            assert_eq!(bh.id().to_bytes().len(), 32);
         }
     }
 
