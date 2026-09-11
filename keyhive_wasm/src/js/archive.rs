@@ -39,14 +39,14 @@ impl JsArchive {
     #[wasm_bindgen(js_name = tryToKeyhive)]
     pub async fn try_to_keyhive(
         &self,
-        ciphertext_store: JsCiphertextStore,
+        ciphertext_store: &JsCiphertextStore,
         signer: &JsSigner,
         event_handler: &js_sys::Function,
     ) -> Result<JsKeyhive, JsTryFromArchiveError> {
         Ok(Keyhive::try_from_archive(
             &self.0,
             signer.clone(),
-            ciphertext_store,
+            ciphertext_store.clone(),
             event_handler.clone().into(),
             Arc::new(Mutex::new(OsRng)),
         )

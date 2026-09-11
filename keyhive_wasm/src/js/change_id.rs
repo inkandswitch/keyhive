@@ -18,8 +18,8 @@ impl JsChangeId {
         Self(bytes)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn bytes(&self) -> Vec<u8> {
+    #[wasm_bindgen(js_name = toBytes)]
+    pub fn to_bytes(&self) -> Vec<u8> {
         self.0.clone()
     }
 
