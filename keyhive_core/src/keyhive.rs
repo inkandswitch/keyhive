@@ -91,6 +91,77 @@ use std::collections::BTreeSet;
 #[cfg(any(test, feature = "test_utils"))]
 use crate::store::ciphertext::CausalDecryptionError;
 
+fn member_agents_only<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    members: HashMap<Identifier, (Agent<F, S, T, L>, Access)>,
+) -> HashMap<Identifier, Agent<F, S, T, L>> {
+    members
+        .into_iter()
+        .map(|(id, (agent, _))| (id, agent))
+        .collect()
+}
+
+/// The revoked members in `own`, plus everyone revoked by a group or document
+/// in `transitive`, plus the members of any revoked group.
+#[allow(clippy::type_complexity)]
+async fn no_longer_reachable<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    own: HashMap<Identifier, (Agent<F, S, T, L>, Access)>,
+    transitive: &HashMap<Identifier, (Agent<F, S, T, L>, Access)>,
+) -> HashMap<Identifier, Agent<F, S, T, L>> {
+    let mut revoked = member_agents_only(own);
+    for (member, _) in transitive.values() {
+        match member {
+            Agent::Group(_, g) => {
+                revoked.extend(member_agents_only(g.lock().await.revoked_members()))
+            }
+            Agent::Document(_, d) => {
+                revoked.extend(member_agents_only(d.lock().await.revoked_members()))
+            }
+            _ => {}
+        }
+    }
+
+    // Descend into the revoked groups. `seen` covers the members already known
+    // so a cycle through a revoked edge terminates.
+    let mut seen: HashSet<Identifier> = revoked.keys().copied().collect();
+    seen.extend(transitive.keys());
+    let mut queue: Vec<Agent<F, S, T, L>> = revoked.values().map(Dupe::dupe).collect();
+    while let Some(member) = queue.pop() {
+        let inside = match &member {
+            Agent::Group(_, g) => {
+                let locked = g.lock().await;
+                let mut inside = member_agents_only(locked.transitive_members().await);
+                inside.extend(member_agents_only(locked.revoked_members()));
+                inside
+            }
+            Agent::Document(_, d) => {
+                let locked = d.lock().await;
+                let mut inside = member_agents_only(locked.transitive_members().await);
+                inside.extend(member_agents_only(locked.revoked_members()));
+                inside
+            }
+            _ => continue,
+        };
+        for (id, agent) in inside {
+            if seen.insert(id) {
+                queue.push(agent.dupe());
+                revoked.insert(id, agent);
+            }
+        }
+    }
+
+    revoked
+}
+
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
 pub struct Keyhive<
@@ -1244,9 +1315,13 @@ impl<
                 .collect::<Vec<_>>()
         };
         for group in groups {
-            let (group_id, transitive) = {
+            let (group_id, transitive, own_revoked) = {
                 let locked = group.lock().await;
-                (locked.group_id(), locked.transitive_members().await)
+                (
+                    locked.group_id(),
+                    locked.transitive_members().await,
+                    locked.revoked_members(),
+                )
             };
             if transitive.contains_key(&who) {
                 add_many_keys(
@@ -1255,7 +1330,12 @@ impl<
                     Agent::Group(group_id, group.dupe()).key_ops().await,
                 );
 
-                for (agent_id, (agent, _access)) in &transitive {
+                let revoked = no_longer_reachable(own_revoked, &transitive).await;
+                for (agent_id, agent) in transitive
+                    .iter()
+                    .map(|(id, (agent, _))| (id, agent))
+                    .chain(revoked.iter())
+                {
                     if !map.contains_key(agent_id) {
                         add_many_keys(&mut map, *agent_id, agent.key_ops().await);
                     }
@@ -1265,9 +1345,13 @@ impl<
 
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
         for doc in docs {
-            let (doc_id, transitive) = {
+            let (doc_id, transitive, own_revoked) = {
                 let locked = doc.lock().await;
-                (locked.doc_id(), locked.transitive_members().await)
+                (
+                    locked.doc_id(),
+                    locked.transitive_members().await,
+                    locked.revoked_members(),
+                )
             };
             if transitive.contains_key(&who) {
                 add_many_keys(
@@ -1276,7 +1360,12 @@ impl<
                     Agent::Document(doc_id, doc.dupe()).key_ops().await,
                 );
 
-                for (agent_id, (agent, _access)) in &transitive {
+                let revoked = no_longer_reachable(own_revoked, &transitive).await;
+                for (agent_id, agent) in transitive
+                    .iter()
+                    .map(|(id, (agent, _))| (id, agent))
+                    .chain(revoked.iter())
+                {
                     if !map.contains_key(agent_id) {
                         add_many_keys(&mut map, *agent_id, agent.key_ops().await);
                     }
@@ -1318,35 +1407,48 @@ impl<
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
 
         type TransitiveMembers<F, S, T, L> = HashMap<Identifier, (Agent<F, S, T, L>, Access)>;
+        type RevokedMembers<F, S, T, L> = HashMap<Identifier, Agent<F, S, T, L>>;
 
-        // For each group: (group_id, group_arc, transitive_members)
+        // For each group: (group_id, group_arc, transitive_members, revoked)
         #[allow(clippy::type_complexity)]
         let mut group_data: Vec<(
             GroupId,
             Arc<Mutex<Group<F, S, T, L>>>,
             TransitiveMembers<F, S, T, L>,
+            RevokedMembers<F, S, T, L>,
         )> = Vec::with_capacity(groups.len());
         for group in groups {
-            let (group_id, transitive) = {
+            let (group_id, transitive, own_revoked) = {
                 let locked = group.lock().await;
-                (locked.group_id(), locked.transitive_members().await)
+                (
+                    locked.group_id(),
+                    locked.transitive_members().await,
+                    locked.revoked_members(),
+                )
             };
-            group_data.push((group_id, group, transitive));
+            let revoked = no_longer_reachable(own_revoked, &transitive).await;
+            group_data.push((group_id, group, transitive, revoked));
         }
 
-        // For each doc: (doc_id, doc_arc, transitive_members)
+        // For each doc: (doc_id, doc_arc, transitive_members, revoked)
         #[allow(clippy::type_complexity)]
         let mut doc_data: Vec<(
             DocumentId,
             Arc<Mutex<Document<F, S, T, L>>>,
             TransitiveMembers<F, S, T, L>,
+            RevokedMembers<F, S, T, L>,
         )> = Vec::with_capacity(docs.len());
         for doc in docs {
-            let (doc_id, transitive) = {
+            let (doc_id, transitive, own_revoked) = {
                 let locked = doc.lock().await;
-                (locked.doc_id(), locked.transitive_members().await)
+                (
+                    locked.doc_id(),
+                    locked.transitive_members().await,
+                    locked.revoked_members(),
+                )
             };
-            doc_data.push((doc_id, doc, transitive));
+            let revoked = no_longer_reachable(own_revoked, &transitive).await;
+            doc_data.push((doc_id, doc, transitive, revoked));
         }
 
         // Phase 2: Collect all key_ops (call key_ops() once per unique agent),
@@ -1354,24 +1456,32 @@ impl<
         let mut key_ops_cache: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
         key_ops_cache.insert(active_id, active_prekeys);
 
-        for (group_id, group, transitive) in &group_data {
+        for (group_id, group, transitive, revoked) in &group_data {
             let g_id: Identifier = (*group_id).into();
             if let Entry::Vacant(e) = key_ops_cache.entry(g_id) {
                 e.insert(Agent::Group(*group_id, group.dupe()).key_ops().await);
             }
-            for (agent_id, (agent, _access)) in transitive {
+            for (agent_id, agent) in transitive
+                .iter()
+                .map(|(id, (agent, _))| (id, agent))
+                .chain(revoked.iter())
+            {
                 if let Entry::Vacant(e) = key_ops_cache.entry(*agent_id) {
                     e.insert(agent.key_ops().await);
                 }
             }
         }
 
-        for (doc_id, doc, transitive) in &doc_data {
+        for (doc_id, doc, transitive, revoked) in &doc_data {
             let d_id: Identifier = (*doc_id).into();
             if let Entry::Vacant(e) = key_ops_cache.entry(d_id) {
                 e.insert(Agent::Document(*doc_id, doc.dupe()).key_ops().await);
             }
-            for (agent_id, (agent, _access)) in transitive {
+            for (agent_id, agent) in transitive
+                .iter()
+                .map(|(id, (agent, _))| (id, agent))
+                .chain(revoked.iter())
+            {
                 if let Entry::Vacant(e) = key_ops_cache.entry(*agent_id) {
                     e.insert(agent.key_ops().await);
                 }
@@ -1405,7 +1515,7 @@ impl<
             entry.insert(agent_id);
         }
 
-        for (group_id, _, transitive) in &group_data {
+        for (group_id, _, transitive, revoked) in &group_data {
             let g_id: Identifier = (*group_id).into();
             for agent_id in transitive.keys() {
                 let entry = index.entry(*agent_id).or_default();
@@ -1413,10 +1523,11 @@ impl<
                 entry.insert(*agent_id);
                 entry.insert(g_id);
                 entry.extend(transitive.keys());
+                entry.extend(revoked.keys());
             }
         }
 
-        for (doc_id, _, transitive) in &doc_data {
+        for (doc_id, _, transitive, revoked) in &doc_data {
             let d_id: Identifier = (*doc_id).into();
             for agent_id in transitive.keys() {
                 let entry = index.entry(*agent_id).or_default();
@@ -1424,6 +1535,7 @@ impl<
                 entry.insert(*agent_id);
                 entry.insert(d_id);
                 entry.extend(transitive.keys());
+                entry.extend(revoked.keys());
             }
         }
 
@@ -3830,6 +3942,11 @@ mod tests {
 
         // Revoke bob from doc1
         alice.revoke_member(bob_id, false, doc1_id).await?;
+
+        // Revoke carol from the group, so doc2 reaches a member group that
+        // holds a revocation. Nothing else in this fixture makes the per-agent
+        // or the all-agents walk follow a group's revocation heads.
+        alice.revoke_member(carol_id, false, group_id).await?;
 
         // Get the all-agents result
         let all_results = alice.membership_ops_for_all_agents().await;

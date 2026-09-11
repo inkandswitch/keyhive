@@ -574,9 +574,8 @@ pub fn collect_membership_heads<
 /// Enqueue BFS edges from a single [`MembershipOperation`].
 ///
 /// For delegations, follows the proof chain and any `after_revocations`.
-/// When `follow_group_heads` is true, also enqueues the group delegate's
-/// own delegation heads (used during full BFS but not when extending from
-/// a single revocation).
+/// When `follow_group_heads` is true, also enqueues the group delegate's own
+/// delegation and revocation heads.
 ///
 /// For revocations, follows the proof and revoke chains.
 async fn push_membership_edges<
@@ -600,10 +599,17 @@ async fn push_membership_edges<
             }
             if follow_group_heads {
                 if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
-                    for dlg in group.lock().await.delegation_heads().values() {
+                    let locked = group.lock().await;
+                    for dlg in locked.delegation_heads().values() {
                         let dlg_hash = Digest::hash(dlg.as_ref()).coerce();
                         if !visited.contains(&dlg_hash) {
                             heads.push((dlg_hash, dlg.dupe().into()));
+                        }
+                    }
+                    for rev in locked.revocation_heads().values() {
+                        let rev_hash = Digest::hash(rev.as_ref()).coerce();
+                        if !visited.contains(&rev_hash) {
+                            heads.push((rev_hash, rev.dupe().into()));
                         }
                     }
                 }
@@ -621,7 +627,7 @@ async fn push_membership_edges<
 
 /// Walk all [`MembershipOperation`]s reachable from the given heads via BFS,
 /// following proof chains, revoke chains, and (for delegations to groups) the
-/// group's own delegation heads. Returns a map keyed by digest.
+/// group's own delegation and revocation heads. Returns a map keyed by digest.
 pub async fn bfs_membership_ops<
     F: FutureForm,
     S: AsyncSigner<F>,
