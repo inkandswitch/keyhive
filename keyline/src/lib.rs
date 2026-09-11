@@ -57,6 +57,3 @@ pub mod signed;
 
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_utils;
-
-#[cfg(any(test, feature = "test_utils"))]
-pub mod conformance;
