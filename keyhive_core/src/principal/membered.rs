@@ -105,6 +105,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
     }
 
+    /// Agents whose delegation here was revoked and who hold no other one.
+    pub async fn revoked_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
+        match self {
+            Membered::Group(_, group) => group.lock().await.revoked_members(),
+            Membered::Document(_, doc) => doc.lock().await.revoked_members(),
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,

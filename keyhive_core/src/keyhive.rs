@@ -91,6 +91,9 @@ use std::collections::BTreeSet;
 #[cfg(any(test, feature = "test_utils"))]
 use crate::store::ciphertext::CausalDecryptionError;
 
+mod member_traversals;
+use member_traversals::{MemberAgents, MemberTraversals};
+
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
 pub struct Keyhive<
@@ -1235,6 +1238,8 @@ impl<
             add_many_keys(&mut map, who, agent.key_ops().await);
         }
 
+        let mut traversals = MemberTraversals::new();
+
         let groups = {
             self.groups
                 .lock()
@@ -1255,7 +1260,14 @@ impl<
                     Agent::Group(group_id, group.dupe()).key_ops().await,
                 );
 
-                for (agent_id, (agent, _access)) in &transitive {
+                let revoked = traversals
+                    .no_longer_reachable(&Membered::Group(group_id, group.dupe()), &transitive)
+                    .await;
+                for (agent_id, agent) in transitive
+                    .iter()
+                    .map(|(id, (agent, _))| (id, agent))
+                    .chain(revoked.iter())
+                {
                     if !map.contains_key(agent_id) {
                         add_many_keys(&mut map, *agent_id, agent.key_ops().await);
                     }
@@ -1276,7 +1288,14 @@ impl<
                     Agent::Document(doc_id, doc.dupe()).key_ops().await,
                 );
 
-                for (agent_id, (agent, _access)) in &transitive {
+                let revoked = traversals
+                    .no_longer_reachable(&Membered::Document(doc_id, doc.dupe()), &transitive)
+                    .await;
+                for (agent_id, agent) in transitive
+                    .iter()
+                    .map(|(id, (agent, _))| (id, agent))
+                    .chain(revoked.iter())
+                {
                     if !map.contains_key(agent_id) {
                         add_many_keys(&mut map, *agent_id, agent.key_ops().await);
                     }
@@ -1296,8 +1315,8 @@ impl<
     ///
     /// Returns an [`AllReachablePrekeyOps`] containing:
     /// - `ops`: topsorted key ops per identifier, computed once and shared
-    /// - `index`: for each agent, the set of identifier keys into `ops` that are
-    ///   reachable for that agent
+    /// - `index`: for each agent, the identifier keys into `ops` that agent
+    ///   needs, including members it can no longer reach
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_all_agents(&self) -> AllReachablePrekeyOps {
         // Phase 1: Precompute shared data
@@ -1319,34 +1338,42 @@ impl<
 
         type TransitiveMembers<F, S, T, L> = HashMap<Identifier, (Agent<F, S, T, L>, Access)>;
 
-        // For each group: (group_id, group_arc, transitive_members)
+        let mut traversals = MemberTraversals::new();
+
         #[allow(clippy::type_complexity)]
         let mut group_data: Vec<(
             GroupId,
             Arc<Mutex<Group<F, S, T, L>>>,
             TransitiveMembers<F, S, T, L>,
+            MemberAgents<F, S, T, L>,
         )> = Vec::with_capacity(groups.len());
         for group in groups {
             let (group_id, transitive) = {
                 let locked = group.lock().await;
                 (locked.group_id(), locked.transitive_members().await)
             };
-            group_data.push((group_id, group, transitive));
+            let revoked = traversals
+                .no_longer_reachable(&Membered::Group(group_id, group.dupe()), &transitive)
+                .await;
+            group_data.push((group_id, group, transitive, revoked));
         }
 
-        // For each doc: (doc_id, doc_arc, transitive_members)
         #[allow(clippy::type_complexity)]
         let mut doc_data: Vec<(
             DocumentId,
             Arc<Mutex<Document<F, S, T, L>>>,
             TransitiveMembers<F, S, T, L>,
+            MemberAgents<F, S, T, L>,
         )> = Vec::with_capacity(docs.len());
         for doc in docs {
             let (doc_id, transitive) = {
                 let locked = doc.lock().await;
                 (locked.doc_id(), locked.transitive_members().await)
             };
-            doc_data.push((doc_id, doc, transitive));
+            let revoked = traversals
+                .no_longer_reachable(&Membered::Document(doc_id, doc.dupe()), &transitive)
+                .await;
+            doc_data.push((doc_id, doc, transitive, revoked));
         }
 
         // Phase 2: Collect all key_ops (call key_ops() once per unique agent),
@@ -1354,24 +1381,32 @@ impl<
         let mut key_ops_cache: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
         key_ops_cache.insert(active_id, active_prekeys);
 
-        for (group_id, group, transitive) in &group_data {
+        for (group_id, group, transitive, revoked) in &group_data {
             let g_id: Identifier = (*group_id).into();
             if let Entry::Vacant(e) = key_ops_cache.entry(g_id) {
                 e.insert(Agent::Group(*group_id, group.dupe()).key_ops().await);
             }
-            for (agent_id, (agent, _access)) in transitive {
+            for (agent_id, agent) in transitive
+                .iter()
+                .map(|(id, (agent, _))| (id, agent))
+                .chain(revoked.iter())
+            {
                 if let Entry::Vacant(e) = key_ops_cache.entry(*agent_id) {
                     e.insert(agent.key_ops().await);
                 }
             }
         }
 
-        for (doc_id, doc, transitive) in &doc_data {
+        for (doc_id, doc, transitive, revoked) in &doc_data {
             let d_id: Identifier = (*doc_id).into();
             if let Entry::Vacant(e) = key_ops_cache.entry(d_id) {
                 e.insert(Agent::Document(*doc_id, doc.dupe()).key_ops().await);
             }
-            for (agent_id, (agent, _access)) in transitive {
+            for (agent_id, agent) in transitive
+                .iter()
+                .map(|(id, (agent, _))| (id, agent))
+                .chain(revoked.iter())
+            {
                 if let Entry::Vacant(e) = key_ops_cache.entry(*agent_id) {
                     e.insert(agent.key_ops().await);
                 }
@@ -1405,7 +1440,7 @@ impl<
             entry.insert(agent_id);
         }
 
-        for (group_id, _, transitive) in &group_data {
+        for (group_id, _, transitive, revoked) in &group_data {
             let g_id: Identifier = (*group_id).into();
             for agent_id in transitive.keys() {
                 let entry = index.entry(*agent_id).or_default();
@@ -1413,10 +1448,11 @@ impl<
                 entry.insert(*agent_id);
                 entry.insert(g_id);
                 entry.extend(transitive.keys());
+                entry.extend(revoked.keys());
             }
         }
 
-        for (doc_id, _, transitive) in &doc_data {
+        for (doc_id, _, transitive, revoked) in &doc_data {
             let d_id: Identifier = (*doc_id).into();
             for agent_id in transitive.keys() {
                 let entry = index.entry(*agent_id).or_default();
@@ -1424,6 +1460,7 @@ impl<
                 entry.insert(*agent_id);
                 entry.insert(d_id);
                 entry.extend(transitive.keys());
+                entry.extend(revoked.keys());
             }
         }
 
@@ -1475,7 +1512,10 @@ impl<
         AllCgkaOps { ops, index }
     }
 
-    /// Every event `agent` can reach, under the digests they are sent by.
+    /// Every event `agent` is sent, under the digests they are sent by.
+    ///
+    /// This includes prekey operations for members revoked out of groups it belongs to,
+    /// which it needs to verify those revocations.
     pub async fn event_digests_for_agent(
         &self,
         agent: impl Into<Identifier>,
@@ -1500,7 +1540,7 @@ impl<
         digests
     }
 
-    /// Every event each agent can reach, gathered once and deduplicated.
+    /// Every event each agent is sent, gathered once and deduplicated.
     pub async fn all_agent_events(&self) -> AllAgentEvents<F, S, T, L> {
         let all_membership = self.membership_ops_for_all_agents().await;
         let all_prekey = self.reachable_prekey_ops_for_all_agents().await;
@@ -3690,6 +3730,9 @@ mod tests {
             .add_member(eve_id, group_id, Access::Edit, &[])
             .await?;
         alice.add_member(group_id, doc2, Access::Read, &[]).await?;
+        // Without a revocation somewhere, neither traversal reaches the code that
+        // provides a revoked member's keys, and the two agree vacuously.
+        alice.revoke_member(carol_id, false, group_id).await?;
 
         // Get the all-agents result
         let all_results = alice.reachable_prekey_ops_for_all_agents().await;
@@ -3830,6 +3873,8 @@ mod tests {
 
         // Revoke bob from doc1
         alice.revoke_member(bob_id, false, doc1_id).await?;
+
+        alice.revoke_member(carol_id, false, group_id).await?;
 
         // Get the all-agents result
         let all_results = alice.membership_ops_for_all_agents().await;
