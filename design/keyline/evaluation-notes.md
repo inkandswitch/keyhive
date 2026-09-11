@@ -5,22 +5,22 @@
 
 ## Sources
 
-| Artifact                                   | Path                             |
-|--------------------------------------------|----------------------------------|
-| Model (normative)                          | `README.md`                      |
-| Crate spec, evaluation program (normative) | `implementation.md`              |
-| Rejected alternatives                      | `alternatives.md`                |
-| Edge cases / field eliminations            | `edge-cases.md`                  |
-| Patterns (roles, pinning, rotation)        | `patterns.md`                    |
-| Crate                                      | `../../keyline/`                 |
-| Reference implementation                   | `../../keyline/src/memory.rs`    |
-| Conformance scenarios and laws             | `../../keyline/src/conformance/` |
+| Artifact                                   | Path                                        |
+|--------------------------------------------|---------------------------------------------|
+| Model (normative)                          | `README.md`                                 |
+| Crate spec, evaluation program (normative) | `implementation.md`                         |
+| Rejected alternatives                      | `alternatives.md`                           |
+| Edge cases / field eliminations            | `edge-cases.md`                             |
+| Patterns (roles, pinning, rotation)        | `patterns.md`                               |
+| Crate                                      | `../../keyline/`                            |
+| Reference implementation                   | `../../keyline/src/memory.rs`               |
+| Conformance scenarios and laws             | `../../keyline/src/test_utils/conformance/` |
 
 Where this document and `implementation.md` disagree, `implementation.md` wins. The SQL below is illustrative; the in-repository evaluator is `MemoryKeyline`.
 
 ## Summary
 
-Keyline is a state-based CRDT: a flat set of signed delegations and revocations over Ed25519 keys, where authority is _derived_ by evaluating the whole set. Evaluation is stratified Datalog with a single negation boundary:
+Keyline is a state-based CRDT: a flat set of signed delegations and revocations over Ed25519 keys, where authority is _derived_ (similar to SDSI) by evaluating the set. Evaluation is equivalent to stratified Datalog with a single negation boundary:
 
 1. _Positive pass_ — compute who has standing, ignoring all revocations.
 2. _Coverage_ — from that, compute per-certificate forbidden nodes (`covered`).
@@ -544,7 +544,7 @@ Plausible readings of the model that are wrong, and why.
 
 ## 9. Testing an Evaluator
 
-- `keyline/src/conformance/scenarios.rs` and `conformance/laws.rs` are a ready-made corpus; `memory.rs` is the reference implementation to differential-test against.
+- `keyline/src/test_utils/conformance/{scenarios,laws}.rs` are a ready-made corpus; `memory.rs` is the reference implementation to differential-test against.
 - The spec's worked example (README §Worked Example: Doc, Dan, Members, Alice, Bob, M2, Carol — boot, heal, re-grant, zombie) exercises every mechanism in eight certificates; encode it first.
 - Property-based targets (bolero is already in the workspace): evaluation is a pure function of the set (permutation invariance = the CRDT property); monotonicity of stratum 1 under cert insertion; revocation coverage never retracts under merge; least-fixpoint-ness (no fact without a derivation — inject ungrounded cycles and assert they stay dead); threshold decomposition agrees with a naive (max, min) evaluator.
 
@@ -592,7 +592,7 @@ Bottom-up evaluators pass phases 1, 3, 5 by construction; phases 2 and 4 are mea
 | Gift-cert scenario (§9) | Not in the conformance suite; phases 2 and 4 apply to bottom-up evaluators |
 | Compute-denial analysis in the model document | §7 has no counterpart in `README.md`, whose griefing section prices authority-denial only |
 | Depth cap as a semantic lever | Analysed and not recommended; consensus-critical if ever adopted, since every replica must agree |
-| Differential testing of SQL backends | `conformance::gen::CertSet` can drive an SQL backend against `MemoryKeyline` |
+| Differential testing of SQL backends | `test_utils::conformance::gen::CertSet` can drive an SQL backend against `MemoryKeyline` |
 
 ## Glossary
 

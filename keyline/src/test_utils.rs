@@ -1,4 +1,9 @@
-//! Deterministic fixtures for tests. Not part of the public API.
+//! Test support: deterministic fixtures, and the cross-backend conformance
+//! suite in [`conformance`].
+//!
+//! Not part of the public API; gated on `cfg(test)` and the `test_utils` feature.
+
+pub mod conformance;
 
 use crate::{
     certificate::Certificate,

@@ -365,10 +365,12 @@ keyline/
     signed.rs       Signed<T>, Verified<T>
     keyline.rs      the Keyline trait, set_digest
     memory.rs       MemoryKeyline: storage, stratified evaluator, Keyline impl
-    conformance.rs  the shared test suite: cast, helpers
-    conformance/    gen.rs (CertSet generator), laws.rs (bolero properties, naive oracle),
-                    scenarios.rs (named cases, generic over K: Keyline)
-    test_utils.rs   deterministic ids, unsigned Verified fixtures
+    test_utils.rs   deterministic ids, unsigned and signed Verified fixtures
+    test_utils/
+      conformance.rs      the shared suite: cast, helpers
+      conformance/gen.rs  CertSet generator
+      conformance/laws.rs bolero properties, naive oracle
+      conformance/scenarios.rs  named cases, generic over K: Keyline
 ```
 
 - `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`. The claim is source-level: the crate compiles without `std` and never links it, but a `wasm32-unknown-unknown` or bare-metal build fails today in `getrandom`, reached through `keyhive_crypto → chacha20poly1305`. `keyline` uses two items from `keyhive_crypto` — `Digest<T>` and `Verifiable` — and neither needs any of that. The fix is to move those two down (to `keyhive_codec`, or a crate beneath it: the layering argument that put `Encode`/`Decode` at the bottom applies to `Digest` identically) or to gate `keyhive_crypto`'s AEAD and key-exchange modules behind a default-on feature. Deferred to the `keyhive_core` integration, when `keyhive_crypto` is being touched anyway; `ci-no-std` checks the host target in the meantime.
@@ -387,7 +389,7 @@ Instrumentation: `insert` logs each certificate at `debug` (kind, endpoints, whe
 
 Every backend runs the same tests against `impl Keyline`. The suite is exported behind `test_utils` as plain functions generic over `K: Keyline + Default`; a backend writes one `#[test]` per scenario and law that calls the function with its type. `MemoryKeyline`'s test module is the reference list.
 
-_Generator._ `conformance::gen::CertSet` draws from a pool of eight deterministic identities: a root edge per subject (one to three), up to ten free-form delegations over any node in the pool (so some land on roles and some are ungrounded), up to four revocations naming delegations already present, up to two re-issues past a revocation, and, about half the time, the clamping shape (a role supplied into a subject, an admin of it, a member of it with an independent grant over the subject, that member's grant to a third party, and the admin's revocation of it). Random 32-byte keys would give nothing but ungrounded edges.
+_Generator._ `test_utils::conformance::gen::CertSet` draws from a pool of eight deterministic identities: a root edge per subject (one to three), up to ten free-form delegations over any node in the pool (so some land on roles and some are ungrounded), up to four revocations naming delegations already present, up to two re-issues past a revocation, and, about half the time, the clamping shape (a role supplied into a subject, an admin of it, a member of it with an independent grant over the subject, that member's grant to a third party, and the admin's revocation of it). Random 32-byte keys would give nothing but ungrounded edges.
 
 _Laws_ (`bolero`, over generated sets):
 
