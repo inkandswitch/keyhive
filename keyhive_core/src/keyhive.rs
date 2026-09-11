@@ -1089,9 +1089,6 @@ impl<
         who: impl Into<Identifier>,
     ) -> HashMap<Digest<MembershipOperation<F, S, T, L>>, MembershipOperation<F, S, T, L>> {
         let who = who.into();
-        let mut ops = HashMap::new();
-        let mut visited_hashes = HashSet::new();
-
         #[allow(clippy::type_complexity)]
         let mut heads: Vec<(
             Digest<MembershipOperation<F, S, T, L>>,
@@ -1122,46 +1119,7 @@ impl<
             heads.push((hash, rev.into()));
         }
 
-        while let Some((hash, op)) = heads.pop() {
-            if visited_hashes.contains(&hash) {
-                continue;
-            }
-
-            visited_hashes.insert(hash);
-            ops.insert(hash, op.clone());
-
-            match op {
-                MembershipOperation::Delegation(dlg) => {
-                    if let Some(proof) = &dlg.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
-                    }
-
-                    for rev in dlg.payload.after_revocations.iter() {
-                        heads.push((Digest::hash(rev.as_ref()).coerce(), rev.dupe().into()));
-                    }
-
-                    // If this delegation is to a group, include the group's delegation heads
-                    if let Agent::Group(_group_id, group) = &dlg.payload.delegate {
-                        for dlg in group.lock().await.delegation_heads().values() {
-                            let dlg_hash = Digest::hash(dlg.as_ref()).coerce();
-                            if !visited_hashes.contains(&dlg_hash) {
-                                heads.push((dlg_hash, dlg.dupe().into()));
-                            }
-                        }
-                    }
-                }
-                MembershipOperation::Revocation(rev) => {
-                    if let Some(proof) = &rev.payload.proof {
-                        heads.push((Digest::hash(proof.as_ref()).coerce(), proof.dupe().into()));
-                    }
-
-                    let r = rev.payload.revoke.dupe();
-                    heads.push((Digest::hash(r.as_ref()).coerce(), r.into()));
-                }
-            }
-        }
-
-        ops
+        bfs_membership_ops(heads).await
     }
 
     /// Compute membership ops for all agents in a single pass.
