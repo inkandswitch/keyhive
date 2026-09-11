@@ -545,13 +545,13 @@ fn pop_highest(buckets: &mut [Vec<Id>; Access::ALL.len()]) -> Option<(Id, Access
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
+    use crate::test_utils::{
+        cert,
         conformance::{d, scenarios, scenarios::standard, DOC, OWNERS},
-        test_utils::cert,
     };
 
     #[cfg(feature = "arbitrary")]
-    use crate::conformance::laws;
+    use crate::test_utils::conformance::laws;
 
     // One test per scenario and law. Add new ones to `scenarios.rs` / `laws.rs`
     // and list them here; a second backend copies this block.
