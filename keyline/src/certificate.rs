@@ -16,7 +16,10 @@ use keyhive_crypto::verifiable::Verifiable;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum Certificate {
+    /// A grant.
     Delegation(Delegation),
+
+    /// A withdrawal of a grant.
     Revocation(Revocation),
 }
 
@@ -29,6 +32,7 @@ impl Certificate {
         }
     }
 
+    /// The delegation, if this certificate is one.
     pub fn as_delegation(&self) -> Option<&Delegation> {
         match self {
             Certificate::Delegation(d) => Some(d),
@@ -36,6 +40,7 @@ impl Certificate {
         }
     }
 
+    /// The revocation, if this certificate is one.
     pub fn as_revocation(&self) -> Option<&Revocation> {
         match self {
             Certificate::Delegation(_) => None,

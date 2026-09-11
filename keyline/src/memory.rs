@@ -64,14 +64,17 @@ pub struct MemoryKeyline {
 }
 
 impl MemoryKeyline {
+    /// An empty set.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// How many certificates are in the set.
     pub fn len(&self) -> usize {
         self.certificates.len()
     }
 
+    /// Whether the set is empty.
     pub fn is_empty(&self) -> bool {
         self.certificates.is_empty()
     }
@@ -81,10 +84,12 @@ impl MemoryKeyline {
         self.certificates.get(cert)
     }
 
+    /// The delegation with this payload digest, if present.
     pub fn delegation(&self, cert: &Digest<Delegation>) -> Option<&Delegation> {
         self.delegations.get(cert)
     }
 
+    /// The revocation with this payload digest, if present.
     pub fn revocation(&self, cert: &Digest<Revocation>) -> Option<&Revocation> {
         self.revocations.get(cert)
     }
@@ -153,7 +158,11 @@ impl MemoryKeyline {
             .iter()
             .map(|(h, revs)| {
                 let mut nodes = Set::new();
-                for k in revs.iter().map(|r| self.revocations[r].iss) {
+                for k in revs
+                    .iter()
+                    .filter_map(|r| self.revocations.get(r))
+                    .map(|r| r.iss)
+                {
                     nodes.insert(k);
                     if let Some(ns) = reach.get(&k) {
                         nodes.extend(ns.iter().copied());
@@ -232,9 +241,11 @@ impl MemoryKeyline {
     /// not on the route to the issuer, so this is the one place a revocation's
     /// effect is decided by the signer's identity rather than their admin reach.
     fn renounced(&self, h: &Digest<Delegation>, aud: Id) -> bool {
-        self.denials
-            .get(h)
-            .is_some_and(|revs| revs.iter().any(|r| self.revocations[r].iss == aud))
+        self.denials.get(h).is_some_and(|revs| {
+            revs.iter()
+                .filter_map(|r| self.revocations.get(r))
+                .any(|r| r.iss == aud)
+        })
     }
 
     /// Stratum 2, level: the greatest fixed point of covered-edge caps,
@@ -248,7 +259,7 @@ impl MemoryKeyline {
             .iter()
             .flat_map(|c| c.edges.iter())
             .filter(|h| live.contains(h))
-            .map(|h| (*h, self.delegations[h].can))
+            .filter_map(|h| self.delegations.get(h).map(|d| (*h, d.can)))
             .collect();
 
         loop {
@@ -259,7 +270,7 @@ impl MemoryKeyline {
                     .edges
                     .iter()
                     .filter(|h| live.contains(h))
-                    .map(|h| (h, &self.delegations[h]))
+                    .filter_map(|h| self.delegations.get(h).map(|d| (h, d)))
                     .collect();
                 if edges.is_empty() {
                     continue;
@@ -270,13 +281,18 @@ impl MemoryKeyline {
                     &Params::live(Some(&ctx.exclude), live, Some(&cap)),
                 );
                 for (h, d) in edges {
-                    let at_iss = levels
-                        .get(&d.sub)
-                        .and_then(|m| m.get(&d.iss))
-                        .copied()
-                        .expect("a live edge's issuer is reachable on its avoiding derivation");
+                    // A live edge's issuer is reachable on its avoiding
+                    // derivation — that is what made it live — so both lookups
+                    // succeed. Were one ever to fail there would be nothing to
+                    // lower, which is what skipping does.
+                    let (Some(at_iss), Some(current)) = (
+                        levels.get(&d.sub).and_then(|m| m.get(&d.iss)).copied(),
+                        cap.get(h).copied(),
+                    ) else {
+                        continue;
+                    };
                     let next = d.can.min(at_iss);
-                    if next < cap[h] {
+                    if next < current {
                         lowered.push((*h, next));
                     }
                 }
@@ -343,7 +359,7 @@ impl MemoryKeyline {
             return best;
         }
 
-        let mut buckets: [Vec<Id>; 4] = Default::default();
+        let mut buckets: [Vec<Id>; Access::ALL.len()] = Default::default();
         best.insert(r, Access::Admin);
         buckets[Access::Admin as usize].push(r);
 
@@ -358,13 +374,15 @@ impl MemoryKeyline {
         };
 
         while let Some((u, lu)) = pop_highest(&mut buckets) {
-            if best[&u] != lu {
+            if best.get(&u) != Some(&lu) {
                 continue; // stale entry; u was raised after this was queued
             }
 
             if let Some(edges) = self.edges.get(&r).and_then(|by_iss| by_iss.get(&u)) {
                 for h in edges.iter().filter(|h| params.usable(h)) {
-                    let d = &self.delegations[h];
+                    let Some(d) = self.delegations.get(h) else {
+                        continue;
+                    };
                     relax(&mut best, &mut buckets, d.aud, lu.min(params.cap(h, d.can)));
                 }
             }
@@ -517,7 +535,7 @@ fn reached(levels: &Map<Id, Map<Id, Access>>, root: Id, node: Id) -> bool {
     levels.get(&root).is_some_and(|m| m.contains_key(&node))
 }
 
-fn pop_highest(buckets: &mut [Vec<Id>; 4]) -> Option<(Id, Access)> {
+fn pop_highest(buckets: &mut [Vec<Id>; Access::ALL.len()]) -> Option<(Id, Access)> {
     Access::ALL
         .iter()
         .rev()

@@ -182,7 +182,14 @@ impl<'de, T> serde::Deserialize<'de> for Digest<T> {
 
 impl<T> fmt::Debug for Digest<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Digest<{}>({self})", core::any::type_name::<T>())
+        // Not `{self}`: `Display` already wraps in `Digest(..)`, which would
+        // nest as `Digest<T>(Digest(..))`.
+        write!(
+            f,
+            "Digest<{}>({})",
+            core::any::type_name::<T>(),
+            self.raw.to_hex()
+        )
     }
 }
 

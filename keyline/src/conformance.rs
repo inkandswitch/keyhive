@@ -37,6 +37,8 @@ pub const CAROL: u8 = 7;
 pub const DAN: u8 = 8;
 pub const EVE: u8 = 9;
 pub const FRANK: u8 = 10;
+/// A second document, for scenarios that need a subject outside the cast.
+pub const OTHER_DOC: u8 = 11;
 
 pub fn d(iss: u8, aud: u8, sub: u8, can: Access) -> Delegation {
     Delegation::new(id(iss), id(aud), id(sub), can)

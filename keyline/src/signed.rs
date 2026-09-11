@@ -51,6 +51,7 @@ impl<T> Signed<T> {
         &self.encoded
     }
 
+    /// The signature over [`Signed::encoded`].
     pub fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -146,6 +147,7 @@ pub struct Verified<T> {
 }
 
 impl<T> Verified<T> {
+    /// The decoded payload.
     pub fn payload(&self) -> &T {
         &self.payload
     }
@@ -160,6 +162,7 @@ impl<T> Verified<T> {
         &self.signed
     }
 
+    /// The payload and the certificate it came from.
     pub fn into_parts(self) -> (T, Signed<T>) {
         (self.payload, self.signed)
     }

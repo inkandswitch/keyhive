@@ -2,6 +2,7 @@
 
 use crate::{delegation::Delegation, id::Id};
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
@@ -34,6 +35,7 @@ pub struct Revocation {
 }
 
 impl Revocation {
+    /// `iss` withdraws the delegation with this payload digest.
     pub fn new(iss: Id, revoke: Digest<Delegation>) -> Self {
         Revocation { iss, revoke }
     }
@@ -65,14 +67,14 @@ impl Encode for Revocation {
 impl Decode for Revocation {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         match bytes.len().cmp(&LEN) {
-            core::cmp::Ordering::Less => return Err(DecodeError::UnexpectedEnd),
-            core::cmp::Ordering::Greater => return Err(DecodeError::TrailingBytes),
-            core::cmp::Ordering::Equal => {}
+            Ordering::Less => return Err(DecodeError::UnexpectedEnd),
+            Ordering::Greater => return Err(DecodeError::TrailingBytes),
+            Ordering::Equal => {}
         }
         let iss = Id::decode(&bytes[..Id::LEN])?;
-        let raw: [u8; 32] = bytes[Id::LEN..]
-            .try_into()
-            .expect("length checked to be exactly LEN");
+        let Ok(raw) = <[u8; 32]>::try_from(&bytes[Id::LEN..]) else {
+            return Err(DecodeError::UnexpectedEnd);
+        };
         Ok(Revocation {
             iss,
             revoke: Digest::from(raw),

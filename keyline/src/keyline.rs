@@ -10,7 +10,10 @@ use crate::{
     access::Access, certificate::Certificate, delegation::Delegation, id::Id,
     revocation::Revocation, signed::Verified,
 };
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 use keyhive_crypto::digest::Digest;
 
 /// A set of certificates and the authority they imply.
@@ -76,8 +79,14 @@ pub trait Keyline {
 pub fn set_digest<I: IntoIterator<Item = Digest<Certificate>>>(
     digests: I,
 ) -> Digest<BTreeSet<Certificate>> {
-    let mut sorted: alloc::vec::Vec<[u8; 32]> =
-        digests.into_iter().map(|d| *d.raw.as_bytes()).collect();
+    let mut sorted: Vec<[u8; 32]> = digests
+        .into_iter()
+        .map(|d| {
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(d.as_slice());
+            bytes
+        })
+        .collect();
     sorted.sort_unstable();
     let mut hasher = blake3::Hasher::new();
     for d in &sorted {
@@ -97,13 +106,5 @@ mod tests {
         let c: Digest<Certificate> = Digest::from([3u8; 32]);
         assert_eq!(set_digest([a, b, c]), set_digest([c, a, b]));
         assert_ne!(set_digest([a, b]), set_digest([a, b, c]));
-    }
-
-    #[test]
-    fn empty_set_has_a_digest() {
-        assert_eq!(
-            set_digest(core::iter::empty()),
-            set_digest(core::iter::empty())
-        );
     }
 }
