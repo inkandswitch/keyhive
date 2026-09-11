@@ -29,6 +29,9 @@ const DOC: u8 = 1;
 const OWNERS: u8 = 2;
 const ROLES: [u8; 3] = [3, 4, 5];
 const FIRST_HUMAN: u8 = 10;
+/// Identities outside the generated population, for one-off certificates.
+const LADDER_LEAF: u8 = 250;
+const LATE_JOINER: u8 = 251;
 
 fn d(iss: u8, aud: u8, sub: u8, can: Access) -> Certificate {
     Delegation::new(id(iss), id(aud), id(sub), can).into()
@@ -51,8 +54,10 @@ fn realistic(n: u8) -> MemoryKeyline {
         d(OWNERS, FIRST_HUMAN + 1, OWNERS, Access::Admin),
     ];
     let mut next = FIRST_HUMAN + 2;
-    for (i, role) in ROLES.iter().enumerate() {
-        let level = [Access::Edit, Access::Read, Access::Relay][i];
+    for (role, level) in ROLES
+        .iter()
+        .zip([Access::Edit, Access::Read, Access::Relay])
+    {
         certs.push(d(FIRST_HUMAN, *role, DOC, level));
         certs.push(d(*role, OWNERS, *role, Access::Admin));
         for _ in 0..n {
@@ -84,7 +89,7 @@ fn club_ladder(k: u8) -> MemoryKeyline {
         certs.push(d(prev, role, DOC, Access::Admin)); // and supplied into Doc
         prev = role;
     }
-    certs.push(d(prev, 250, prev, Access::Edit));
+    certs.push(d(prev, LADDER_LEAF, prev, Access::Edit));
     build(certs)
 }
 
@@ -130,7 +135,7 @@ fn realistic_insert(bencher: Bencher, n: u8) {
         .with_inputs(|| {
             (
                 realistic(n),
-                cert(d(FIRST_HUMAN, 251, ROLES[1], Access::Read)),
+                cert(d(FIRST_HUMAN, LATE_JOINER, ROLES[1], Access::Read)),
             )
         })
         .bench_values(|(mut g, c)| g.insert(c));
