@@ -62,8 +62,7 @@ test.describe("Signer", async () => {
         const { Signer } = window.keyhive;
         const key = Signer.generateMemory();
         const signed = await key.trySign(new Uint8Array(input.toSign));
-        const { payload, verifyingKey, signature } = signed;
-        return { input, payload, verifyingKey, signature, key };
+        return { payload: signed.payload(), signature: signed.signature };
       };
 
       test("has a signature", async ({ page }) => {
@@ -137,8 +136,7 @@ test.describe("Signer", async () => {
         const { Signer } = window.keyhive;
         const key = await Signer.generateWebCrypto();
         const signed = await key.trySign(new Uint8Array(input.toSign));
-        const { payload, verifyingKey, signature } = signed;
-        return { input, payload, verifyingKey, signature, key };
+        return { payload: signed.payload(), signature: signed.signature };
       };
 
       test("has a signature", async ({ page, browserName }) => {
