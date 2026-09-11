@@ -15,7 +15,6 @@ use keyhive_core::principal::{
 };
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
-use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = Document)]
 #[derive(Debug, Clone, Dupe)]
@@ -24,7 +23,6 @@ pub struct JsDocument {
     pub(crate) inner: Arc<Mutex<Document<Local, JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
-#[wasm_refgen(js_ref = JsDocumentRef)]
 #[wasm_bindgen(js_class = Document)]
 impl JsDocument {
     #[wasm_bindgen(getter)]
@@ -32,7 +30,7 @@ impl JsDocument {
         JsIdentifier(self.doc_id.into())
     }
 
-    #[wasm_bindgen(getter)]
+    #[wasm_bindgen(getter, js_name = docId)]
     pub fn doc_id(&self) -> JsDocumentId {
         JsDocumentId(self.doc_id)
     }

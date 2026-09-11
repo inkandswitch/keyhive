@@ -27,6 +27,11 @@ impl JsIdentifier {
         JsIdentifier(Public.id())
     }
 
+    #[wasm_bindgen(js_name = toString)]
+    pub fn to_js_string(&self) -> String {
+        self.0.to_string()
+    }
+
     #[wasm_bindgen(js_name = toBytes)]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.as_bytes().to_vec()
