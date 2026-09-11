@@ -4,7 +4,9 @@
 //! The cast: `DOC` is a document; `OWNERS` and `MEMBERS` are roles; `MODS` is a
 //! role in the clamping example; the rest are people.
 
-use super::{access, build, d, r, ALICE, BOB, CAROL, DAN, DOC, EVE, FRANK, MEMBERS, MODS, OWNERS};
+use super::{
+    access, build, d, r, ALICE, BOB, CAROL, DAN, DOC, EVE, FRANK, MEMBERS, MODS, OTHER_DOC, OWNERS,
+};
 use crate::{
     access::Access,
     delegation::Delegation,
@@ -83,10 +85,9 @@ pub fn membership_composes<K: Keyline + Default>() {
 
 pub fn late_binding_grants_new_documents_to_members<K: Keyline + Default>() {
     let (mut g, _, _) = standard::<K>();
-    let other = 11;
-    assert_eq!(access(&g, other, ALICE), None);
-    g.insert(cert(d(other, MEMBERS, other, Access::Read)));
-    assert_eq!(access(&g, other, ALICE), Some(Access::Read));
+    assert_eq!(access(&g, OTHER_DOC, ALICE), None);
+    g.insert(cert(d(OTHER_DOC, MEMBERS, OTHER_DOC, Access::Read)));
+    assert_eq!(access(&g, OTHER_DOC, ALICE), Some(Access::Read));
 }
 
 pub fn retraction_is_total<K: Keyline + Default>() {

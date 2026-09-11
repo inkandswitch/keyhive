@@ -60,6 +60,7 @@ pub struct Delegation {
 }
 
 impl Delegation {
+    /// A first issuance: `iss` grants `aud` `can` over `sub`, with no `seen`.
     pub fn new(iss: Id, aud: Id, sub: Id, can: Access) -> Self {
         Delegation {
             iss,
@@ -131,7 +132,7 @@ impl Decode for Delegation {
         let iss = Id::decode(&ids[..Id::LEN])?;
         let aud = Id::decode(&ids[Id::LEN..Id::LEN * 2])?;
         let sub = Id::decode(&ids[Id::LEN * 2..])?;
-        let can = Access::try_from(rest[0])?;
+        let can = Access::try_from(rest[0]).map_err(|_| DecodeError::InvalidTag(rest[0]))?;
 
         let seen = match rest[1] {
             SEEN_ABSENT => {
@@ -147,9 +148,9 @@ impl Decode for Delegation {
                 if bytes.len() > SEEN_LEN {
                     return Err(DecodeError::TrailingBytes);
                 }
-                let raw: [u8; 32] = rest[2..]
-                    .try_into()
-                    .expect("length checked to be exactly SEEN_LEN");
+                let Ok(raw) = <[u8; 32]>::try_from(&rest[2..]) else {
+                    return Err(DecodeError::UnexpectedEnd);
+                };
                 Some(Digest::from(raw))
             }
             other => return Err(DecodeError::InvalidTag(other)),

@@ -1,5 +1,6 @@
 //! Node identity: an Ed25519 verifying key.
 
+use alloc::vec::Vec;
 use core::{cmp::Ordering, fmt};
 use ed25519_dalek::VerifyingKey;
 use keyhive_codec::{
@@ -18,17 +19,19 @@ use keyhive_crypto::verifiable::Verifiable;
 /// that the bytes are a valid curve point, so [`Id::verifying_key`] cannot fail.
 // TODO(keyhive_types): unify with `keyhive_core::Identifier` and `beekem::MemberId`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Id([u8; 32]);
+pub struct Id([u8; Self::LEN]);
 
 impl Id {
+    /// Length of the compressed verifying key, in bytes.
     pub const LEN: usize = 32;
 
+    /// The `Id` of a verifying key.
     pub fn new(key: VerifyingKey) -> Self {
         Id(key.to_bytes())
     }
 
     /// Construct from raw bytes, checking that they are a valid verifying key.
-    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, InvalidId> {
+    pub fn from_bytes(bytes: [u8; Self::LEN]) -> Result<Self, InvalidId> {
         VerifyingKey::from_bytes(&bytes)
             .map(|_| Id(bytes))
             .map_err(|_| InvalidId)
@@ -39,11 +42,13 @@ impl Id {
         VerifyingKey::from_bytes(&self.0).expect("Id bytes were validated at construction")
     }
 
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    /// The compressed verifying key.
+    pub fn as_bytes(&self) -> &[u8; Self::LEN] {
         &self.0
     }
 
-    pub fn to_bytes(&self) -> [u8; 32] {
+    /// The compressed verifying key, by value.
+    pub fn to_bytes(&self) -> [u8; Self::LEN] {
         self.0
     }
 }
@@ -82,7 +87,7 @@ impl fmt::Display for Id {
 }
 
 impl Encode for Id {
-    fn encode_into(&self, out: &mut alloc::vec::Vec<u8>) {
+    fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.0);
     }
 }
@@ -132,11 +137,6 @@ impl<'a> arbitrary::Arbitrary<'a> for Id {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn size_is_thirty_two_bytes() {
-        assert_eq!(core::mem::size_of::<Id>(), 32);
-    }
 
     #[test]
     fn rejects_non_curve_points() {

@@ -1,5 +1,6 @@
 //! Access levels.
 
+use alloc::vec::Vec;
 use core::fmt;
 use keyhive_codec::{
     error::DecodeError,
@@ -29,31 +30,35 @@ pub enum Access {
 }
 
 impl Access {
+    /// Every level, ascending. `Relay < Read < Edit < Admin`.
     pub const ALL: [Access; 4] = [Access::Relay, Access::Read, Access::Edit, Access::Admin];
 
+    /// At least `Read`: may decrypt.
     pub fn is_reader(self) -> bool {
         self >= Access::Read
     }
 
+    /// At least `Edit`: may write.
     pub fn is_editor(self) -> bool {
         self >= Access::Edit
     }
 
+    /// Exactly `Admin`: may govern.
     pub fn is_admin(self) -> bool {
         self == Access::Admin
     }
 }
 
 impl TryFrom<u8> for Access {
-    type Error = DecodeError;
+    type Error = InvalidAccess;
 
-    fn try_from(byte: u8) -> Result<Self, DecodeError> {
+    fn try_from(byte: u8) -> Result<Self, InvalidAccess> {
         match byte {
             0 => Ok(Access::Relay),
             1 => Ok(Access::Read),
             2 => Ok(Access::Edit),
             3 => Ok(Access::Admin),
-            other => Err(DecodeError::InvalidTag(other)),
+            other => Err(InvalidAccess(other)),
         }
     }
 }
@@ -70,7 +75,7 @@ impl fmt::Display for Access {
 }
 
 impl Encode for Access {
-    fn encode_into(&self, out: &mut alloc::vec::Vec<u8>) {
+    fn encode_into(&self, out: &mut Vec<u8>) {
         out.push(*self as u8);
     }
 }
@@ -79,11 +84,16 @@ impl Decode for Access {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         match bytes {
             [] => Err(DecodeError::UnexpectedEnd),
-            [b] => Access::try_from(*b),
+            [b] => Access::try_from(*b).map_err(|InvalidAccess(t)| DecodeError::InvalidTag(t)),
             _ => Err(DecodeError::TrailingBytes),
         }
     }
 }
+
+/// The byte is not an access level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{0} is not an access level")]
+pub struct InvalidAccess(u8);
 
 #[cfg(test)]
 mod tests {
