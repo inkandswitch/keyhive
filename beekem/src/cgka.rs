@@ -428,7 +428,14 @@ impl Cgka {
                 self.tree.push_leaf(added_id, pk.into());
             }
             CgkaOperation::Remove { id, .. } => {
-                self.tree.remove_id(id)?;
+                match self.tree.remove_id(id) {
+                    Ok(_) => {}
+                    // A concurrent history might have removed the same member.
+                    Err(CgkaError::IdentifierNotFound) => {}
+                    // TODO: Support empty trees
+                    Err(CgkaError::RemoveLastMember) => {}
+                    Err(e) => return Err(e),
+                }
             }
             CgkaOperation::Update { ref new_path, .. } => {
                 self.tree.apply_path(new_path);
@@ -461,7 +468,7 @@ impl Cgka {
                 // An epoch with at least one membership change requires blanking
                 // removed paths and sorting added leaves after all ops are applied.
                 let mut added_ids = Set::new();
-                let mut removed_ids = Set::new();
+                let mut removed_ids = BTreeSet::new();
                 for op in epoch.iter() {
                     match op.payload {
                         CgkaOperation::Add { added_id, .. } => {
