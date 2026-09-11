@@ -34,6 +34,7 @@ impl JsContactCard {
         JsEvent(Event::from(self.0.op().clone()))
     }
 
+    #[wasm_bindgen(getter)]
     pub fn signature(&self) -> Vec<u8> {
         self.0.signature().to_bytes().to_vec()
     }

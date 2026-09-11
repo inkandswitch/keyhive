@@ -25,7 +25,7 @@ impl JsSigner {
     }
 
     #[cfg(not(feature = "web-sys"))]
-    #[wasm_bindgen(constructor, js_name = generate)]
+    #[wasm_bindgen]
     pub async fn generate() -> Self {
         Self::generate_memory()
     }

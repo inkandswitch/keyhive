@@ -5,7 +5,7 @@ use keyhive_core::principal::identifier::Identifier;
 use crate::{
     js::{
         archive::JsSerializationError,
-        document_id::JsDocumentId,
+        document_id::{JsDocumentId, JsDocumentIdRef},
         event::JsEvent,
         group_id::JsGroupId,
         individual::JsIndividual,
@@ -25,7 +25,7 @@ use super::{
     ciphertext_store::JsCiphertextStore,
     contact_card::JsContactCard,
     decrypted_keyed::JsDecryptedKeyed,
-    document::{JsDocument, JsDocumentRef},
+    document::JsDocument,
     encrypted::JsEncrypted,
     encrypted_content_with_update::JsEncryptedContentWithUpdate,
     encrypted_keyed::JsEncryptedKeyed,
@@ -33,10 +33,9 @@ use super::{
     generate_doc_error::JsGenerateDocError,
     generate_group_error::JsGenerateGroupError,
     group::JsGroup,
-    identifier::JsIdentifier,
+    identifier::{JsIdentifier, JsIdentifierRef},
     individual_id::JsIndividualId,
-    membered::JsMembered,
-    peer::{JsPeer, JsPeerRef},
+    membered_id::JsMemberedId,
     revoke_member_error::JsRevokeMemberError,
     share_key::JsShareKey,
     signed::JsSigned,
@@ -53,7 +52,6 @@ use future_form::Local;
 use keyhive_core::{
     all_agent_events::EventDigest,
     crypto::digest::Digest,
-    error::not_found::NotFound,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{
@@ -104,7 +102,6 @@ impl JsKeyhive {
         self.0.id().into()
     }
 
-    #[wasm_bindgen(getter)]
     pub async fn individual(&self) -> JsIndividual {
         init_span!("JsKeyhive::individual");
         JsIndividual {
@@ -132,38 +129,30 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = generateGroup)]
     pub async fn generate_group(
         &self,
-        js_coparents: Vec<JsPeerRef>,
-    ) -> Result<JsGroup, JsGenerateGroupError> {
-        let coparents = js_coparents
-            .into_iter()
-            .map(|js_peer| JsPeer::from_js_ref(&js_peer).0.id())
+        coparents: Vec<JsIdentifierRef>,
+    ) -> Result<JsGroupId, JsGenerateGroupError> {
+        let coparents = coparents
+            .iter()
+            .map(|r| JsIdentifier::from_js_ref(r).0)
             .collect::<Vec<_>>();
-
-        let group_id = self.0.generate_group(coparents).await?;
-        let inner = self
-            .0
-            .get_group(group_id)
-            .await
-            .ok_or_else(|| NotFound::new(group_id))?;
-
-        Ok(JsGroup { group_id, inner })
+        Ok(JsGroupId(self.0.generate_group(coparents).await?))
     }
 
     /// Generate a document.
     #[wasm_bindgen(js_name = generateDocument)]
     pub async fn generate_doc(
         &self,
-        coparents: Vec<JsPeerRef>,
+        coparents: Vec<JsIdentifierRef>,
         initial_content_ref_head: &JsChangeId,
         more_initial_content_refs: Vec<JsChangeIdRef>,
-    ) -> Result<JsDocument, JsGenerateDocError> {
+    ) -> Result<JsDocumentId, JsGenerateDocError> {
         init_span!("JsKeyhive::generate_doc");
         let doc_id = self
             .0
             .generate_doc(
                 coparents
-                    .into_iter()
-                    .map(|js_peer| JsPeer::from_js_ref(&js_peer).0.id())
+                    .iter()
+                    .map(|r| JsIdentifier::from_js_ref(r).0)
                     .collect::<Vec<_>>(),
                 NonEmpty {
                     head: initial_content_ref_head.clone(),
@@ -174,13 +163,8 @@ impl JsKeyhive {
                 },
             )
             .await?;
-        let inner = self
-            .0
-            .get_document(doc_id)
-            .await
-            .ok_or_else(|| NotFound::new(doc_id))?;
 
-        Ok(JsDocument { doc_id, inner })
+        Ok(JsDocumentId(doc_id))
     }
 
     #[wasm_bindgen(js_name = trySign)]
@@ -192,7 +176,7 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryEncrypt)]
     pub async fn try_encrypt(
         &self,
-        doc: &JsDocument,
+        doc_id: &JsDocumentId,
         content_ref: &JsChangeId,
         js_pred_refs: Vec<JsChangeIdRef>,
         content: &[u8],
@@ -205,7 +189,7 @@ impl JsKeyhive {
 
         Ok(self
             .0
-            .try_encrypt_content(doc.doc_id, content_ref, &pred_refs, content)
+            .try_encrypt_content(doc_id.0, content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -215,7 +199,7 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryEncryptKeyed)]
     pub async fn try_encrypt_keyed(
         &self,
-        doc: &JsDocument,
+        doc_id: &JsDocumentId,
         content_ref: &JsChangeId,
         js_pred_refs: Vec<JsChangeIdRef>,
         content: &[u8],
@@ -228,7 +212,7 @@ impl JsKeyhive {
 
         let (inner, key) = self
             .0
-            .try_encrypt_content_keyed(doc.doc_id, content_ref, &pred_refs, content)
+            .try_encrypt_content_keyed(doc_id.0, content_ref, &pred_refs, content)
             .await?;
         Ok(JsEncryptedKeyed {
             inner,
@@ -239,24 +223,24 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryDecrypt)]
     pub async fn try_decrypt(
         &self,
-        doc: &JsDocument,
+        doc_id: &JsDocumentId,
         encrypted: &JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
         init_span!("JsKeyhive::try_decrypt");
-        Ok(self.0.try_decrypt_content(doc.doc_id, &encrypted.0).await?)
+        Ok(self.0.try_decrypt_content(doc_id.0, &encrypted.0).await?)
     }
 
     /// Decrypt content and also return the 32-byte application secret key used.
     #[wasm_bindgen(js_name = tryDecryptKeyed)]
     pub async fn try_decrypt_keyed(
         &self,
-        doc: &JsDocument,
+        doc_id: &JsDocumentId,
         encrypted: &JsEncrypted,
     ) -> Result<JsDecryptedKeyed, JsDecryptError> {
         init_span!("JsKeyhive::try_decrypt_keyed");
         let (plaintext, key) = self
             .0
-            .try_decrypt_content_keyed(doc.doc_id, &encrypted.0)
+            .try_decrypt_content_keyed(doc_id.0, &encrypted.0)
             .await?;
         Ok(JsDecryptedKeyed::new(plaintext, key.as_slice().to_vec()))
     }
@@ -265,25 +249,20 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = addMember)]
     pub async fn add_member(
         &self,
-        to_add: &JsAgent,
-        membered: &JsMembered,
+        to_add: &JsIdentifier,
+        membered_id: &JsMemberedId,
         access: &JsAccess,
-        other_relevant_docs: Vec<JsDocumentRef>,
+        other_relevant_docs: Vec<JsDocumentIdRef>,
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
         init_span!("JsKeyhive::add_member");
         let other_docs: Vec<_> = other_relevant_docs
             .iter()
-            .map(|js_doc| JsDocument::from_js_ref(js_doc).doc_id)
+            .map(|r| JsDocumentId::from_js_ref(r).0)
             .collect();
 
         let res = self
             .0
-            .add_member(
-                to_add.0.id(),
-                membered.0.membered_id(),
-                **access,
-                other_docs.as_slice(),
-            )
+            .add_member(to_add.0, membered_id.0, **access, other_docs.as_slice())
             .await?;
 
         Ok(res.delegation.into())
@@ -292,18 +271,14 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = revokeMember)]
     pub async fn revoke_member(
         &self,
-        to_revoke: &JsAgent,
+        to_revoke: &JsIdentifier,
         retain_all_other_members: bool,
-        membered: &JsMembered,
+        membered_id: &JsMemberedId,
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
         init_span!("JsKeyhive::revoke_member");
         let res = self
             .0
-            .revoke_member(
-                to_revoke.id().0,
-                retain_all_other_members,
-                membered.0.membered_id(),
-            )
+            .revoke_member(to_revoke.0, retain_all_other_members, membered_id.0)
             .await?;
 
         Ok(res
@@ -333,11 +308,11 @@ impl JsKeyhive {
     /// `importPrekeySecrets` accepts).
     /// The returned bytes are secret key material: do not log or persist unencrypted.
     #[wasm_bindgen(js_name = forcePcsUpdate)]
-    pub async fn force_pcs_update(&self, doc: &JsDocument) -> Result<Box<[u8]>, JsValue> {
+    pub async fn force_pcs_update(&self, doc_id: &JsDocumentId) -> Result<Box<[u8]>, JsValue> {
         init_span!("JsKeyhive::force_pcs_update");
         let (_op, new_share_key, new_share_secret_key) = self
             .0
-            .force_pcs_update(doc.doc_id)
+            .force_pcs_update(doc_id.0)
             .await
             .map_err(EncryptContentError::from)
             .map_err(JsEncryptError::from)?;
@@ -347,9 +322,9 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = tryPcsKeyHash)]
-    pub async fn try_pcs_key_hash(&self, doc: &JsDocument) -> Option<Vec<u8>> {
+    pub async fn try_pcs_key_hash(&self, doc_id: &JsDocumentId) -> Option<Vec<u8>> {
         self.0
-            .try_pcs_key_hash(doc.doc_id)
+            .try_pcs_key_hash(doc_id.0)
             .await
             .map(|d| d.as_slice().to_vec())
     }
@@ -388,19 +363,11 @@ impl JsKeyhive {
     pub async fn receive_contact_card(
         &self,
         contact_card: &JsContactCard,
-    ) -> Result<JsIndividual, JsReceivePreKeyOpError> {
+    ) -> Result<JsIndividualId, JsReceivePreKeyOpError> {
         init_span!("JsKeyhive::receive_contact_card");
-        match self.0.receive_contact_card(&contact_card.clone()).await {
-            Ok(id) => {
-                let inner = self
-                    .0
-                    .get_individual(id)
-                    .await
-                    .ok_or_else(|| NotFound::new(id))?;
-                Ok(JsIndividual { id, inner })
-            }
-            Err(err) => Err(err.into()),
-        }
+        Ok(JsIndividualId(
+            self.0.receive_contact_card(contact_card).await?,
+        ))
     }
 
     #[wasm_bindgen(js_name = getAgent)]
@@ -581,6 +548,27 @@ impl JsKeyhive {
         })
     }
 
+    /// Whether a document with this id is known.
+    #[wasm_bindgen(js_name = hasDocument)]
+    pub async fn has_document(&self, doc_id: &JsDocumentId) -> bool {
+        init_span!("JsKeyhive::has_document");
+        self.0.has_document(doc_id.0).await
+    }
+
+    /// Whether a group with this id is known.
+    #[wasm_bindgen(js_name = hasGroup)]
+    pub async fn has_group(&self, group_id: &JsGroupId) -> bool {
+        init_span!("JsKeyhive::has_group");
+        self.0.has_group(group_id.0).await
+    }
+
+    /// Whether an individual with this id is known.
+    #[wasm_bindgen(js_name = hasIndividual)]
+    pub async fn has_individual(&self, id: &JsIndividualId) -> bool {
+        init_span!("JsKeyhive::has_individual");
+        self.0.has_individual(id.0).await
+    }
+
     #[wasm_bindgen(js_name = getDocument)]
     pub async fn get_document(&self, doc_id: &JsDocumentId) -> Option<JsDocument> {
         init_span!("JsKeyhive::get_document");
@@ -678,12 +666,6 @@ impl JsKeyhive {
             .map_err(JsSerializationError::from)
     }
 
-    #[wasm_bindgen(js_name = intoArchive)]
-    pub async fn into_archive(self) -> JsArchive {
-        init_span!("JsKeyhive::into_archive");
-        self.0.into_archive().await.into()
-    }
-
     #[wasm_bindgen(js_name = toArchive)]
     pub async fn to_archive(&self) -> JsArchive {
         init_span!("JsKeyhive::to_archive");
@@ -752,25 +734,9 @@ impl JsKeyhive {
 }
 
 #[derive(Debug, Error)]
-#[error(transparent)]
-pub struct JsNotFound(#[from] NotFound);
-
-impl From<JsNotFound> for JsValue {
-    fn from(err: JsNotFound) -> Self {
-        let err = js_sys::Error::new(&err.to_string());
-        err.set_name("NotFound");
-        err.into()
-    }
-}
-
-#[derive(Debug, Error)]
 pub enum JsReceivePreKeyOpError {
     #[error(transparent)]
     ReceivePrekeyOp(#[from] ReceivePrekeyOpError),
-
-    /// The individual was registered and could not then be read back.
-    #[error(transparent)]
-    NotFound(#[from] NotFound),
 }
 
 impl From<JsReceivePreKeyOpError> for JsValue {
@@ -845,7 +811,7 @@ mod tests {
         #[allow(unused)]
         async fn test_length() {
             let bh = setup().await;
-            assert_eq!(bh.id().bytes().len(), 32);
+            assert_eq!(bh.id().to_bytes().len(), 32);
         }
     }
 

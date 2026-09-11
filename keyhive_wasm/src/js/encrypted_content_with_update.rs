@@ -11,10 +11,12 @@ pub struct JsEncryptedContentWithUpdate(pub(crate) EncryptedContentWithUpdate<Js
 
 #[wasm_bindgen(js_class = EncryptedContentWithUpdate)]
 impl JsEncryptedContentWithUpdate {
+    #[wasm_bindgen(js_name = encryptedContent)]
     pub fn encrypted_content(&self) -> JsEncrypted {
         self.0.encrypted_content().clone().into()
     }
 
+    #[wasm_bindgen(js_name = updateOp)]
     pub fn update_op(&self) -> Option<JsSignedCgkaOperation> {
         self.0.update_op().map(|op| op.clone().into())
     }

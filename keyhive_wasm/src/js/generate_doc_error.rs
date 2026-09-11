@@ -1,5 +1,5 @@
 use derive_more::{Display, From};
-use keyhive_core::{error::not_found::NotFound, principal::document::GenerateDocError};
+use keyhive_core::principal::document::GenerateDocError;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -8,10 +8,6 @@ pub enum JsGenerateDocError {
     /// Generating the document failed.
     #[display("{_0}")]
     GenerateDoc(GenerateDocError),
-
-    /// The document was created and could not then be read back.
-    #[display("{_0}")]
-    NotFound(NotFound),
 }
 
 impl From<JsGenerateDocError> for JsValue {

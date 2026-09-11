@@ -11,11 +11,7 @@ pub struct JsEncrypted(pub(crate) EncryptedContent<Vec<u8>, JsChangeId>);
 #[wasm_bindgen(js_class = Encrypted)]
 impl JsEncrypted {
     #[wasm_bindgen(js_name = toBytes)]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.0.ciphertext.clone()
-    }
-
-    pub fn serialize(&self) -> Result<Vec<u8>, JsValue> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, JsValue> {
         bincode::serialize(&self.0).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -26,7 +22,7 @@ impl JsEncrypted {
         Ok(JsEncrypted(encrypted))
     }
 
-    #[wasm_bindgen(getter)]
+    /// Copies the ciphertext out of wasm memory on every call.
     pub fn ciphertext(&self) -> Vec<u8> {
         self.0.ciphertext.clone()
     }
@@ -36,17 +32,18 @@ impl JsEncrypted {
         self.0.nonce.as_bytes().to_vec()
     }
 
-    #[wasm_bindgen(getter)]
+    #[wasm_bindgen(getter, js_name = pcsKeyHash)]
     pub fn pcs_key_hash(&self) -> Vec<u8> {
         self.0.pcs_key_hash.raw.as_bytes().to_vec()
     }
 
-    #[wasm_bindgen(getter)]
+    /// Copies the content ref out of wasm memory on every call.
+    #[wasm_bindgen(js_name = contentRef)]
     pub fn content_ref(&self) -> Vec<u8> {
-        self.0.content_ref.bytes().to_vec()
+        self.0.content_ref.to_bytes()
     }
 
-    #[wasm_bindgen(getter)]
+    #[wasm_bindgen(getter, js_name = predRefs)]
     pub fn pred_refs(&self) -> Vec<u8> {
         self.0.pred_refs.raw.as_bytes().to_vec()
     }

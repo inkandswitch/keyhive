@@ -28,7 +28,7 @@ pub mod individual;
 pub mod individual_id;
 pub mod invocation;
 pub mod keyhive;
-pub mod membered;
+pub mod membered_id;
 pub mod membership;
 pub mod peer;
 pub mod revocation;

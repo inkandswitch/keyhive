@@ -14,10 +14,12 @@ pub struct JsEncryptedKeyed {
 
 #[wasm_bindgen(js_class = EncryptedKeyed)]
 impl JsEncryptedKeyed {
+    #[wasm_bindgen(js_name = encryptedContent)]
     pub fn encrypted_content(&self) -> JsEncrypted {
         self.inner.encrypted_content().clone().into()
     }
 
+    #[wasm_bindgen(js_name = updateOp)]
     pub fn update_op(&self) -> Option<JsSignedCgkaOperation> {
         self.inner.update_op().map(|op| op.clone().into())
     }

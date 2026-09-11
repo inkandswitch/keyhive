@@ -31,16 +31,16 @@ impl JsEvent {
         matches!(self.0, Event::Revoked(_))
     }
 
-    #[wasm_bindgen(js_name = tryIntoSignedDelegation)]
-    pub fn try_into_signed_delegation(&self) -> Option<JsSignedDelegation> {
+    #[wasm_bindgen(js_name = asSignedDelegation)]
+    pub fn as_signed_delegation(&self) -> Option<JsSignedDelegation> {
         match &self.0 {
             Event::Delegated(d) => Some(d.dupe().into()),
             _ => None,
         }
     }
 
-    #[wasm_bindgen(js_name = tryIntoSignedRevocation)]
-    pub fn try_into_signed_revocation(&self) -> Option<JsSignedRevocation> {
+    #[wasm_bindgen(js_name = asSignedRevocation)]
+    pub fn as_signed_revocation(&self) -> Option<JsSignedRevocation> {
         match &self.0 {
             Event::Revoked(r) => Some(r.dupe().into()),
             _ => None,

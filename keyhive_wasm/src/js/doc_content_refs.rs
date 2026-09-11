@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use super::{change_id::JsChangeId, document_id::JsDocumentId};
+use super::{
+    change_id::{JsChangeId, JsChangeIdRef},
+    document_id::JsDocumentId,
+};
+use from_js_ref::FromJsRef;
 use futures::lock::Mutex;
 use wasm_bindgen::prelude::*;
 
@@ -13,16 +17,18 @@ pub struct DocContentRefs {
 #[wasm_bindgen]
 impl DocContentRefs {
     #[wasm_bindgen(constructor)]
-    pub fn new(doc_id: JsDocumentId, change_hashes: Vec<JsChangeId>) -> Result<Self, String> {
-        Ok(Self {
-            doc_id,
-            change_hashes: Arc::new(Mutex::new(change_hashes)),
-        })
+    pub fn new(doc_id: &JsDocumentId, change_hashes: Vec<JsChangeIdRef>) -> Self {
+        Self {
+            doc_id: *doc_id,
+            change_hashes: Arc::new(Mutex::new(
+                change_hashes.iter().map(JsChangeId::from_js_ref).collect(),
+            )),
+        }
     }
 
     #[wasm_bindgen(js_name = addChangeId)]
-    pub async fn add_change_id(&self, hash: JsChangeId) {
-        self.change_hashes.lock().await.push(hash)
+    pub async fn add_change_id(&self, hash: &JsChangeId) {
+        self.change_hashes.lock().await.push(hash.clone())
     }
 
     #[wasm_bindgen(getter, js_name = docId)]
@@ -30,7 +36,7 @@ impl DocContentRefs {
         self.doc_id
     }
 
-    #[wasm_bindgen(getter)]
+    #[wasm_bindgen(js_name = changeHashes)]
     pub async fn change_hashes(&self) -> Vec<JsChangeId> {
         self.change_hashes.lock().await.clone()
     }
