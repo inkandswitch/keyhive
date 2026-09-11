@@ -43,7 +43,7 @@ impl JsIndividual {
     }
 
     #[wasm_bindgen(js_name = pickPrekey)]
-    pub async fn pick_prekey(&self, doc_id: JsDocumentId) -> JsShareKey {
+    pub async fn pick_prekey(&self, doc_id: &JsDocumentId) -> JsShareKey {
         let locked = self.inner.lock().await;
         JsShareKey(*locked.pick_prekey(doc_id.0))
     }

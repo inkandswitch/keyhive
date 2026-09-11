@@ -52,7 +52,6 @@ use future_form::Local;
 use keyhive_core::{
     all_agent_events::EventDigest,
     crypto::digest::Digest,
-    error::not_found::NotFound,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{
@@ -103,7 +102,6 @@ impl JsKeyhive {
         self.0.id().into()
     }
 
-    #[wasm_bindgen(getter)]
     pub async fn individual(&self) -> JsIndividual {
         init_span!("JsKeyhive::individual");
         JsIndividual {
@@ -178,7 +176,7 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryEncrypt)]
     pub async fn try_encrypt(
         &self,
-        doc: &JsDocumentId,
+        doc_id: &JsDocumentId,
         content_ref: &JsChangeId,
         js_pred_refs: Vec<JsChangeIdRef>,
         content: &[u8],
@@ -191,7 +189,7 @@ impl JsKeyhive {
 
         Ok(self
             .0
-            .try_encrypt_content(doc.0, content_ref, &pred_refs, content)
+            .try_encrypt_content(doc_id.0, content_ref, &pred_refs, content)
             .await?
             .into())
     }
@@ -201,7 +199,7 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryEncryptKeyed)]
     pub async fn try_encrypt_keyed(
         &self,
-        doc: &JsDocumentId,
+        doc_id: &JsDocumentId,
         content_ref: &JsChangeId,
         js_pred_refs: Vec<JsChangeIdRef>,
         content: &[u8],
@@ -214,7 +212,7 @@ impl JsKeyhive {
 
         let (inner, key) = self
             .0
-            .try_encrypt_content_keyed(doc.0, content_ref, &pred_refs, content)
+            .try_encrypt_content_keyed(doc_id.0, content_ref, &pred_refs, content)
             .await?;
         Ok(JsEncryptedKeyed {
             inner,
@@ -225,24 +223,24 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = tryDecrypt)]
     pub async fn try_decrypt(
         &self,
-        doc: &JsDocumentId,
+        doc_id: &JsDocumentId,
         encrypted: &JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
         init_span!("JsKeyhive::try_decrypt");
-        Ok(self.0.try_decrypt_content(doc.0, &encrypted.0).await?)
+        Ok(self.0.try_decrypt_content(doc_id.0, &encrypted.0).await?)
     }
 
     /// Decrypt content and also return the 32-byte application secret key used.
     #[wasm_bindgen(js_name = tryDecryptKeyed)]
     pub async fn try_decrypt_keyed(
         &self,
-        doc: &JsDocumentId,
+        doc_id: &JsDocumentId,
         encrypted: &JsEncrypted,
     ) -> Result<JsDecryptedKeyed, JsDecryptError> {
         init_span!("JsKeyhive::try_decrypt_keyed");
         let (plaintext, key) = self
             .0
-            .try_decrypt_content_keyed(doc.0, &encrypted.0)
+            .try_decrypt_content_keyed(doc_id.0, &encrypted.0)
             .await?;
         Ok(JsDecryptedKeyed::new(plaintext, key.as_slice().to_vec()))
     }
@@ -252,7 +250,7 @@ impl JsKeyhive {
     pub async fn add_member(
         &self,
         to_add: &JsIdentifier,
-        membered: &JsMemberedId,
+        membered_id: &JsMemberedId,
         access: &JsAccess,
         other_relevant_docs: Vec<JsDocumentIdRef>,
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
@@ -264,7 +262,7 @@ impl JsKeyhive {
 
         let res = self
             .0
-            .add_member(to_add.0, membered.0, **access, other_docs.as_slice())
+            .add_member(to_add.0, membered_id.0, **access, other_docs.as_slice())
             .await?;
 
         Ok(res.delegation.into())
@@ -275,12 +273,12 @@ impl JsKeyhive {
         &self,
         to_revoke: &JsIdentifier,
         retain_all_other_members: bool,
-        membered: &JsMemberedId,
+        membered_id: &JsMemberedId,
     ) -> Result<Vec<JsSignedRevocation>, JsRevokeMemberError> {
         init_span!("JsKeyhive::revoke_member");
         let res = self
             .0
-            .revoke_member(to_revoke.0, retain_all_other_members, membered.0)
+            .revoke_member(to_revoke.0, retain_all_other_members, membered_id.0)
             .await?;
 
         Ok(res
@@ -310,11 +308,11 @@ impl JsKeyhive {
     /// `importPrekeySecrets` accepts).
     /// The returned bytes are secret key material: do not log or persist unencrypted.
     #[wasm_bindgen(js_name = forcePcsUpdate)]
-    pub async fn force_pcs_update(&self, doc: &JsDocumentId) -> Result<Box<[u8]>, JsValue> {
+    pub async fn force_pcs_update(&self, doc_id: &JsDocumentId) -> Result<Box<[u8]>, JsValue> {
         init_span!("JsKeyhive::force_pcs_update");
         let (_op, new_share_key, new_share_secret_key) = self
             .0
-            .force_pcs_update(doc.0)
+            .force_pcs_update(doc_id.0)
             .await
             .map_err(EncryptContentError::from)
             .map_err(JsEncryptError::from)?;
@@ -324,9 +322,9 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = tryPcsKeyHash)]
-    pub async fn try_pcs_key_hash(&self, doc: &JsDocumentId) -> Option<Vec<u8>> {
+    pub async fn try_pcs_key_hash(&self, doc_id: &JsDocumentId) -> Option<Vec<u8>> {
         self.0
-            .try_pcs_key_hash(doc.0)
+            .try_pcs_key_hash(doc_id.0)
             .await
             .map(|d| d.as_slice().to_vec())
     }
@@ -368,7 +366,7 @@ impl JsKeyhive {
     ) -> Result<JsIndividualId, JsReceivePreKeyOpError> {
         init_span!("JsKeyhive::receive_contact_card");
         Ok(JsIndividualId(
-            self.0.receive_contact_card(&contact_card.clone()).await?,
+            self.0.receive_contact_card(contact_card).await?,
         ))
     }
 
@@ -550,18 +548,24 @@ impl JsKeyhive {
         })
     }
 
+    /// Whether a document with this id is known.
     #[wasm_bindgen(js_name = hasDocument)]
     pub async fn has_document(&self, doc_id: &JsDocumentId) -> bool {
+        init_span!("JsKeyhive::has_document");
         self.0.has_document(doc_id.0).await
     }
 
+    /// Whether a group with this id is known.
     #[wasm_bindgen(js_name = hasGroup)]
     pub async fn has_group(&self, group_id: &JsGroupId) -> bool {
+        init_span!("JsKeyhive::has_group");
         self.0.has_group(group_id.0).await
     }
 
+    /// Whether an individual with this id is known.
     #[wasm_bindgen(js_name = hasIndividual)]
     pub async fn has_individual(&self, id: &JsIndividualId) -> bool {
+        init_span!("JsKeyhive::has_individual");
         self.0.has_individual(id.0).await
     }
 
@@ -662,12 +666,6 @@ impl JsKeyhive {
             .map_err(JsSerializationError::from)
     }
 
-    #[wasm_bindgen(js_name = intoArchive)]
-    pub async fn into_archive(self) -> JsArchive {
-        init_span!("JsKeyhive::into_archive");
-        self.0.into_archive().await.into()
-    }
-
     #[wasm_bindgen(js_name = toArchive)]
     pub async fn to_archive(&self) -> JsArchive {
         init_span!("JsKeyhive::to_archive");
@@ -732,18 +730,6 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = stats)]
     pub async fn stats(&self) -> JsStats {
         JsStats(self.0.stats().await)
-    }
-}
-
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct JsNotFound(#[from] NotFound);
-
-impl From<JsNotFound> for JsValue {
-    fn from(err: JsNotFound) -> Self {
-        let err = js_sys::Error::new(&err.to_string());
-        err.set_name("NotFound");
-        err.into()
     }
 }
 

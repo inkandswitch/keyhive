@@ -20,7 +20,6 @@ use keyhive_core::principal::{
 };
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
-use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = Group)]
 #[derive(Debug, Clone, Dupe, Into, From)]
@@ -29,7 +28,6 @@ pub struct JsGroup {
     pub(crate) inner: Arc<Mutex<Group<Local, JsSigner, JsChangeId, JsEventHandler>>>,
 }
 
-#[wasm_refgen(js_ref = JsGroupRef)]
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
     #[wasm_bindgen(getter)]
