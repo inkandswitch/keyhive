@@ -220,8 +220,8 @@ mod tests {
         bytes[last - 1] = 7;
         assert_eq!(Delegation::decode(&bytes), Err(DecodeError::InvalidTag(7)));
 
-        // present tag with too few bytes
-        bytes[last - 1] = 0;
+        // present tag with too few bytes (restore a valid `can` first)
+        bytes[last - 1] = Access::Read as u8;
         bytes[last] = 1;
         assert_eq!(Delegation::decode(&bytes), Err(DecodeError::UnexpectedEnd));
 

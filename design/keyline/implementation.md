@@ -38,6 +38,8 @@ pub enum Access { Relay, Read, Edit, Admin }
 
 Totally ordered, `Relay < Read < Edit < Admin`. Attenuation along a route is `min`; combination across routes is `max`. The type belongs here rather than in `keyhive_core` because the ordering is part of the graph semantics, not of the API layer; `keyhive_core` will re-export it at integration.
 
+Order and encoding are deliberately separate. The lattice is `Access::rank()`; the wire tag is the ASCII initial (`L`, `R`, `E`, `A`), one byte. Nothing may derive one from the other — `Admin` is the top of the order and the lowest of the four bytes, which a unit test pins. The separation is what makes the level set extensible: a level added later takes any free byte and sits wherever its rank puts it, so no existing certificate's bytes change and no digest moves. Had the tags been consecutive integers, inserting a conveyance level would have renumbered `Admin` and invalidated every `revoke` and `seen` pointer in every stored set.
+
 ### `Delegation`
 
 ```rust
@@ -328,11 +330,11 @@ The second is a security requirement, not tidiness. Certificates travel as `Enco
 
 ```
 Certificate: kind:u8 ‖ payload
-Delegation:  iss ‖ aud ‖ sub ‖ can:u8 ‖ seen_tag:u8 ‖ seen?
+Delegation:  iss ‖ aud ‖ sub ‖ can:u8 ‖ seen_tag:u8 ‖ seen?    can is one of L R E A
 Revocation:  iss ‖ revoke
 ```
 
-where `seen_tag` is `0` with no following bytes when `seen` is absent and `1` followed by 32 bytes when present. Fixed-width layouts are canonical by construction, so `decode` only has to check length and enum ranges.
+where `seen_tag` is `0` with no following bytes when `seen` is absent and `1` followed by 32 bytes when present, and `can` is one of the four ASCII tags. Fixed-width layouts are canonical by construction, so `decode` only has to check length and tag membership. `0x00` is not a valid `can`, so a zeroed buffer fails to decode.
 
 This layout is a placeholder for the bespoke codec. When that lands, these `Encode` / `Decode` impls are replaced (possibly by derive macros in `keyhive_codec`), every hash changes, and the pending API break absorbs it. `Encoded<T>`, `Signed<T>`, `Verified<T>`, and the `Keyline` trait do not change. The placeholder exists so that the crate is `no_std` from the start (no `bincode`) and so that the evaluator and its tests have stable hashes to build against.
 
