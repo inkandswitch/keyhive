@@ -34,10 +34,10 @@ Equivalently: the design is RT₀/SDSI chain discovery (P-complete, pushdown rea
 
 The single most important framing: _there are two overlaid graphs, and only one of them is stored._
 
-| Layer | Contents | Status |
-|-------|----------|--------|
-| Message graph | Certificates: who signed what to whom (`iss → aud`, labeled `sub`, `can`) | _Given._ Append-only, unconditional — any key can sign anything about anything |
-| Authority graph | Who actually holds authority over what | _Derived._ Recomputed from the message graph at every evaluation; stored nowhere |
+| Layer           | Contents                                                                  | Status                                                                           |
+|-----------------|---------------------------------------------------------------------------|----------------------------------------------------------------------------------|
+| Message graph   | Certificates: who signed what to whom (`iss → aud`, labeled `sub`, `can`) | _Given._ Append-only, unconditional — any key can sign anything about anything   |
+| Authority graph | Who actually holds authority over what                                    | _Derived._ Recomputed from the message graph at every evaluation; stored nowhere |
 
 ```mermaid
 flowchart LR
@@ -116,13 +116,13 @@ Useful corollaries of the AND/OR view:
 
 A minimal set exercising every mechanism. One subject (Doc), one role (Members), and a sponsorship into the role:
 
-| # | Certificate | Kind |
-|---|-------------|------|
-| 1 | `{iss: Doc, aud: Alice, sub: Doc}` | root (subject self-grounds) |
-| 2 | `{iss: Alice, aud: Members, sub: Doc}` | supply (role receives Doc-standing) |
+| # | Certificate                                | Kind                                      |
+|---|--------------------------------------------|-------------------------------------------|
+| 1 | `{iss: Doc, aud: Alice, sub: Doc}`         | root (subject self-grounds)               |
+| 2 | `{iss: Alice, aud: Members, sub: Doc}`     | supply (role receives Doc-standing)       |
 | 3 | `{iss: Members, aud: Alice, sub: Members}` | roster (role self-grounds its membership) |
-| 4 | `{iss: Alice, aud: Bob, sub: Members}` | sponsorship — the role-rule AND-node |
-| 5 | `{iss: Bob, aud: Dan, sub: Doc}` | direct grant riding derived standing |
+| 4 | `{iss: Alice, aud: Bob, sub: Members}`     | sponsorship — the role-rule AND-node      |
+| 5 | `{iss: Bob, aud: Dan, sub: Doc}`           | direct grant riding derived standing      |
 
 ```mermaid
 flowchart LR
@@ -152,14 +152,14 @@ flowchart LR
 
 Fixpoint rounds (semi-naive; every fact lands at its derivation depth):
 
-| Round | New facts | Via |
-|-------|-----------|-----|
-| 0 | `R(Doc, Doc)`, `R(Members, Members)` | subjects |
-| 1 | `R(Doc, Alice)`, `R(Members, Alice)` | #1; #3 |
-| 2 | `R(Doc, Members)`, `R(Members, Bob)` | #2; #4 (roster side only) |
-| 3 | `R(Doc, Bob)` | #4 (both feeds: `R(Doc, Members)` ∧ `R(Members, Alice)`) |
-| 4 | `R(Doc, Dan)` | #5 |
-| 5 | — (stable) | |
+| Round | New facts                            | Via                                                      |
+|-------|--------------------------------------|----------------------------------------------------------|
+| 0     | `R(Doc, Doc)`, `R(Members, Members)` | subjects                                                 |
+| 1     | `R(Doc, Alice)`, `R(Members, Alice)` | #1; #3                                                   |
+| 2     | `R(Doc, Members)`, `R(Members, Bob)` | #2; #4 (roster side only)                                |
+| 3     | `R(Doc, Bob)`                        | #4 (both feeds: `R(Doc, Members)` ∧ `R(Members, Alice)`) |
+| 4     | `R(Doc, Dan)`                        | #5                                                       |
+| 5     | — (stable)                           |                                                          |
 
 Lessons packed into five certs:
 
@@ -170,11 +170,11 @@ Lessons packed into five certs:
 
 Extend with two revocations (assigning levels `#1/#3 Admin, #2/#4 Edit, #5 Read`) and the full pipeline becomes exercisable:
 
-| Revocation | Tier | Effect |
-|------------|------|--------|
-| `rA = {iss: Bob, revoke: #2}` | third party, `admin_reach(Bob) = {Bob}` | inert: #2's routes are `{Doc, Alice}`; valid, admissible, zero effect |
-| `rB = {iss: Alice, revoke: #5}` | deep cut, `admin_reach(Alice) = {Alice, Doc, Members}` | #5 dead (its every route transits the reach); #4 and Bob untouched — scoped, no cascade |
-| variant `rB′ = {iss: Alice, revoke: #4}` | party (issuer) → total | #4 conducts nowhere; #5 — covered by _nothing_ — dies implicitly (failure to re-derive). Cascade ≠ coverage |
+| Revocation                               | Tier                                                   | Effect                                                                                                      |
+|------------------------------------------|--------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
+| `rA = {iss: Bob, revoke: #2}`            | third party, `admin_reach(Bob) = {Bob}`                | inert: #2's routes are `{Doc, Alice}`; valid, admissible, zero effect                                       |
+| `rB = {iss: Alice, revoke: #5}`          | deep cut, `admin_reach(Alice) = {Alice, Doc, Members}` | #5 dead (its every route transits the reach); #4 and Bob untouched — scoped, no cascade                     |
+| variant `rB′ = {iss: Alice, revoke: #4}` | party (issuer) → total                                 | #4 conducts nowhere; #5 — covered by _nothing_ — dies implicitly (failure to re-derive). Cascade ≠ coverage |
 
 Two semantic findings this example surfaces:
 
@@ -220,10 +220,10 @@ Properties that make this work (from the spec, evaluation-side view):
 
 ## 4. Complexity: Why This Is Hard, and for Whom
 
-| Fragment | Proof shape | Complexity | SQL analogue |
-|----------|-------------|------------|--------------|
-| Linear Datalog | paths ("paths") | ⊆ NL | `WITH RECURSIVE` (single self-reference) |
-| Full/non-linear Datalog | trees | P-complete | — none — |
+| Fragment                | Proof shape     | Complexity | SQL analogue                             |
+|-------------------------|-----------------|------------|------------------------------------------|
+| Linear Datalog          | paths ("paths") | ⊆ NL       | `WITH RECURSIVE` (single self-reference) |
+| Full/non-linear Datalog | trees           | P-complete | — none —                                 |
 
 - The role rule is non-linear (two recursive premises). This is RT₀/SDSI credential chain discovery, which Jha & Reps showed equivalent to pushdown system reachability — P-complete. The hardness predates Keyline by decades and is the price of role indirection itself, in any evaluator.
 - SQLite and PostgreSQL restrict recursive CTEs to _linear_ recursion: the recursive self-reference may appear exactly once, not inside a subquery, aggregate, or the nullable side of an outer join. Their evaluation model (working-table iteration) joins in-progress rows against base tables only.
@@ -235,13 +235,13 @@ Properties that make this work (from the spec, evaluation-side view):
 
 ## 5. SQL Expressibility, Precisely
 
-| Piece | One SQL statement? |
-|-------|--------------------|
-| Stratum chaining (S1 → S1b → S2) | Yes — chained CTEs (`WITH a AS (...), b AS (...)`); chaining _is_ the stratification, written out |
-| `covered` = revocations × admin reach | Yes — plain joins over S1 output |
-| Party-signed (total) revocation tier | Yes — anti-join or `EXCEPT` |
-| Per-cert exclusions inside recursion | Yes — `NOT EXISTS` against a _prior, completed_ CTE is legal even in a recursive term (the restriction binds only the recursive self-reference) |
-| The route-search fixpoint itself (S1, S2) | _No_ — non-linear recursion |
+| Piece                                     | One SQL statement?                                                                                                                              |
+|-------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
+| Stratum chaining (S1 → S1b → S2)          | Yes — chained CTEs (`WITH a AS (...), b AS (...)`); chaining _is_ the stratification, written out                                               |
+| `covered` = revocations × admin reach     | Yes — plain joins over S1 output                                                                                                                |
+| Party-signed (total) revocation tier      | Yes — anti-join or `EXCEPT`                                                                                                                     |
+| Per-cert exclusions inside recursion      | Yes — `NOT EXISTS` against a _prior, completed_ CTE is legal even in a recursive term (the restriction binds only the recursive self-reference) |
+| The route-search fixpoint itself (S1, S2) | _No_ — non-linear recursion                                                                                                                     |
 
 So the shape of a correct SQL evaluator is:
 
@@ -265,10 +265,10 @@ Options, from most to least appropriate:
 
 A distinction that dissolves most confusion about "SQL can't do this":
 
-| Question | Complexity | SQL |
-|----------|------------|-----|
-| "Is Bob reachable from Doc over _given_ edges?" | NL — transitive closure | one `WITH RECURSIVE`; SQL's home turf |
-| "Is Bob reachable from Doc, where each edge only _counts_ if two other reachability facts already hold?" (Keyline) | P-complete | exceeds `WITH RECURSIVE`; needs the loop |
+| Question                                                                                                           | Complexity              | SQL                                      |
+|--------------------------------------------------------------------------------------------------------------------|-------------------------|------------------------------------------|
+| "Is Bob reachable from Doc over _given_ edges?"                                                                    | NL — transitive closure | one `WITH RECURSIVE`; SQL's home turf    |
+| "Is Bob reachable from Doc, where each edge only _counts_ if two other reachability facts already hold?" (Keyline) | P-complete              | exceeds `WITH RECURSIVE`; needs the loop |
 
 Reachability is not the problem; _this_ reachability is. The edge set is an output of the search (a cert conducts only once both its feeds are derived), so the graph and the search over it are one entangled fixpoint. Delete feed 2 — or make it a base-table lookup — and the whole pipeline drops back into NL and single-statement SQL. The two-feed rule _is_ the role system.
 
@@ -276,7 +276,7 @@ Reachability is not the problem; _this_ reachability is. The edge set is an outp
 
 An SQLite implementation of this pipeline reproduces the worked sketch: S1 converges in 5 rounds with the hand-derived facts, `admin_reach(Alice) = {Alice, Doc, Members}`, the inert revocation does nothing, the deep cuts kill only their targets, the retraction variant cascades implicitly, and exclusion contexts dedup (two cuts by one revoker share a single context — see §7).
 
-Schema (levels as integers `0 Relay … 3 Admin`):
+Schema (levels as integer ranks `0 Relay … 3 Admin`; a backend translates the wire tag to a rank at ingest, since the tags are not ordered):
 
 ```sql
 CREATE TABLE delegation (hash TEXT PRIMARY KEY,
@@ -326,12 +326,12 @@ Stratum 2 — same fixpoint over `live(ctx, lvl, s, n)`, where `ctx` is an exclu
 
 The fixpoint loop is the one non-SQL ingredient, and where it can live is an engine property:
 
-| Host | Where the "until" lives | Caller sees one query? |
-|------|-------------------------|------------------------|
-| SQLite + application | app-side loop | no |
-| SQLite + extension | virtual-table `xFilter` (C/Rust, in-process) | yes |
-| SQLite, pure SQL | state-blob recursive CTE (facts as JSON per row) | yes — stunt tier, see §5 escape hatch 3 |
-| PostgreSQL | PL/pgSQL function body — fully in-database | yes: `SELECT * FROM keyline_effective()` |
+| Host                 | Where the "until" lives                          | Caller sees one query?                   |
+|----------------------|--------------------------------------------------|------------------------------------------|
+| SQLite + application | app-side loop                                    | no                                       |
+| SQLite + extension   | virtual-table `xFilter` (C/Rust, in-process)     | yes                                      |
+| SQLite, pure SQL     | state-blob recursive CTE (facts as JSON per row) | yes — stunt tier, see §5 escape hatch 3  |
+| PostgreSQL           | PL/pgSQL function body — fully in-database       | yes: `SELECT * FROM keyline_effective()` |
 
 In PostgreSQL the entire pipeline is one PL/pgSQL function (temp tables per stratum, `LOOP ... GET DIAGNOSTICS ... EXIT WHEN 0` around each round statement). No external driver of any kind — callers just write:
 
@@ -378,12 +378,12 @@ DBSP (the Z-set/stream-circuit theory under Feldera; Budiu, McSherry et al.) is 
 
 What the outer clock buys, against a bottom-up evaluator such as `MemoryKeyline`:
 
-| Operation | Evaluators here | DBSP |
-|-----------|-----------------|------|
-| Add delegation | S1 delta (if cached), S2 recompute | O(\|new facts\|) |
-| Add revocation | full S2 recompute | retraction delta — O(\|facts killed\|) |
-| Heal (`seen` re-issue) | full S2 recompute | revival delta — O(\|facts revived\|) |
-| Query | read materialized | read materialized |
+| Operation              | Evaluators here                    | DBSP                                   |
+|------------------------|------------------------------------|----------------------------------------|
+| Add delegation         | S1 delta (if cached), S2 recompute | O(\|new facts\|)                       |
+| Add revocation         | full S2 recompute                  | retraction delta — O(\|facts killed\|) |
+| Heal (`seen` re-issue) | full S2 recompute                  | revival delta — O(\|facts revived\|)   |
+| Query                  | read materialized                  | read materialized                      |
 
 The revocation row is the important one: Keyline's cert set is add-only, but the derived authority graph _flickers_ — new coverage retracts live facts, cascade is facts losing support. Retraction through a recursive fixpoint is the classically miserable part of incremental view maintenance, and it is exactly what Z-set circuits handle natively. Cascade costs what it kills; healing costs what it revives; both are one mechanism run with opposite signs — a literal implementation of the spec's "death and resurrection are one late-binding rule viewed from two directions."
 
