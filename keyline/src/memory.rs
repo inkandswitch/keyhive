@@ -7,6 +7,13 @@
 //! queried subject. Anything faster MUST agree with it on every set; the
 //! conformance suite is how that is checked.
 //!
+//! Two consequences of "no caching" worth knowing before using this at scale.
+//! Stratum 1 is global, so a query costs what the whole replica costs, not what
+//! the queried subject costs. And there is no demand-driven evaluation, so
+//! `effective_access` materializes the subject's entire row before indexing into
+//! it: a point query costs what `members` costs. Both are appropriate for an
+//! embedded replica holding one document's closure, and wrong for a relay.
+//!
 //! ```text
 //! stratum 1   reaches   = search(all subjects, exclude ∅, every edge, cap = can)
 //!             admin_reach(k) = { n : k reaches n at Admin } ∪ {k}
@@ -325,8 +332,13 @@ impl MemoryKeyline {
 
             for r in roots {
                 let fresh = self.widest(r, params, &levels);
+                // Only nodes that are the subject of some delegation can contribute
+                // through rule 3: for any other n, reaches(n, ·) is just {n}, and
+                // composing it yields reaches(s, n), which we already have. In a
+                // document with many members this is the difference between one
+                // root per role and one per member.
                 for n in fresh.keys() {
-                    if !levels.contains_key(n) {
+                    if self.edges.contains_key(n) && !levels.contains_key(n) {
                         levels.insert(*n, Map::new());
                         changed = true;
                     }

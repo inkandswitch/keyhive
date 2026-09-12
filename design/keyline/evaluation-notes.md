@@ -26,9 +26,11 @@ Keyline is a state-based CRDT: a flat set of signed delegations and revocations 
 2. _Coverage_ — from that, compute per-certificate forbidden nodes (`covered`).
 3. _Replay_ — recompute standing, filtering routes through the coverage relation.
 
-The pipeline (steps 1 → 2 → 3) is expressible in SQL as chained CTEs, and the negation is a legal anti-join. The hard part is _inside_ steps 1 and 3: deriving standing is a _non-linear_ fixpoint (each derivation step consumes _two_ recursively derived facts), which exceeds `WITH RECURSIVE` in SQLite/PostgreSQL (both allow exactly one reference to the in-progress relation). Consequence: _one ordinary SQL statement per fixpoint round, plus a driver loop ("repeat until no new rows")_. The loop is the only non-declarative ingredient in the entire design.
+The pipeline (steps 1 → 2 → 3) is expressible in SQL as chained CTEs, and the negation is a legal anti-join. What resists is _inside_ steps 1 and 3: deriving standing is a _non-linear_ fixpoint (a derivation step can consume _two_ recursively derived facts), which exceeds `WITH RECURSIVE` in SQLite/PostgreSQL (both allow exactly one reference to the in-progress relation). Consequence: _one ordinary SQL statement per fixpoint round, plus a driver loop ("repeat until no new rows")_. The loop is the only non-declarative ingredient in the entire design.
 
-Equivalently: the design is RT₀/SDSI chain discovery (P-complete, pushdown reachability) while SQL's recursive fragment is linear Datalog (⊆ NL). No rewrite closes that gap; you buy the fixpoint procedurally.
+This is a statement about expressibility, not cost. Evaluation is polynomial with small constants, and it is the delegation semantics that cause it: a Keyline with no revocations at all has the same shape. See [§4](#4-why-it-is-not-one-query).
+
+Equivalently: the shape is RT₀/SDSI chain discovery, while SQL's recursive fragment is linear Datalog (⊆ NL). Whether *no* rewrite closes that gap is inherited from the RT₀ literature rather than shown here (§4); what is certain is that the rule is not expressible verbatim, so you buy the fixpoint procedurally.
 
 ## 1. The Two-Layer Graph Model
 
@@ -218,20 +220,57 @@ Properties that make this work (from the spec, evaluation-side view):
 - _Denials are mutually invisible._ Revocations name delegations only (`revoke: Hash<Delegation>` — a revocation of a revocation is unwritable), so no revocation's effect depends on another's. This is what makes the coverage relation computable in one stroke, order-independently.
 - _`covered` is a relation, not a set._ `(cert, node)` pairs: node N may be forbidden for cert c and fine for cert c′. There is no single "graph-minus-holes"; each covered cert has its own mask.
 
-## 4. Complexity: Why This Is Hard, and for Whom
+## 4. Why It Is Not One Query
 
-| Fragment                | Proof shape     | Complexity | SQL analogue                             |
-|-------------------------|-----------------|------------|------------------------------------------|
-| Linear Datalog          | paths ("paths") | ⊆ NL       | `WITH RECURSIVE` (single self-reference) |
-| Full/non-linear Datalog | trees           | P-complete | — none —                                 |
+Two claims are worth keeping apart, because only the first is about cost and it is the *cheap* one.
 
-- The role rule is non-linear (two recursive premises). This is RT₀/SDSI credential chain discovery, which Jha & Reps showed equivalent to pushdown system reachability — P-complete. The hardness predates Keyline by decades and is the price of role indirection itself, in any evaluator.
-- SQLite and PostgreSQL restrict recursive CTEs to _linear_ recursion: the recursive self-reference may appear exactly once, not inside a subquery, aggregate, or the nullable side of an outer join. Their evaluation model (working-table iteration) joins in-progress rows against base tables only.
-- A general rewrite of the role rule into linear form would place a P-complete problem in NL, i.e., prove NL = P. Some non-linear programs are linearizable (same-generation, famously); pushdown-hard ones are believed not to be.
-- Logic-side restatement: NL = FO + transitive closure; P = FO + least fixed point. Recursive CTEs bolt transitive closure onto SQL; Keyline's semantics need the least-fixed-point operator. The gap between the design and a single query is exactly the gap between those two logics.
+_Where the difficulty is._ Entirely in the positive pass — stratum 1, delegation semantics, `sub`-as-scope. A Keyline with zero revocations has it in full. Coverage and replay, which look like the complicated parts, are a join and an anti-join over an already-computed relation. No redesign of revocations touches this; the rejected `sub`-on-`Revocation` field ([alternatives](alternatives.md#a-sub-jurisdiction-field-on-revocation)) would have left it exactly as it is. Conversely, deleting `sub`-as-scope from delegations would collapse the whole thing to per-subject reachability — and delete the role system with it.
 
-> [!IMPORTANT]
-> The hardness lives entirely in the _positive pass_ (delegation semantics, `sub`-as-scope). It exists in a Keyline with zero revocations. No redesign of revocations — e.g. the rejected `sub`-on-`Revocation` field (alternatives.md, "A `sub` (jurisdiction) field on `Revocation`") — touches it. Conversely, deleting `sub`-as-scope from delegations would linearize everything and gut the design (no roles, no late-bound membership).
+_What "hard" means here._ Not slow. The evaluation is polynomial with small constants; `MemoryKeyline` answers `members()` in about a millisecond for a document with 180 members. The claim is about *expressibility*: the rule cannot be written as a single recursive SQL query, so a backend needs a driver loop. That is all. Anyone reading "P-complete" as "expensive" has the wrong end of it — P-complete means *in P*, plus a statement about parallelisability that has no bearing on our constants.
+
+### The rule that causes it
+
+```prolog
+rule 2:  reaches(n, aud, …) :- reaches(n, iss, l),  del(_, iss, aud, n, can)
+                               └── derived ──┘      └── base table ──┘        one recursive premise
+
+rule 3:  reaches(s, x,   …) :- reaches(s, n, l₁),  reaches(n, x, l₂)
+                               └── derived ──┘      └── derived ──┘          two recursive premises
+```
+
+Rule 2 is linear, and linear is exactly what `WITH RECURSIVE` implements: SQLite and PostgreSQL allow the recursive self-reference once, not inside a subquery, aggregate, or the nullable side of an outer join, because the working-table algorithm joins in-progress rows against base tables only. Rule 3 has two, so it is not expressible there verbatim.
+
+### "Isn't that just the ancestor rule?"
+
+It is, and the objection is a good one. The textbook pair
+
+```prolog
+ancestor(X, Y) :- parent(X, Y).
+ancestor(X, Y) :- ancestor(X, Z), ancestor(Z, Y).
+```
+
+is also non-linear as written, and is famously *linearizable* — rewrite the second rule as `ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y)` and it drops back into NL and into a single recursive CTE. So "non-linear as written" does not by itself mean "needs a loop".
+
+What defeats the same rewrite here is that the edge relation is not given. Linearizing transitive closure works because a path splits into *first edge, then the rest*, and edges live in a base table. Rule 2 can only follow edges whose `sub` is the subject under evaluation, so a composition step has nowhere to go. Concretely:
+
+```
+Doc    → Owners   (sub: Doc)
+Owners → Bob      (sub: Owners)
+```
+
+`reaches(Doc, Owners)` and `reaches(Owners, Bob)` each come from rule 2. `reaches(Doc, Bob)` comes only from rule 3: there is no `sub: Doc` edge into Bob, so no sequence of rule-2 steps in Doc's graph derives it, and the missing step lies in a different edge set. The relation being closed over is an output of the closure.
+
+### What is and is not established
+
+| Claim | Status |
+|---|---|
+| Rule 3 is non-linear as written, so it cannot be a recursive CTE verbatim | Certain; syntactic |
+| Composition is essential — the program is not per-subject transitive closure | Certain; the example above |
+| No linearization exists, so a loop is genuinely required rather than merely convenient | _Inherited, not proved here._ Rule 3 is RT₀'s linking inclusion `A.r ← A.r₁.r₂`; Jha & Reps map SPKI/SDSI resolution onto pushdown system reachability, which is P-complete. The reduction has not been checked against this rule set, and the P-hardness direction is taken on the citation's word |
+
+The third row is the one the `ancestor` objection attacks, and it is the one to be careful about. Nothing downstream depends on it: the first two rows already say a backend needs a loop today, and the cost argument never rested on the complexity class.
+
+Logic-side restatement, for orientation rather than argument: NL is FO plus transitive closure, P is FO plus least fixed point; recursive CTEs bolt transitive closure onto SQL, while this program is stated as a least fixed point.
 
 ## 5. SQL Expressibility, Precisely
 
@@ -370,7 +409,7 @@ effective(S, N, L) :- live(empty, L, S, N), not shadowed(S, N, L).
 shadowed(S, N, L)  :- live(empty, L2, S, N), lt(L, L2).
 ```
 
-Datalog does not buy less work: evaluation is still P-complete — the engine's semi-naive evaluator contains exactly the "until stable" loop the SQL driver hand-writes. The lfp is a language primitive instead of an external driver; the rounds and deltas are identical. Datalog moves the loop, it does not delete it.
+Datalog does not buy less work: the engine's semi-naive evaluator contains exactly the "until stable" loop the SQL driver hand-writes. The lfp is a language primitive instead of an external driver; the rounds and deltas are identical. Datalog moves the loop, it does not delete it.
 
 ### Incremental Evaluation: DBSP
 
@@ -392,6 +431,7 @@ What DBSP does _not_ fix:
 - _The semantic floor._ The k² role-ladder facts still get derived — once, incrementally, but all of them (§7).
 - _Encoding choices._ DBSP happily incrementalizes a wasteful program; the context-dedup-by-exclusion-set choice must still be made at the program level.
 - _State size — it gets worse._ Incremental engines trade CPU for resident memory: arrangements (indexes) of every intermediate relation stay materialized. An attacker who cannot burn CPU inflates RSS instead; eviction brings back recompute. The tradeoff relocates, it does not dissolve.
+- _Eagerness — the cost model inverts._ Today insertion is a map write and queries pay. Incrementally, ingest pays and queries are reads. For a replica taking a certificate stream, that means paying for every certificate received, including ones nobody ever asks about. Ungrounded junk is still free, since it derives nothing, but the [gift-cert attack](#single-queries-and-the-gift-cert-attack) gets worse: the attacker's ladder is grounded, so its facts materialize at ingest on every replica that holds them, rather than only on those that ask. §7's "cost is paid once, memoized" becomes "paid at ingest, always". Which tier a replica belongs to is decided by this more than by throughput: exposure to junk argues for lazy evaluation, update volume for eager.
 
 `keyline` is `no_std` and targets Wasm; the `dbsp` crate is a std, multithreaded runtime. Two tiers follow: embedded replicas (apps, Wasm) run a `memory.rs`-style evaluator with digest memoization and an S1 frontier cache; heavy replicas (relays, sync servers, org indexers) run a DBSP/Feldera circuit. That places the strongest DoS defense exactly where update volume and exposure concentrate. Differential-dataflow/Materialize occupy the same niche; DBSP's edge here is the cleaner theory, a Rust library, and Feldera's SQL frontend with first-class recursive views.
 
@@ -403,11 +443,60 @@ What DBSP does _not_ fix:
 - _Least fixpoint, always._ Start from root edges, derive outward. Never seed optimistically: assume-dead-on-revisit is what keeps ungrounded cycles dead.
 - _Cache stratum 1 aggressively._ It consults only delegations, which are append-only; admin reach and coverage grow monotonically and never retract. Merges evaluate deltas from the cached frontier. Stratum 2 is the disputed-certificate tax: uncovered certs share one pass; each distinct exclusion set pays a route search (§7, obligation 1). A jurisdiction accumulating cuts is one under dispute; rotation moots the cuts and restores the fast path.
 - _Witness hints are pure optimization._ A peer may attach the claimed route; verifying a hint costs its length; a wrong hint falls back to search. Soundness never depends on hints.
-- _Partial visibility:_ provisionally honor unconfirmed revocations (over-applying a denial fails closed; fuller sync confirms or retires it).
+- _Partial visibility:_ provisionally honor unconfirmed revocations — over-applying a denial fails closed, and fuller sync confirms or retires it. Note that absence fails open in _both_ directions: a replica short of delegations under-computes admin reach, and so judges live revocations inert. What a replica must hold, and why a bounded subset suffices, is [What a Replica Must Hold](README.md#what-a-replica-must-hold).
+
+### The Split That Matters: Monotone Stratum, Negated Stratum
+
+The tiering that matters is not embedded-versus-relay or lazy-versus-eager. It follows the stratification:
+
+|                                    | Scope                                              | Behaviour under insertion                                | What it wants                                                                                                           |
+|------------------------------------|----------------------------------------------------|----------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| Stratum 1 + admin reach + coverage | global, shared across every subject on the replica | append-only; facts activate and expand, never retract    | a materialised table, extended from the previous frontier. "Incremental" for a monotone relation is just "never delete" |
+| Stratum 2 (live set, caps)         | rooted at one subject                              | retracts — a revocation kills facts, a heal revives them | recomputation per disputed subject, or a real IVM engine                                                                |
+
+Two things follow. Retraction through a recursive fixpoint — the part that actually needs Z-sets — is confined to the smaller, per-subject half; the large global half needs nothing more exotic than a table and an append. And the per-subject half decomposes: two documents sharing no roles share no stratum-2 work, and two that share a role share that role's row, computed once. Parallelism across documents is recovered exactly when the monotone half is hoisted out of the query path.
+
+The daisy-chain rule is what makes that decomposition hold. Because `live(h)` is rooted at `sub(h)` rather than at the querying subject, a role's liveness is one answer every document supplying it can share. Rooted at the querying subject instead, every document would need a private copy of every shared role's evaluation.
+
+### Cost in Practice
+
+Measured against `MemoryKeyline` (with release opt flags on 2026-09-11), one document, one role, _n_ members:
+
+| members | `members(doc)` |
+|---------|----------------|
+| 1 000   | 3.1 ms         |
+| 10 000  | 26 ms          |
+| 60 000  | 285 ms         |
+
+Superlinear, exponent ≈ 1.1–1.4 — from map inserts and cache pressure, not from the rule. At the same size, a _point_ query costs what the full view costs (297 ms against 281 ms), because the implementation materialises the subject's whole row and then indexes into it.
+
+Which parts of that are inherent:
+
+| Cost                              | Inherent | Why                                                                      |
+|-----------------------------------|----------|--------------------------------------------------------------------------|
+| `members(s)` is Ω(members)        | yes      | the answer is that size                                                  |
+| Depth-many sequential rounds      | yes      | single digits on realistic graphs                                        |
+| Stratum 1 evaluated globally      | no       | an over-approximation; only subjects reachable from the query can matter |
+| Stratum 1 recomputed per query    | no       | it is monotone — materialise it                                          |
+| A point query costing a full view | no       | demand-driven evaluation makes it O(route)                               |
+| Serial execution within a round   | no       | rounds are joins; parallel over tuples                                   |
+
+The expensive entries are all on the "no" side. A backend that materialises the monotone stratum and evaluates demand-driven should be orders better on everything except `members()` of a genuinely large document, where nothing beats Ω(output).
+
+### Parallelism and Paging
+
+Two sequential structures are easy to conflate. _Strata_ are three phases, fixed by the negation boundary, and no amount of data changes that count. _Rounds_ are the fixpoint iteration inside a stratum, and their count is derivation depth — data-dependent, and the thing a P-complete problem forbids you from compressing. Three fixed phases would imply nothing about complexity; the unbounded round count is the whole content of the claim.
+
+Within a round there is no such constraint, and that is where the size lives. Which axis you can exploit depends on the formulation:
+
+- _Per-root search_ (what `MemoryKeyline` does) parallelises across **subjects**. A document with two subjects and ten million members offers 2×. The axis scales with the dimension that is small.
+- _Relational_ (`Δreaches ⋈ del`, `Δreaches ⋈ reaches`) parallelises across **tuples**. Hash-partition on the join key and fan out, regardless of subject count. This is what a parallel hash join gives, and why the one-statement-per-round shape — forced on us by the lack of recursive CTEs — turns out to suit Postgres well.
+
+Paging follows the same split, for the same reason. A per-root search chases pointers: random access over the derived relation, in no useful order, so it wants residency. A relational formulation is joins, and external hash or sort-merge join keeps one partition resident and spills the rest — working set becomes a tuning parameter rather than a function of graph size. The real bound is _depth-many passes_ over the relation, not the whole graph at once. P-completeness constrains time and parallel depth; it says nothing about space.
 
 ## 7. Threat Model: Evaluation Cost as a DoS Surface
 
-Evaluation is superlinear (quadratic fact space; more under dispute), which raises the question: can an adversary weaponize the evaluator? Answer: yes, but only from _inside_ the authorization graph — and the boundary between tiers is sharp. The model document's griefing analysis prices authority-denial; this section prices compute-denial.
+Evaluation is superlinear (quadratic fact space; more under dispute), which raises the question: can an adversary weaponize the evaluator? Answer: yes, but only from _inside_ the authorization graph — and the boundary between tiers is sharp. The model document's griefing analysis prices authority-denial; this section prices compute-denial. Keep the tier in proportion, though: a member with standing has easier avenues than clever graph constructions — writing very many edges works, much as it would against an Automerge document, and needs no insight at all. What the shapes below buy an attacker is leverage rather than possibility: a role ladder turns 2k certificates into k²/2 facts, so a thousand-odd certificates reach what flooding needs a million for. And the leverage is rented, not owned — the derived cost follows liveness and vanishes when the attacker is revoked, though the certificates themselves are add-only and stay.
 
 ### Tier 0 — Outsiders: storage spam only
 
@@ -485,29 +574,29 @@ The forcing construction — the _gift-cert attack_ — is why demand-driven eva
    path — so one boolean query demands the Ω(k²) closure.
 ```
 
-Fine-grained complexity agrees this is not an evaluator deficiency: the problem family (RT₀ chain discovery / pushdown reachability) carries conditional lower bounds that apply to _single-pair_ queries, unlike plain reachability where single-source really is linear.
+The problem family (RT₀ chain discovery / pushdown reachability) is believed to carry conditional lower bounds that apply to _single-pair_ queries, unlike plain reachability where single-source really is linear — so this is probably not an evaluator deficiency, though see §4 on how much weight that literature can bear here.
 
 ### Why the gift-cert attack is survivable: cost follows liveness
 
 The certificates are permanent; the _cost_ is late-bound. The quadratic requires two things simultaneously, both revocable:
 
-| Component | Permanent? | Killed by |
-|---|---|---|
-| Certificates (storage) | yes — add-only set | nothing (quotas bound growth) |
-| Ladder's k² fixpoint cost | no — follows liveness | booting the attacker: the ladder's standing over Doc rides their membership, so it dies in the ordinary cascade; dead facts are never derived |
-| Demand-path relevance | no | the victim _renouncing_ the gift — it names them as `aud`, so the party rule gives an unconditional, total revocation. Re-gifts need fresh hashes (varied `seen`; identical fields collide with the revoked hash and silently fail), are rate-bounded, individually renounceable, and each is a fresh signed artifact naming the victim |
-| Dead-ladder exploration bait | no — evaluator artifact | obligation 3 above (subject-first ordering); note a booted attacker's ladder stays _internally_ self-grounded, which is exactly what obligation 3 defends against |
-| Revival risk | latent | fresh-key re-add discipline — the DoS analysis independently rejustifies the spec's compromise-hygiene rule, since same-key re-add revives the ladder's cost along with everything else |
+| Component                    | Permanent?              | Killed by                                                                                                                                                                                                                                                                                                                               |
+|------------------------------|-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Certificates (storage)       | yes — add-only set      | nothing (quotas bound growth)                                                                                                                                                                                                                                                                                                           |
+| Ladder's k² fixpoint cost    | no — follows liveness   | booting the attacker: the ladder's standing over Doc rides their membership, so it dies in the ordinary cascade; dead facts are never derived                                                                                                                                                                                           |
+| Demand-path relevance        | no                      | the victim _renouncing_ the gift — it names them as `aud`, so the party rule gives an unconditional, total revocation. Re-gifts need fresh hashes (varied `seen`; identical fields collide with the revoked hash and silently fail), are rate-bounded, individually renounceable, and each is a fresh signed artifact naming the victim |
+| Dead-ladder exploration bait | no — evaluator artifact | obligation 3 above (subject-first ordering); note a booted attacker's ladder stays _internally_ self-grounded, which is exactly what obligation 3 defends against                                                                                                                                                                       |
+| Revival risk                 | latent                  | fresh-key re-add discipline — the DoS analysis independently rejustifies the spec's compromise-hygiene rule, since same-key re-add revives the ladder's cost along with everything else                                                                                                                                                 |
 
 Two structural consolations. First, attribution is maximal: a signed cert from attacker naming victim, pointing into a junk ladder — a smoking gun, not merely an audit trail. Second, the cost-inflicter set collapses into the already-trusted set: to force expensive queries on a victim, the attacker must sit upstream-adjacent to the victim's demanded routes — and upstream parties already hold outright deny-power (the spec's griefing analysis). Demand-driven evaluation aligns "who can burn your CPU" with "who could already cut you off," adding little marginal power.
 
 ### Non-issues
 
-| Worry | Why it is not one |
-|-------|-------------------|
-| "P-complete = expensive" | It means inherently sequential-ish; cost is polynomial with small constants |
-| Deep chains → many rounds | Serializes latency, not work: semi-naive total work is bounded by fact count |
-| Unrelated documents' graphs | Queries root at one subject; you pay only for graphs you replicate |
+| Worry                       | Why it is not one                                                                                                                                                                          |
+|-----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| "P-complete = expensive"    | P-complete means _in P_. It is a statement about parallelisability and about SQL expressibility (§4), not about cost: the constants are small and a 180-member document evaluates in ~1 ms |
+| Deep chains → many rounds   | Serializes latency, not work: semi-naive total work is bounded by fact count                                                                                                               |
+| Unrelated documents' graphs | Queries root at one subject; you pay only for graphs you replicate                                                                                                                         |
 
 ### Mitigation checklist for implementations
 
@@ -584,27 +673,27 @@ Bottom-up evaluators pass phases 1, 3, 5 by construction; phases 2 and 4 are mea
 
 ## 10. Status
 
-| Obligation or idea | Status |
-|---|---|
+| Obligation or idea                                | Status                                                                                                             |
+|---------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
 | Context dedup by exclusion set (§7, obligation 1) | Implemented: `MemoryKeyline::contexts` groups covered delegations by exclusion set; one search per group per round |
-| Early exit on inert disputes (§7, obligation 2) | Implemented: covered edges whose issuer is unreachable in the shared pass are never searched |
-| Subject-first demand ordering (§7, obligation 3) | Not applicable to bottom-up evaluators; binding for any demand-driven one |
-| Gift-cert scenario (§9) | Not in the conformance suite; phases 2 and 4 apply to bottom-up evaluators |
-| Compute-denial analysis in the model document | §7 has no counterpart in `README.md`, whose griefing section prices authority-denial only |
-| Depth cap as a semantic lever | Analysed and not recommended; consensus-critical if ever adopted, since every replica must agree |
-| Differential testing of SQL backends | `test_utils::conformance::gen::CertSet` can drive an SQL backend against `MemoryKeyline` |
+| Early exit on inert disputes (§7, obligation 2)   | Implemented: covered edges whose issuer is unreachable in the shared pass are never searched                       |
+| Subject-first demand ordering (§7, obligation 3)  | Not applicable to bottom-up evaluators; binding for any demand-driven one                                          |
+| Gift-cert scenario (§9)                           | Not in the conformance suite; phases 2 and 4 apply to bottom-up evaluators                                         |
+| Compute-denial analysis in the model document     | §7 has no counterpart in `README.md`, whose griefing section prices authority-denial only                          |
+| Depth cap as a semantic lever                     | Analysed and not recommended; consensus-critical if ever adopted, since every replica must agree                   |
+| Differential testing of SQL backends              | `test_utils::conformance::gen::CertSet` can drive an SQL backend against `MemoryKeyline`                           |
 
 ## Glossary
 
-| Term | Meaning |
-|------|---------|
-| AND-node | A certificate in the authority graph: conducts iff all feeds live; output = min of feeds and own `can` |
-| Admin reach | Nodes a key _ever_ held Admin over (computed on the positive pass, revocation-blind) ∪ its own node; frozen by construction |
-| Role rule | The non-linear derivation step: a `sub`-scoped cert needs the role's standing over the subject AND the issuer's standing in the role |
-| Covered | The per-certificate `(cert, forbidden node)` relation cut from the positive pass; applied as an anti-join during replay |
-| Inert | A well-signed certificate deriving nothing (issuer never reached, or revocation whose reach touches no route). Not an error |
-| Message graph | The stored certificate set; append-only; merge = set union |
-| OR-node | A principal in the authority graph: standing = max over incident conducting certs |
+| Term            | Meaning                                                                                                                                                                 |
+|-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| AND-node        | A certificate in the authority graph: conducts iff all feeds live; output = min of feeds and own `can`                                                                  |
+| Admin reach     | Nodes a key _ever_ held Admin over (computed on the positive pass, revocation-blind) ∪ its own node; frozen by construction                                             |
+| Role rule       | The non-linear derivation step: a `sub`-scoped cert needs the role's standing over the subject AND the issuer's standing in the role                                    |
+| Covered         | The per-certificate `(cert, forbidden node)` relation cut from the positive pass; applied as an anti-join during replay                                                 |
+| Inert           | A well-signed certificate deriving nothing (issuer never reached, or revocation whose reach touches no route). Not an error                                             |
+| Message graph   | The stored certificate set; append-only; merge = set union                                                                                                              |
+| OR-node         | A principal in the authority graph: standing = max over incident conducting certs                                                                                       |
 | Authority graph | Derived standing facts (the README's term); recomputed per evaluation; stored nowhere. The _positive graph_ is the same thing computed blind to revocations (stratum 1) |
-| Path vs tree | Linear vs non-linear proof shape; the boundary between `WITH RECURSIVE` and a driver loop |
-| Subject | The node an evaluation is rooted at; a document or a role (root edges: `iss = sub`) |
+| Path vs tree    | Linear vs non-linear proof shape; the boundary between `WITH RECURSIVE` and a driver loop                                                                               |
+| Subject         | The node an evaluation is rooted at; a document or a role (root edges: `iss = sub`)                                                                                     |
