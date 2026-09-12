@@ -361,7 +361,7 @@ impl MemoryKeyline {
 
         let mut buckets: [Vec<Id>; Access::ALL.len()] = Default::default();
         best.insert(r, Access::Admin);
-        buckets[Access::Admin as usize].push(r);
+        buckets[Access::Admin.rank()].push(r);
 
         let relax = |best: &mut Map<Id, Access>, buckets: &mut [Vec<Id>; 4], v: Id, l: Access| {
             if params.excludes(&v) {
@@ -369,7 +369,7 @@ impl MemoryKeyline {
             }
             if best.get(&v).is_none_or(|current| *current < l) {
                 best.insert(v, l);
-                buckets[l as usize].push(v);
+                buckets[l.rank()].push(v);
             }
         };
 
@@ -539,7 +539,7 @@ fn pop_highest(buckets: &mut [Vec<Id>; Access::ALL.len()]) -> Option<(Id, Access
     Access::ALL
         .iter()
         .rev()
-        .find_map(|l| buckets[*l as usize].pop().map(|id| (id, *l)))
+        .find_map(|l| buckets[l.rank()].pop().map(|id| (id, *l)))
 }
 
 #[cfg(test)]
