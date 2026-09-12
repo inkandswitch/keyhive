@@ -307,10 +307,10 @@ Delegations and revocations have deliberately _asymmetric_ justification require
 
 > Ambiguity resolves toward less authority.
 
-| Statement | Justification | When the issuer is booted |
-|---|---|---|
-| Delegation | _Ongoing_ — recomputed at every check | Their grants die (transitive cascade) |
-| Revocation | _Ever_ — the frozen admin reach | Their revocations stand, forever — within their admin reach |
+| Statement  | Justification                         | When the issuer is booted                                   |
+|------------|---------------------------------------|-------------------------------------------------------------|
+| Delegation | _Ongoing_ — recomputed at every check | Their grants die (transitive cascade)                       |
+| Revocation | _Ever_ — the frozen admin reach       | Their revocations stand, forever — within their admin reach |
 
 Both arms fail closed. Late-bound revocation validity would mean booting an admin _resurrects everyone that admin ever removed_ — and worse, would let a later merge un-apply an applied denial, restoring access by delivery order. Permanence is also forced by the absence of global ordering: a revocation signed by a booted admin is bit-for-bit indistinguishable whether signed before or after the boot, so "old ones stay, new ones don't" is not an expressible rule, and causal predecessors would not fix it (a dishonest ex-admin backdates by omitting heads).
 
@@ -336,11 +336,11 @@ This follows from late-bound liveness, and it is two-faced by design:
 
 The removal tiers, by what you believe about the removal:
 
-| Removal | Durable against re-add? | Recoverable if mistaken? |
-|---|---|---|
-| Implicit (cut memberships only) | No — revival on re-add | Fully — one cert, everything heals |
-| Explicit (also cut their issued certs) | Yes | Partially — kept certs must be re-issued |
-| Fresh-key re-add | N/A — old key stays dead | New key re-issues what it should hold |
+| Removal                                | Durable against re-add?  | Recoverable if mistaken?                 |
+|----------------------------------------|--------------------------|------------------------------------------|
+| Implicit (cut memberships only)        | No — revival on re-add   | Fully — one cert, everything heals       |
+| Explicit (also cut their issued certs) | Yes                      | Partially — kept certs must be re-issued |
+| Fresh-key re-add                       | N/A — old key stays dead | New key re-issues what it should hold    |
 
 #### Persistence Past Removal
 
@@ -360,12 +360,12 @@ Booted from Members, Bob can still validly cut certificates on routes through Me
 
 Which is BeeKEM's PCS discipline surfacing at the authority layer:
 
-|                              | BeeKEM (keys)                      | Keyline (authority)              |
-|------------------------------|------------------------------------|----------------------------------|
-| What a removed party retains | Old key material                   | A frozen admin reach          |
+|                              | BeeKEM (keys)                      | Keyline (authority)                 |
+|------------------------------|------------------------------------|-------------------------------------|
+| What a removed party retains | Old key material                   | A frozen admin reach                |
 | Why removal alone fails      | Can still decrypt old-path secrets | Can still sign covering revocations |
-| The fix                      | Rotate keys on the path (PCS)      | Rotate the role node             |
-| Cost                         | $O(\log n)$ path rotation          | Mint a key + re-roster           |
+| The fix                      | Rotate keys on the path (PCS)      | Rotate the role node                |
+| Cost                         | $O(\log n)$ path rotation          | Mint a key + re-roster              |
 
 You cannot un-know someone; you can only move to where they have never been. Under admin-reach scoping, that place is well-defined:
 
@@ -426,14 +426,40 @@ The [no-proof design][no proof field] pushes route information out of the certif
 
 The honest cost of graph-global evaluation is possession, not computation. A replica cannot confirm a revocation's coverage without the issuer's constitutional history, and cannot mint a _working_ re-issue of a certificate it has never seen revoked (the [`seen`][the seen field] collision is silent and fail-closed; tooling SHOULD surface it). Provisionally honoring unconfirmed revocations is RECOMMENDED: over-applying a denial fails closed, and fuller sync confirms or retires it.
 
+Absence is dangerous in both directions, which is easy to get backwards. A missing _delegation_ usually costs access, but it can also grant it: admin reach is computed from delegations, so a replica that has not seen the certificate making K an admin of `Members` will judge K's revocations there inert, and honor access the full set denies. Coverage [activates and expands as delegations arrive][why the strata are mandatory]; a replica short of delegations is a replica short of denials.
+
+#### What a Replica Must Hold
+
+A replica does not need the world. Define the _closure_ of a subject `S` as `S`, every node reachable from it, every certificate about those nodes, and every revocation naming one of those certificates. Then:
+
+> No certificate outside `closure(S)` can change any answer about `S`.
+
+Every step of evaluation stays inside it. `reaches(S, ·)` extends along edges about `S` and composes through nodes `S` reaches, whose own rows come from edges about them. Admin reach is consulted only for nodes on a route, so only for nodes in the closure. Liveness and caps are rooted at the certificate's own subject. Nothing looks outward.
+
+The same boundary confines revocations, which is the less obvious half:
+
+> A revocation whose issuer lies outside `closure(S)` is inert for `S`.
+
+For the cut to bite, some node `n` on the target's route must be in the issuer's admin reach, and `n` is in the closure. Either `n` is the issuer, putting it in the closure; or the issuer is reachable from `n` at Admin, and the closure is closed under reachability. Either way the issuer was in the closure to begin with. So "who can affect this document" has a finite, checkable answer.
+
+Three consequences for replication:
+
+- _Closure size is a topology choice._ Flat constitutions keep it small; nesting and shared roles enlarge it. [Constitutional flatness][constitutional flatness] is usually argued from griefing containment, but it also decides how much a phone has to hold.
+- _Closures only grow._ More certificates can only enlarge a closure, never shrink one, so a subscription never has to be retracted — only extended as new supplies pull new roles into scope.
+- _Derivation belongs to the larger peer._ A small replica cannot compute its own closure: it lacks the certificates that say what is reachable. It does not need to. It names its interest — a handful of subject identifiers — and a peer holding a superset derives the closure and ships it. The expensive half runs where the graph already is.
+
+What no protocol can supply is proof of completeness. A replica cannot verify it holds every relevant revocation, because absence is not witnessable, and in a system without consensus there is no canonical set to prove non-membership against. What holds instead is weaker and sufficient: merging is union and denial is [permanent][permanence], so a peer that withholds a revocation can only delay it, and any other peer repairs the omission. One honest peer suffices, and nothing a dishonest one sends afterwards can un-apply a denial. The exposure is a window, not a state.
+
+Asking narrower questions does not shrink the requirement much. "Does _this_ key have access?" needs only the routes to that key — but judging whether those routes are cut needs the admin reach of everyone who revoked anything on them, and that is computed from those nodes' own graphs. Coverage pulls the closure back in. The closure is close to the floor for exact answers; anything less is an approximation, and it approximates in the fail-open direction.
+
 ## Root Edges and the Apex
 
 Subjects bootstrap their own authority. At creation, the subject key signs exactly one delegation — `{iss: Doc, aud: Owners, sub: Doc, can: Admin}` (or `can: Edit`; see [Who Can Revoke the Root Edge][who can revoke the root edge]) — to a freshly minted apex role, and the subject's signing key is destroyed (cf. Keyhive's `EphemeralSigner`). The subject's _identity_ is its verifying key, permanent; its _authority_ immediately lives elsewhere.
 
 ```
-┌─────┐  Admin (sole root edge)  ┌────────┐        ┌─────────┐
+┌─────┐  Admin (sole root edge)  ┌────────┐         ┌─────────┐
 │ Doc │◄─────────────────────────│ Owners │◄───...──│ Members │◄── ...
-└─────┘  key destroyed after     └────────┘        └─────────┘
+└─────┘  key destroyed after     └────────┘         └─────────┘
          signing this one cert    rotatable…        …all the way down
 ```
 
@@ -441,10 +467,10 @@ Subjects bootstrap their own authority. At creation, the subject key signs exact
 
 The route of `Doc → Owners` is itself, grounded at Doc, so a covering revocation needs Doc in its issuer's admin reach. Whether anyone's does is decided by the ceremony, not by a rule:
 
-| Root edge | Who holds Admin over Doc | Root edge deniable by |
-|---|---|---|
-| `{iss: Doc, aud: Owners, sub: Doc, can: Admin}` | every Admin member of Owners, ever | every ever-apex-admin: one revocation bricks the document permanently |
-| `{iss: Doc, aud: Owners, sub: Doc, can: Edit}` | nobody (the subject key is destroyed) | nobody |
+| Root edge                                       | Who holds Admin over Doc              | Root edge deniable by                                                 |
+|-------------------------------------------------|---------------------------------------|-----------------------------------------------------------------------|
+| `{iss: Doc, aud: Owners, sub: Doc, can: Admin}` | every Admin member of Owners, ever    | every ever-apex-admin: one revocation bricks the document permanently |
+| `{iss: Doc, aud: Owners, sub: Doc, can: Edit}`  | nobody (the subject key is destroyed) | nobody                                                                |
 
 Admin over a document gates nothing except reach over it — delegation is open, and membership is governed by Admin over the _role_ — so the Edit-rooted document loses no capability. It gains an undeniable apex, and a retained subject key can re-root it out from under old admins ([below](#the-apex-is-append-only-unless-the-subject-key-survives)). The Admin-rooted document gives every apex admin the power to destroy it, which is the power they already hold by other means (eject every peer, lose the key); it is the right shape when the owners _are_ the document. See [patterns, Rooting Level][rooting level].
 
@@ -455,10 +481,10 @@ Admin over a document gates nothing except reach over it — delegation is open,
 
 Rotation works at every layer except the top. Rotating Owners requires a new root edge, and with the subject key destroyed, none can ever be minted. Meanwhile every ever-apex-admin has Owners in their admin reach — and every route in the document transits Owners — so apex ejection is never durable. There is no surviving senior to appeal to: the apex's parent destroyed itself at the creation ceremony.
 
-| Layer | Removal semantics |
-|---|---|
+| Layer              | Removal semantics                                                  |
+|--------------------|--------------------------------------------------------------------|
 | Apex role (Owners) | Append-only trust — membership can grow; ejection is never durable |
-| Every layer below | Fully rotatable — durable ejection via mint-and-re-roster |
+| Every layer below  | Fully rotatable — durable ejection via mint-and-re-roster          |
 
 A _retained_ subject key (cold storage, threshold-split) changes this for an Edit-rooted document: it can retract the old root edge and mint `Doc → Owners′`, and the old apex admins' admin reach contains Owners, which the new hierarchy's routes never transit. True apex rotation, durable ejection included, at the custody cost of a key that can do the same _to_ you. For an Admin-rooted document the retained key buys nothing durable: the old admins' reach contains Doc itself, so `Doc → Owners′` is as deniable as its predecessor. The ceremony's choices are therefore rooting level and key custody; there is no third lever.
 
@@ -561,6 +587,7 @@ Settled elsewhere in this document: concurrent mutual revocation (both stand; th
 [subduction]: https://github.com/inkandswitch/subduction
 [ucan]: https://github.com/ucan-wg/spec
 [the seen field]: #the-seen-field
+[why the strata are mandatory]: #why-the-strata-are-mandatory
 [the ex-admin sharp edge]: #the-ex-admin-sharp-edge
 [rooting level]: patterns.md#rooting-level
 [who can revoke the root edge]: #who-can-revoke-the-root-edge
