@@ -50,6 +50,7 @@ use keyhive_crypto::{
 };
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::AtomicU64;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
@@ -97,12 +98,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
+        generation: Arc<AtomicU64>,
     ) -> Self {
         listener.on_delegation(group_id.into(), &head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::GroupId(group_id),
             members: HashMap::new(),
-            state: state::GroupState::new(head, delegations, revocations).await,
+            state: state::GroupState::new(head, delegations, revocations, generation).await,
             active_revocations: HashMap::new(),
             listener,
         };
@@ -118,12 +120,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
+        generation: Arc<AtomicU64>,
     ) -> Self {
         listener.on_delegation(individual.id().into(), &head).await;
         let mut group = Self {
             id_or_indie: IdOrIndividual::Individual(individual),
             members: HashMap::new(),
-            state: GroupState::new(head, delegations, revocations).await,
+            state: GroupState::new(head, delegations, revocations, generation).await,
             active_revocations: HashMap::new(),
             listener,
         };
@@ -138,6 +141,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
         csprng: Arc<Mutex<R>>,
+        generation: Arc<AtomicU64>,
     ) -> Result<Group<F, S, T, L>, SigningError> {
         let mut locked_csprng = csprng.lock().await;
         let (group_result, _vk) =
@@ -150,6 +154,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     revocations,
                     Default::default(),
                     listener,
+                    Arc::clone(&generation),
                 )
             });
 
@@ -165,10 +170,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
         listener: L,
+        generation: Arc<AtomicU64>,
     ) -> Result<Self, SigningError> {
         let id = verifier.into();
         let group_id = GroupId(id);
-        let mut delegation_heads = DelegationStore::new();
+        let mut delegation_heads = DelegationStore::with_generation(Arc::clone(&generation));
 
         {
             let async_listener = Arc::new(&listener);
@@ -213,7 +219,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 delegation_heads,
                 delegations,
 
-                revocation_heads: RevocationStore::new(),
+                revocation_heads: RevocationStore::with_generation(Arc::clone(&generation)),
                 revocations,
             },
             listener,
@@ -830,11 +836,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
+        generation: Arc<AtomicU64>,
     ) -> Self {
         Self {
             members: HashMap::new(),
             id_or_indie: archive.id_or_indie,
-            state: GroupState::dummy_from_archive(archive.state, delegations, revocations),
+            state: GroupState::dummy_from_archive(archive.state, delegations, revocations, generation),
             active_revocations: HashMap::new(),
             listener,
         }
@@ -1067,7 +1074,7 @@ mod tests {
             let rng = arc_csprng.dupe();
             async move {
                 Arc::new(Mutex::new(
-                    Group::generate(parents, dlg, rev, NoListener, rng)
+                    Group::generate(parents, dlg, rev, NoListener, rng, Arc::new(AtomicU64::new(0)))
                         .await
                         .unwrap(),
                 ))
@@ -1159,6 +1166,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1172,6 +1180,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1187,6 +1196,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1202,6 +1212,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng,
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1225,6 +1236,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1237,6 +1249,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1249,6 +1262,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1261,6 +1275,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1273,6 +1288,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1285,6 +1301,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1297,6 +1314,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1309,6 +1327,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1321,6 +1340,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1333,6 +1353,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1427,6 +1448,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 arc_csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1439,6 +1461,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 arc_csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1495,6 +1518,7 @@ mod tests {
                         rev_store.dupe(),
                         NoListener,
                         arc_csprng.dupe(),
+                        Arc::new(AtomicU64::new(0)),
                     )
                     .await
                     .unwrap(),
@@ -1597,6 +1621,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 arc_csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1609,6 +1634,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 arc_csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -1689,7 +1715,7 @@ mod tests {
             let rng = arc_csprng.dupe();
             async move {
                 Arc::new(Mutex::new(
-                    Group::generate(parents, dlg, rev, NoListener, rng)
+                    Group::generate(parents, dlg, rev, NoListener, rng, Arc::new(AtomicU64::new(0)))
                         .await
                         .unwrap(),
                 ))
@@ -2001,6 +2027,7 @@ mod tests {
                 revocations.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2014,6 +2041,7 @@ mod tests {
                 revocations.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2028,6 +2056,7 @@ mod tests {
                 revocations.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2089,6 +2118,7 @@ mod tests {
                 revocations.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2116,6 +2146,7 @@ mod tests {
                 revocations.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2137,6 +2168,7 @@ mod tests {
                 revocations.dupe(),
                 NoListener,
                 csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2216,6 +2248,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 arc_csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2230,6 +2263,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 arc_csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2244,6 +2278,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 arc_csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2383,6 +2418,7 @@ mod tests {
             rev_store.dupe(),
             NoListener,
             Arc::new(Mutex::new(csprng)),
+            Arc::new(AtomicU64::new(0)),
         )
         .await
         .unwrap();
@@ -2542,6 +2578,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 arc_csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
@@ -2556,6 +2593,7 @@ mod tests {
                 rev_store.dupe(),
                 NoListener,
                 arc_csprng.dupe(),
+                Arc::new(AtomicU64::new(0)),
             )
             .await
             .unwrap(),
