@@ -11,12 +11,12 @@
 
 use divan::Bencher;
 use keyline::{
-    power::Power,
     certificate::Certificate,
     delegation::Delegation,
     id::Id,
     keyline::Keyline,
     memory::MemoryKeyline,
+    power::Power,
     revocation::Revocation,
     test_utils::{cert, id},
 };
@@ -54,10 +54,7 @@ fn realistic(n: u8) -> MemoryKeyline {
         d(OWNERS, FIRST_HUMAN + 1, OWNERS, Power::Admin),
     ];
     let mut next = FIRST_HUMAN + 2;
-    for (role, level) in ROLES
-        .iter()
-        .zip([Power::Edit, Power::Read, Power::Relay])
-    {
+    for (role, level) in ROLES.iter().zip([Power::Edit, Power::Read, Power::Relay]) {
         certs.push(d(FIRST_HUMAN, *role, DOC, level));
         certs.push(d(*role, OWNERS, *role, Power::Admin));
         for _ in 0..n {

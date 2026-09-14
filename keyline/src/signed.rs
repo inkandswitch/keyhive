@@ -251,9 +251,9 @@ pub enum VerifyError {
 mod tests {
     use super::*;
     use crate::{
-        power::Power,
         certificate::Certificate,
         delegation::Delegation,
+        power::Power,
         test_utils::{id, signing_key},
     };
 
@@ -350,9 +350,14 @@ mod tests {
                 let key = SigningKey::from(*seed);
                 let issuer = Id::new(key.verifying_key());
                 let cert = match cert {
-                    Certificate::Delegation(d) => Certificate::Delegation(Delegation { issuer, ..*d }),
+                    Certificate::Delegation(d) => {
+                        Certificate::Delegation(Delegation { issuer, ..*d })
+                    }
                     Certificate::Revocation(r) => {
-                        Certificate::Revocation(crate::revocation::Revocation { issuer, ..r.clone() })
+                        Certificate::Revocation(crate::revocation::Revocation {
+                            issuer,
+                            ..r.clone()
+                        })
                     }
                 };
                 let verified = Signed::try_sign(&cert, &key)

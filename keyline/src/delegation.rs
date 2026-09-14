@@ -1,6 +1,6 @@
 //! Delegations: signed edges granting an power level over a subject.
 
-use crate::{power::Power, id::Id, revocation::RevocationId};
+use crate::{id::Id, power::Power, revocation::RevocationId};
 use alloc::vec::Vec;
 use keyhive_codec::{
     error::DecodeError,
@@ -189,7 +189,10 @@ mod tests {
     fn seen_changes_hash_and_nothing_else() {
         let d = Delegation::new(id(1), id(2), id(3), Power::Edit);
         let r = d.reissue(Digest::from([9u8; 32]));
-        assert_eq!((r.issuer, r.audience, r.subject, r.power), (d.issuer, d.audience, d.subject, d.power));
+        assert_eq!(
+            (r.issuer, r.audience, r.subject, r.power),
+            (d.issuer, d.audience, d.subject, d.power)
+        );
         assert_ne!(Digest::of(&d.encode()), Digest::of(&r.encode()));
     }
 

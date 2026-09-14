@@ -38,7 +38,7 @@ The single most important framing: _there are two overlaid graphs, and only one 
 
 | Layer           | Contents                                                                  | Status                                                                           |
 |-----------------|---------------------------------------------------------------------------|----------------------------------------------------------------------------------|
-| Message graph   | Certificates: who signed what to whom (`iss → aud`, labeled `sub`, `can`) | _Given._ Append-only, unconditional — any key can sign anything about anything   |
+| Message graph   | Certificates: who signed what to whom (`issuer → audience`, labeled `subject`, `power`) | _Given._ Append-only, unconditional — any key can sign anything about anything   |
 | Authority graph | Who actually holds authority over what                                    | _Derived._ Recomputed from the message graph at every evaluation; stored nowhere |
 
 ```mermaid
@@ -47,9 +47,9 @@ flowchart LR
 
     Doc((Doc)):::subject
 
-    Doc -. "root cert [sub: Doc]" .-> Alice((Alice))
-    Alice -. "cert [sub: Doc]" .-> Bob((Bob))
-    Dan((Dan)) -. "cert [sub: Doc]" .-> Bob
+    Doc -. "root cert [subject: Doc]" .-> Alice((Alice))
+    Alice -. "cert [subject: Doc]" .-> Bob((Bob))
+    Dan((Dan)) -. "cert [subject: Doc]" .-> Bob
 
     Doc ==>|power| Alice
     Alice ==>|power| Bob
@@ -72,7 +72,7 @@ The authority graph is not a plain graph: it alternates between two node kinds w
 | Element | Role | Semantics |
 |---------|------|-----------|
 | Principal (circle) | OR | Standing arrives via _any_ incident delivering cert. Effective level = `max` over arrivals — this is redundant routes / widest-path |
-| Certificate (box) | AND | Conducts only when _all_ prerequisite feeds are live. Output clamped to `min` of inputs and its own `can` — this is attenuation |
+| Certificate (box) | AND | Conducts only when _all_ prerequisite feeds are live. Output clamped to `min` of inputs and its own `power` — this is attenuation |
 
 ```mermaid
 flowchart LR
@@ -84,9 +84,9 @@ flowchart LR
     Alice((Alice))
     Carol((Carol))
 
-    supply["supply cert<br/>{iss: Bob, aud: Members, sub: Doc}"]:::cert
-    roster["roster cert<br/>{iss: Members, aud: Alice, sub: Members}"]:::cert
-    sponsor["sponsor cert<br/>{iss: Alice, aud: Carol, sub: Members}"]:::cert
+    supply["supply cert<br/>{issuer: Bob, audience: Members, subject: Doc}"]:::cert
+    roster["roster cert<br/>{issuer: Members, audience: Alice, subject: Members}"]:::cert
+    sponsor["sponsor cert<br/>{issuer: Alice, audience: Carol, subject: Members}"]:::cert
 
     Doc ==> supply ==> Members
     Members ==> roster ==> Alice
@@ -95,7 +95,7 @@ flowchart LR
     sponsor ==> Carol
 ```
 
-The AND-ness is where all the difficulty lives. A certificate whose `sub` is the evaluated subject itself has one feed (its issuer's standing) — those chains are paths. A certificate whose `sub` is a _role_ has _two feeds of different kinds_:
+The AND-ness is where all the difficulty lives. A certificate whose `subject` is the evaluated subject itself has one feed (its issuer's standing) — those chains are paths. A certificate whose `subject` is a _role_ has _two feeds of different kinds_:
 
 1. the role's standing over the evaluated subject (`R(subject, role)`), and
 2. the issuer's standing within the role (`R(role, issuer)`).
@@ -120,11 +120,11 @@ A minimal set exercising every mechanism. One subject (Doc), one role (Members),
 
 | # | Certificate                                | Kind                                      |
 |---|--------------------------------------------|-------------------------------------------|
-| 1 | `{iss: Doc, aud: Alice, sub: Doc}`         | root (subject self-grounds)               |
-| 2 | `{iss: Alice, aud: Members, sub: Doc}`     | supply (role receives Doc-standing)       |
-| 3 | `{iss: Members, aud: Alice, sub: Members}` | roster (role self-grounds its membership) |
-| 4 | `{iss: Alice, aud: Bob, sub: Members}`     | sponsorship — the role-rule AND-node      |
-| 5 | `{iss: Bob, aud: Dan, sub: Doc}`           | direct grant riding derived standing      |
+| 1 | `{issuer: Doc, audience: Alice, subject: Doc}`         | root (subject self-grounds)               |
+| 2 | `{issuer: Alice, audience: Members, subject: Doc}`     | supply (role receives Doc-standing)       |
+| 3 | `{issuer: Members, audience: Alice, subject: Members}` | roster (role self-grounds its membership) |
+| 4 | `{issuer: Alice, audience: Bob, subject: Members}`     | sponsorship — the role-rule AND-node      |
+| 5 | `{issuer: Bob, audience: Dan, subject: Doc}`           | direct grant riding derived standing      |
 
 ```mermaid
 flowchart LR
@@ -165,30 +165,30 @@ Fixpoint rounds (semi-naive; every fact lands at its derivation depth):
 
 Lessons packed into five certs:
 
-- _One cert, two flavors._ #4 delivers `R(Members, Bob)` (round 2, roster feed alone suffices when the evaluated subject _is_ the role) and `R(Doc, Bob)` (round 3, both feeds required). Membership conveys the role's entire present and future portfolio: supply the role with a second subject later and Bob inherits it with no new certificate — `sub` is a scope, not an endpoint.
+- _One cert, two flavors._ #4 delivers `R(Members, Bob)` (round 2, roster feed alone suffices when the evaluated subject _is_ the role) and `R(Doc, Bob)` (round 3, both feeds required). Membership conveys the role's entire present and future portfolio: supply the role with a second subject later and Bob inherits it with no new certificate — `subject` is a scope, not an endpoint.
 - _The cycle is benign._ #2 and #3 form `Alice → Members → Alice`. The role route back into Alice grounds through Alice's own root standing, so it is min-clamped to what she already had: cycles amplify nothing; only subjects ground. (Least fixpoint; assume-dead-on-revisit.)
 - _False redundancy._ Alice has OR fan-in (direct root + around the role), but the role route transits her own root cert — cut #1 and every fact from round 1 downward dies. Redundant routes defend only when jurisdictionally disjoint; a loop through your own standing is maximally non-disjoint. Real redundancy here requires an _independent_ supply into Members from a second Doc-standing holder.
-- _Variant:_ change #5 to `sub: Members` and Dan joins the role instead: two feeds, lands round 3, inherits future role acquisitions. The choice between "grant a thing" and "grant membership" is one field.
+- _Variant:_ change #5 to `subject: Members` and Dan joins the role instead: two feeds, lands round 3, inherits future role acquisitions. The choice between "grant a thing" and "grant membership" is one field.
 
 Extend with two revocations (assigning levels `#1/#3 Admin, #2/#4 Edit, #5 Read`) and the full pipeline becomes exercisable:
 
 | Revocation                               | Tier                                                   | Effect                                                                                                      |
 |------------------------------------------|--------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
-| `rA = {iss: Bob, revoke: #2}`            | third party, `admin_reach(Bob) = {Bob}`                | inert: #2's routes are `{Doc, Alice}`; valid, admissible, zero effect                                       |
-| `rB = {iss: Alice, revoke: #5}`          | deep cut, `admin_reach(Alice) = {Alice, Doc, Members}` | #5 dead (its every route transits the reach); #4 and Bob untouched — scoped, no cascade                     |
-| variant `rB′ = {iss: Alice, revoke: #4}` | party (issuer) → total                                 | #4 conducts nowhere; #5 — covered by _nothing_ — dies implicitly (failure to re-derive). Cascade ≠ coverage |
+| `rA = {issuer: Bob, revoke: #2}`            | third party, `admin_reach(Bob) = {Bob}`                | inert: #2's routes are `{Doc, Alice}`; valid, admissible, zero effect                                       |
+| `rB = {issuer: Alice, revoke: #5}`          | deep cut, `admin_reach(Alice) = {Alice, Doc, Members}` | #5 dead (its every route transits the reach); #4 and Bob untouched — scoped, no cascade                     |
+| variant `rB′ = {issuer: Alice, revoke: #4}` | party (issuer) → total                                 | #4 conducts nowhere; #5 — covered by _nothing_ — dies implicitly (failure to re-derive). Cascade ≠ coverage |
 
 Two semantic findings this example surfaces:
 
-- _The subject can be inside an admin reach._ `#1` is a live-key `{sub: Doc, can: Admin}` cert, so `Doc ∈ admin_reach(Alice)` — and since every derivation grounds at the subject, Alice can cover _any_ cert in this graph, including #1 itself: ownership-equivalent kill power. Whether a document's root edge is deniable is not a rule; it is decided by whether any surviving key holds Admin over the subject, which the ceremony chooses by the level of the root edge ([patterns, Rooting Level](patterns.md#rooting-level)). Same rules, different certificate set, opposite outcome.
-- _Reach is composed._ `admin_reach(K) = {K} ∪ {n : R⁺(n, K) = Admin}` — a row lookup over the positive pass, so Admin standing inherited through a role counts. The stricter alternative (only Admin whose final hop is a `sub: n` certificate) was considered and rejected; see [alternatives, Direct (last-hop) admin reach](alternatives.md#direct-last-hop-admin-reach).
+- _The subject can be inside an admin reach._ `#1` is a live-key `{subject: Doc, power: Admin}` cert, so `Doc ∈ admin_reach(Alice)` — and since every derivation grounds at the subject, Alice can cover _any_ cert in this graph, including #1 itself: ownership-equivalent kill power. Whether a document's root edge is deniable is not a rule; it is decided by whether any surviving key holds Admin over the subject, which the ceremony chooses by the level of the root edge ([patterns, Rooting Level](patterns.md#rooting-level)). Same rules, different certificate set, opposite outcome.
+- _Reach is composed._ `admin_reach(K) = {K} ∪ {n : R⁺(n, K) = Admin}` — a row lookup over the positive pass, so Admin standing inherited through a role counts. The stricter alternative (only Admin whose final hop is a `subject: n` certificate) was considered and rejected; see [alternatives, Direct (last-hop) admin reach](alternatives.md#direct-last-hop-admin-reach).
 
 ## 3. The Datalog Formulation
 
 Facts derived per evaluation, over `R(s, n, ℓ)` = "node `n` holds effective level `ℓ` over subject `s`":
 
 ```prolog
-% grounding: every node stands at Admin over itself; root edges (iss = sub) are
+% grounding: every node stands at Admin over itself; root edges (issuer = subject) are
 % then ordinary instances of the rule below
 R(S, S, Admin) :- node(S).
 
@@ -205,8 +205,8 @@ The full pipeline, stratified:
 Stratum 1 (positive pass):  R⁺ = lfp(rules above), ignoring all revocations
 Stratum 1b (coverage relation):       admin_reach(K) = {n : R⁺ ⊢ K ever held Admin over n} ∪ {K}
                             covered(c, n)  = for each revocation r naming c:
-                                               party-signed (iss/aud of c) → all n (total)
-                                               otherwise → n ∈ admin_reach(iss(r))
+                                               party-signed (issuer/audience of c) → all n (total)
+                                               otherwise → n ∈ admin_reach(issuer(r))
 Stratum 2 (replay):         live = lfp(rules above), where routes justifying
                             cert c avoid every n with covered(c, n), and hops
                             must themselves be live
@@ -224,14 +224,14 @@ Properties that make this work (from the spec, evaluation-side view):
 
 Two claims are worth keeping apart, because only the first is about cost and it is the *cheap* one.
 
-_Where the difficulty is._ Entirely in the positive pass — stratum 1, delegation semantics, `sub`-as-scope. A Keyline with zero revocations has it in full. Coverage and replay, which look like the complicated parts, are a join and an anti-join over an already-computed relation. No redesign of revocations touches this; the rejected `sub`-on-`Revocation` field ([alternatives](alternatives.md#a-sub-jurisdiction-field-on-revocation)) would have left it exactly as it is. Conversely, deleting `sub`-as-scope from delegations would collapse the whole thing to per-subject reachability — and delete the role system with it.
+_Where the difficulty is._ Entirely in the positive pass — stratum 1, delegation semantics, `subject`-as-scope. A Keyline with zero revocations has it in full. Coverage and replay, which look like the complicated parts, are a join and an anti-join over an already-computed relation. No redesign of revocations touches this; the rejected `subject`-on-`Revocation` field ([alternatives](alternatives.md#a-subject-jurisdiction-field-on-revocation)) would have left it exactly as it is. Conversely, deleting `subject`-as-scope from delegations would collapse the whole thing to per-subject reachability — and delete the role system with it.
 
 _What "hard" means here._ Not slow. The evaluation is polynomial with small constants; `MemoryKeyline` answers `members()` in about a millisecond for a document with 180 members. The claim is about *expressibility*: the rule cannot be written as a single recursive SQL query, so a backend needs a driver loop. That is all. Anyone reading "P-complete" as "expensive" has the wrong end of it — P-complete means *in P*, plus a statement about parallelisability that has no bearing on our constants.
 
 ### The rule that causes it
 
 ```prolog
-rule 2:  reaches(n, aud, …) :- reaches(n, iss, l),  del(_, iss, aud, n, can)
+rule 2:  reaches(n, audience, …) :- reaches(n, issuer, l),  del(_, issuer, audience, n, can)
                                └── derived ──┘      └── base table ──┘        one recursive premise
 
 rule 3:  reaches(s, x,   …) :- reaches(s, n, l₁),  reaches(n, x, l₂)
@@ -251,14 +251,14 @@ ancestor(X, Y) :- ancestor(X, Z), ancestor(Z, Y).
 
 is also non-linear as written, and is famously *linearizable* — rewrite the second rule as `ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y)` and it drops back into NL and into a single recursive CTE. So "non-linear as written" does not by itself mean "needs a loop".
 
-What defeats the same rewrite here is that the edge relation is not given. Linearizing transitive closure works because a path splits into *first edge, then the rest*, and edges live in a base table. Rule 2 can only follow edges whose `sub` is the subject under evaluation, so a composition step has nowhere to go. Concretely:
+What defeats the same rewrite here is that the edge relation is not given. Linearizing transitive closure works because a path splits into *first edge, then the rest*, and edges live in a base table. Rule 2 can only follow edges whose `subject` is the subject under evaluation, so a composition step has nowhere to go. Concretely:
 
 ```
-Doc    → Owners   (sub: Doc)
-Owners → Bob      (sub: Owners)
+Doc    → Owners   (subject: Doc)
+Owners → Bob      (subject: Owners)
 ```
 
-`reaches(Doc, Owners)` and `reaches(Owners, Bob)` each come from rule 2. `reaches(Doc, Bob)` comes only from rule 3: there is no `sub: Doc` edge into Bob, so no sequence of rule-2 steps in Doc's graph derives it, and the missing step lies in a different edge set. The relation being closed over is an output of the closure.
+`reaches(Doc, Owners)` and `reaches(Owners, Bob)` each come from rule 2. `reaches(Doc, Bob)` comes only from rule 3: there is no `subject: Doc` edge into Bob, so no sequence of rule-2 steps in Doc's graph derives it, and the missing step lies in a different edge set. The relation being closed over is an output of the closure.
 
 ### What is and is not established
 
@@ -319,9 +319,9 @@ Schema (levels as integer ranks `0 Relay … 3 Admin`; a backend translates the 
 
 ```sql
 CREATE TABLE delegation (hash TEXT PRIMARY KEY,
-                         iss TEXT, aud TEXT, sub TEXT, can INT);
+                         issuer TEXT, audience TEXT, subject TEXT, can INT);
 CREATE TABLE revocation (hash TEXT PRIMARY KEY,
-                         iss TEXT, target TEXT REFERENCES delegation(hash));
+                         issuer TEXT, target TEXT REFERENCES delegation(hash));
 -- derived: principal (all ids), level (0..3)
 ```
 
@@ -334,11 +334,11 @@ SELECT level.lvl, p.id, p.id FROM level, principal p;
 
 -- conduct: repeated until it inserts nothing (the loop):
 INSERT OR IGNORE INTO reach_pos (lvl, s, n)
-SELECT f1.lvl, f1.s, d.aud
+SELECT f1.lvl, f1.s, d.audience
 FROM delegation d
-JOIN reach_pos f1 ON f1.n = d.sub AND f1.lvl <= d.can   -- feed 1: R(s, sub)
-JOIN reach_pos f2 ON f2.lvl = f1.lvl                    -- feed 2: R(sub, iss)
-                 AND f2.s = d.sub AND f2.n = d.iss;
+JOIN reach_pos f1 ON f1.n = d.subject AND f1.lvl <= d.power   -- feed 1: R(s, subject)
+JOIN reach_pos f2 ON f2.lvl = f1.lvl                    -- feed 2: R(subject, issuer)
+                 AND f2.s = d.subject AND f2.n = d.issuer;
 ```
 
 The two `JOIN reach_pos` clauses are the non-linearity: as a plain statement over a real table, perfectly legal; inside `WITH RECURSIVE`, a parse error. That single contrast is the entire SQL story.
@@ -353,15 +353,15 @@ CREATE VIEW covered AS
   SELECT r.target AS cert, ar.node, 0 AS total       -- third party: reach
   FROM revocation r
   JOIN delegation d ON d.hash = r.target
-  JOIN admin_reach ar ON ar.k = r.iss
-  WHERE r.iss NOT IN (d.iss, d.aud)
+  JOIN admin_reach ar ON ar.k = r.issuer
+  WHERE r.issuer NOT IN (d.issuer, d.audience)
   UNION
   SELECT r.target, NULL, 1                           -- party: total
   FROM revocation r JOIN delegation d ON d.hash = r.target
-  WHERE r.iss IN (d.iss, d.aud);
+  WHERE r.issuer IN (d.issuer, d.audience);
 ```
 
-Stratum 2 — same fixpoint over `live(ctx, lvl, s, n)`, where `ctx` is an exclusion context: `''` (unconstrained) plus _one per distinct exclusion set_ — contexts are keyed by a canonical signature of the excluded-node set (`GROUP_CONCAT(node ORDER BY node)` per covered cert, deduped), _not_ per covered cert. Certs covered by the same revoker(s) share a context; this is the k³ → k² collapse of §7 and is mandatory, not an optimization nicety. The encoding enforces node avoidance without materializing paths: a derivation in context X never transits an excluded node because the subject seed and every conduct step are filtered by `excl(X, ·)`; and every hop must additionally be justifiable in its _own_ context (its own exclusion-set signature), _rooted at the hop's own subject_ — `live(own, lvl, d.sub, d.iss)`, not `live(own, lvl, s, …)`. A hop about `Members` is judged inside `Members`' graph regardless of which subject is being queried; how `s` reaches `Members` is irrelevant to whether the hop conducts (the daisy-chain rule in [implementation, Evaluation](implementation.md#evaluation)). The shape is the S1 round plus three anti-joins (`NOT EXISTS` against `covered`/`excl`), which are legal everywhere, plus one feed-join for the hop's own-context check. Fact blowup is |contexts| = 1 + |distinct revoker-sets among covered certs| — tighter than the spec's per-dispute cost model. Final answer: `SELECT s, n, MAX(lvl) FROM live WHERE ctx = '' GROUP BY s, n`.
+Stratum 2 — same fixpoint over `live(ctx, lvl, s, n)`, where `ctx` is an exclusion context: `''` (unconstrained) plus _one per distinct exclusion set_ — contexts are keyed by a canonical signature of the excluded-node set (`GROUP_CONCAT(node ORDER BY node)` per covered cert, deduped), _not_ per covered cert. Certs covered by the same revoker(s) share a context; this is the k³ → k² collapse of §7 and is mandatory, not an optimization nicety. The encoding enforces node avoidance without materializing paths: a derivation in context X never transits an excluded node because the subject seed and every conduct step are filtered by `excl(X, ·)`; and every hop must additionally be justifiable in its _own_ context (its own exclusion-set signature), _rooted at the hop's own subject_ — `live(own, lvl, d.subject, d.issuer)`, not `live(own, lvl, s, …)`. A hop about `Members` is judged inside `Members`' graph regardless of which subject is being queried; how `s` reaches `Members` is irrelevant to whether the hop conducts (the daisy-chain rule in [implementation, Evaluation](implementation.md#evaluation)). The shape is the S1 round plus three anti-joins (`NOT EXISTS` against `covered`/`excl`), which are legal everywhere, plus one feed-join for the hop's own-context check. Fact blowup is |contexts| = 1 + |distinct revoker-sets among covered certs| — tighter than the spec's per-dispute cost model. Final answer: `SELECT s, n, MAX(lvl) FROM live WHERE ctx = '' GROUP BY s, n`.
 
 The fixpoint loop is the one non-SQL ingredient, and where it can live is an engine property:
 
@@ -421,7 +421,7 @@ What the outer clock buys, against a bottom-up evaluator such as `MemoryKeyline`
 |------------------------|------------------------------------|----------------------------------------|
 | Add delegation         | S1 delta (if cached), S2 recompute | O(\|new facts\|)                       |
 | Add revocation         | full S2 recompute                  | retraction delta — O(\|facts killed\|) |
-| Heal (`seen` re-issue) | full S2 recompute                  | revival delta — O(\|facts revived\|)   |
+| Heal (`cites` re-issue) | full S2 recompute                  | revival delta — O(\|facts revived\|)   |
 | Query                  | read materialized                  | read materialized                      |
 
 The revocation row is the important one: Keyline's cert set is add-only, but the derived authority graph _flickers_ — new coverage retracts live facts, cascade is facts losing support. Retraction through a recursive fixpoint is the classically miserable part of incremental view maintenance, and it is exactly what Z-set circuits handle natively. Cascade costs what it kills; healing costs what it revives; both are one mechanism run with opposite signs — a literal implementation of the spec's "death and resurrection are one late-binding rule viewed from two directions."
@@ -439,7 +439,7 @@ What DBSP does _not_ fix:
 
 - _Semi-naive iteration._ Each round joins only the previous round's delta against the accumulated facts. Total work is O(|derivable facts| × join fanout) regardless of round count.
 - _Round count is derivation depth, not fact count._ All facts whose premises are present derive in the same round (breadth-first over the derivation DAG). Real graphs are wide and shallow (roles, pinning, constitutional flatness push that way): expect single-digit rounds. The theoretical bound (|facts| rounds, one new fact each) requires an adversarial pencil-shaped graph.
-- _Threshold decomposition (recommended for the (max, min) semiring)._ Do not carry levels as data. For each ℓ ∈ {Relay, Read, Edit, Admin}, run a boolean reachability pass using only certs with `can ≥ ℓ`; effective level = max ℓ that holds. Four independent monotone passes; no aggregates inside recursion, no dominated-fact churn, and per-node convergence at the shortest route achieving the best level. This is the spec's "four levels ⇒ bucketed BFS" observation, made executable. The finite _total order_ of `Can` is load-bearing here: a partial order or real-valued lattice would break the decomposition.
+- _Threshold decomposition (recommended for the (max, min) semiring)._ Do not carry levels as data. For each ℓ ∈ {Relay, Read, Edit, Admin}, run a boolean reachability pass using only certs with `power ≥ ℓ`; effective level = max ℓ that holds. Four independent monotone passes; no aggregates inside recursion, no dominated-fact churn, and per-node convergence at the shortest route achieving the best level. This is the spec's "four levels ⇒ bucketed BFS" observation, made executable. The finite _total order_ of `Can` is load-bearing here: a partial order or real-valued lattice would break the decomposition.
 - _Least fixpoint, always._ Start from root edges, derive outward. Never seed optimistically: assume-dead-on-revisit is what keeps ungrounded cycles dead.
 - _Cache stratum 1 aggressively._ It consults only delegations, which are append-only; admin reach and coverage grow monotonically and never retract. Merges evaluate deltas from the cached frontier. Stratum 2 is the disputed-certificate tax: uncovered certs share one pass; each distinct exclusion set pays a route search (§7, obligation 1). A jurisdiction accumulating cuts is one under dispute; rotation moots the cuts and restores the fast path.
 - _Witness hints are pure optimization._ A peer may attach the claimed route; verifying a hint costs its length; a wrong hint falls back to search. Soundness never depends on hints.
@@ -456,7 +456,7 @@ The tiering that matters is not embedded-versus-relay or lazy-versus-eager. It f
 
 Two things follow. Retraction through a recursive fixpoint — the part that actually needs Z-sets — is confined to the smaller, per-subject half; the large global half needs nothing more exotic than a table and an append. And the per-subject half decomposes: two documents sharing no roles share no stratum-2 work, and two that share a role share that role's row, computed once. Parallelism across documents is recovered exactly when the monotone half is hoisted out of the query path.
 
-The daisy-chain rule is what makes that decomposition hold. Because `live(h)` is rooted at `sub(h)` rather than at the querying subject, a role's liveness is one answer every document supplying it can share. Rooted at the querying subject instead, every document would need a private copy of every shared role's evaluation.
+The daisy-chain rule is what makes that decomposition hold. Because `live(h)` is rooted at `subject(h)` rather than at the querying subject, a role's liveness is one answer every document supplying it can share. Rooted at the querying subject instead, every document would need a private copy of every shared role's evaluation.
 
 ### Cost in Practice
 
@@ -516,7 +516,7 @@ role₁ over Doc, role₂ member of role₁, …, roleₖ member of roleₖ₋�
   → 2k certificates → R(s_j, node_i) for all j < i ≈ k²/2 facts
 ```
 
-Linear input, quadratic fact space. Aggravator: the `seen` field accepts arbitrary bytes, so one authority can mint unboundedly many distinct, grounded certificates without generating fresh audience keys (not a new capability — fresh `aud` keys do the same — but one field cheaper).
+Linear input, quadratic fact space. Aggravator: the `cites` field accepts arbitrary bytes, so one authority can mint unboundedly many distinct, grounded certificates without generating fresh audience keys (not a new capability — fresh `audience` keys do the same — but one field cheaper).
 
 Bounds: every cert is signed (a spree is a self-incriminating audit trail); scope is limited to documents the attacker is a member of; removal + rotation ends growth; stratum 1's append-only monotonicity means honest replicas pay the delta once, not per query.
 
@@ -567,7 +567,7 @@ The forcing construction — the _gift-cert attack_ — is why demand-driven eva
 1. Attacker (Tier 1 member) builds a k-role ladder with adversarially
    nested rosters — self-grounded, expensive to walk, relevant to no one:
    costs nothing while unaimed.
-2. Attacker signs ONE cert: {iss: attacker, aud: victim, sub: ladder_top}
+2. Attacker signs ONE cert: {issuer: attacker, audience: victim, subject: ladder_top}
    — the "gift." No acceptance step exists; it is in the set after sync.
 3. The victim's own access check now has the ladder as a candidate route.
    An existence search must explore candidates — it might be the valid
@@ -584,7 +584,7 @@ The certificates are permanent; the _cost_ is late-bound. The quadratic requires
 |------------------------------|-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Certificates (storage)       | yes — add-only set      | nothing (quotas bound growth)                                                                                                                                                                                                                                                                                                           |
 | Ladder's k² fixpoint cost    | no — follows liveness   | booting the attacker: the ladder's standing over Doc rides their membership, so it dies in the ordinary cascade; dead facts are never derived                                                                                                                                                                                           |
-| Demand-path relevance        | no                      | the victim _renouncing_ the gift — it names them as `aud`, so the party rule gives an unconditional, total revocation. Re-gifts need fresh hashes (varied `seen`; identical fields collide with the revoked hash and silently fail), are rate-bounded, individually renounceable, and each is a fresh signed artifact naming the victim |
+| Demand-path relevance        | no                      | the victim _renouncing_ the gift — it names them as `audience`, so the party rule gives an unconditional, total revocation. Re-gifts need fresh hashes (varied `cites`; identical fields collide with the revoked hash and silently fail), are rate-bounded, individually renounceable, and each is a fresh signed artifact naming the victim |
 | Dead-ladder exploration bait | no — evaluator artifact | obligation 3 above (subject-first ordering); note a booted attacker's ladder stays _internally_ self-grounded, which is exactly what obligation 3 defends against                                                                                                                                                                       |
 | Revival risk                 | latent                  | fresh-key re-add discipline — the DoS analysis independently rejustifies the spec's compromise-hygiene rule, since same-key re-add revives the ladder's cost along with everything else                                                                                                                                                 |
 
@@ -608,7 +608,7 @@ Two structural consolations. First, attribution is maximal: a signed cert from a
 6. Witness hints: peers attach routes; verification degrades from search to an O(route-length) check in the common case
 7. Monitoring: fact count and context count per issuer are cheap anomaly signals, with a built-in audit trail to act on
 
-Items 1–2 are evaluator obligations; 3–5 attack different terms of the cost product (amortization, rate, scope) and compose. The residual after all of them: _a member can spend their own quota to make replicas do quadratic work once, attributably_. That floor is semantic — the k² fact space is the answer to the query, not overhead — and shrinking it requires giving up design properties (depth caps: composability + consensus-criticality; witness-mandatory verification: half the UCAN trade, and denials still need verifier-side search; Admin-gated delegation: rejected in `alternatives.md`; dropping `sub`-as-scope: the role system itself).
+Items 1–2 are evaluator obligations; 3–5 attack different terms of the cost product (amortization, rate, scope) and compose. The residual after all of them: _a member can spend their own quota to make replicas do quadratic work once, attributably_. That floor is semantic — the k² fact space is the answer to the query, not overhead — and shrinking it requires giving up design properties (depth caps: composability + consensus-criticality; witness-mandatory verification: half the UCAN trade, and denials still need verifier-side search; Admin-gated delegation: rejected in `alternatives.md`; dropping `subject`-as-scope: the role system itself).
 
 ## 8. Misconception Ledger
 
@@ -620,7 +620,7 @@ Plausible readings of the model that are wrong, and why.
 | "Evaluation zombies are the design's accepted zombies" | Different animals. Design zombies: same evaluator, _grown set_ (re-added key revives old certs) — spec-compliant, signature-gated, accepted trade. Evaluation zombies: _same set_, evaluator disagrees with spec, fail-open — a soundness bug |
 | "One subtracted graph, then reachability" | `covered` is per-certificate: node N forbidden for cert c, fine for c′. No single G⁻ exists; each covered cert carries its own mask. (Also, coverage computed against an already-cut graph is the spec's explicitly rejected order-dependent shortcut — "Why the Strata Are Mandatory") |
 | "The SQL problem is the negation / stratification" | Negation over a completed stratum is a legal anti-join, even inside a recursive term. Stratification = chained CTEs. Both trivial. The blocker is non-linear _positive_ recursion |
-| "Redesigning revocations (e.g. `sub` field) would fix expressibility" | Coverage was always the easy part; the fixpoint over delegations is untouched. The rejected design still needs the same positive pass to validate issuer standing — it computes the identical fixpoint and uses one row of it |
+| "Redesigning revocations (e.g. `subject` field) would fix expressibility" | Coverage was always the easy part; the fixpoint over delegations is untouched. The rejected design still needs the same positive pass to validate issuer standing — it computes the identical fixpoint and uses one row of it |
 | "The hard part is pathfinding (shortest/widest path)" | Path _optimization_ is easy (and mostly dissolves via threshold decomposition). The hard part is computing _which edges exist at all_ — the graph is an output of the search, not an input (edges conduct only when their issuer's derived standing exists) |
 | "The planner should infer stratification" | Within one recursive definition there is no stratification to find (self-negation is unstratifiable by definition); across definitions, SQL's CTE dependency order makes strata explicit. Engines enforce monotonicity per stratum with blunt syntax rules; nothing is being 'missed' |
 | "Rounds ≈ \|nodes\|² × 4 — brutal" | That is the adversarial ceiling. Rounds = derivation depth ≈ graph diameter (single digits in practice); threshold decomposition gives per-node convergence at the best path; semi-naive makes total work independent of round slicing |
@@ -645,9 +645,9 @@ A conformance case for demand-driven evaluators; bottom-up evaluators pass phase
 certs:
   L1..Lk : a k-role ladder, self-grounded, with nested rosters
            (adversarially deep internal membership chains)
-  S      : {iss: attacker, aud: L1, sub: Doc}        — supply: grounds the
+  S      : {issuer: attacker, audience: L1, subject: Doc}        — supply: grounds the
            ladder in Doc's graph (attacker must hold Doc-standing)
-  G      : {iss: attacker, aud: victim, sub: Lk}     — the gift
+  G      : {issuer: attacker, audience: victim, subject: Lk}     — the gift
 
 phases and assertions:
   1. pre-gift:    victim's query "R(Doc, victim)?" must not explore the
@@ -659,17 +659,17 @@ phases and assertions:
                   does not walk the ladder's still-self-grounded internals
                   (obligation 3: subject-side feed first). This is the
                   assertion a naive top-down evaluator fails.
-  4. renounce:    victim revokes G (party rule, aud). Assert relevance is
+  4. renounce:    victim revokes G (party rule, audience). Assert relevance is
                   severed even if the attacker is re-added; assert an
                   identical re-gift (same fields) collides with the revoked
-                  hash and silently fails; a varied re-gift (fresh `seen`)
+                  hash and silently fails; a varied re-gift (fresh `cites`)
                   is a new hash requiring a new renunciation.
   5. resurrect:   re-add the attacker's same key (no renunciation). Assert
                   the ladder cost returns — zombie economics — and that a
                   fresh-key re-add does not revive it.
 ```
 
-Bottom-up evaluators pass phases 1, 3, 5 by construction; phases 2 and 4 are meaningful for any evaluator. Encoding this in `conformance/scenarios.rs` form would also pin the spec-level claims (renunciation totality, `seen`-collision fail-closed) that the cost argument leans on.
+Bottom-up evaluators pass phases 1, 3, 5 by construction; phases 2 and 4 are meaningful for any evaluator. Encoding this in `conformance/scenarios.rs` form would also pin the spec-level claims (renunciation totality, `cites`-collision fail-closed) that the cost argument leans on.
 
 ## 10. Status
 
@@ -687,13 +687,13 @@ Bottom-up evaluators pass phases 1, 3, 5 by construction; phases 2 and 4 are mea
 
 | Term            | Meaning                                                                                                                                                                 |
 |-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| AND-node        | A certificate in the authority graph: conducts iff all feeds live; output = min of feeds and own `can`                                                                  |
+| AND-node        | A certificate in the authority graph: conducts iff all feeds live; output = min of feeds and own `power`                                                                  |
 | Admin reach     | Nodes a key _ever_ held Admin over (computed on the positive pass, revocation-blind) ∪ its own node; frozen by construction                                             |
-| Role rule       | The non-linear derivation step: a `sub`-scoped cert needs the role's standing over the subject AND the issuer's standing in the role                                    |
+| Role rule       | The non-linear derivation step: a `subject`-scoped cert needs the role's standing over the subject AND the issuer's standing in the role                                    |
 | Covered         | The per-certificate `(cert, forbidden node)` relation cut from the positive pass; applied as an anti-join during replay                                                 |
 | Inert           | A well-signed certificate deriving nothing (issuer never reached, or revocation whose reach touches no route). Not an error                                             |
 | Message graph   | The stored certificate set; append-only; merge = set union                                                                                                              |
 | OR-node         | A principal in the authority graph: standing = max over incident conducting certs                                                                                       |
 | Authority graph | Derived standing facts (the README's term); recomputed per evaluation; stored nowhere. The _positive graph_ is the same thing computed blind to revocations (stratum 1) |
 | Path vs tree    | Linear vs non-linear proof shape; the boundary between `WITH RECURSIVE` and a driver loop                                                                               |
-| Subject         | The node an evaluation is rooted at; a document or a role (root edges: `iss = sub`)                                                                                     |
+| Subject         | The node an evaluation is rooted at; a document or a role (root edges: `issuer = subject`)                                                                                     |

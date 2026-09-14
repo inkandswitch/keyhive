@@ -33,12 +33,12 @@
 //! node's members inherit what the node reaches).
 
 use crate::{
-    power::Power,
     certificate::Certificate,
     collections::{Map, Set},
     delegation::Delegation,
     id::Id,
     keyline::{set_digest, Keyline},
+    power::Power,
     revocation::{Revocation, RevocationId},
     signed::{Signed, Verified},
 };
@@ -294,7 +294,10 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     // succeed. Were one ever to fail there would be nothing to
                     // lower, which is what skipping does.
                     let (Some(at_iss), Some(current)) = (
-                        levels.get(&d.subject).and_then(|m| m.get(&d.issuer)).copied(),
+                        levels
+                            .get(&d.subject)
+                            .and_then(|m| m.get(&d.issuer))
+                            .copied(),
                         cap.get(h).copied(),
                     ) else {
                         continue;
@@ -396,7 +399,12 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     let Some(d) = self.delegations.get(h) else {
                         continue;
                     };
-                    relax(&mut best, &mut buckets, d.audience, lu.min(params.cap(h, d.power)));
+                    relax(
+                        &mut best,
+                        &mut buckets,
+                        d.audience,
+                        lu.min(params.cap(h, d.power)),
+                    );
                 }
             }
 
