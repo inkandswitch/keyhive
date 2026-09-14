@@ -301,6 +301,42 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         Ok(())
     }
 
+    /// Export active prekey state as an opaque archive.
+    ///
+    /// This includes both the secret prekey pairs and the public `Individual`
+    /// prekey operation state that backs stable contact-card reuse.
+    ///
+    /// # Security
+    ///
+    /// The returned bytes contain unencrypted secret key material.
+    /// Callers are responsible for protecting this data at rest and in transit.
+    pub async fn export_prekey_archive(&self) -> Result<Vec<u8>, bincode::Error> {
+        bincode::serialize(&self.into_archive().await)
+    }
+
+    /// Import active prekey state from a previously exported archive.
+    ///
+    /// The archive must belong to this active identity. Imported secret pairs are
+    /// merged into the current pair map; imported public prekey operations are
+    /// merged into the active `Individual` so `get_existing_contact_card()`
+    /// continues to expose the same prekey op after a restart.
+    pub async fn import_prekey_archive(&self, bytes: &[u8]) -> Result<(), bincode::Error> {
+        let archive: ActiveArchive = bincode::deserialize(bytes)?;
+        if archive.individual.id() != self.id {
+            return Err(Box::new(bincode::ErrorKind::Custom(
+                "active prekey archive identity mismatch".to_owned(),
+            )));
+        }
+
+        let ActiveArchive {
+            prekey_pairs,
+            individual,
+        } = archive;
+        *self.prekey_pairs.lock().await = prekey_pairs;
+        *self.individual.lock().await = individual;
+        Ok(())
+    }
+
     /// Serialize for storage.
     pub async fn into_archive(&self) -> ActiveArchive {
         ActiveArchive {
@@ -493,6 +529,29 @@ mod tests {
             merged_pairs.len(),
             original_pairs.len() + exported_pairs.len()
         );
+    }
+
+    #[tokio::test]
+    async fn test_export_import_prekey_archive_preserves_contact_card() {
+        test_utils::init_logging();
+
+        let csprng = &mut rand::thread_rng();
+        let signer = MemorySigner::generate(csprng);
+        let active1: Active<Sendable, _, [u8; 32], _> =
+            Active::<Sendable, _, _, _>::generate(signer.clone(), NoListener, csprng)
+                .await
+                .unwrap();
+        let contact1 = active1.individual.lock().await.contact_card();
+        let exported = active1.export_prekey_archive().await.unwrap();
+
+        let active2: Active<Sendable, _, [u8; 32], _> =
+            Active::<Sendable, _, _, _>::generate(signer, NoListener, csprng)
+                .await
+                .unwrap();
+        active2.import_prekey_archive(&exported).await.unwrap();
+
+        let contact2 = active2.individual.lock().await.contact_card();
+        assert_eq!(contact2, contact1);
     }
 
     #[tokio::test]
