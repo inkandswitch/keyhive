@@ -9,10 +9,10 @@ use keyhive_codec::{
 
 /// What an edge conveys. Totally ordered; each level implies the ones below.
 ///
-/// `Relay`, `Read`, and `Edit` are conveyance levels: what may travel along a
-/// route. `Admin` is the governance level: it places the subject in the
-/// holder's admin reach, which is what gives third-party revocations their
-/// reach. Attenuation along a route is `min`; combination across routes is `max`.
+/// `Relay`, `Read`, and `Edit` govern what may travel along a route. `Admin` is
+/// the sole governance level: it places the subject in the holder's admin
+/// reach, which is what gives third-party revocations their reach. Attenuation
+/// along a route is `min`; combination across routes is `max`.
 ///
 /// # Ordering and encoding are separate
 ///

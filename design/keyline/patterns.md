@@ -16,26 +16,26 @@ A "role" is just a node: mint a key, grant authority _to_ it (supplies), and gra
      Admin    │  Dan   │    Admin (root)
    ┌──────────┤        ├──────────┐
    ▼          └────────┘          ▼
-┌─────────┐   supply {iss: Dan, aud: Members, sub: Doc, can: Admin}
+┌─────────┐   supply {issuer: Dan, audience: Members, subject: Doc, power: Admin}
 │ Members │──────────────────────►┌─────┐
 └─────────┘                       │ Doc │
  ▲   ▲                            └─────┘
- │   └──────── Bob   {iss: Dan, aud: Bob,   sub: Members, can: Admin}
- └──────────── Alice {iss: Dan, aud: Alice, sub: Members, can: Admin}
+ │   └──────── Bob   {issuer: Dan, audience: Bob,   subject: Members, power: Admin}
+ └──────────── Alice {issuer: Dan, audience: Alice, subject: Members, power: Admin}
 ```
 
-The role's signing key is ephemeral: create the key, sign any ceremony edges, discard it. The role never signs again — authority flows _into_ it via supplies (signed by whoever holds the supplied authority) and _through_ it via memberships. Members at Admin manage the roster; members at Edit or Read merely transit ([`sub` is a scope][sub is a scope, not an endpoint]). "Invite at a level" is just a membership with a `can` ceiling — attenuation does the rest.
+The role's signing key is ephemeral: create the key, sign any ceremony edges, discard it. The role never signs again — authority flows _into_ it via supplies (signed by whoever holds the supplied authority) and _through_ it via memberships. Members at Admin manage the roster; members at Edit or Read merely transit ([`subject` is a scope][subject is a scope, not an endpoint]). "Invite at a level" is just a membership with a `power` ceiling — attenuation does the rest.
 
 ## Pinning: Sub-Scoped Intermediaries
 
-To grant while _submitting the grant to a jurisdiction's oversight_ — dies with your standing there, killable by its admins — route it through a node pinned by `sub`:
+To grant while _submitting the grant to a jurisdiction's oversight_ — dies with your standing there, killable by its admins — route it through a node pinned by `subject`:
 
 ```
 Dan grants Eve, submitted to Members:
 
   mint M2
-  {iss: Dan, aud: M2,  sub: Members, can: Edit}    pinned: routes ground at Members
-  {iss: Dan, aud: Eve, sub: M2,      can: Edit}    Eve's membership in M2
+  {issuer: Dan, audience: M2,  subject: Members, power: Edit}    pinned: routes ground at Members
+  {issuer: Dan, audience: Eve, subject: M2,      power: Edit}    Eve's membership in M2
 ```
 
 Any Members admin can cut `Dan → M2` totally (all its routes transit Members); the whole construction dies with Dan's Members-standing regardless of his other routes. Pinning is voluntary submission — trading resilience for governability — and it is a topology choice, made per grant.
@@ -56,7 +56,7 @@ The ocap caretaker — interpose a cuttable proxy between grantor and grantee �
 ```
 
 - _Assignable revocation rights._ Dan — no authority over Members or Doc — has `C` in his admin reach and can cut every edge grounded there. The kill switch became a grantable capability.
-- _Pre-installed cut points._ `C` has one roster edge (`sub: C`, to Carol); cutting it severs everything downstream, no enumeration. The supply edge _into_ `C` stays its issuer's to cut: the recipient of an edge is not on its route.
+- _Pre-installed cut points._ `C` has one roster edge (`subject: C`, to Carol); cutting it severs everything downstream, no enumeration. The supply edge _into_ `C` stays its issuer's to cut: the recipient of an edge is not on its route.
 - _Revoking the unseen._ `Revoke` names a hash, which requires having seen it. A caretaker at a trust boundary lets you sever a whole unseen subtree by cutting the one edge you _do_ hold.
 
 Unlike ocap caretakers, a certificate node is inert — it cannot filter, log, or rate-limit. Only the revocability transfers. In the ocap reading, every Keyline node is a forwarder that may decline to forward: revocation _in its entirety_ is forwarders declining — at their own hop (self), across their admin reach, or at a purpose-built proxy (caretaker).
@@ -94,7 +94,7 @@ Whether ever-admin power _cascades_ is a topology choice, made when roles are wi
 
 | | Nested (adjudicable) | Flat (contained) |
 |---|---|---|
-| Wiring | `{aud: Mod1, sub: TeamX, can: Admin}` — an upstream role in TeamX's constitution | `{aud: TeamX, sub: Doc}` supply, or a ≤Edit membership |
+| Wiring | `{audience: Mod1, subject: TeamX, power: Admin}` — an upstream role in TeamX's constitution | `{audience: TeamX, subject: Doc}` supply, or a ≤Edit membership |
 | TeamX's constitution | Names Mod1 | Names individuals (Eve, Frank) — never an upstream role |
 | Consequence | Every Mod1 admin, ever, holds Admin over TeamX: they can adjudicate inside it (cut any roster entry, without a separate grant), and that power is permanent — revocation coverage over everything TeamX-grounded, surviving rotation of Mod1 | Upstream admins never hold Admin over TeamX; their control is the supply line: total, coarse, and cleanly severable |
 
@@ -110,27 +110,27 @@ Admin over a document gates exactly one thing: reach over the document's routes.
 
 | Root edge                                       | Doc is in the admin reach of       | Root edge deniable by                                       | Retained subject key                                                                     |
 |-------------------------------------------------|------------------------------------|-------------------------------------------------------------|------------------------------------------------------------------------------------------|
-| `{iss: Doc, aud: Owners, sub: Doc, can: Admin}` | every Admin member of Owners, ever | any of them; one revocation bricks the document | cannot escape: old admins' reach covers `Doc → Owners′` too |
-| `{iss: Doc, aud: Owners, sub: Doc, can: Edit}` | nobody | nobody | re-roots cleanly: old admins' reach holds Owners, which the new hierarchy never transits |
+| `{issuer: Doc, audience: Owners, subject: Doc, power: Admin}` | every Admin member of Owners, ever | any of them; one revocation bricks the document | cannot escape: old admins' reach covers `Doc → Owners′` too |
+| `{issuer: Doc, audience: Owners, subject: Doc, power: Edit}` | nobody | nobody | re-roots cleanly: old admins' reach holds Owners, which the new hierarchy never transits |
 
-Edit-rooting costs nothing in capability: humans reach the document at Edit, which is all the conveyance there is, and govern it through Admin over its roles. It is the shape for a document whose owners should be able to leave without taking it with them. Admin-rooting is the shape when the owners _are_ the document — a personal document, a two-party agreement — and being able to end it unilaterally is the point. The power it grants is not new: a root admin can already eject every peer and lose their own key.
+Edit-rooting costs nothing in capability: humans reach the document at Edit, which is as much as any route can carry, and govern it through Admin over its roles. It is the shape for a document whose owners should be able to leave without taking it with them. Admin-rooting is the shape when the owners _are_ the document — a personal document, a two-party agreement — and being able to end it unilaterally is the point. The power it grants is not new: a root admin can already eject every peer and lose their own key.
 
 A document's rooting level is fixed at the ceremony (the root edge cannot be replaced without the subject key) and is visible to anyone holding the set, so it is a published fact about the document rather than a policy.
 
 ## Memberships as the Only Shape
 
-With no anchor field, the schema enforces the shape: humans hold _memberships in roles, at a level_; the only `sub: Doc` edges are supplies. Every grant is a membership; individual grants are memberships in [caretaker][caretakers] roles of one.
+With no anchor field, the schema enforces the shape: humans hold _memberships in roles, at a level_; the only `subject: Doc` edges are supplies. Every grant is a membership; individual grants are memberships in [caretaker][caretakers] roles of one.
 
 ```
         ┌─────┐
-        │ Doc │◄──────── supply (sub: Doc) ────────┐
+        │ Doc │◄──────── supply (subject: Doc) ────────┐
         └─────┘                                    │
                     ┌────────┐   supply    ┌──────────────┐
                     │ Owners │───────────► │  Moderators  │
-                    └────────┘  (sub:Doc)  └──────────────┘
+                    └────────┘  (subject:Doc)  └──────────────┘
                         ▲                     ▲     ▲     ▲
              membership │          membership │     │     │ membership
-            (can:Admin) │         (can:Admin) │     │     │ (can:Edit)
+            (power:Admin) │         (power:Admin) │     │     │ (power:Edit)
                         │                     │     │     │
                       Dan                  Alice   Bob   Carol
 ```
@@ -152,6 +152,6 @@ Two costs: invitation is an admin act (a membership is a constitutional edge; an
 [renunciation]: README.md#renunciation
 [roles]: #roles
 [rotating a role]: #rotating-a-role
-[sub is a scope, not an endpoint]: README.md#sub-is-a-scope-not-an-endpoint
+[subject is a scope, not an endpoint]: README.md#subject-is-a-scope-not-an-endpoint
 [the ex-admin sharp edge]: README.md#the-ex-admin-sharp-edge
 [rooting level]: #rooting-level
