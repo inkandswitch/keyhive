@@ -1,7 +1,7 @@
 //! Keyline: Keyhive's convergent authority graph.
 //!
 //! A flat namespace of Ed25519 verifying keys ([`id::Id`]) and a set of signed
-//! certificates over them: [`delegation::Delegation`]s that grant an [`access::Access`] level over
+//! certificates over them: [`delegation::Delegation`]s that grant an [`power::Power`] level over
 //! a subject, and [`revocation::Revocation`]s that withdraw a delegation by hash. Authority
 //! is reachability over that graph, attenuated to the minimum along a route and
 //! combined as the maximum over routes. Evaluation is a pure function of the
@@ -45,7 +45,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-pub mod access;
+pub mod power;
 pub mod certificate;
 pub mod collections;
 pub mod delegation;

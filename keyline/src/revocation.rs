@@ -16,20 +16,20 @@ use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 /// or the issuer's own node, and inert elsewhere. Admin reach is computed on the
 /// revocation-free graph and only grows, so a revocation's reach is permanent.
 ///
-/// There is no `sub`: effect is scoped by the admin reach, not by the issuer's
+/// There is no `subject`: effect is scoped by the admin reach, not by the issuer's
 /// choice. A jurisdiction field was rejected because every rotation would then
 /// moot every standing denial, forcing the deny list to be re-signed; see
 /// `design/keyline/alternatives.md`.
 ///
-/// The type of `revoke` makes revoking a revocation unwritable. Repair is by
+/// The type of `revokes` makes revoking a revocation unwritable. Repair is by
 /// re-granting with [`Delegation::reissue`], never by un-denying.
 ///
-/// # `keep`
+/// # `retains`
 ///
 /// Revoking a key raises a second question the authority graph cannot answer:
-/// what becomes of the content that key already wrote. `keep` carries the
+/// what becomes of the content that key already wrote. `retains` carries the
 /// revoker's answer — a retention watermark, opaque to this crate. Evaluation
-/// never reads it, exactly as it never reads [`Delegation::seen`]; the layer
+/// never reads it, exactly as it never reads [`Delegation::cites`]; the layer
 /// that materialises content does.
 ///
 /// The keys are subjects — documents, in `keyhive_core`'s reading, though this
@@ -54,35 +54,35 @@ use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 )]
 pub struct Revocation<C> {
     /// Signer. Determines the admin reach that scopes the effect.
-    pub iss: Id,
+    pub issuer: Id,
 
     /// The delegation being revoked, by content address.
-    pub revoke: Digest<Delegation>,
+    pub revokes: Digest<Delegation>,
 
     /// Per-subject retention watermarks. Ignored by evaluation.
-    pub keep: BTreeMap<Id, C>,
+    pub retains: BTreeMap<Id, C>,
 }
 
 impl<C> Revocation<C> {
-    /// `iss` withdraws the delegation with this payload digest, naming no
+    /// `issuer` withdraws the delegation with this payload digest, naming no
     /// retention watermarks.
-    pub fn new(iss: Id, revoke: Digest<Delegation>) -> Self {
+    pub fn new(issuer: Id, revokes: Digest<Delegation>) -> Self {
         Revocation {
-            iss,
-            revoke,
-            keep: BTreeMap::new(),
+            issuer,
+            revokes,
+            retains: BTreeMap::new(),
         }
     }
 
     /// The same revocation, carrying retention watermarks.
-    pub fn keeping(self, keep: BTreeMap<Id, C>) -> Self {
-        Revocation { keep, ..self }
+    pub fn retaining(self, retains: BTreeMap<Id, C>) -> Self {
+        Revocation { retains, ..self }
     }
 }
 
 impl<C: Encode> Revocation<C> {
     /// Content address of the payload: what a re-issued
-    /// [`Delegation::seen`] names. Digest of the revocation's own encoding,
+    /// [`Delegation::cites`] names. Digest of the revocation's own encoding,
     /// without the [`crate::certificate::Certificate`] kind tag.
     ///
     /// Typed as [`RevocationId`] rather than `Digest<Revocation<C>>` so that a
@@ -101,14 +101,14 @@ pub enum RevocationId {}
 
 impl<C> Verifiable for Revocation<C> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.iss.verifying_key()
+        self.issuer.verifying_key()
     }
 }
 
-// Layout:  iss ‖ revoke ‖ count:u32 ‖ entry*
+// Layout:  issuer ‖ revokes ‖ count:u32 ‖ entry*
 //   entry: id ‖ len:u32 ‖ value
 //
-// `keep` is the crate's only variable-length field, so it is the only place
+// `retains` is the crate's only variable-length field, so it is the only place
 // canonicality is not free. Three rules make it so, and `decode` enforces all
 // three: entries ascend by `Id` with no repeats (one ordering per map), lengths
 // are fixed-width big-endian (one encoding per number), and the input must be
@@ -127,11 +127,11 @@ fn u32_at(bytes: &[u8], at: usize) -> Result<usize, DecodeError> {
 
 impl<C: Encode> Encode for Revocation<C> {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.iss.encode_into(out);
-        out.extend_from_slice(self.revoke.as_slice());
-        out.extend_from_slice(&(self.keep.len() as u32).to_be_bytes());
+        self.issuer.encode_into(out);
+        out.extend_from_slice(self.revokes.as_slice());
+        out.extend_from_slice(&(self.retains.len() as u32).to_be_bytes());
         // `BTreeMap` iterates in ascending key order, which is the canonical one.
-        for (subject, value) in &self.keep {
+        for (subject, value) in &self.retains {
             subject.encode_into(out);
             let encoded = value.encode();
             out.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
@@ -145,13 +145,13 @@ impl<C: Decode> Decode for Revocation<C> {
         if bytes.len() < BASE_LEN {
             return Err(DecodeError::UnexpectedEnd);
         }
-        let iss = Id::decode(&bytes[..Id::LEN])?;
+        let issuer = Id::decode(&bytes[..Id::LEN])?;
         let raw: [u8; 32] = bytes[Id::LEN..Id::LEN + 32]
             .try_into()
             .map_err(|_| DecodeError::UnexpectedEnd)?;
         let count = u32_at(bytes, Id::LEN + 32)?;
 
-        let mut keep = BTreeMap::new();
+        let mut retains = BTreeMap::new();
         let mut at = BASE_LEN;
         let mut previous: Option<Id> = None;
         for _ in 0..count {
@@ -162,7 +162,7 @@ impl<C: Decode> Decode for Revocation<C> {
             )?;
             if previous.is_some_and(|p| p >= subject) {
                 return Err(DecodeError::InvalidField(
-                    "keep: unsorted or repeated subject",
+                    "retains: unsorted or repeated subject",
                 ));
             }
             previous = Some(subject);
@@ -171,7 +171,7 @@ impl<C: Decode> Decode for Revocation<C> {
             let len = u32_at(bytes, at)?;
             at += 4;
             let value = bytes.get(at..at + len).ok_or(DecodeError::UnexpectedEnd)?;
-            keep.insert(subject, C::decode(value)?);
+            retains.insert(subject, C::decode(value)?);
             at += len;
         }
         if at != bytes.len() {
@@ -179,9 +179,9 @@ impl<C: Decode> Decode for Revocation<C> {
         }
 
         Ok(Revocation {
-            iss,
-            revoke: Digest::from(raw),
-            keep,
+            issuer,
+            revokes: Digest::from(raw),
+            retains,
         })
     }
 }
@@ -191,9 +191,9 @@ impl<'a, C: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Revocation<C>
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let raw: [u8; 32] = u.arbitrary()?;
         Ok(Revocation {
-            iss: u.arbitrary()?,
-            revoke: Digest::from(raw),
-            keep: u.arbitrary()?,
+            issuer: u.arbitrary()?,
+            revokes: Digest::from(raw),
+            retains: u.arbitrary()?,
         })
     }
 }
@@ -203,7 +203,7 @@ mod tests {
     use super::*;
     use crate::test_utils::id;
 
-    /// A watermark type with a variable-length encoding, so the `keep` codec is
+    /// A watermark type with a variable-length encoding, so the `retains` codec is
     /// exercised on values of differing size rather than a fixed stand-in.
     type Keep = Vec<u8>;
 
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn keep_round_trips() {
-        let r = sample().keeping(BTreeMap::from([
+        let r = sample().retaining(BTreeMap::from([
             (id(2), alloc::vec![1, 2, 3]),
             (id(3), Vec::new()),
         ]));
@@ -232,7 +232,7 @@ mod tests {
         assert_ne!(
             sample().digest(),
             r.digest(),
-            "keep is covered by the digest"
+            "retains is covered by the digest"
         );
     }
 
@@ -251,10 +251,10 @@ mod tests {
         );
     }
 
-    /// The three ways a `keep` map could have two encodings, each rejected.
+    /// The three ways a `retains` map could have two encodings, each rejected.
     #[test]
     fn rejects_non_canonical_keep() {
-        let r = sample().keeping(BTreeMap::from([
+        let r = sample().retaining(BTreeMap::from([
             (id(2), alloc::vec![7]),
             (id(3), alloc::vec![8]),
         ]));
@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(
             Revocation::<Keep>::decode(&swapped),
             Err(DecodeError::InvalidField(
-                "keep: unsorted or repeated subject"
+                "retains: unsorted or repeated subject"
             ))
         );
 
@@ -279,7 +279,7 @@ mod tests {
         assert_eq!(
             Revocation::<Keep>::decode(&repeated),
             Err(DecodeError::InvalidField(
-                "keep: unsorted or repeated subject"
+                "retains: unsorted or repeated subject"
             ))
         );
 
