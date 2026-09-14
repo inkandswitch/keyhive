@@ -12,18 +12,22 @@ use keyhive_crypto::verifiable::Verifiable;
 /// takes and what the set holds.
 ///
 /// Encoded as a one-byte kind tag followed by the certificate's own encoding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(bound = "C: serde::Serialize + serde::de::DeserializeOwned")
+)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub enum Certificate {
+pub enum Certificate<C> {
     /// A grant.
     Delegation(Delegation),
 
     /// A withdrawal of a grant.
-    Revocation(Revocation),
+    Revocation(Revocation<C>),
 }
 
-impl Certificate {
+impl<C> Certificate<C> {
     /// The signer of either kind.
     pub fn issuer(&self) -> Id {
         match self {
@@ -41,7 +45,7 @@ impl Certificate {
     }
 
     /// The revocation, if this certificate is one.
-    pub fn as_revocation(&self) -> Option<&Revocation> {
+    pub fn as_revocation(&self) -> Option<&Revocation<C>> {
         match self {
             Certificate::Delegation(_) => None,
             Certificate::Revocation(r) => Some(r),
@@ -49,19 +53,19 @@ impl Certificate {
     }
 }
 
-impl From<Delegation> for Certificate {
+impl<C> From<Delegation> for Certificate<C> {
     fn from(d: Delegation) -> Self {
         Certificate::Delegation(d)
     }
 }
 
-impl From<Revocation> for Certificate {
-    fn from(r: Revocation) -> Self {
+impl<C> From<Revocation<C>> for Certificate<C> {
+    fn from(r: Revocation<C>) -> Self {
         Certificate::Revocation(r)
     }
 }
 
-impl Verifiable for Certificate {
+impl<C> Verifiable for Certificate<C> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.issuer().verifying_key()
     }
@@ -71,7 +75,7 @@ impl Verifiable for Certificate {
 const TAG_DELEGATION: u8 = 0;
 const TAG_REVOCATION: u8 = 1;
 
-impl Encode for Certificate {
+impl<C: Encode> Encode for Certificate<C> {
     fn encode_into(&self, out: &mut Vec<u8>) {
         match self {
             Certificate::Delegation(d) => {
@@ -86,7 +90,7 @@ impl Encode for Certificate {
     }
 }
 
-impl Decode for Certificate {
+impl<C: Decode> Decode for Certificate<C> {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         let (tag, rest) = bytes.split_first().ok_or(DecodeError::UnexpectedEnd)?;
         match *tag {
@@ -101,17 +105,26 @@ impl Decode for Certificate {
 mod tests {
     use super::*;
 
+    /// Variable-length, to exercise the `keep` codec through the wrapper.
+    type Keep = Vec<u8>;
+
     #[test]
     fn empty_and_bad_tag() {
-        assert_eq!(Certificate::decode(&[]), Err(DecodeError::UnexpectedEnd));
-        assert_eq!(Certificate::decode(&[7]), Err(DecodeError::InvalidTag(7)));
+        assert_eq!(
+            Certificate::<Keep>::decode(&[]),
+            Err(DecodeError::UnexpectedEnd)
+        );
+        assert_eq!(
+            Certificate::<Keep>::decode(&[7]),
+            Err(DecodeError::InvalidTag(7))
+        );
     }
 
     #[test]
     #[cfg(feature = "arbitrary")]
     fn codec_laws() {
         bolero::check!()
-            .with_arbitrary::<Certificate>()
+            .with_arbitrary::<Certificate<Keep>>()
             .for_each(|c| {
                 let encoded = c.encode();
                 let decoded = Certificate::decode(encoded.as_bytes()).expect("round trip");
@@ -123,7 +136,7 @@ mod tests {
     #[test]
     fn decode_is_canonical() {
         bolero::check!().with_type::<Vec<u8>>().for_each(|bytes| {
-            if let Ok(c) = Certificate::decode(bytes) {
+            if let Ok(c) = Certificate::<Keep>::decode(bytes) {
                 assert_eq!(c.encode().as_bytes(), bytes.as_slice());
             }
         });

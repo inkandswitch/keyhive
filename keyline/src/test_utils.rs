@@ -11,7 +11,7 @@ use crate::{
     signed::{Signed, Verified},
 };
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
-use keyhive_codec::traits::Encode;
+use keyhive_codec::traits::{Decode, Encode};
 
 /// A deterministic signing key derived from a small integer.
 pub fn signing_key(n: u8) -> SigningKey {
@@ -28,7 +28,7 @@ pub fn id(n: u8) -> Id {
 /// The signature is all zeros and is never checked: [`Verified::assume`] exists
 /// so that graph tests do not pay for Ed25519. Use [`signed`] where the
 /// production path matters.
-pub fn cert<C: Into<Certificate>>(cert: C) -> Verified<Certificate> {
+pub fn cert<C: Encode + Decode, X: Into<Certificate<C>>>(cert: X) -> Verified<Certificate<C>> {
     let cert = cert.into();
     Verified::assume(Signed::from_parts(
         cert.encode(),
@@ -41,7 +41,7 @@ pub fn cert<C: Into<Certificate>>(cert: C) -> Verified<Certificate> {
 ///
 /// The issuer must be one of the fixture identities (`id(n)`), so its signing
 /// key is `signing_key(n)`.
-pub fn signed<C: Into<Certificate>>(cert: C) -> Verified<Certificate> {
+pub fn signed<C: Encode + Decode, X: Into<Certificate<C>>>(cert: X) -> Verified<Certificate<C>> {
     let cert = cert.into();
     let key = (0..=u8::MAX)
         .map(signing_key)
