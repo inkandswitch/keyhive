@@ -8,8 +8,8 @@
 //! `cites` collisions and heals both occur.
 
 use crate::{
-    power::Power, certificate::Certificate, delegation::Delegation, id::Id,
-    revocation::Revocation, test_utils::id,
+    certificate::Certificate, delegation::Delegation, id::Id, power::Power, revocation::Revocation,
+    test_utils::id,
 };
 use alloc::vec::Vec;
 use arbitrary::{Arbitrary, Result, Unstructured};

@@ -70,7 +70,7 @@ The set of operations is grow-only and merges by set union. A revocation is a ne
 Relay < Read < Edit < Admin
 ```
 
-A delegation's level MUST be at or below its proof's level. `Relay`, `Read`, and `Edit` are conveyance levels: what may travel along the edge. `Admin` is the governance level: authority over the graph itself. The [glossary](./glossary.md#authority) lists what each level permits.
+A delegation's level MUST be at or below its proof's level. `Relay`, `Read`, and `Edit` govern data: what may travel along the edge. `Admin` is the sole governance level: authority over the graph itself. The [glossary](./glossary.md#authority) lists what each level permits.
 
 ### Evaluation
 

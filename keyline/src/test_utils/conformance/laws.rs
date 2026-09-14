@@ -12,7 +12,7 @@ use super::{
     TestContent,
 };
 use crate::{
-    power::Power, certificate::Certificate, delegation::Delegation, id::Id, keyline::Keyline,
+    certificate::Certificate, delegation::Delegation, id::Id, keyline::Keyline, power::Power,
     test_utils::cert,
 };
 use alloc::{
@@ -218,7 +218,9 @@ pub mod naive {
             }
         }
 
-        let levels = level(&f, &none, &|x| live.contains(x), &|x, d| cap[x].min(d.power));
+        let levels = level(&f, &none, &|x| live.contains(x), &|x, d| {
+            cap[x].min(d.power)
+        });
         Evaluation { live, levels }
     }
 }

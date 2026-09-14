@@ -45,13 +45,13 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
-pub mod power;
 pub mod certificate;
 pub mod collections;
 pub mod delegation;
 pub mod id;
 pub mod keyline;
 pub mod memory;
+pub mod power;
 pub mod revocation;
 pub mod signed;
 

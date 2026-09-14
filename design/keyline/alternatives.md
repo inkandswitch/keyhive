@@ -4,23 +4,23 @@ Design choices that were considered and rejected, with the reason and the condit
 
 ## Certificate Shape
 
-### A `sub` (jurisdiction) field on `Revocation`
+### A `subject` (jurisdiction) field on `Revocation`
 
-_Proposal._ `{iss, sub, revoke}`: the cut applies only on routes through `sub`, not through every node in the issuer's admin reach. Earlier drafts called the field `from`, then `via`.
+_Proposal._ `{issuer, subject, revoke}`: the cut applies only on routes through `subject`, not through every node in the issuer's admin reach. Earlier drafts called the field `from`, then `via`.
 
 _Would buy._ Narrow denial with one key (ban in room A, keep in room B). Legibility: the certificate names where the act was exercised. Symmetry with `Delegation`. A one-node exclusion set per revocation.
 
 _Rejected because._ Rotation would re-sign the deny list. A cut pinned to `Members` does not cover `Members′` after rotation, so every standing denial must be re-issued after every rotation, forever. Under admin-reach scoping a surviving admin's admin reach grows as they are re-rostered, and their old cuts follow automatically; the griefer's admin reach froze, so theirs do not. The explicit field taxes the honest admin on the routine path (rotation is the recommended hygiene) to buy flexibility on a rare one. It also introduces an inert-by-mistake state (naming a node the target never routes through) that admin-reach scoping cannot produce, and it is the narrower of the two denials where the design resolves ambiguity toward less authority. Narrow denial is available today by signing with a capacity key per role administered.
 
-_Reopen if._ Narrow denial turns out to be common. The compatible extension is `sub: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the [`seen`](#a-random-nonce-instead-of-seen) invariant carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations--collapsed-into-the-issuer).
+_Reopen if._ Narrow denial turns out to be common. The compatible extension is `subject: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the [`cites`](#a-random-nonce-instead-of-cites) invariant carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations--collapsed-into-the-issuer).
 
-### A random nonce instead of `seen`
+### A random nonce instead of `cites`
 
-_Proposal._ Replace `seen: Option<Digest<Revocation>>` with random bytes so an issuer need not know which revoked certificate it is re-issuing past.
+_Proposal._ Replace `cites: Option<Digest<Revocation>>` with random bytes so an issuer need not know which revoked certificate it is re-issuing past.
 
 _Would buy._ No silent-collision UX; no dependency on having synced the revocation.
 
-_Rejected because._ It flips the fail direction. Two accidental issuances of one grant become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering grant. With `seen`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take. The collision is detectable: `insert` returns `false` and `revocations_naming` reports what named the duplicate. Long form: [edge-cases, `nonce` vs `seen`](edge-cases.md#nonce-vs-seen--seen-won-on-fail-direction) and [implementation, why `seen`](implementation.md#why-seen-and-not-a-nonce).
+_Rejected because._ It flips the fail direction. Two accidental issuances of one grant become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering grant. With `cites`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take. The collision is detectable: `insert` returns `false` and `revocations_naming` reports what named the duplicate. Long form: [edge-cases, `nonce` vs `cites`](edge-cases.md#nonce-vs-cites--cites-won-on-fail-direction) and [implementation, why `cites`](implementation.md#why-cites-and-not-a-nonce).
 
 _Reopen if._ Never on its own merits; only if a use case needs many live copies of one grant, which would be a different feature.
 
@@ -38,21 +38,21 @@ _Reopen if._ Verification without the set becomes a hard requirement (e.g. a con
 
 _Proposal._ Name the capacity a delegation is exercised in.
 
-_Rejected because._ Every job it did is an arrangement of nodes: scoping is `sub`, acting in a capacity is a dedicated key per capacity, pinning is a sub-scoped intermediary, jurisdiction-narrow denial is signing with the narrow key. An optional field whose absence aliased "the issuer" produced two encodings for one act, two hashes, and a revocation that killed one twin and missed the other. Long form: [edge-cases, `from` on delegations](edge-cases.md#from-on-delegations--eliminated).
+_Rejected because._ Every job it did is an arrangement of nodes: scoping is `subject`, acting in a capacity is a dedicated key per capacity, pinning is a subject-scoped intermediary, jurisdiction-narrow denial is signing with the narrow key. An optional field whose absence aliased "the issuer" produced two encodings for one act, two hashes, and a revocation that killed one twin and missed the other. Long form: [edge-cases, `from` on delegations](edge-cases.md#from-on-delegations--eliminated).
 
 _Reopen if._ A capacity cannot be expressed as a node. None found so far.
 
 ### Revocations that target revocations
 
-_Proposal._ Let `revoke` name a `Digest<Revocation>` so a mistaken denial can be undone.
+_Proposal._ Let `revokes` name a `Digest<Revocation>` so a mistaken denial can be undone.
 
-_Rejected because._ It starts the regress (who may revoke the un-revocation?), requires an authority rule for un-revokers, and needs an ordering to settle revoke/un-revoke/re-revoke races — causal metadata or merge-order dependence. Repair is by re-grant with `seen`: access returns because live authority signed something new, never because a denial was un-applied. Declining the feature costs one workflow and deletes the tower. Long form: [README, Revocations Cannot Be Revoked](README.md#revocations-cannot-be-revoked).
+_Rejected because._ It starts the regress (who may revoke the un-revocation?), requires an authority rule for un-revokers, and needs an ordering to settle revoke/un-revoke/re-revoke races — causal metadata or merge-order dependence. Repair is by re-grant with `cites`: access returns because live authority signed something new, never because a denial was un-applied. Declining the feature costs one workflow and deletes the tower. Long form: [README, Revocations Cannot Be Revoked](README.md#revocations-cannot-be-revoked).
 
 _Reopen if._ Never; the invariant "no merge may un-apply a denial" depends on it.
 
 ### An adoption certificate
 
-_Proposal._ A third kind, `{iss, adopt: Digest<Delegation>}`: the named delegation is live if the adopter has live authority at or above its `can` over its `sub`, regardless of the original issuer's standing. Keeps the original certificate alive under a new sponsor.
+_Proposal._ A third kind, `{issuer, adopt: Digest<Delegation>}`: the named delegation is live if the adopter has live authority at or above its `power` over its `subject`, regardless of the original issuer's standing. Keeps the original certificate alive under a new sponsor.
 
 _Would buy._ Persistence of a grant past its issuer's removal while preserving the original's hash and provenance.
 
@@ -80,7 +80,7 @@ _Reopen if._ Never in this consistency model.
 
 ### Admin-only delegation
 
-_Proposal._ Only holders of `Admin` over `sub` may issue delegations; edges issued by `Read`/`Edit`/`Relay` holders are never live.
+_Proposal._ Only holders of `Admin` over `subject` may issue delegations; edges issued by `Read`/`Edit`/`Relay` holders are never live.
 
 _Would buy._ Every roster change is an admin act; a cleaner governance story.
 
@@ -124,7 +124,7 @@ _Reopen if._ Never.
 
 ### Gated-only levels on covered edges
 
-_Proposal._ A covered delegation is live iff some derivation to its issuer avoids the covered nodes, and then conveys `min(can, issuer's global level)`. The avoiding derivation decides existence only.
+_Proposal._ A covered delegation is live iff some derivation to its issuer avoids the covered nodes, and then conveys `min(power, issuer's global level)`. The avoiding derivation decides existence only.
 
 _Would buy._ One widest-path pass for levels; exclusion-set searches return a boolean.
 
@@ -144,17 +144,17 @@ _Reopen if._ A polynomial algorithm for the ordered forbidden-pairs case turns u
 
 ### Direct (last-hop) admin reach
 
-_Proposal._ `admin_reach(k, n)` only when the last hop of `k`'s Admin standing over `n` is an edge _about_ `n` (`sub: n`); Admin inherited through a role does not count.
+_Proposal._ `admin_reach(k, n)` only when the last hop of `k`'s Admin standing over `n` is an edge _about_ `n` (`subject: n`); Admin inherited through a role does not count.
 
 _Would buy._ An Admin-rooted document's root edge is undeniable by construction: apex admins hold `Owners`, never `Doc`. Reach is answerable from a node's own certificates.
 
-_Rejected because._ Nested roles stop working as governance expects: an Admin of `Owners`, where `Owners` is Admin over `Members`, could not cut inside `Members` without a separate `sub: Members` grant. And the protection it buys is one self-signed certificate from false: an apex admin signs `{iss: me, aud: me, sub: Doc, can: Admin}` (their standing over `Doc` is Admin, so the grant is direct) and `Doc` is in their reach permanently. Composed reach makes the rule uniform, and the same protection is available as a pattern with no rule: root the document at Edit ([patterns, Rooting Level](patterns.md#rooting-level)). Bricking an Admin-rooted document is not a new power — a root admin can already eject every peer and lose their key.
+_Rejected because._ Nested roles stop working as governance expects: an Admin of `Owners`, where `Owners` is Admin over `Members`, could not cut inside `Members` without a separate `subject: Members` grant. And the protection it buys is one self-signed certificate from false: an apex admin signs `{issuer: me, audience: me, subject: Doc, power: Admin}` (their standing over `Doc` is Admin, so the grant is direct) and `Doc` is in their reach permanently. Composed reach makes the rule uniform, and the same protection is available as a pattern with no rule: root the document at Edit ([patterns, Rooting Level](patterns.md#rooting-level)). Bricking an Admin-rooted document is not a new power — a root admin can already eject every peer and lose their key.
 
 _Reopen if._ Never on the protection argument; possibly if a use case needs reach to be locally computable per node.
 
 ### Root edges answer only to the subject key
 
-_Proposal._ Keep composed reach but exempt root edges (`iss = sub`) from third-party coverage: the subject's own node is excluded from a derivation only when the revoker is the subject itself.
+_Proposal._ Keep composed reach but exempt root edges (`issuer = subject`) from third-party coverage: the subject's own node is excluded from a derivation only when the revoker is the subject itself.
 
 _Would buy._ Undeniable root edges for every rooting level; re-rooting with a retained key always escapes old admins.
 

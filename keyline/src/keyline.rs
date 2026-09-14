@@ -7,7 +7,7 @@
 //! proves that.
 
 use crate::{
-    power::Power, certificate::Certificate, delegation::Delegation, id::Id,
+    certificate::Certificate, delegation::Delegation, id::Id, power::Power,
     revocation::RevocationId, signed::Verified,
 };
 use alloc::{

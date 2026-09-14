@@ -5,12 +5,12 @@
 //! role in the clamping example; the rest are people.
 
 use super::{
-    power, build, d, r, ALICE, BOB, CAROL, DAN, DOC, EVE, FRANK, MEMBERS, MODS, OTHER_DOC, OWNERS,
+    build, d, power, r, ALICE, BOB, CAROL, DAN, DOC, EVE, FRANK, MEMBERS, MODS, OTHER_DOC, OWNERS,
 };
 use crate::{
-    power::Power,
     delegation::Delegation,
     keyline::Keyline,
+    power::Power,
     revocation::Revocation,
     test_utils::{cert, id, signed},
 };

@@ -17,10 +17,10 @@ pub mod laws;
 pub mod scenarios;
 
 use crate::{
-    power::Power,
     certificate::Certificate,
     delegation::Delegation,
     keyline::Keyline,
+    power::Power,
     revocation::Revocation,
     test_utils::{cert, id},
 };
