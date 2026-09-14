@@ -1,6 +1,6 @@
 //! Delegations: signed edges granting an access level over a subject.
 
-use crate::{access::Access, id::Id, revocation::Revocation};
+use crate::{access::Access, id::Id, revocation::RevocationId};
 use alloc::vec::Vec;
 use keyhive_codec::{
     error::DecodeError,
@@ -56,7 +56,7 @@ pub struct Delegation {
     pub can: Access,
 
     /// The revocation this delegation is re-issued past. Ignored by evaluation.
-    pub seen: Option<Digest<Revocation>>,
+    pub seen: Option<Digest<RevocationId>>,
 }
 
 impl Delegation {
@@ -72,14 +72,14 @@ impl Delegation {
     }
 
     /// Re-issue this delegation past a revocation, giving it a fresh hash.
-    pub fn reissue(self, seen: Digest<Revocation>) -> Self {
+    pub fn reissue(self, seen: Digest<RevocationId>) -> Self {
         Delegation {
             seen: Some(seen),
             ..self
         }
     }
 
-    /// Content address of the payload: what a [`Revocation`] names.
+    /// Content address of the payload: what a [`crate::revocation::Revocation`] names.
     ///
     /// This is the digest of the delegation's own encoding, not of the
     /// [`crate::certificate::Certificate`] wrapper (which carries a kind tag).

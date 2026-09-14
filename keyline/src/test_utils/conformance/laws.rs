@@ -9,10 +9,11 @@
 use super::{
     build,
     gen::{ids, CertSet},
+    TestContent,
 };
 use crate::{
     access::Access, certificate::Certificate, delegation::Delegation, id::Id, keyline::Keyline,
-    revocation::Revocation, test_utils::cert,
+    test_utils::cert,
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -28,7 +29,10 @@ pub struct Observed {
     pub live: BTreeSet<Digest<Delegation>>,
 }
 
-pub fn observe<K: Keyline>(k: &K, set: &CertSet) -> Observed {
+pub fn observe<K: Keyline>(k: &K, set: &CertSet<K::Content>) -> Observed
+where
+    K::Content: TestContent,
+{
     let levels = ids()
         .flat_map(|s| ids().map(move |x| (s, x)))
         .filter_map(|(s, x)| k.effective_access(s, x).map(|l| ((s, x), l)))
@@ -58,7 +62,9 @@ pub mod naive {
     struct Facts {
         nodes: BTreeSet<Id>,
         dels: BTreeMap<Digest<Delegation>, Delegation>,
-        revs: Vec<Revocation>,
+        // Issuer and target only: `keep` has no bearing on authority, so the
+        // oracle cannot read it even by accident.
+        revs: Vec<(Id, Digest<Delegation>)>,
     }
 
     fn raise(m: &mut Levels, key: (Id, Id), l: Access) -> bool {
@@ -116,7 +122,7 @@ pub mod naive {
         }
     }
 
-    fn facts(set: &CertSet) -> Facts {
+    fn facts<C>(set: &CertSet<C>) -> Facts {
         let mut nodes: BTreeSet<Id> = ids().collect();
         let mut dels = BTreeMap::new();
         let mut revs = Vec::new();
@@ -128,7 +134,7 @@ pub mod naive {
                 }
                 Certificate::Revocation(r) => {
                     nodes.insert(r.iss);
-                    revs.push(*r);
+                    revs.push((r.iss, r.revoke));
                 }
             }
         }
@@ -136,12 +142,12 @@ pub mod naive {
     }
 
     /// Stratum 1 alone: `reaches` over the pool, blind to revocations.
-    pub fn reaches(set: &CertSet) -> Levels {
+    pub fn reaches<C>(set: &CertSet<C>) -> Levels {
         level(&facts(set), &BTreeSet::new(), &|_| true, &|_, d| d.can)
     }
 
     /// Both strata: the live set (LFP) and caps (GFP), then the live levels.
-    pub fn evaluate(set: &CertSet) -> Evaluation {
+    pub fn evaluate<C>(set: &CertSet<C>) -> Evaluation {
         let f = facts(set);
         let none = BTreeSet::new();
 
@@ -157,14 +163,17 @@ pub mod naive {
             s
         };
         let mut covered: BTreeMap<Digest<Delegation>, BTreeSet<Id>> = BTreeMap::new();
-        for r in &f.revs {
+        for (iss, revoke) in &f.revs {
             covered
-                .entry(r.revoke)
+                .entry(*revoke)
                 .or_default()
-                .extend(admin_reach(r.iss));
+                .extend(admin_reach(*iss));
         }
-        let renounced =
-            |h: &Digest<Delegation>, aud: Id| f.revs.iter().any(|r| r.revoke == *h && r.iss == aud);
+        let renounced = |h: &Digest<Delegation>, aud: Id| {
+            f.revs
+                .iter()
+                .any(|(iss, revoke)| revoke == h && *iss == aud)
+        };
 
         let mut live: BTreeSet<Digest<Delegation>> = BTreeSet::new();
         loop {
@@ -216,13 +225,16 @@ pub mod naive {
 
 /// Without revocations, `effective_access` is exactly stratum 1, and every
 /// delegation whose issuer reaches its subject is live.
-pub fn matches_naive_oracle_without_revocations<K: Keyline + Default>() {
+pub fn matches_naive_oracle_without_revocations<K: Keyline + Default>()
+where
+    K::Content: TestContent,
+{
     bolero::check!()
-        .with_arbitrary::<CertSet>()
+        .with_arbitrary::<CertSet<K::Content>>()
         .for_each(|set| {
             let set = set.without_revocations();
             let expected = naive::reaches(&set);
-            let k: K = build(set.certs.iter().copied());
+            let k: K = build(set.certs.iter().cloned());
 
             for s in ids() {
                 for x in ids() {
@@ -246,12 +258,15 @@ pub fn matches_naive_oracle_without_revocations<K: Keyline + Default>() {
 /// With revocations, every query agrees with the normative program: admin
 /// reach, coverage, the live set as a least fixed point with renunciation,
 /// and clamped levels.
-pub fn matches_naive_oracle_with_revocations<K: Keyline + Default>() {
+pub fn matches_naive_oracle_with_revocations<K: Keyline + Default>()
+where
+    K::Content: TestContent,
+{
     bolero::check!()
-        .with_arbitrary::<CertSet>()
+        .with_arbitrary::<CertSet<K::Content>>()
         .for_each(|set| {
             let expected = naive::evaluate(set);
-            let k: K = build(set.certs.iter().copied());
+            let k: K = build(set.certs.iter().cloned());
 
             for s in ids() {
                 for x in ids() {
@@ -273,11 +288,14 @@ pub fn matches_naive_oracle_with_revocations<K: Keyline + Default>() {
 }
 
 /// Any insertion order gives the same answers and the same digest.
-pub fn order_independent<K: Keyline + Default>() {
+pub fn order_independent<K: Keyline + Default>()
+where
+    K::Content: TestContent,
+{
     bolero::check!()
-        .with_arbitrary::<(CertSet, Vec<u8>)>()
+        .with_arbitrary::<(CertSet<K::Content>, Vec<u8>)>()
         .for_each(|(set, keys)| {
-            let a: K = build(set.certs.iter().copied());
+            let a: K = build(set.certs.iter().cloned());
             let b: K = build(set.permuted(keys).certs);
             assert_eq!(a.digest(), b.digest());
             assert_eq!(observe(&a, set), observe(&b, set));
@@ -288,25 +306,31 @@ pub fn order_independent<K: Keyline + Default>() {
 }
 
 /// Inserting a certificate already present returns `false` and changes nothing.
-pub fn idempotent<K: Keyline + Default>() {
+pub fn idempotent<K: Keyline + Default>()
+where
+    K::Content: TestContent,
+{
     bolero::check!()
-        .with_arbitrary::<CertSet>()
+        .with_arbitrary::<CertSet<K::Content>>()
         .for_each(|set| {
-            let mut k: K = build(set.certs.iter().copied());
+            let mut k: K = build(set.certs.iter().cloned());
             let before = (k.digest(), observe(&k, set));
             for c in &set.certs {
-                assert!(!k.insert(cert(*c)));
+                assert!(!k.insert(cert(c.clone())));
             }
             assert_eq!((k.digest(), observe(&k, set)), before);
         });
 }
 
 /// Adding a revocation never raises any level and never revives a delegation.
-pub fn revocations_only_deny<K: Keyline + Default>() {
+pub fn revocations_only_deny<K: Keyline + Default>()
+where
+    K::Content: TestContent,
+{
     bolero::check!()
-        .with_arbitrary::<CertSet>()
+        .with_arbitrary::<CertSet<K::Content>>()
         .for_each(|set| {
-            let with: K = build(set.certs.iter().copied());
+            let with: K = build(set.certs.iter().cloned());
             let after = observe(&with, set);
 
             let revocations: Vec<usize> = set
@@ -336,11 +360,14 @@ pub fn revocations_only_deny<K: Keyline + Default>() {
 
 /// `digest` is a function of the set: same set (any order), same digest;
 /// dropping any certificate changes it.
-pub fn digest_identifies_the_set<K: Keyline + Default>() {
+pub fn digest_identifies_the_set<K: Keyline + Default>()
+where
+    K::Content: TestContent,
+{
     bolero::check!()
-        .with_arbitrary::<(CertSet, Vec<u8>)>()
+        .with_arbitrary::<(CertSet<K::Content>, Vec<u8>)>()
         .for_each(|(set, keys)| {
-            let a: K = build(set.certs.iter().copied());
+            let a: K = build(set.certs.iter().cloned());
             let b: K = build(set.permuted(keys).certs);
             assert_eq!(a.digest(), b.digest());
 
@@ -363,11 +390,14 @@ pub fn digest_identifies_the_set<K: Keyline + Default>() {
 
 /// Every node is Admin over itself; `members` is exactly `effective_access`
 /// minus the subject; `contains` agrees with what was inserted.
-pub fn queries_are_consistent<K: Keyline + Default>() {
+pub fn queries_are_consistent<K: Keyline + Default>()
+where
+    K::Content: TestContent,
+{
     bolero::check!()
-        .with_arbitrary::<CertSet>()
+        .with_arbitrary::<CertSet<K::Content>>()
         .for_each(|set| {
-            let k: K = build(set.certs.iter().copied());
+            let k: K = build(set.certs.iter().cloned());
             for s in ids() {
                 assert_eq!(k.effective_access(s, s), Some(Access::Admin));
                 let members = k.members(s);
@@ -377,7 +407,7 @@ pub fn queries_are_consistent<K: Keyline + Default>() {
                 }
             }
             for c in &set.certs {
-                assert!(k.contains(&cert(*c).digest()));
+                assert!(k.contains(&cert(c.clone()).digest()));
                 if let Some(d) = c.as_delegation() {
                     let naming = k.revocations_naming(&d.digest());
                     let expected: BTreeSet<_> = set

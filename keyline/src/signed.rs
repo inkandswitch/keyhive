@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn works_for_certificates() {
-        let cert = Certificate::from(sample());
+        let cert = Certificate::<()>::from(sample());
         let verified = Signed::try_sign(&cert, &signing_key(1))
             .expect("key is the issuer")
             .verify()
@@ -344,7 +344,7 @@ mod tests {
     #[cfg(feature = "arbitrary")]
     fn sign_verify_round_trip_property() {
         bolero::check!()
-            .with_arbitrary::<(Certificate, [u8; 32])>()
+            .with_arbitrary::<(Certificate<alloc::vec::Vec<u8>>, [u8; 32])>()
             .for_each(|(cert, seed)| {
                 // Re-issue the certificate under the generated key so it is signable.
                 let key = SigningKey::from(*seed);
@@ -352,7 +352,7 @@ mod tests {
                 let cert = match cert {
                     Certificate::Delegation(d) => Certificate::Delegation(Delegation { iss, ..*d }),
                     Certificate::Revocation(r) => {
-                        Certificate::Revocation(crate::revocation::Revocation { iss, ..*r })
+                        Certificate::Revocation(crate::revocation::Revocation { iss, ..r.clone() })
                     }
                 };
                 let verified = Signed::try_sign(&cert, &key)

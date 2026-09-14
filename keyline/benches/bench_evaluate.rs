@@ -33,11 +33,11 @@ const FIRST_HUMAN: u8 = 10;
 const LADDER_LEAF: u8 = 250;
 const LATE_JOINER: u8 = 251;
 
-fn d(iss: u8, aud: u8, sub: u8, can: Access) -> Certificate {
+fn d(iss: u8, aud: u8, sub: u8, can: Access) -> Certificate<()> {
     Delegation::new(id(iss), id(aud), id(sub), can).into()
 }
 
-fn build<I: IntoIterator<Item = Certificate>>(certs: I) -> MemoryKeyline {
+fn build<I: IntoIterator<Item = Certificate<()>>>(certs: I) -> MemoryKeyline {
     let mut g = MemoryKeyline::new();
     for c in certs {
         g.insert(cert(c));
