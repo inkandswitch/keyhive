@@ -148,6 +148,11 @@ impl NodeKey {
         }
     }
 
+    /// Whether this node carries more than one concurrently written key.
+    pub fn has_conflict(&self) -> bool {
+        matches!(self, Self::ConflictKeys(_))
+    }
+
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         match self {

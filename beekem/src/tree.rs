@@ -542,9 +542,23 @@ impl BeeKem {
         }
     }
 
+    /// Whether a node is excluded from its sibling's resolution.
+    ///
+    /// A node is skipped when it is blank or carries conflicting keys, for
+    /// both leaves and inner nodes. A conflicted leaf is easy to miss: it is
+    /// not blank, so it would otherwise be resolved as a single `ShareKey`
+    /// and panic in `encrypt_new_secret_store_for_parent`. Conflicted nodes
+    /// are deferred to the next covering update instead — see
+    /// `maybe_decrypt_parent_key`, which treats them the same way.
     fn should_skip_for_resolution(&self, idx: TreeNodeIndex) -> bool {
         match idx {
-            TreeNodeIndex::Leaf(_) => self.is_blank(idx),
+            TreeNodeIndex::Leaf(l_idx) => {
+                self.is_blank(idx)
+                    || self
+                        .leaf(l_idx)
+                        .as_ref()
+                        .is_some_and(|leaf| leaf.pk.has_conflict())
+            }
             TreeNodeIndex::Inner(i_idx) => self
                 .inner_node(i_idx)
                 .as_ref()

@@ -807,4 +807,90 @@ mod concurrent_update_conflict_tests {
             .await
             .expect("rotation after concurrent grants must resolve conflicted siblings");
     }
+
+    /// A *leaf* can also be conflicted, and unlike a conflicted inner node it
+    /// is not blank: two concurrent `Update`s for the same member write
+    /// different keys to the same leaf, and `BeeKem::apply_path` merges them
+    /// into `NodeKey::ConflictKeys` on that leaf. A later rotation whose path
+    /// has that leaf as a sibling then walks it into the sibling resolution.
+    ///
+    /// This is the shape the document CGKA takes in production: the owner is
+    /// the group principal, whose share secret keys every writer holds, so two
+    /// writers rotating the same document from the same epoch produce exactly
+    /// these two concurrent updates for one member.
+    #[tokio::test]
+    async fn rotation_after_same_member_concurrent_updates_resolves_conflicted_leaf() {
+        let mut rng = StdRng::seed_from_u64(0xF00D);
+        let signer_a = MemorySigner::generate(&mut rng);
+        let signer_b = MemorySigner::generate(&mut rng);
+        let id_a = MemberId(signer_a.verifying_key());
+        let id_b = MemberId(signer_b.verifying_key());
+        let sk_a = ShareSecretKey::generate(&mut rng);
+        let pk_a = sk_a.share_key();
+        let sk_b = ShareSecretKey::generate(&mut rng);
+        let pk_b = sk_b.share_key();
+        let doc_id = TreeId(signer_a.verifying_key());
+
+        // A founds the group and adds B.
+        let mut cgka_a = Cgka::new::<Sendable, _>(doc_id, id_a, pk_a, &signer_a)
+            .await
+            .expect("init cgka a");
+        let add_b = cgka_a
+            .add::<Sendable, _>(id_b, pk_b, &signer_a)
+            .await
+            .expect("add b")
+            .expect("b was not yet a member");
+
+        // B replays the group from A's init add, then learns of its own add,
+        // then owns its own leaf. Note the init add is seeded with *A*'s id: it
+        // is the op that adds A, so seeding it with B would leave B as the sole
+        // member and `apply_path` would silently skip every update for A.
+        let mut cgka_b =
+            Cgka::new_from_init_add(doc_id, id_a, pk_a, cgka_a.init_add_op())
+                .expect("init cgka b from a's init add");
+        cgka_b
+            .merge_concurrent_operation(Arc::new(add_b))
+            .expect("b merges its own add");
+        cgka_b = cgka_b
+            .with_new_owner(id_b, super::ShareKeyMap::new())
+            .expect("b owns its own leaf");
+
+        // Two rotations for the *same* member (A) from the identical
+        // pre-state, so A's leaf ends up with two candidate keys.
+        let mut cgka_a_fork = cgka_a.clone();
+        let usk_a1 = ShareSecretKey::generate(&mut rng);
+        let (_, op_a1) = cgka_a
+            .update::<Sendable, _, _>(usk_a1.share_key(), usk_a1, &signer_a, &mut rng)
+            .await
+            .expect("a's first concurrent update");
+        let usk_a2 = ShareSecretKey::generate(&mut rng);
+        let (_, op_a2) = cgka_a_fork
+            .update::<Sendable, _, _>(usk_a2.share_key(), usk_a2, &signer_a, &mut rng)
+            .await
+            .expect("a's second concurrent update");
+
+        // Merge both into B: A's leaf now holds two candidate keys.
+        cgka_b
+            .merge_concurrent_operation(Arc::new(op_a1))
+            .expect("merge a's first update into b");
+        cgka_b
+            .merge_concurrent_operation(Arc::new(op_a2))
+            .expect("merge a's second update into b");
+        let a_leaf_key = cgka_b
+            .tree
+            .node_key_for_id(id_a)
+            .expect("a's leaf should be present in b's tree");
+        assert!(
+            matches!(a_leaf_key, crate::keys::NodeKey::ConflictKeys(_)),
+            "precondition: a's leaf must be conflicted, got {a_leaf_key:?}"
+        );
+
+        // B rotates. A's conflicted leaf is the sibling of B's leaf, so the
+        // rotation must skip it rather than panic on a non-`ShareKey` node.
+        let usk_b = ShareSecretKey::generate(&mut rng);
+        cgka_b
+            .update::<Sendable, _, _>(usk_b.share_key(), usk_b, &signer_b, &mut rng)
+            .await
+            .expect("rotation must resolve a conflicted leaf sibling");
+    }
 }
