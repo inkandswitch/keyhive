@@ -148,6 +148,17 @@ impl NodeKey {
         }
     }
 
+    pub fn lowest(&self) -> ShareKey {
+        match self {
+            Self::ShareKey(pk) => *pk,
+            Self::ConflictKeys(keys) => keys
+                .iter()
+                .copied()
+                .min()
+                .expect("ConflictKeys holds at least two keys"),
+        }
+    }
+
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         match self {
