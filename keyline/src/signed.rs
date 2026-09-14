@@ -251,14 +251,14 @@ pub enum VerifyError {
 mod tests {
     use super::*;
     use crate::{
-        access::Access,
+        power::Power,
         certificate::Certificate,
         delegation::Delegation,
         test_utils::{id, signing_key},
     };
 
     fn sample() -> Delegation {
-        Delegation::new(id(1), id(2), id(3), Access::Edit)
+        Delegation::new(id(1), id(2), id(3), Power::Edit)
     }
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn signer_must_be_the_payload_issuer() {
         let forger = signing_key(2);
-        let encoded = sample().encode(); // iss = id(1)
+        let encoded = sample().encode(); // issuer = id(1)
         let signature = forger.sign(encoded.as_bytes());
         let forged = Signed::<Delegation>::from_parts(encoded, signature);
         assert_eq!(forged.verify().unwrap_err(), VerifyError::BadSignature);
@@ -348,11 +348,11 @@ mod tests {
             .for_each(|(cert, seed)| {
                 // Re-issue the certificate under the generated key so it is signable.
                 let key = SigningKey::from(*seed);
-                let iss = Id::new(key.verifying_key());
+                let issuer = Id::new(key.verifying_key());
                 let cert = match cert {
-                    Certificate::Delegation(d) => Certificate::Delegation(Delegation { iss, ..*d }),
+                    Certificate::Delegation(d) => Certificate::Delegation(Delegation { issuer, ..*d }),
                     Certificate::Revocation(r) => {
-                        Certificate::Revocation(crate::revocation::Revocation { iss, ..r.clone() })
+                        Certificate::Revocation(crate::revocation::Revocation { issuer, ..r.clone() })
                     }
                 };
                 let verified = Signed::try_sign(&cert, &key)
@@ -360,7 +360,7 @@ mod tests {
                     .verify()
                     .expect("verifies");
                 assert_eq!(verified.payload(), &cert);
-                assert_eq!(verified.issuer(), iss);
+                assert_eq!(verified.issuer(), issuer);
             });
     }
 }
