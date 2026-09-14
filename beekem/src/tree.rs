@@ -34,10 +34,14 @@ pub struct PathChange {
 /// BeeKEM is our variant of the [TreeKEM] protocol (used in [MLS]) and inspired by
 /// [Matthew Weidner's Causal TreeKEM][Causal TreeKEM]. The distinctive
 /// feature of BeeKEM is that when merging concurrent updates, we keep all concurrent
-/// public keys at any node where there is a conflict (until they are overwritten by
-/// a future update along that path). The conflict keys are used to ensure
+/// public keys at any inner node where there is a conflict (until they are overwritten
+/// by a future update along that path). The conflict keys are used to ensure
 /// that a passive adversary needs all of the historical secret keys at
 /// one of the leaves in order to read the latest root secret after a merge.
+///
+/// Leaves are the exception. A leaf belongs to one identity, so a conflict there is
+/// between two instances of the same member, and it is resolved by keeping the lowest
+/// key so that every instance converges on the same one.
 ///
 /// Leaf nodes represent group members. Each member has a fixed identifier as well
 /// as a public key that is rotated over time. Each inner node stores one or more
@@ -275,7 +279,10 @@ impl BeeKem {
             path: Vec::new(),
             removed_keys: self.node_key_for_id(id)?.keys(),
         };
-        self.insert_leaf_at(leaf_idx, id, NodeKey::ShareKey(pk));
+        // Wait to write into the tree until the whole path has been encrypted so an
+        // error along the way aborts the whole write. Once all encryptions have
+        // succeeded, we write the stores from `new_path` and the new secrets from `new_sks`.
+        let mut new_sks: Vec<(ShareKey, ShareSecretKey)> = Vec::new();
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
         // An encrypter will always have a single public key at each node as it
         // encrypts up its path. At its leaf, it will have written the latest public
@@ -292,8 +299,8 @@ impl BeeKem {
             let new_parent_pk = new_parent_sk.share_key();
             // Hold on to the secret so we can derive the root key later without
             // having to decrypt our own path.
-            sks.insert(new_parent_pk, new_parent_sk);
-            self.encrypt_key_for_parent(
+            new_sks.push((new_parent_pk, new_parent_sk));
+            let secret_store = self.encrypt_new_secret_store_for_parent(
                 child_idx,
                 child_pk,
                 &child_sk,
@@ -301,17 +308,19 @@ impl BeeKem {
                 &new_parent_sk,
                 csprng,
             )?;
-            new_path.path.push((
-                parent_idx.u32(),
-                self.inner_node(parent_idx)
-                    .as_ref()
-                    .expect("Parent node should not be None after encryption")
-                    .clone(),
-            ));
+            new_path.path.push((parent_idx.u32(), secret_store));
             child_idx = parent_idx.into();
             child_pk = new_parent_pk;
             child_sk = new_parent_sk;
             parent_idx = treemath::parent(child_idx);
+        }
+
+        self.insert_leaf_at(leaf_idx, id, NodeKey::ShareKey(pk));
+        for (idx, secret_store) in &new_path.path {
+            self.insert_inner_node_at(InnerNodeIndex::new(*idx), secret_store.clone());
+        }
+        for (new_pk, new_sk) in new_sks {
+            sks.insert(new_pk, new_sk);
         }
         Ok(Some((child_sk.into(), new_path)))
     }
@@ -403,30 +412,6 @@ impl BeeKem {
         Ok(maybe_secret)
     }
 
-    /// Encrypt new secret for parent node.
-    fn encrypt_key_for_parent<R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
-        child_idx: TreeNodeIndex,
-        child_pk: ShareKey,
-        child_sk: &ShareSecretKey,
-        new_parent_pk: ShareKey,
-        new_parent_sk: &ShareSecretKey,
-        csprng: &mut R,
-    ) -> Result<(), CgkaError> {
-        debug_assert!(!self.is_root(child_idx));
-        let parent_idx = treemath::parent(child_idx);
-        let secret_store = self.encrypt_new_secret_store_for_parent(
-            child_idx,
-            child_pk,
-            child_sk,
-            new_parent_pk,
-            new_parent_sk,
-            csprng,
-        )?;
-        self.insert_inner_node_at(parent_idx, secret_store);
-        Ok(())
-    }
-
     /// Build a new [`SecretStore`] for parent node.
     ///
     /// Encrypt the new parent [`ShareSecretKey`] for each member of your sibling
@@ -467,7 +452,7 @@ impl BeeKem {
             for idx in sibling_resolution {
                 let next_pk = match self.node_key_for_index(idx)? {
                     NodeKey::ShareKey(share_key) => share_key,
-                    _ => panic!("Sibling resolution nodes should have exactly one ShareKey"),
+                    NodeKey::ConflictKeys(_) => return Err(CgkaError::UnexpectedKeyConflict),
                 };
                 let encrypted_sk = crate::encrypted::encrypt_secret(
                     self.doc_id.as_bytes(),
@@ -534,8 +519,15 @@ impl BeeKem {
             .expect("Node should not be blank")
     }
 
+    /// Insert `pk` at `idx`, keeping only its lowest key.
+    ///
+    /// Two instances of one identity share a leaf and can rotate it concurrently. Distinct
+    /// instances converge by keeping the lowest key on merge.
     fn insert_leaf_at(&mut self, idx: LeafNodeIndex, id: MemberId, pk: NodeKey) {
-        let leaf = LeafNode { id, pk };
+        let leaf = LeafNode {
+            id,
+            pk: NodeKey::ShareKey(pk.lowest()),
+        };
         self.leaves[idx.usize()] = Some(leaf);
     }
 
