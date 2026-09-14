@@ -52,6 +52,7 @@ use keyhive_crypto::{
 };
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::AtomicU64;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     hash::{Hash, Hasher},
@@ -179,6 +180,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         listener: L,
         signer: &S,
         csprng: Arc<Mutex<R>>,
+        generation: Arc<AtomicU64>,
     ) -> Result<Self, GenerateDocError> {
         let (group_result, group_vk) = {
             let mut locked_csprng = csprng.lock().await;
@@ -194,6 +196,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         initial_content_heads.iter().cloned().collect::<Vec<_>>(),
                     )]),
                     listener,
+                    Arc::clone(&generation),
                 )
             })
         };
@@ -226,6 +229,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         listener: L,
         signer: &S,
         csprng: Arc<Mutex<R>>,
+        generation: Arc<AtomicU64>,
     ) -> Result<Self, GenerateDocError> {
         let group_vk = reserved_signer.verifying_key();
         let group_result = EphemeralSigner::with_signer_key(reserved_signer, |verifier, signer| {
@@ -240,6 +244,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     initial_content_heads.iter().cloned().collect::<Vec<_>>(),
                 )]),
                 listener,
+                    Arc::clone(&generation),
             )
         });
         Self::finish_generate(
@@ -759,6 +764,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
+        generation: Arc<AtomicU64>,
     ) -> Result<Self, MissingIndividualError> {
         Ok(Document {
             group: Group::<F, S, T, L>::dummy_from_archive(
@@ -766,6 +772,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 delegations,
                 revocations,
                 listener,
+                generation,
             ),
             content_heads: archive.content_heads,
             content_state: archive.content_state,

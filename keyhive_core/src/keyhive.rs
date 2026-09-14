@@ -126,6 +126,10 @@ pub struct Keyhive<
     revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
 
     /// [`StaticEvent`]s that are still awaiting dependencies.
+    /// Serializes batch ingestion because applying one event spans multiple
+    /// projection stores and is not atomic at the individual store-lock level.
+    event_ingestion: Arc<Mutex<()>>,
+
     pending_events: Arc<Mutex<Vec<Arc<StaticEvent<T>>>>>,
 
     /// Monotonic projection-generation counter. Bumped by every mutation of
@@ -198,6 +202,13 @@ impl<
         let inner_active = Active::generate(signer, event_listener.clone(), &mut csprng).await?;
         let active_id = inner_active.id();
 
+        // The shared delegation/revocation stores carry a counter, and the hive's
+        // `state_generation` must be the same series: delegations and revocations
+        // are mutated directly through cloned handles on the local-event path, so
+        // a store-private counter would leave derived caches (the advertisement
+        // views peers are served from) unaware that the projection changed.
+        let state_generation = Arc::new(AtomicU64::new(0));
+
         Ok(Self {
             verifying_key,
             individuals: Arc::new(Mutex::new(HashMap::from_iter([
@@ -210,9 +221,14 @@ impl<
             active: Arc::new(Mutex::new(inner_active)),
             groups: Arc::new(Mutex::new(HashMap::new())),
             docs: Arc::new(Mutex::new(HashMap::new())),
-            state_generation: Arc::new(AtomicU64::new(0)),
-            delegations: Arc::new(Mutex::new(DelegationStore::new())),
-            revocations: Arc::new(Mutex::new(RevocationStore::new())),
+            state_generation: Arc::clone(&state_generation),
+            delegations: Arc::new(Mutex::new(DelegationStore::with_generation(
+                Arc::clone(&state_generation),
+            ))),
+            revocations: Arc::new(Mutex::new(RevocationStore::with_generation(
+                Arc::clone(&state_generation),
+            ))),
+            event_ingestion: Arc::new(Mutex::new(())),
             pending_events: Arc::new(Mutex::new(Vec::new())),
             ciphertext_store,
             event_listener,
@@ -243,13 +259,39 @@ impl<
         self.state_generation.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Record a projection mutation that happened outside [`Keyhive`]'s own
-    /// methods — e.g. document-level CGKA updates invoked on a cloned handle
-    /// during content encryption.
+    /// Sum of every principal store's mutation counters.
     ///
-    /// Cache freshness is structural: callers who mutate the projection
-    /// directly MUST mark it here, or the next refresh will early-exit and
-    /// serve stale advertisement views.
+    /// Cheap and allocation-free, so a
+    /// derived cache can sample it across a refresh and prove that nothing moved
+    /// while the counter it compares against stayed put.
+    pub async fn nested_store_generation_sum(&self) -> u64 {
+        let mut total = 0u64;
+        let groups = self.groups.as_ref().lock().await;
+        for group in groups.values() {
+            let group = group.lock().await;
+            total += group.delegation_heads().generation();
+            total += group.revocation_heads().generation();
+        }
+        drop(groups);
+        let docs = self.docs.as_ref().lock().await;
+        for doc in docs.values() {
+            let doc = doc.lock().await;
+            total += doc.group.delegation_heads().generation();
+            total += doc.group.revocation_heads().generation();
+        }
+        total
+    }
+
+    /// Record a projection mutation that happened outside [`Keyhive`]'s own
+    /// methods and outside the generation-carrying stores — in practice
+    /// document-level CGKA updates applied on a cloned handle during content
+    /// encryption, since `Document::cgka` is not store-backed.
+    ///
+    /// Delegations and revocations no longer need this: every delegation and
+    /// revocation store, including each principal's own head store, shares the
+    /// hive's generation and bumps it on mutation. Everything else that mutates
+    /// the projection directly MUST still mark it here, or the next refresh will
+    /// early-exit and serve stale advertisement views.
     pub fn note_direct_mutation(&self) {
         self.touch();
     }
@@ -299,6 +341,7 @@ impl<
             self.revocations.dupe(),
             self.event_listener.clone(),
             self.csprng.dupe(),
+            Arc::clone(&self.state_generation),
         )
         .await?;
         let group_id = group.group_id();
@@ -340,6 +383,7 @@ impl<
             self.event_listener.clone(),
             &signer,
             self.csprng.dupe(),
+            Arc::clone(&self.state_generation),
         )
         .await?;
 
@@ -402,6 +446,7 @@ impl<
             self.event_listener.clone(),
             &signer,
             self.csprng.dupe(),
+            Arc::clone(&self.state_generation),
         )
         .await?;
 
@@ -2159,6 +2204,7 @@ impl<
                 self.delegations.dupe(),
                 self.revocations.dupe(),
                 self.event_listener.clone(),
+                Arc::clone(&self.state_generation),
             )
             .await;
 
@@ -2238,6 +2284,7 @@ impl<
                 self.delegations.dupe(),
                 self.revocations.dupe(),
                 self.event_listener.clone(),
+                Arc::clone(&self.state_generation),
             )
             .await,
         ));
@@ -2446,6 +2493,7 @@ impl<
                 self.delegations.dupe(),
                 self.revocations.dupe(),
                 self.event_listener.clone(),
+                Arc::clone(&self.state_generation),
             )
             .await,
         ));
@@ -2646,6 +2694,7 @@ impl<
                     delegations.dupe(),
                     revocations.dupe(),
                     listener.clone(),
+                    Arc::clone(&state_generation),
                 ))),
             );
         }
@@ -2659,6 +2708,7 @@ impl<
                     delegations.dupe(),
                     revocations.dupe(),
                     listener.clone(),
+                    Arc::clone(&state_generation),
                 )?)),
             );
         }
@@ -2871,6 +2921,7 @@ impl<
             state_generation,
             delegations,
             revocations,
+            event_ingestion: Arc::new(Mutex::new(())),
             pending_events: Arc::new(Mutex::new(pending_events)),
             csprng,
             ciphertext_store,
@@ -2945,6 +2996,7 @@ impl<
         &self,
         mut events: Vec<StaticEvent<T>>,
     ) -> (Vec<Arc<StaticEvent<T>>>, bool) {
+        let _ingestion = self.event_ingestion.lock().await;
         // FIXME: Some errors might not be recoverable on future attempts
         tracing::debug!("Keyhive::ingest_unsorted_static_events()");
         use std::collections::{HashMap, HashSet};
@@ -3623,11 +3675,116 @@ mod tests {
             "pure reads must not bump the generation"
         );
 
-        // Ingestion-path bumps are covered structurally: received
-        // delegations/revocations land in the shared generation-carrying
-        // stores (receive_delegation -> Group/Document receive_delegation ->
-        // DelegationStore::insert), and applied CGKA ops / pending-set
-        // replacement bump explicitly at their call sites above.
+        // Ingestion-path bumps are covered by
+        // `shared_stores_carry_the_hive_generation` and
+        // `principal_stores_carry_the_hive_generation`, which mutate the stores
+        // directly rather than asserting the property in a comment. Applied
+        // CGKA ops are not store-backed and still bump at their call sites.
+        Ok(())
+    }
+
+    /// Mutating through the *shared* stores — what the local-event path does when
+    /// it creates delegations and revocations outside [`Keyhive`] methods — must
+    /// move the hive generation.
+    ///
+    /// The normal constructor used to build these stores with their own private
+    /// counters, so this mutation was invisible to derived caches and peers were
+    /// never offered the resulting events.
+    #[tokio::test]
+    async fn shared_stores_carry_the_hive_generation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut csprng = rand::rngs::OsRng;
+        let sk = MemorySigner::generate(&mut csprng);
+        let hive = Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
+            sk.clone(),
+            MemoryCiphertextStore::new(),
+            NoListener,
+            csprng,
+        )
+        .await?;
+
+        // A freshly generated hive's shared store is empty: its own principal
+        // holds the head. Seed the shared store from that head, which is what the
+        // local-event path ends up doing when it creates a delegation outside
+        // `Keyhive` methods.
+        let group_id = hive.generate_group(vec![]).await?;
+        let group = hive.get_group(group_id).await.expect("just created");
+        let head = group
+            .lock()
+            .await
+            .state
+            .delegation_heads
+            .values()
+            .next()
+            .expect("a generated group has a delegation head")
+            .dupe();
+
+        let before = hive.state_generation();
+        hive.delegations.lock().await.insert(head);
+        assert!(
+            hive.state_generation() > before,
+            "the shared delegation store must bump the hive generation"
+        );
+        Ok(())
+    }
+
+    /// A principal's own head store must carry the hive's counter too.
+    ///
+    /// Groups and documents are handed to callers as handles, and the local-event
+    /// path mutates them outside [`Keyhive`] methods. With a private counter the
+    /// hive generation stayed put, so the advertisement cache early-exited and
+    /// served pre-mutation state: a peer holding the grant never learned of it.
+    #[tokio::test]
+    async fn principal_stores_carry_the_hive_generation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut csprng = rand::rngs::OsRng;
+        let sk = MemorySigner::generate(&mut csprng);
+        let hive = Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
+            sk.clone(),
+            MemoryCiphertextStore::new(),
+            NoListener,
+            csprng,
+        )
+        .await?;
+
+        let group_id = hive.generate_group(vec![]).await?;
+        let before = hive.state_generation();
+        {
+            let group = hive.get_group(group_id).await.expect("just created");
+            let mut group = group.lock().await;
+            let head = group
+                .state
+                .delegation_heads
+                .values()
+                .next()
+                .expect("a generated group has a delegation head")
+                .dupe();
+            group.state.delegation_heads.insert(head);
+        }
+        assert!(
+            hive.state_generation() > before,
+            "a principal head-store mutation must bump the hive generation"
+        );
+
+        let doc_id = hive.generate_doc(vec![], nonempty![[3u8; 32]]).await?;
+        let before = hive.state_generation();
+        {
+            let doc = hive.get_document(doc_id).await.expect("just created");
+            let mut doc = doc.lock().await;
+            let head = doc
+                .group
+                .state
+                .delegation_heads
+                .values()
+                .next()
+                .expect("a generated document has a delegation head")
+                .dupe();
+            doc.group.state.delegation_heads.insert(head);
+        }
+        assert!(
+            hive.state_generation() > before,
+            "a document head-store mutation must bump the hive generation"
+        );
         Ok(())
     }
 
@@ -3661,6 +3818,7 @@ mod tests {
                 listener,
                 &signer,
                 csprng,
+                Arc::new(AtomicU64::new(0)),
             )
             .await
         });
@@ -4067,6 +4225,7 @@ mod tests {
         assert_eq!(hive2.groups.lock().await.len(), 1);
         assert_eq!(hive2.docs.lock().await.len(), 0);
     }
+
 
     #[tokio::test]
     async fn test_transitive_ops_for_agent() {

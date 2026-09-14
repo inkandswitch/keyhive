@@ -20,7 +20,10 @@ use keyhive_crypto::{
     signer::{async_signer::AsyncSigner, memory::MemorySigner},
     verifiable::Verifiable,
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{atomic::AtomicU64, Arc},
+};
 
 #[derive(Clone)]
 #[derive_where(Debug, Hash; T)]
@@ -48,6 +51,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         delegation_head: Arc<Signed<Delegation<F, S, T, L>>>,
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+        generation: Arc<AtomicU64>,
     ) -> Self {
         let id = GroupId(delegation_head.verifying_key().into());
         let mut heads = vec![delegation_head.dupe()];
@@ -72,7 +76,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             }
         }
 
-        let mut delegation_heads = DelegationStore::new();
+        let mut delegation_heads = DelegationStore::with_generation(Arc::clone(&generation));
         delegation_heads.insert(delegation_head);
 
         Self {
@@ -83,7 +87,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
             // NOTE revocation_heads are guaranteed to be blank at this stage
             // because they can only come before the delegation passed in.
-            revocation_heads: RevocationStore::new(),
+            revocation_heads: RevocationStore::with_generation(Arc::clone(&generation)),
             revocations,
         }
     }
@@ -93,6 +97,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         csprng: &mut R,
+        generation: Arc<AtomicU64>,
     ) -> Result<Self, DelegationError> {
         let signer = MemorySigner::generate(csprng);
         let group_id = signer.verifying_key().into();
@@ -100,10 +105,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let group = GroupState {
             id: GroupId(group_id),
 
-            delegation_heads: DelegationStore::new(),
+            delegation_heads: DelegationStore::with_generation(Arc::clone(&generation)),
             delegations,
 
-            revocation_heads: RevocationStore::new(),
+            revocation_heads: RevocationStore::with_generation(Arc::clone(&generation)),
             revocations,
         };
 
@@ -289,14 +294,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         archive: GroupStateArchive<T>,
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+        generation: Arc<AtomicU64>,
     ) -> Self {
         Self {
             id: archive.id,
 
-            delegation_heads: DelegationStore::new(),
+            delegation_heads: DelegationStore::with_generation(Arc::clone(&generation)),
             delegations,
 
-            revocation_heads: RevocationStore::new(),
+            revocation_heads: RevocationStore::with_generation(Arc::clone(&generation)),
             revocations,
         }
     }
