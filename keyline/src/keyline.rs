@@ -7,7 +7,7 @@
 //! proves that.
 
 use crate::{
-    access::Access, certificate::Certificate, delegation::Delegation, id::Id,
+    power::Power, certificate::Certificate, delegation::Delegation, id::Id,
     revocation::RevocationId, signed::Verified,
 };
 use alloc::{
@@ -23,7 +23,7 @@ use keyhive_crypto::digest::Digest;
 /// Concurrency is the wrapper's job: `keyhive_core` holds an implementation
 /// behind a `RwLock`, and readers call `&self` methods in parallel.
 pub trait Keyline {
-    /// The retention watermark a revocation may carry ([`crate::revocation::Revocation::keep`]).
+    /// The retention watermark a revocation may carry ([`crate::revocation::Revocation::retains`]).
     ///
     /// Evaluation never reads it; the bound exists only so certificates
     /// round-trip canonically. A backend that does not care picks `()`.
@@ -54,19 +54,19 @@ pub trait Keyline {
     /// issuer's admin reach; this reports the syntactic fact. Its main use
     /// is explaining a silent collision: an issuer who re-mints a grant
     /// byte-identical to a revoked one gets `insert == false`, and this tells
-    /// them why and that a re-issue with `seen` is needed.
+    /// them why and that a re-issue with `cites` is needed.
     fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>>;
 
-    /// `aud`'s effective level over `sub`: the maximum over live routes of the
+    /// `audience`'s effective level over `subject`: the maximum over live routes of the
     /// minimum along each. `None` if no live route exists.
     ///
     /// Every subject stands at `Admin` over itself by axiom, so
-    /// `effective_access(x, x)` is `Some(Admin)` for every `x`.
-    fn effective_access(&self, sub: Id, aud: Id) -> Option<Access>;
+    /// `effective_power(x, x)` is `Some(Admin)` for every `x`.
+    fn effective_power(&self, subject: Id, audience: Id) -> Option<Power>;
 
-    /// Every `Id` other than `sub` itself with a live route to `sub`, with its
+    /// Every `Id` other than `subject` itself with a live route to `subject`, with its
     /// effective level. The materialized view.
-    fn members(&self, sub: Id) -> BTreeMap<Id, Access>;
+    fn members(&self, subject: Id) -> BTreeMap<Id, Power>;
 
     /// Whether the named delegation participates in any live derivation.
     /// `false` for digests not in the set.

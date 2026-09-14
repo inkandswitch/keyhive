@@ -17,7 +17,7 @@ pub mod laws;
 pub mod scenarios;
 
 use crate::{
-    access::Access,
+    power::Power,
     certificate::Certificate,
     delegation::Delegation,
     keyline::Keyline,
@@ -41,17 +41,17 @@ pub const FRANK: u8 = 10;
 /// A second document, for scenarios that need a subject outside the cast.
 pub const OTHER_DOC: u8 = 11;
 
-pub fn d(iss: u8, aud: u8, sub: u8, can: Access) -> Delegation {
-    Delegation::new(id(iss), id(aud), id(sub), can)
+pub fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Delegation {
+    Delegation::new(id(issuer), id(audience), id(subject), power)
 }
 
-pub fn r<C>(iss: u8, target: &Delegation) -> Revocation<C> {
-    Revocation::new(id(iss), target.digest())
+pub fn r<C>(issuer: u8, target: &Delegation) -> Revocation<C> {
+    Revocation::new(id(issuer), target.digest())
 }
 
 /// What a backend's content type must satisfy to run the generated laws.
 ///
-/// The scenarios need none of this — they never look at [`crate::revocation::Revocation::keep`]
+/// The scenarios need none of this — they never look at [`crate::revocation::Revocation::retains`]
 /// — but the laws generate whole certificate sets, so the content type has to
 /// be generatable and comparable as well as encodable.
 pub trait TestContent:
@@ -81,6 +81,6 @@ pub fn build<K: Keyline + Default, I: IntoIterator<Item = Certificate<K::Content
     k
 }
 
-pub fn access<K: Keyline>(k: &K, sub: u8, aud: u8) -> Option<Access> {
-    k.effective_access(id(sub), id(aud))
+pub fn power<K: Keyline>(k: &K, subject: u8, audience: u8) -> Option<Power> {
+    k.effective_power(id(subject), id(audience))
 }

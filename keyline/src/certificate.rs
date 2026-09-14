@@ -31,8 +31,8 @@ impl<C> Certificate<C> {
     /// The signer of either kind.
     pub fn issuer(&self) -> Id {
         match self {
-            Certificate::Delegation(d) => d.iss,
-            Certificate::Revocation(r) => r.iss,
+            Certificate::Delegation(d) => d.issuer,
+            Certificate::Revocation(r) => r.issuer,
         }
     }
 
@@ -105,7 +105,7 @@ impl<C: Decode> Decode for Certificate<C> {
 mod tests {
     use super::*;
 
-    /// Variable-length, to exercise the `keep` codec through the wrapper.
+    /// Variable-length, to exercise the `retains` codec through the wrapper.
     type Keep = Vec<u8>;
 
     #[test]

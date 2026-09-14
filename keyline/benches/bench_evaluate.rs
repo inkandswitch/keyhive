@@ -11,7 +11,7 @@
 
 use divan::Bencher;
 use keyline::{
-    access::Access,
+    power::Power,
     certificate::Certificate,
     delegation::Delegation,
     id::Id,
@@ -33,8 +33,8 @@ const FIRST_HUMAN: u8 = 10;
 const LADDER_LEAF: u8 = 250;
 const LATE_JOINER: u8 = 251;
 
-fn d(iss: u8, aud: u8, sub: u8, can: Access) -> Certificate<()> {
-    Delegation::new(id(iss), id(aud), id(sub), can).into()
+fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Certificate<()> {
+    Delegation::new(id(issuer), id(audience), id(subject), power).into()
 }
 
 fn build<I: IntoIterator<Item = Certificate<()>>>(certs: I) -> MemoryKeyline {
@@ -49,19 +49,19 @@ fn build<I: IntoIterator<Item = Certificate<()>>>(certs: I) -> MemoryKeyline {
 /// Edit/Read/Relay, each rooted at Owners, with `n` humans; two revocations.
 fn realistic(n: u8) -> MemoryKeyline {
     let mut certs = vec![
-        d(DOC, OWNERS, DOC, Access::Admin),
-        d(OWNERS, FIRST_HUMAN, OWNERS, Access::Admin),
-        d(OWNERS, FIRST_HUMAN + 1, OWNERS, Access::Admin),
+        d(DOC, OWNERS, DOC, Power::Admin),
+        d(OWNERS, FIRST_HUMAN, OWNERS, Power::Admin),
+        d(OWNERS, FIRST_HUMAN + 1, OWNERS, Power::Admin),
     ];
     let mut next = FIRST_HUMAN + 2;
     for (role, level) in ROLES
         .iter()
-        .zip([Access::Edit, Access::Read, Access::Relay])
+        .zip([Power::Edit, Power::Read, Power::Relay])
     {
         certs.push(d(FIRST_HUMAN, *role, DOC, level));
-        certs.push(d(*role, OWNERS, *role, Access::Admin));
+        certs.push(d(*role, OWNERS, *role, Power::Admin));
         for _ in 0..n {
-            certs.push(d(FIRST_HUMAN, next, *role, Access::Edit));
+            certs.push(d(FIRST_HUMAN, next, *role, Power::Edit));
             next = next.wrapping_add(1);
         }
     }
@@ -71,7 +71,7 @@ fn realistic(n: u8) -> MemoryKeyline {
         id(FIRST_HUMAN),
         id(FIRST_HUMAN + 3),
         id(ROLES[0]),
-        Access::Edit,
+        Power::Edit,
     );
     g.insert(cert(Revocation::new(id(FIRST_HUMAN + 1), victim.digest())));
     g.insert(cert(Revocation::new(id(FIRST_HUMAN + 4), victim.digest())));
@@ -81,15 +81,15 @@ fn realistic(n: u8) -> MemoryKeyline {
 /// Doc → role₁ → role₂ → … → roleₖ, each an Admin member of the previous, with
 /// one human at the bottom.
 fn club_ladder(k: u8) -> MemoryKeyline {
-    let mut certs = vec![d(DOC, OWNERS, DOC, Access::Admin)];
+    let mut certs = vec![d(DOC, OWNERS, DOC, Power::Admin)];
     let mut prev = OWNERS;
     for i in 0..k {
         let role = FIRST_HUMAN + i;
-        certs.push(d(role, prev, role, Access::Admin)); // role rooted at prev
-        certs.push(d(prev, role, DOC, Access::Admin)); // and supplied into Doc
+        certs.push(d(role, prev, role, Power::Admin)); // role rooted at prev
+        certs.push(d(prev, role, DOC, Power::Admin)); // and supplied into Doc
         prev = role;
     }
-    certs.push(d(prev, LADDER_LEAF, prev, Access::Edit));
+    certs.push(d(prev, LADDER_LEAF, prev, Power::Edit));
     build(certs)
 }
 
@@ -97,14 +97,14 @@ fn club_ladder(k: u8) -> MemoryKeyline {
 /// exclusion set.
 fn revocation_spree(k: u8) -> MemoryKeyline {
     let mut g = realistic(k);
-    let booted = Delegation::new(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Access::Admin);
+    let booted = Delegation::new(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Power::Admin);
     g.insert(cert(Revocation::new(id(FIRST_HUMAN), booted.digest())));
     for i in 0..k {
         let target = Delegation::new(
             id(FIRST_HUMAN),
             id(FIRST_HUMAN + 2 + i),
             id(ROLES[0]),
-            Access::Edit,
+            Power::Edit,
         );
         g.insert(cert(Revocation::new(id(FIRST_HUMAN + 1), target.digest())));
     }
@@ -123,10 +123,10 @@ fn realistic_members(bencher: Bencher, n: u8) {
 }
 
 #[divan::bench(args = [10, 30, 60])]
-fn realistic_effective_access(bencher: Bencher, n: u8) {
+fn realistic_effective_power(bencher: Bencher, n: u8) {
     bencher
         .with_inputs(|| realistic(n))
-        .bench_refs(|g| g.effective_access(doc(), id(FIRST_HUMAN + 5)));
+        .bench_refs(|g| g.effective_power(doc(), id(FIRST_HUMAN + 5)));
 }
 
 #[divan::bench(args = [10, 30, 60])]
@@ -135,7 +135,7 @@ fn realistic_insert(bencher: Bencher, n: u8) {
         .with_inputs(|| {
             (
                 realistic(n),
-                cert(d(FIRST_HUMAN, LATE_JOINER, ROLES[1], Access::Read)),
+                cert(d(FIRST_HUMAN, LATE_JOINER, ROLES[1], Power::Read)),
             )
         })
         .bench_values(|(mut g, c)| g.insert(c));

@@ -12,7 +12,7 @@ use super::{
     TestContent,
 };
 use crate::{
-    access::Access, certificate::Certificate, delegation::Delegation, id::Id, keyline::Keyline,
+    power::Power, certificate::Certificate, delegation::Delegation, id::Id, keyline::Keyline,
     test_utils::cert,
 };
 use alloc::{
@@ -25,7 +25,7 @@ use keyhive_crypto::digest::Digest;
 /// live status of every delegation: the whole observable state of a set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Observed {
-    pub levels: BTreeMap<(Id, Id), Access>,
+    pub levels: BTreeMap<(Id, Id), Power>,
     pub live: BTreeSet<Digest<Delegation>>,
 }
 
@@ -35,7 +35,7 @@ where
 {
     let levels = ids()
         .flat_map(|s| ids().map(move |x| (s, x)))
-        .filter_map(|(s, x)| k.effective_access(s, x).map(|l| ((s, x), l)))
+        .filter_map(|(s, x)| k.effective_power(s, x).map(|l| ((s, x), l)))
         .collect();
     let live = set
         .delegations()
@@ -50,7 +50,7 @@ pub mod naive {
     use super::*;
 
     /// `(subject, node) -> level`.
-    pub type Levels = BTreeMap<(Id, Id), Access>;
+    pub type Levels = BTreeMap<(Id, Id), Power>;
 
     /// What the oracle derives from a set.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,12 +62,12 @@ pub mod naive {
     struct Facts {
         nodes: BTreeSet<Id>,
         dels: BTreeMap<Digest<Delegation>, Delegation>,
-        // Issuer and target only: `keep` has no bearing on authority, so the
+        // Issuer and target only: `retains` has no bearing on authority, so the
         // oracle cannot read it even by accident.
         revs: Vec<(Id, Digest<Delegation>)>,
     }
 
-    fn raise(m: &mut Levels, key: (Id, Id), l: Access) -> bool {
+    fn raise(m: &mut Levels, key: (Id, Id), l: Power) -> bool {
         match m.get(&key) {
             Some(current) if *current >= l => false,
             _ => {
@@ -79,18 +79,18 @@ pub mod naive {
 
     /// `level(s, x, h, l)` for one exclusion set: rules 1-3 over `usable`
     /// edges weighted by `cap`, every node in `exclude` refused. With
-    /// `exclude = ∅`, every edge usable and `cap = can`, this is stratum 1.
+    /// `exclude = ∅`, every edge usable and `cap = power`, this is stratum 1.
     fn level(
         f: &Facts,
         exclude: &BTreeSet<Id>,
         usable: &dyn Fn(&Digest<Delegation>) -> bool,
-        cap: &dyn Fn(&Digest<Delegation>, &Delegation) -> Access,
+        cap: &dyn Fn(&Digest<Delegation>, &Delegation) -> Power,
     ) -> Levels {
         let mut m: Levels = f
             .nodes
             .iter()
             .filter(|n| !exclude.contains(n))
-            .map(|n| ((*n, *n), Access::Admin))
+            .map(|n| ((*n, *n), Power::Admin))
             .collect();
 
         loop {
@@ -98,11 +98,11 @@ pub mod naive {
             let snapshot = m.clone();
 
             for (h, d) in &f.dels {
-                if !usable(h) || exclude.contains(&d.aud) {
+                if !usable(h) || exclude.contains(&d.audience) {
                     continue;
                 }
-                if let Some(l) = snapshot.get(&(d.sub, d.iss)) {
-                    changed |= raise(&mut m, (d.sub, d.aud), (*l).min(cap(h, d)));
+                if let Some(l) = snapshot.get(&(d.subject, d.issuer)) {
+                    changed |= raise(&mut m, (d.subject, d.audience), (*l).min(cap(h, d)));
                 }
             }
             for ((s, n), l1) in &snapshot {
@@ -129,12 +129,12 @@ pub mod naive {
         for c in &set.certs {
             match c {
                 Certificate::Delegation(d) => {
-                    nodes.extend([d.iss, d.aud, d.sub]);
+                    nodes.extend([d.issuer, d.audience, d.subject]);
                     dels.insert(d.digest(), *d);
                 }
                 Certificate::Revocation(r) => {
-                    nodes.insert(r.iss);
-                    revs.push((r.iss, r.revoke));
+                    nodes.insert(r.issuer);
+                    revs.push((r.issuer, r.revokes));
                 }
             }
         }
@@ -143,7 +143,7 @@ pub mod naive {
 
     /// Stratum 1 alone: `reaches` over the pool, blind to revocations.
     pub fn reaches<C>(set: &CertSet<C>) -> Levels {
-        level(&facts(set), &BTreeSet::new(), &|_| true, &|_, d| d.can)
+        level(&facts(set), &BTreeSet::new(), &|_| true, &|_, d| d.power)
     }
 
     /// Both strata: the live set (LFP) and caps (GFP), then the live levels.
@@ -151,28 +151,28 @@ pub mod naive {
         let f = facts(set);
         let none = BTreeSet::new();
 
-        let reaches = level(&f, &none, &|_| true, &|_, d| d.can);
+        let reaches = level(&f, &none, &|_| true, &|_, d| d.power);
         let admin_reach = |k: Id| -> BTreeSet<Id> {
             let mut s: BTreeSet<Id> = f
                 .nodes
                 .iter()
                 .copied()
-                .filter(|n| reaches.get(&(*n, k)) == Some(&Access::Admin))
+                .filter(|n| reaches.get(&(*n, k)) == Some(&Power::Admin))
                 .collect();
             s.insert(k);
             s
         };
         let mut covered: BTreeMap<Digest<Delegation>, BTreeSet<Id>> = BTreeMap::new();
-        for (iss, revoke) in &f.revs {
+        for (issuer, revokes) in &f.revs {
             covered
-                .entry(*revoke)
+                .entry(*revokes)
                 .or_default()
-                .extend(admin_reach(*iss));
+                .extend(admin_reach(*issuer));
         }
-        let renounced = |h: &Digest<Delegation>, aud: Id| {
+        let renounced = |h: &Digest<Delegation>, audience: Id| {
             f.revs
                 .iter()
-                .any(|(iss, revoke)| revoke == h && *iss == aud)
+                .any(|(issuer, revokes)| revokes == h && *issuer == audience)
         };
 
         let mut live: BTreeSet<Digest<Delegation>> = BTreeSet::new();
@@ -180,11 +180,11 @@ pub mod naive {
             let added: Vec<Digest<Delegation>> = f
                 .dels
                 .iter()
-                .filter(|(h, d)| !live.contains(*h) && !renounced(h, d.aud))
+                .filter(|(h, d)| !live.contains(*h) && !renounced(h, d.audience))
                 .filter(|(h, d)| {
                     let exclude = covered.get(*h).cloned().unwrap_or_default();
-                    level(&f, &exclude, &|x| live.contains(x), &|_, d| d.can)
-                        .contains_key(&(d.sub, d.iss))
+                    level(&f, &exclude, &|x| live.contains(x), &|_, d| d.power)
+                        .contains_key(&(d.subject, d.issuer))
                 })
                 .map(|(h, _)| *h)
                 .collect();
@@ -194,8 +194,8 @@ pub mod naive {
             live.extend(added);
         }
 
-        let mut cap: BTreeMap<Digest<Delegation>, Access> =
-            f.dels.iter().map(|(h, d)| (*h, d.can)).collect();
+        let mut cap: BTreeMap<Digest<Delegation>, Power> =
+            f.dels.iter().map(|(h, d)| (*h, d.power)).collect();
         loop {
             let mut changed = false;
             for (h, d) in &f.dels {
@@ -205,9 +205,9 @@ pub mod naive {
                 let exclude = covered.get(h).cloned().unwrap_or_default();
                 let current = cap.clone();
                 let at_iss = level(&f, &exclude, &|x| live.contains(x), &|x, d| {
-                    current[x].min(d.can)
-                })[&(d.sub, d.iss)];
-                let next = d.can.min(at_iss);
+                    current[x].min(d.power)
+                })[&(d.subject, d.issuer)];
+                let next = d.power.min(at_iss);
                 if next < cap[h] {
                     cap.insert(*h, next);
                     changed = true;
@@ -218,12 +218,12 @@ pub mod naive {
             }
         }
 
-        let levels = level(&f, &none, &|x| live.contains(x), &|x, d| cap[x].min(d.can));
+        let levels = level(&f, &none, &|x| live.contains(x), &|x, d| cap[x].min(d.power));
         Evaluation { live, levels }
     }
 }
 
-/// Without revocations, `effective_access` is exactly stratum 1, and every
+/// Without revocations, `effective_power` is exactly stratum 1, and every
 /// delegation whose issuer reaches its subject is live.
 pub fn matches_naive_oracle_without_revocations<K: Keyline + Default>()
 where
@@ -239,16 +239,16 @@ where
             for s in ids() {
                 for x in ids() {
                     assert_eq!(
-                        k.effective_access(s, x),
+                        k.effective_power(s, x),
                         expected.get(&(s, x)).copied(),
-                        "effective_access({s}, {x})"
+                        "effective_power({s}, {x})"
                     );
                 }
             }
             for d in set.delegations() {
                 assert_eq!(
                     k.is_live(&d.digest()),
-                    expected.contains_key(&(d.sub, d.iss)),
+                    expected.contains_key(&(d.subject, d.issuer)),
                     "is_live({d:?})"
                 );
             }
@@ -271,9 +271,9 @@ where
             for s in ids() {
                 for x in ids() {
                     assert_eq!(
-                        k.effective_access(s, x),
+                        k.effective_power(s, x),
                         expected.levels.get(&(s, x)).copied(),
-                        "effective_access({s}, {x})"
+                        "effective_power({s}, {x})"
                     );
                 }
             }
@@ -388,7 +388,7 @@ where
         });
 }
 
-/// Every node is Admin over itself; `members` is exactly `effective_access`
+/// Every node is Admin over itself; `members` is exactly `effective_power`
 /// minus the subject; `contains` agrees with what was inserted.
 pub fn queries_are_consistent<K: Keyline + Default>()
 where
@@ -399,11 +399,11 @@ where
         .for_each(|set| {
             let k: K = build(set.certs.iter().cloned());
             for s in ids() {
-                assert_eq!(k.effective_access(s, s), Some(Access::Admin));
+                assert_eq!(k.effective_power(s, s), Some(Power::Admin));
                 let members = k.members(s);
                 assert!(!members.contains_key(&s));
                 for x in ids().filter(|x| *x != s) {
-                    assert_eq!(members.get(&x).copied(), k.effective_access(s, x));
+                    assert_eq!(members.get(&x).copied(), k.effective_power(s, x));
                 }
             }
             for c in &set.certs {
@@ -412,7 +412,7 @@ where
                     let naming = k.revocations_naming(&d.digest());
                     let expected: BTreeSet<_> = set
                         .revocations()
-                        .filter(|r| r.revoke == d.digest())
+                        .filter(|r| r.revokes == d.digest())
                         .map(|r| r.digest())
                         .collect();
                     assert_eq!(naming, expected);

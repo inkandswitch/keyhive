@@ -10,30 +10,30 @@
 //! Two consequences of "no caching" worth knowing before using this at scale.
 //! Stratum 1 is global, so a query costs what the whole replica costs, not what
 //! the queried subject costs. And there is no demand-driven evaluation, so
-//! `effective_access` materializes the subject's entire row before indexing into
+//! `effective_power` materializes the subject's entire row before indexing into
 //! it: a point query costs what `members` costs. Both are appropriate for an
 //! embedded replica holding one document's closure, and wrong for a relay.
 //!
 //! ```text
-//! stratum 1   reaches   = search(all subjects, exclude ∅, every edge, cap = can)
+//! stratum 1   reaches   = search(all subjects, exclude ∅, every edge, cap = power)
 //!             admin_reach(k) = { n : k reaches n at Admin } ∪ {k}
 //!             covered(h) = ⋃ admin_reach(k) for every k revoking h
 //!
-//! stratum 2   live      = least fixed point:  h joins when iss(h) is reachable
-//!                         from sub(h) over live edges avoiding covered(h),
-//!                         and aud(h) has not revoked h itself
-//!             cap       = greatest fixed point from can: covered h conveys at most
-//!                         the level iss(h) holds on a derivation avoiding covered(h)
+//! stratum 2   live      = least fixed point:  h joins when issuer(h) is reachable
+//!                         from subject(h) over live edges avoiding covered(h),
+//!                         and audience(h) has not revoked h itself
+//!             cap       = greatest fixed point from power: covered h conveys at most
+//!                         the level issuer(h) holds on a derivation avoiding covered(h)
 //!
 //! query       search(s, exclude ∅, live edges, cap)
 //! ```
 //!
 //! `search` is one procedure: a bucketed widest-path pass per root, iterated to
-//! a fixed point across every root it discovers, because `sub` composes (a
+//! a fixed point across every root it discovers, because `subject` composes (a
 //! node's members inherit what the node reaches).
 
 use crate::{
-    access::Access,
+    power::Power,
     certificate::Certificate,
     collections::{Map, Set},
     delegation::Delegation,
@@ -62,7 +62,7 @@ pub struct MemoryKeyline<C = ()> {
 
     delegations: Map<Digest<Delegation>, Delegation>,
 
-    /// `sub -> iss -> edges about sub issued by iss`: the adjacency the search walks.
+    /// `subject -> issuer -> edges about subject issued by issuer`: the adjacency the search walks.
     edges: Map<Id, Map<Id, Vec<Digest<Delegation>>>>,
 
     revocations: Map<Digest<RevocationId>, Revocation<C>>,
@@ -115,17 +115,17 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
             contexts = contexts.len(),
             live = live.len(),
             dead = self.delegations.len() - live.len(),
-            clamped = cap.values().filter(|c| **c < Access::Admin).count(),
+            clamped = cap.values().filter(|c| **c < Power::Admin).count(),
             "evaluated"
         );
         Evaluation { live, cap }
     }
 
-    /// The live level of every node over `sub`, including `sub` itself.
-    fn levels(&self, sub: Id) -> Map<Id, Access> {
+    /// The live level of every node over `subject`, including `subject` itself.
+    fn levels(&self, subject: Id) -> Map<Id, Power> {
         let Evaluation { live, cap } = self.evaluate();
-        self.search([sub], &Params::live(None, &live, Some(&cap)))
-            .remove(&sub)
+        self.search([subject], &Params::live(None, &live, Some(&cap)))
+            .remove(&subject)
             .unwrap_or_default()
     }
 
@@ -156,7 +156,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
         let mut reach: Map<Id, Set<Id>> = Map::new();
         for (n, levels) in &reaches {
             for (k, l) in levels {
-                if *l == Access::Admin {
+                if *l == Power::Admin {
                     reach.entry(*k).or_default().insert(*n);
                 }
             }
@@ -169,7 +169,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                 for k in revs
                     .iter()
                     .filter_map(|r| self.revocations.get(r))
-                    .map(|r| r.iss)
+                    .map(|r| r.issuer)
                 {
                     nodes.insert(k);
                     if let Some(ns) = reach.get(&k) {
@@ -198,7 +198,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                 .delegations
                 .iter()
                 .filter(|(h, d)| {
-                    !live.contains(h) && !covered.contains(h) && reached(&base, d.sub, d.iss)
+                    !live.contains(h) && !covered.contains(h) && reached(&base, d.subject, d.issuer)
                 })
                 .map(|(h, _)| *h)
                 .collect();
@@ -211,10 +211,10 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     .filter(|h| !live.contains(h))
                     .filter_map(|h| self.delegations.get(h).map(|d| (h, d)))
                     .filter(|(h, d)| {
-                        !(ctx.exclude.contains(&d.iss)
-                            || ctx.exclude.contains(&d.sub)
-                            || self.renounced(h, d.aud))
-                            && reached(&base, d.sub, d.iss)
+                        !(ctx.exclude.contains(&d.issuer)
+                            || ctx.exclude.contains(&d.subject)
+                            || self.renounced(h, d.audience))
+                            && reached(&base, d.subject, d.issuer)
                     })
                     .collect();
                 if candidates.is_empty() {
@@ -222,13 +222,13 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                 }
 
                 let levels = self.search(
-                    candidates.iter().map(|(_, d)| d.sub),
+                    candidates.iter().map(|(_, d)| d.subject),
                     &Params::live(Some(&ctx.exclude), &live, None),
                 );
                 newly_live.extend(
                     candidates
                         .iter()
-                        .filter(|(_, d)| reached(&levels, d.sub, d.iss))
+                        .filter(|(_, d)| reached(&levels, d.subject, d.issuer))
                         .map(|(h, _)| **h),
                 );
             }
@@ -248,30 +248,30 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
     /// Whether the recipient of `h` has signed a revocation of it. The recipient is
     /// not on the route to the issuer, so this is the one place a revocation's
     /// effect is decided by the signer's identity rather than their admin reach.
-    fn renounced(&self, h: &Digest<Delegation>, aud: Id) -> bool {
+    fn renounced(&self, h: &Digest<Delegation>, audience: Id) -> bool {
         self.denials.get(h).is_some_and(|revs| {
             revs.iter()
                 .filter_map(|r| self.revocations.get(r))
-                .any(|r| r.iss == aud)
+                .any(|r| r.issuer == audience)
         })
     }
 
     /// Stratum 2, level: the greatest fixed point of covered-edge caps,
-    /// iterated down from `can`. Uncovered edges are absent; their cap is `can`.
+    /// iterated down from `power`. Uncovered edges are absent; their cap is `power`.
     fn caps(
         &self,
         contexts: &[Context],
         live: &Set<Digest<Delegation>>,
-    ) -> Map<Digest<Delegation>, Access> {
-        let mut cap: Map<Digest<Delegation>, Access> = contexts
+    ) -> Map<Digest<Delegation>, Power> {
+        let mut cap: Map<Digest<Delegation>, Power> = contexts
             .iter()
             .flat_map(|c| c.edges.iter())
             .filter(|h| live.contains(h))
-            .filter_map(|h| self.delegations.get(h).map(|d| (*h, d.can)))
+            .filter_map(|h| self.delegations.get(h).map(|d| (*h, d.power)))
             .collect();
 
         loop {
-            let mut lowered: Vec<(Digest<Delegation>, Access)> = Vec::new();
+            let mut lowered: Vec<(Digest<Delegation>, Power)> = Vec::new();
 
             for ctx in contexts {
                 let edges: Vec<(&Digest<Delegation>, &Delegation)> = ctx
@@ -285,7 +285,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                 }
 
                 let levels = self.search(
-                    edges.iter().map(|(_, d)| d.sub),
+                    edges.iter().map(|(_, d)| d.subject),
                     &Params::live(Some(&ctx.exclude), live, Some(&cap)),
                 );
                 for (h, d) in edges {
@@ -294,12 +294,12 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     // succeed. Were one ever to fail there would be nothing to
                     // lower, which is what skipping does.
                     let (Some(at_iss), Some(current)) = (
-                        levels.get(&d.sub).and_then(|m| m.get(&d.iss)).copied(),
+                        levels.get(&d.subject).and_then(|m| m.get(&d.issuer)).copied(),
                         cap.get(h).copied(),
                     ) else {
                         continue;
                     };
-                    let next = d.can.min(at_iss);
+                    let next = d.power.min(at_iss);
                     if next < current {
                         lowered.push((*h, next));
                     }
@@ -323,8 +323,8 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
         &self,
         roots: R,
         params: &Params<'_>,
-    ) -> Map<Id, Map<Id, Access>> {
-        let mut levels: Map<Id, Map<Id, Access>> =
+    ) -> Map<Id, Map<Id, Power>> {
+        let mut levels: Map<Id, Map<Id, Power>> =
             roots.into_iter().map(|r| (r, Map::new())).collect();
 
         loop {
@@ -365,18 +365,18 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
         &self,
         r: Id,
         params: &Params<'_>,
-        others: &Map<Id, Map<Id, Access>>,
-    ) -> Map<Id, Access> {
-        let mut best: Map<Id, Access> = Map::new();
+        others: &Map<Id, Map<Id, Power>>,
+    ) -> Map<Id, Power> {
+        let mut best: Map<Id, Power> = Map::new();
         if params.excludes(&r) {
             return best;
         }
 
-        let mut buckets: [Vec<Id>; Access::ALL.len()] = Default::default();
-        best.insert(r, Access::Admin);
-        buckets[Access::Admin.rank()].push(r);
+        let mut buckets: [Vec<Id>; Power::ALL.len()] = Default::default();
+        best.insert(r, Power::Admin);
+        buckets[Power::Admin.rank()].push(r);
 
-        let relax = |best: &mut Map<Id, Access>, buckets: &mut [Vec<Id>; 4], v: Id, l: Access| {
+        let relax = |best: &mut Map<Id, Power>, buckets: &mut [Vec<Id>; 4], v: Id, l: Power| {
             if params.excludes(&v) {
                 return;
             }
@@ -396,7 +396,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     let Some(d) = self.delegations.get(h) else {
                         continue;
                     };
-                    relax(&mut best, &mut buckets, d.aud, lu.min(params.cap(h, d.can)));
+                    relax(&mut best, &mut buckets, d.audience, lu.min(params.cap(h, d.power)));
                 }
             }
 
@@ -441,11 +441,11 @@ impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
         match payload {
             Certificate::Delegation(d) => {
                 let h = d.digest();
-                debug!(iss = %d.iss, aud = %d.aud, sub = %d.sub, can = %d.can, seen = d.seen.is_some(), "delegation inserted");
+                debug!(issuer = %d.issuer, audience = %d.audience, subject = %d.subject, power = %d.power, cites = d.cites.is_some(), "delegation inserted");
                 self.edges
-                    .entry(d.sub)
+                    .entry(d.subject)
                     .or_default()
-                    .entry(d.iss)
+                    .entry(d.issuer)
                     .or_default()
                     .push(h);
                 self.delegations.insert(h, d);
@@ -453,12 +453,12 @@ impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
             Certificate::Revocation(r) => {
                 let k = r.digest();
                 debug!(
-                    iss = %r.iss,
-                    revoke = %r.revoke,
-                    target_known = self.delegations.contains_key(&r.revoke),
+                    issuer = %r.issuer,
+                    revokes = %r.revokes,
+                    target_known = self.delegations.contains_key(&r.revokes),
                     "revocation inserted"
                 );
-                self.denials.entry(r.revoke).or_default().insert(k);
+                self.denials.entry(r.revokes).or_default().insert(k);
                 self.revocations.insert(k, r);
             }
         }
@@ -477,16 +477,16 @@ impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
             .unwrap_or_default()
     }
 
-    #[instrument(level = "trace", skip(self), fields(%sub, %aud))]
-    fn effective_access(&self, sub: Id, aud: Id) -> Option<Access> {
-        self.levels(sub).get(&aud).copied()
+    #[instrument(level = "trace", skip(self), fields(%subject, %audience))]
+    fn effective_power(&self, subject: Id, audience: Id) -> Option<Power> {
+        self.levels(subject).get(&audience).copied()
     }
 
-    #[instrument(level = "trace", skip(self), fields(%sub))]
-    fn members(&self, sub: Id) -> BTreeMap<Id, Access> {
-        self.levels(sub)
+    #[instrument(level = "trace", skip(self), fields(%subject))]
+    fn members(&self, subject: Id) -> BTreeMap<Id, Power> {
+        self.levels(subject)
             .into_iter()
-            .filter(|(id, _)| *id != sub)
+            .filter(|(id, _)| *id != subject)
             .collect()
     }
 
@@ -509,7 +509,7 @@ struct Context {
 /// Stratum 2 results.
 struct Evaluation {
     live: Set<Digest<Delegation>>,
-    cap: Map<Digest<Delegation>, Access>,
+    cap: Map<Digest<Delegation>, Power>,
 }
 
 /// What a search may traverse.
@@ -518,8 +518,8 @@ struct Params<'a> {
     exclude: Option<&'a Set<Id>>,
     /// Edges the search may step along; `None` means every edge (stratum 1).
     live: Option<&'a Set<Digest<Delegation>>>,
-    /// Caps on covered edges; absent edges convey their `can`.
-    cap: Option<&'a Map<Digest<Delegation>, Access>>,
+    /// Caps on covered edges; absent edges convey their `power`.
+    cap: Option<&'a Map<Digest<Delegation>, Power>>,
 }
 
 impl<'a> Params<'a> {
@@ -535,7 +535,7 @@ impl<'a> Params<'a> {
     fn live(
         exclude: Option<&'a Set<Id>>,
         live: &'a Set<Digest<Delegation>>,
-        cap: Option<&'a Map<Digest<Delegation>, Access>>,
+        cap: Option<&'a Map<Digest<Delegation>, Power>>,
     ) -> Self {
         Params {
             exclude,
@@ -552,19 +552,19 @@ impl<'a> Params<'a> {
         self.live.is_none_or(|live| live.contains(h))
     }
 
-    fn cap(&self, h: &Digest<Delegation>, can: Access) -> Access {
+    fn cap(&self, h: &Digest<Delegation>, power: Power) -> Power {
         self.cap
             .and_then(|cap| cap.get(h).copied())
-            .map_or(can, |c| c.min(can))
+            .map_or(power, |c| c.min(power))
     }
 }
 
-fn reached(levels: &Map<Id, Map<Id, Access>>, root: Id, node: Id) -> bool {
+fn reached(levels: &Map<Id, Map<Id, Power>>, root: Id, node: Id) -> bool {
     levels.get(&root).is_some_and(|m| m.contains_key(&node))
 }
 
-fn pop_highest(buckets: &mut [Vec<Id>; Access::ALL.len()]) -> Option<(Id, Access)> {
-    Access::ALL
+fn pop_highest(buckets: &mut [Vec<Id>; Power::ALL.len()]) -> Option<(Id, Power)> {
+    Power::ALL
         .iter()
         .rev()
         .find_map(|l| buckets[l.rank()].pop().map(|id| (id, *l)))
@@ -740,7 +740,7 @@ mod tests {
         let (g, _, _) = standard::<MemoryKeyline>();
         assert_eq!(g.len(), 6);
         assert!(!g.is_empty());
-        let root = d(DOC, OWNERS, DOC, Access::Admin);
+        let root = d(DOC, OWNERS, DOC, Power::Admin);
         assert_eq!(g.delegation(&root.digest()), Some(&root));
         assert!(g.get(&cert(root).digest()).is_some());
         assert!(g.revocation(&Digest::from([0u8; 32])).is_none());

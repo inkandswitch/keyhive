@@ -5,10 +5,10 @@
 //! draw from a fixed pool of [`POOL`] deterministic identities, plant a root
 //! edge for each subject, and wire the rest at random. Revocations name
 //! delegations already in the set; a few are re-issued past a revocation so
-//! `seen` collisions and heals both occur.
+//! `cites` collisions and heals both occur.
 
 use crate::{
-    access::Access, certificate::Certificate, delegation::Delegation, id::Id,
+    power::Power, certificate::Certificate, delegation::Delegation, id::Id,
     revocation::Revocation, test_utils::id,
 };
 use alloc::vec::Vec;
@@ -84,8 +84,8 @@ impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C
         // Root edges: each subject grounds itself to some node.
         let subjects = u.int_in_range(1..=3)?;
         for s in 1..=subjects {
-            let aud = pick_id(u)?;
-            certs.push(Delegation::new(id(s), aud, id(s), Access::Admin).into());
+            let audience = pick_id(u)?;
+            certs.push(Delegation::new(id(s), audience, id(s), Power::Admin).into());
         }
 
         // Free-form delegations over any node in the pool as subject, so some
@@ -120,20 +120,20 @@ impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C
                 pick_distinct(u)?,
             );
             let via_role = if u.arbitrary()? {
-                Access::Edit
+                Power::Edit
             } else {
-                Access::Read
+                Power::Read
             };
-            let independent = if via_role == Access::Edit && u.arbitrary()? {
-                Access::Read
+            let independent = if via_role == Power::Edit && u.arbitrary()? {
+                Power::Read
             } else {
-                Access::Relay
+                Power::Relay
             };
-            let grant = Delegation::new(e, f, s, Access::Admin);
+            let grant = Delegation::new(e, f, s, Power::Admin);
             certs.extend::<[Certificate<C>; 6]>([
                 Delegation::new(s, m, s, via_role).into(),
-                Delegation::new(m, k, m, Access::Admin).into(),
-                Delegation::new(k, e, m, Access::Admin).into(),
+                Delegation::new(m, k, m, Power::Admin).into(),
+                Delegation::new(k, e, m, Power::Admin).into(),
                 Delegation::new(s, e, s, independent).into(),
                 grant.into(),
                 Revocation::new(k, grant.digest()).into(),
@@ -151,14 +151,14 @@ impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C
             // A third of revocations are by a party to the target (retraction or
             // renunciation), which random revokers rarely produce.
             let revoker = match u.int_in_range(0..=2)? {
-                0 => target.iss,
-                1 => target.aud,
+                0 => target.issuer,
+                1 => target.audience,
                 _ => pick_id(u)?,
             };
             certs.push(Revocation::new(revoker, target.digest()).into());
         }
 
-        // Re-issues past a revocation, so heals and `seen` collisions happen.
+        // Re-issues past a revocation, so heals and `cites` collisions happen.
         for _ in 0..u.int_in_range(0..=2)? {
             let revs: Vec<Revocation<C>> = certs
                 .iter()
@@ -172,7 +172,7 @@ impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C
             let Some(target) = certs
                 .iter()
                 .filter_map(Certificate::as_delegation)
-                .find(|d| d.digest() == rev.revoke)
+                .find(|d| d.digest() == rev.revokes)
                 .copied()
             else {
                 continue;
