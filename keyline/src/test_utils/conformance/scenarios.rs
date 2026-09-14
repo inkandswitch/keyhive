@@ -11,6 +11,7 @@ use crate::{
     access::Access,
     delegation::Delegation,
     keyline::Keyline,
+    revocation::Revocation,
     test_utils::{cert, id, signed},
 };
 use alloc::vec::Vec;
@@ -306,13 +307,14 @@ pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
     assert!(!g.insert(cert(alice_member)));
     assert_eq!(g.digest(), before);
 
-    let rev = r(CAROL, &alice_member);
+    let rev: Revocation<K::Content> = r(CAROL, &alice_member);
+    let rev_digest = rev.digest();
     g.insert(cert(rev));
     assert!(!g.insert(cert(alice_member)));
     assert!(g
         .revocations_naming(&alice_member.digest())
         .into_iter()
-        .eq([rev.digest()]));
+        .eq([rev_digest]));
 }
 
 pub fn reissue_with_seen_heals<K: Keyline + Default>() {
@@ -322,14 +324,14 @@ pub fn reissue_with_seen_heals<K: Keyline + Default>() {
     g.insert(cert(eve_member));
     assert_eq!(access(&g, DOC, EVE), Some(Access::Edit));
 
-    let rev = r(CAROL, &alice_member);
+    let rev: Revocation<K::Content> = r(CAROL, &alice_member);
+    let healed = alice_member.reissue(rev.digest());
     g.insert(cert(rev));
     assert_eq!(access(&g, DOC, ALICE), None);
     // Eve dies implicitly: nothing named her certificate.
     assert!(!g.is_live(&eve_member.digest()));
     assert_eq!(access(&g, DOC, EVE), None);
 
-    let healed = alice_member.reissue(rev.digest());
     assert_ne!(healed.digest(), alice_member.digest());
     assert!(g.insert(cert(healed)));
     assert!(g.is_live(&healed.digest()));

@@ -39,13 +39,14 @@ use crate::{
     delegation::Delegation,
     id::Id,
     keyline::{set_digest, Keyline},
-    revocation::Revocation,
+    revocation::{Revocation, RevocationId},
     signed::{Signed, Verified},
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
+use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::digest::Digest;
 use tracing::{debug, instrument, trace};
 
@@ -53,24 +54,24 @@ use tracing::{debug, instrument, trace};
 ///
 /// Plain maps of plain data: no interior mutability, so `Send + Sync` hold and
 /// `&self` queries may run in parallel behind a read lock.
-#[derive(Debug, Default, Clone)]
-pub struct MemoryKeyline {
+#[derive(Debug, Clone)]
+pub struct MemoryKeyline<C = ()> {
     /// The set itself, keyed by certificate identity. Retained as received so
     /// certificates can be forwarded without re-encoding.
-    certificates: Map<Digest<Certificate>, Signed<Certificate>>,
+    certificates: Map<Digest<Certificate<C>>, Signed<Certificate<C>>>,
 
     delegations: Map<Digest<Delegation>, Delegation>,
 
     /// `sub -> iss -> edges about sub issued by iss`: the adjacency the search walks.
     edges: Map<Id, Map<Id, Vec<Digest<Delegation>>>>,
 
-    revocations: Map<Digest<Revocation>, Revocation>,
+    revocations: Map<Digest<RevocationId>, Revocation<C>>,
 
     /// Target delegation -> the revocations naming it.
-    denials: Map<Digest<Delegation>, Set<Digest<Revocation>>>,
+    denials: Map<Digest<Delegation>, Set<Digest<RevocationId>>>,
 }
 
-impl MemoryKeyline {
+impl<C: Encode + Decode> MemoryKeyline<C> {
     /// An empty set.
     pub fn new() -> Self {
         Self::default()
@@ -87,7 +88,7 @@ impl MemoryKeyline {
     }
 
     /// The certificate as received, if present.
-    pub fn get(&self, cert: &Digest<Certificate>) -> Option<&Signed<Certificate>> {
+    pub fn get(&self, cert: &Digest<Certificate<C>>) -> Option<&Signed<Certificate<C>>> {
         self.certificates.get(cert)
     }
 
@@ -97,7 +98,7 @@ impl MemoryKeyline {
     }
 
     /// The revocation with this payload digest, if present.
-    pub fn revocation(&self, cert: &Digest<Revocation>) -> Option<&Revocation> {
+    pub fn revocation(&self, cert: &Digest<RevocationId>) -> Option<&Revocation<C>> {
         self.revocations.get(cert)
     }
 
@@ -412,9 +413,24 @@ impl MemoryKeyline {
     }
 }
 
-impl Keyline for MemoryKeyline {
+// Manual: the derive would add a spurious `C: Default` bound, which no field needs.
+impl<C> Default for MemoryKeyline<C> {
+    fn default() -> Self {
+        MemoryKeyline {
+            certificates: Map::new(),
+            delegations: Map::new(),
+            edges: Map::new(),
+            revocations: Map::new(),
+            denials: Map::new(),
+        }
+    }
+}
+
+impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
+    type Content = C;
+
     #[instrument(level = "debug", skip(self, cert), fields(digest = %cert.digest()))]
-    fn insert(&mut self, cert: Verified<Certificate>) -> bool {
+    fn insert(&mut self, cert: Verified<Certificate<C>>) -> bool {
         let digest = cert.digest();
         if self.certificates.contains_key(&digest) {
             debug!("duplicate certificate; not inserted");
@@ -450,11 +466,11 @@ impl Keyline for MemoryKeyline {
         true
     }
 
-    fn contains(&self, cert: &Digest<Certificate>) -> bool {
+    fn contains(&self, cert: &Digest<Certificate<C>>) -> bool {
         self.certificates.contains_key(cert)
     }
 
-    fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<Revocation>> {
+    fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>> {
         self.denials
             .get(cert)
             .map(|revs| revs.iter().copied().collect())
@@ -479,7 +495,7 @@ impl Keyline for MemoryKeyline {
         self.delegations.contains_key(cert) && self.evaluate().live.contains(cert)
     }
 
-    fn digest(&self) -> Digest<BTreeSet<Certificate>> {
+    fn digest(&self) -> Digest<BTreeSet<Certificate<C>>> {
         set_digest(self.certificates.keys().copied())
     }
 }

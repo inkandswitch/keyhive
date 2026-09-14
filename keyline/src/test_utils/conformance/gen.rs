@@ -13,6 +13,7 @@ use crate::{
 };
 use alloc::vec::Vec;
 use arbitrary::{Arbitrary, Result, Unstructured};
+use keyhive_codec::traits::{Decode, Encode};
 
 /// Number of identities in the pool; [`ids`] yields them.
 pub const POOL: u8 = 8;
@@ -25,41 +26,41 @@ pub fn ids() -> impl Iterator<Item = Id> {
 /// A generated certificate set. Order is generation order; laws that care
 /// about order permute it themselves.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CertSet {
-    pub certs: Vec<Certificate>,
+pub struct CertSet<C> {
+    pub certs: Vec<Certificate<C>>,
 }
 
-impl CertSet {
+impl<C: Clone + Encode + Decode> CertSet<C> {
     pub fn delegations(&self) -> impl Iterator<Item = &Delegation> {
         self.certs.iter().filter_map(Certificate::as_delegation)
     }
 
-    pub fn revocations(&self) -> impl Iterator<Item = &Revocation> {
+    pub fn revocations(&self) -> impl Iterator<Item = &Revocation<C>> {
         self.certs.iter().filter_map(Certificate::as_revocation)
     }
 
     /// The same set with every revocation removed.
-    pub fn without_revocations(&self) -> CertSet {
+    pub fn without_revocations(&self) -> CertSet<C> {
         CertSet {
             certs: self
                 .certs
                 .iter()
                 .filter(|c| c.as_delegation().is_some())
-                .copied()
+                .cloned()
                 .collect(),
         }
     }
 
     /// The same set with one certificate removed.
-    pub fn without(&self, index: usize) -> CertSet {
+    pub fn without(&self, index: usize) -> CertSet<C> {
         let mut certs = self.certs.clone();
         certs.remove(index);
         CertSet { certs }
     }
 
     /// Reorder by a permutation given as sort keys, one per certificate.
-    pub fn permuted(&self, keys: &[u8]) -> CertSet {
-        let mut indexed: Vec<(u8, &Certificate)> = self
+    pub fn permuted(&self, keys: &[u8]) -> CertSet<C> {
+        let mut indexed: Vec<(u8, &Certificate<C>)> = self
             .certs
             .iter()
             .enumerate()
@@ -67,7 +68,7 @@ impl CertSet {
             .collect();
         indexed.sort_by_key(|(k, _)| *k);
         CertSet {
-            certs: indexed.into_iter().map(|(_, c)| *c).collect(),
+            certs: indexed.into_iter().map(|(_, c)| c.clone()).collect(),
         }
     }
 }
@@ -76,9 +77,9 @@ fn pick_id(u: &mut Unstructured<'_>) -> Result<Id> {
     Ok(id(u.int_in_range(1..=POOL)?))
 }
 
-impl<'a> Arbitrary<'a> for CertSet {
+impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C> {
     fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
-        let mut certs: Vec<Certificate> = Vec::new();
+        let mut certs: Vec<Certificate<C>> = Vec::new();
 
         // Root edges: each subject grounds itself to some node.
         let subjects = u.int_in_range(1..=3)?;
@@ -129,7 +130,7 @@ impl<'a> Arbitrary<'a> for CertSet {
                 Access::Relay
             };
             let grant = Delegation::new(e, f, s, Access::Admin);
-            certs.extend::<[Certificate; 6]>([
+            certs.extend::<[Certificate<C>; 6]>([
                 Delegation::new(s, m, s, via_role).into(),
                 Delegation::new(m, k, m, Access::Admin).into(),
                 Delegation::new(k, e, m, Access::Admin).into(),
@@ -159,15 +160,15 @@ impl<'a> Arbitrary<'a> for CertSet {
 
         // Re-issues past a revocation, so heals and `seen` collisions happen.
         for _ in 0..u.int_in_range(0..=2)? {
-            let revs: Vec<Revocation> = certs
+            let revs: Vec<Revocation<C>> = certs
                 .iter()
                 .filter_map(Certificate::as_revocation)
-                .copied()
+                .cloned()
                 .collect();
             if revs.is_empty() {
                 break;
             }
-            let rev = revs[u.choose_index(revs.len())?];
+            let rev = revs[u.choose_index(revs.len())?].clone();
             let Some(target) = certs
                 .iter()
                 .filter_map(Certificate::as_delegation)

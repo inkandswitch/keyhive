@@ -24,6 +24,7 @@ use crate::{
     revocation::Revocation,
     test_utils::{cert, id},
 };
+use keyhive_codec::traits::{Decode, Encode};
 
 // The cast, as small integers for `test_utils::id`. Roles first, then people
 // in the usual order (Alice, Bob, Carol, Dan, Eve, Frank).
@@ -44,12 +45,35 @@ pub fn d(iss: u8, aud: u8, sub: u8, can: Access) -> Delegation {
     Delegation::new(id(iss), id(aud), id(sub), can)
 }
 
-pub fn r(iss: u8, target: &Delegation) -> Revocation {
+pub fn r<C>(iss: u8, target: &Delegation) -> Revocation<C> {
     Revocation::new(id(iss), target.digest())
 }
 
+/// What a backend's content type must satisfy to run the generated laws.
+///
+/// The scenarios need none of this — they never look at [`crate::revocation::Revocation::keep`]
+/// — but the laws generate whole certificate sets, so the content type has to
+/// be generatable and comparable as well as encodable.
+pub trait TestContent:
+    'static + for<'a> arbitrary::Arbitrary<'a> + Clone + core::fmt::Debug + Eq + Ord + Encode + Decode
+{
+}
+
+impl<
+        T: 'static
+            + for<'a> arbitrary::Arbitrary<'a>
+            + Clone
+            + core::fmt::Debug
+            + Eq
+            + Ord
+            + Encode
+            + Decode,
+    > TestContent for T
+{
+}
+
 /// A backend holding exactly these certificates.
-pub fn build<K: Keyline + Default, I: IntoIterator<Item = Certificate>>(certs: I) -> K {
+pub fn build<K: Keyline + Default, I: IntoIterator<Item = Certificate<K::Content>>>(certs: I) -> K {
     let mut k = K::default();
     for c in certs {
         k.insert(cert(c));
