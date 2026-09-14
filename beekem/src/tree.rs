@@ -118,8 +118,15 @@ impl BeeKem {
         let mut leaves_to_sort = Vec::new();
         for (id, idx) in removed_ids {
             added_ids.remove(&id);
+            if idx as usize >= self.leaves.len() {
+                continue;
+            }
             let leaf_idx = LeafNodeIndex::new(idx);
-            debug_assert!(self.leaf(leaf_idx).is_none());
+            if self.leaf(leaf_idx).is_some() {
+                // The merge would have cleared the removed member's leaf. This must
+                // be someone else.
+                continue;
+            }
             // We should have already removed this id during merge, but concurrent
             // updates at other leaves with intersecting paths must be overridden by
             // this remove.
@@ -318,12 +325,9 @@ impl BeeKem {
     pub fn apply_path(&mut self, new_path: &PathChange) {
         // If this id has been concurrently removed, it might no longer be present
         // when we try to apply the concurrent update at that id.
-        if !self.id_to_leaf_idx.contains_key(&new_path.leaf_id) {
+        let Ok(&leaf_idx) = self.leaf_index_for_id(new_path.leaf_id) else {
             return;
-        }
-        let leaf_idx = *self
-            .leaf_index_for_id(new_path.leaf_id)
-            .expect("Id should be present");
+        };
         if !self.is_valid_path(new_path) {
             // Since this path is no longer valid, we can only update the leaf for
             // this id.
@@ -569,15 +573,20 @@ impl BeeKem {
         self.inner_nodes[idx.usize()] = None;
     }
 
-    /// Whether the [`PathChange`] still makes sense given the state of the tree
-    /// we are attempting to merge it into.
+    /// Whether `new_path` is actually the direct path of its leaf.
     fn is_valid_path(&self, new_path: &PathChange) -> bool {
-        debug_assert!(self.id_to_leaf_idx.contains_key(&new_path.leaf_id));
-        let leaf_idx = self
-            .leaf_index_for_id(new_path.leaf_id)
-            .expect("Id should be present");
-        new_path.path.len() == self.path_length_for(LeafNodeIndex::new(new_path.leaf_idx))
-            && leaf_idx.u32() == new_path.leaf_idx
+        let Ok(leaf_idx) = self.leaf_index_for_id(new_path.leaf_id) else {
+            return false;
+        };
+        if leaf_idx.u32() != new_path.leaf_idx {
+            return false;
+        }
+        let expected = treemath::direct_path((*leaf_idx).into(), self.tree_size);
+        new_path
+            .path
+            .iter()
+            .map(|(idx, _)| *idx)
+            .eq(expected.iter().map(|idx| idx.u32()))
     }
 
     /// Growing the tree will add a new root and a new subtree, all blank.
@@ -600,10 +609,6 @@ impl BeeKem {
         idx == treemath::root(self.tree_size)
     }
 
-    fn path_length_for(&self, idx: LeafNodeIndex) -> usize {
-        treemath::direct_path(idx.into(), self.tree_size).len()
-    }
-
     /// Highest non-blank, non-conflict descendants of a node
     fn append_resolution(&self, idx: TreeNodeIndex, acc: &mut Vec<TreeNodeIndex>) {
         if self.should_skip_for_resolution(idx) {
@@ -623,4 +628,138 @@ impl BeeKem {
 pub struct LeafNode {
     pub id: MemberId,
     pub pk: NodeKey,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::collections::BTreeMap;
+
+    /// Deterministic so test failures reproduce.
+    struct SeededRng(u64);
+
+    impl rand::RngCore for SeededRng {
+        fn next_u32(&mut self) -> u32 {
+            self.next_u64() as u32
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0
+        }
+
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            for chunk in dest.chunks_mut(8) {
+                let bytes = self.next_u64().to_le_bytes();
+                chunk.copy_from_slice(&bytes[..chunk.len()]);
+            }
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+
+    impl rand::CryptoRng for SeededRng {}
+
+    fn share_key(csprng: &mut SeededRng) -> ShareKey {
+        ShareSecretKey::generate(csprng).share_key()
+    }
+
+    fn member_id(csprng: &mut SeededRng) -> MemberId {
+        MemberId(ed25519_dalek::SigningKey::generate(csprng).verifying_key())
+    }
+
+    /// Four members, so that there are leaves in different subtrees.
+    fn four_member_tree(csprng: &mut SeededRng) -> (BeeKem, MemberId) {
+        let doc_id = TreeId(ed25519_dalek::SigningKey::generate(csprng).verifying_key());
+        let first = member_id(csprng);
+        let mut tree = BeeKem::new(doc_id, first, share_key(csprng)).expect("a one member tree");
+        for _ in 0..3 {
+            tree.push_leaf(member_id(csprng), share_key(csprng).into());
+        }
+        (tree, first)
+    }
+
+    #[test]
+    fn a_path_belonging_to_another_leaf_is_not_merged_into_the_wrong_subtree() {
+        let csprng = &mut SeededRng(1);
+        let (mut tree, first) = four_member_tree(csprng);
+        let first_idx = *tree.leaf_index_for_id(first).expect("the first is seated");
+        let elsewhere = LeafNodeIndex::new(3);
+
+        let mine = treemath::direct_path(first_idx.into(), tree.tree_size);
+        let theirs = treemath::direct_path(elsewhere.into(), tree.tree_size);
+        assert_ne!(mine, theirs, "the two leaves must be in different subtrees");
+        // The node just above the other leaf, which is on their path and not on
+        // mine.
+        let intruded = theirs[0];
+        assert!(!mine.contains(&intruded));
+        assert!(tree.inner_node(intruded).is_none(), "blank to begin with");
+
+        let junk = share_key(csprng);
+        let forged = PathChange {
+            leaf_id: first,
+            leaf_idx: first_idx.u32(),
+            leaf_pk: NodeKey::ShareKey(share_key(csprng)),
+            path: theirs
+                .iter()
+                .map(|idx| (idx.u32(), SecretStore::new(junk, junk, BTreeMap::new())))
+                .collect(),
+            removed_keys: vec![],
+        };
+        tree.apply_path(&forged);
+
+        assert!(
+            tree.inner_node(intruded).is_none(),
+            "another member's subtree was written to"
+        );
+    }
+
+    #[test]
+    fn a_path_whose_indices_are_out_of_range_updates_only_the_leaf() {
+        let csprng = &mut SeededRng(2);
+        let (mut tree, first) = four_member_tree(csprng);
+        let first_idx = *tree.leaf_index_for_id(first).expect("the first is seated");
+        let mine = treemath::direct_path(first_idx.into(), tree.tree_size);
+
+        // As many indices as a real direct path, so a check on the length alone
+        // would let them through but past the end of the tree.
+        let past_the_end = tree.inner_nodes.len() as u32;
+        let junk = share_key(csprng);
+        let rotated_to = share_key(csprng);
+        let forged = PathChange {
+            leaf_id: first,
+            leaf_idx: first_idx.u32(),
+            leaf_pk: NodeKey::ShareKey(rotated_to),
+            path: (0..mine.len() as u32)
+                .map(|n| {
+                    (
+                        past_the_end + n,
+                        SecretStore::new(junk, junk, BTreeMap::new()),
+                    )
+                })
+                .collect(),
+            removed_keys: tree
+                .node_key_for_id(first)
+                .expect("the first is placed")
+                .keys(),
+        };
+
+        // We shouldn't panic attempting to reach an out of range index.
+        tree.apply_path(&forged);
+
+        assert_eq!(
+            tree.node_key_for_id(first).expect("the first is placed"),
+            NodeKey::ShareKey(rotated_to)
+        );
+        for idx in mine {
+            assert!(tree.inner_node(idx).is_none(), "the path was not blanked");
+        }
+        assert_eq!(tree.member_count(), 4, "nobody was removed");
+    }
 }
