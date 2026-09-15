@@ -614,7 +614,7 @@ async fn test_competing_cgka_init_adds() -> TestResult {
             doc_tree_id,
             bob_member_id,
             bob_pk,
-            beekem::operation::CgkaAuthorization::Delegation([0; 32]),
+            beekem::operation::CgkaAuthorization::Delegation([0u8; 32]),
         );
         let signed_init = keyhive_crypto::signer::async_signer::try_sign_async::<
             future_form::Sendable,
