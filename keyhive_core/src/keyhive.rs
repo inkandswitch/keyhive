@@ -56,7 +56,8 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::{
-    encrypted::EncryptedContent, error::CgkaError, operation::CgkaOperation, pcs_key::PcsKey,
+    encrypted::EncryptedContent, error::CgkaError, keys::LeafKeyPair, operation::CgkaOperation,
+    pcs_key::PcsKey,
 };
 use derive_where::derive_where;
 use dupe::{Dupe, OptionDupedExt};
@@ -65,7 +66,7 @@ use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::ShareKey,
     signed::{Signed, SigningError, VerificationError},
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
@@ -673,7 +674,7 @@ impl<
     {
         let handle = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
-        let result = {
+        let (result, new_key_pair) = {
             let mut locked_csprng = self.csprng.lock().await;
             handle
                 .lock()
@@ -687,6 +688,7 @@ impl<
                 )
                 .await?
         };
+        self.insert_rotated_secret(new_key_pair).await;
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
         }
@@ -705,7 +707,7 @@ impl<
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
         let doc = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
-        let (result, application_secret_key) = {
+        let (result, application_secret_key, new_key_pair) = {
             let mut locked_csprng = self.csprng.lock().await;
             doc.lock()
                 .await
@@ -719,10 +721,19 @@ impl<
                 .await
                 .map_err(EncryptContentError::from)?
         };
+        self.insert_rotated_secret(new_key_pair).await;
         if let Some(op) = &result.update_op {
             self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
         }
         Ok((result, application_secret_key))
+    }
+
+    /// Insert a rotation's leaf key in the shareable secrets for sharing with other
+    /// instances of a keyhive identity.
+    async fn insert_rotated_secret(&self, key_pair: Option<LeafKeyPair>) {
+        if let Some((pk, sk)) = key_pair {
+            self.active.lock().await.insert_rotated_secret(pk, sk).await;
+        }
     }
 
     /// The identities in `doc`'s encryption tree. Returns `None` if it has no tree yet.
@@ -838,17 +849,20 @@ impl<
     pub async fn force_pcs_update(
         &self,
         doc: DocumentId,
-    ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, Option<LeafKeyPair>), EncryptError> {
         let handle = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
-        let mut locked_csprng = self.csprng.lock().await;
-        let (op, new_share_key, new_share_secret_key) = handle
-            .lock()
-            .await
-            .pcs_update(&signer, &mut *locked_csprng)
-            .await?;
+        let (op, new_key_pair) = {
+            let mut locked_csprng = self.csprng.lock().await;
+            handle
+                .lock()
+                .await
+                .pcs_update(&signer, &mut *locked_csprng)
+                .await?
+        };
+        self.insert_rotated_secret(new_key_pair).await;
         self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
-        Ok((op, new_share_key, new_share_secret_key))
+        Ok((op, new_key_pair))
     }
 
     /// Every document the active agent reaches and at what access level.
@@ -1961,7 +1975,7 @@ impl<
             let active_id = locked_active.id();
             if active_id == added_id {
                 let sk = {
-                    let locked_prekeys = locked_active.prekey_pairs.lock().await;
+                    let locked_prekeys = locked_active.key_pairs.lock().await;
                     *locked_prekeys
                         .get(&pk)
                         .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?
@@ -1980,16 +1994,122 @@ impl<
                 let merged = locked_doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
                 locked_doc.reset_cgka_owner(active_id)?;
                 drop(locked_doc);
+                // Resetting the owner changes which leaf is ours so a secret we hold for
+                // it may only now be the one this document needs. Release the active
+                // guard first.
+                drop(locked_active);
+                self.adopt_leaf_secrets(&doc, Vec::new()).await;
                 if merged {
                     self.event_listener.on_cgka_op(&signed_op).await;
                 }
                 return Ok(());
             }
         }
-        if doc.lock().await.merge_cgka_op(signed_op.clone())? {
+        let merged = doc.lock().await.merge_cgka_op(signed_op.clone())?;
+        let mut leaf_keys = Vec::new();
+        if let CgkaOperation::Update { id, new_path, .. } = &signed_op.payload {
+            if IndividualId::from(*id) == self.active.lock().await.id() {
+                leaf_keys.extend(new_path.leaf_pk.keys());
+            }
+        }
+        self.adopt_leaf_secrets(&doc, leaf_keys).await;
+        if merged {
             self.event_listener.on_cgka_op(&signed_op).await;
         }
         Ok(())
+    }
+
+    /// Move the secret for our own leaf in `doc` from the shareable secrets into the
+    /// document, if we hold it and the document does not.
+    ///
+    /// Considers the current leaf key plus any in `also`.
+    async fn adopt_leaf_secrets(
+        &self,
+        doc: &Arc<Mutex<Document<F, S, T, L>>>,
+        also: Vec<ShareKey>,
+    ) {
+        let wanted: Vec<ShareKey> = {
+            let locked_doc = doc.lock().await;
+            let Ok(cgka) = locked_doc.cgka() else { return };
+            let mut leaf_keys = also;
+            leaf_keys.extend(cgka.owner_leaf_key());
+            leaf_keys.retain(|pk| !cgka.owner_sks().contains_key(pk));
+            leaf_keys
+        };
+        if wanted.is_empty() {
+            return;
+        }
+        let held: Vec<_> = {
+            let locked_active = self.active.lock().await;
+            let pairs = locked_active.key_pairs.lock().await;
+            wanted
+                .into_iter()
+                .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, *sk)))
+                .collect()
+        };
+        if held.is_empty() {
+            return;
+        }
+        match doc.lock().await.cgka_mut() {
+            Ok(cgka) => {
+                for (pk, sk) in held {
+                    cgka.owner_sks_mut().insert(pk, sk);
+                }
+            }
+            Err(e) => tracing::warn!("document lost its key tree while adopting: {e}"),
+        }
+    }
+
+    /// Adopt a leaf secret into every document that needs to take one.
+    async fn adopt_all_leaf_secrets(&self) {
+        let docs: Vec<_> = self.docs.lock().await.values().cloned().collect();
+        for doc in docs {
+            self.adopt_seated_leaf_secrets(&doc).await;
+        }
+    }
+
+    /// Move into `doc` every secret we hold for a key the document has ever placed at our
+    /// leaf.
+    async fn adopt_seated_leaf_secrets(&self, doc: &Arc<Mutex<Document<F, S, T, L>>>) {
+        let me = { self.active.lock().await.id() };
+        let wanted: Vec<ShareKey> = {
+            let locked_doc = doc.lock().await;
+            let Ok(cgka) = locked_doc.cgka() else { return };
+            let mut leaf_keys: Vec<ShareKey> = cgka.owner_leaf_key().into_iter().collect();
+            if let Ok(epochs) = locked_doc.cgka_ops() {
+                for op in epochs.iter().flat_map(|epoch| epoch.iter()) {
+                    if let CgkaOperation::Update { id, new_path, .. } = &op.payload {
+                        if IndividualId::from(*id) == me {
+                            leaf_keys.extend(new_path.leaf_pk.keys());
+                        }
+                    }
+                }
+            }
+            leaf_keys.retain(|pk| !cgka.owner_sks().contains_key(pk));
+            leaf_keys
+        };
+        if wanted.is_empty() {
+            return;
+        }
+        let held: Vec<_> = {
+            let locked_active = self.active.lock().await;
+            let pairs = locked_active.key_pairs.lock().await;
+            wanted
+                .into_iter()
+                .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, *sk)))
+                .collect()
+        };
+        if held.is_empty() {
+            return;
+        }
+        match doc.lock().await.cgka_mut() {
+            Ok(cgka) => {
+                for (pk, sk) in held {
+                    cgka.owner_sks_mut().insert(pk, sk);
+                }
+            }
+            Err(e) => tracing::warn!("document lost its key tree while adopting: {e}"),
+        }
     }
 
     #[instrument(skip_all)]
@@ -2083,6 +2203,7 @@ impl<
         let active = self.active.lock().await;
         active.import_prekey_secrets(bytes).await?;
         drop(active);
+        self.adopt_all_leaf_secrets().await;
         Ok(self.ingest_unsorted_static_events(vec![]).await)
     }
 
@@ -2418,10 +2539,10 @@ impl<
             let locked_active = self.active.lock().await;
             {
                 locked_active
-                    .prekey_pairs
+                    .key_pairs
                     .lock()
                     .await
-                    .extend(archive.active.prekey_pairs);
+                    .extend(archive.active.key_pairs);
             }
             {
                 locked_active
@@ -2440,6 +2561,8 @@ impl<
                 locked_indies.insert(id, Arc::new(Mutex::new(indie)));
             }
         }
+        self.adopt_all_leaf_secrets().await;
+
         let events = archive
             .topsorted_ops
             .into_iter()
@@ -3129,14 +3252,7 @@ mod tests {
         hive.generate_doc(vec![indie_id.into()], nonempty![[1u8; 32], [2u8; 32]])
             .await?;
 
-        assert!(!hive
-            .active
-            .lock()
-            .await
-            .prekey_pairs
-            .lock()
-            .await
-            .is_empty());
+        assert!(!hive.active.lock().await.key_pairs.lock().await.is_empty());
         assert_eq!(hive.individuals.lock().await.len(), 3);
         assert_eq!(hive.groups.lock().await.len(), 1);
         assert_eq!(hive.docs.lock().await.len(), 1);
@@ -4225,7 +4341,7 @@ mod tests {
                     .active
                     .lock()
                     .await
-                    .prekey_pairs
+                    .key_pairs
                     .lock()
                     .await
                     .len(),
@@ -4252,9 +4368,9 @@ mod tests {
                 let init_group_count = fork.groups.lock().await.len();
                 assert_eq!(init_group_count, 1);
 
-                assert_eq!(fork.active.lock().await.prekey_pairs.lock().await.len(), 7);
+                assert_eq!(fork.active.lock().await.key_pairs.lock().await.len(), 7);
                 fork.expand_prekeys().await.unwrap(); // 1 event (prekey)
-                assert_eq!(fork.active.lock().await.prekey_pairs.lock().await.len(), 8);
+                assert_eq!(fork.active.lock().await.key_pairs.lock().await.len(), 8);
 
                 let bob_indie = Individual::generate::<Sendable, _, _>(
                     &MemorySigner::generate(&mut rand::rngs::OsRng),
@@ -4327,7 +4443,7 @@ mod tests {
                     .active
                     .lock()
                     .await
-                    .prekey_pairs
+                    .key_pairs
                     .lock()
                     .await
                     .len(),
