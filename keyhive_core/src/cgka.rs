@@ -12,7 +12,7 @@ use beekem::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::ShareKeyMap,
-    operation::{CgkaEpoch, CgkaOperation},
+    operation::{CgkaAuthorization, CgkaEpoch, CgkaOperation},
     pcs_key::{ApplicationSecret, PcsKey},
 };
 use future_form::FutureForm;
@@ -67,12 +67,14 @@ impl Cgka {
         doc_id: DocumentId,
         owner_id: IndividualId,
         owner_pk: ShareKey,
+        authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Self, CgkaError> {
         let mut inner = beekem::cgka::Cgka::new(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
             owner_pk,
+            authorization,
             signer,
         )
         .await?;
@@ -158,26 +160,32 @@ impl Cgka {
         &mut self,
         id: IndividualId,
         pk: ShareKey,
+        authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.0.add(MemberId(id.verifying_key()), pk, signer).await
+        self.0
+            .add(MemberId(id.verifying_key()), pk, authorization, signer)
+            .await
     }
 
     pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        members: NonEmpty<(IndividualId, ShareKey)>,
+        members: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
-        let converted = members.map(|(id, pk)| (MemberId(id.verifying_key()), pk));
+        let converted = members.map(|(id, pk, auth)| (MemberId(id.verifying_key()), pk, auth));
         self.0.add_multiple(converted, signer).await
     }
 
     pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
+        authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.0.remove(MemberId(id.verifying_key()), signer).await
+        self.0
+            .remove(MemberId(id.verifying_key()), authorization, signer)
+            .await
     }
 
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(

@@ -23,6 +23,17 @@ use keyhive_crypto::{digest::Digest, share_key::ShareKey, signed::Signed};
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 
+/// The membership operation authorizing a [`CgkaOperation`].
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub enum CgkaAuthorization {
+    /// The digest of the delegation that generated an add.
+    Delegation([u8; 32]),
+
+    /// The digest of the revocation that generated a remove.
+    Revocation([u8; 32]),
+}
+
 /// An ordered [`NonEmpty`] of concurrent [`CgkaOperation`]s.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CgkaEpoch(NonEmpty<Arc<Signed<CgkaOperation>>>);
@@ -60,6 +71,7 @@ pub enum CgkaOperation {
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         add_predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
+        authorization: CgkaAuthorization,
     },
     Remove {
         id: MemberId,
@@ -67,6 +79,7 @@ pub enum CgkaOperation {
         removed_keys: Vec<ShareKey>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
+        authorization: CgkaAuthorization,
     },
     Update {
         id: MemberId,
@@ -77,7 +90,12 @@ pub enum CgkaOperation {
 }
 
 impl CgkaOperation {
-    pub fn init_add(doc_id: TreeId, added_id: MemberId, pk: ShareKey) -> Self {
+    pub fn init_add(
+        doc_id: TreeId,
+        added_id: MemberId,
+        pk: ShareKey,
+        authorization: CgkaAuthorization,
+    ) -> Self {
         Self::Add {
             added_id,
             pk,
@@ -85,6 +103,7 @@ impl CgkaOperation {
             predecessors: Vec::new(),
             add_predecessors: Vec::new(),
             doc_id,
+            authorization,
         }
     }
 
