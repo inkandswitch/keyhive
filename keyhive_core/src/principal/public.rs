@@ -84,7 +84,7 @@ impl Public {
         Active {
             id: self.signer().verifying_key().into(),
             signer: self.signer(),
-            prekey_pairs: Arc::new(Mutex::new(BTreeMap::from_iter([(
+            key_pairs: Arc::new(Mutex::new(BTreeMap::from_iter([(
                 self.share_key(),
                 self.share_secret_key(),
             )]))),
