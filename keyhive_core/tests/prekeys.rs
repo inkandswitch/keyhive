@@ -112,12 +112,12 @@ async fn a_rotated_away_intermediate_prekey_does_not_survive() -> Result<()> {
 async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_worker = ctx.new_keyhive_instance_for(&alice, "alice-worker").await?;
+    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
 
     let k1 = alice.expand_prekeys().await?.payload().share_key;
     ctx.sync_all_unsent().await?;
     assert!(
-        ctx.prekeys_of(&alice_worker, alice.id())
+        ctx.prekeys_of(&alice_replica, alice.id())
             .await?
             .contains(&k1),
         "both instances start from the same key"
@@ -125,15 +125,15 @@ async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
 
     // Neither rotation has heard of the other.
     let from_first = alice.rotate_prekey(k1).await?.payload().new;
-    let from_worker = alice_worker.rotate_prekey(k1).await?.payload().new;
-    assert_ne!(from_first, from_worker);
+    let from_replica = alice_replica.rotate_prekey(k1).await?.payload().new;
+    assert_ne!(from_first, from_replica);
 
     ctx.sync_all_unsent().await?;
 
-    for observer in [&alice, &alice_worker] {
+    for observer in [&alice, &alice_replica] {
         let live = ctx.prekeys_of(observer, alice.id()).await?;
         assert!(
-            live.contains(&from_first) && live.contains(&from_worker),
+            live.contains(&from_first) && live.contains(&from_replica),
             "{} lost one of the two concurrent replacements",
             observer.name()
         );
