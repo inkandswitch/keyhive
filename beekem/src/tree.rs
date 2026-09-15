@@ -692,6 +692,40 @@ mod tests {
     }
 
     #[test]
+    fn a_path_whose_indices_are_out_of_range_updates_only_the_leaf() {
+        let (mut tree, [owner, ..], genuine) = seeded();
+        let owner_idx = *tree.leaf_index_for_id(owner).expect("the owner is seated");
+        let mine = treemath::direct_path(owner_idx.into(), tree.tree_size);
+
+        // As many indices as a real direct path, so a check on the length alone
+        // would let them through, and every one of them past the end of the tree.
+        let past_the_end = tree.inner_nodes.len() as u32;
+        let mut forged = genuine.clone();
+        forged.path = genuine
+            .path
+            .iter()
+            .enumerate()
+            .map(|(n, (_, store))| (past_the_end + n as u32, store.clone()))
+            .collect();
+        forged.removed_keys = tree
+            .node_key_for_id(owner)
+            .expect("the owner is placed")
+            .keys();
+
+        tree.apply_path(&forged);
+
+        assert_eq!(
+            tree.node_key_for_id(owner).expect("the owner is placed"),
+            genuine.leaf_pk,
+            "the leaf it names is still its own to rotate"
+        );
+        for idx in mine {
+            assert!(tree.inner_node(idx).is_none(), "the path was not blanked");
+        }
+        assert_eq!(tree.member_count(), 4, "nobody was removed");
+    }
+
+    #[test]
     fn a_member_should_not_write_to_other_paths() {
         let (tree, _, genuine) = seeded();
         assert_eq!(
