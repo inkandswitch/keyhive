@@ -57,6 +57,7 @@ pub enum CgkaError {
     #[cfg_attr(feature = "thiserror", error("SecretKey not found"))]
     SecretKeyNotFound,
 
+    // TODO: Support empty trees and remove this error
     #[cfg_attr(feature = "thiserror", error("Tried to remove last member from group"))]
     RemoveLastMember,
 
