@@ -1,11 +1,19 @@
 //! Syncing events between keyhives.
 
+use beekem::{
+    id::{MemberId, TreeId},
+    operation::CgkaOperation,
+};
 use keyhive_core::{
     access::Access::{self, Edit, Read},
     event::Event,
-    test_utils::{EventKind, TestContext, TestResult as Result},
+    principal::{document::id::DocumentId, individual::id::IndividualId},
+    test_utils::{EventKind, Instance, TestContext, TestError, TestResult as Result},
 };
-use keyhive_crypto::{digest::Digest, signer::memory::MemorySigner};
+use keyhive_crypto::{
+    digest::Digest, share_key::ShareKey, signed::Signed, signer::memory::MemorySigner,
+    verifiable::Verifiable,
+};
 use std::collections::BTreeSet;
 
 /// The event type the harness's keyhives emit.
@@ -422,5 +430,94 @@ async fn all_agent_events_agrees_with_the_per_agent_walk() -> Result<()> {
             who.name()
         );
     }
+    Ok(())
+}
+
+/// The member individuals in `who`'s key agreement tree for `doc`, sorted.
+async fn tree_members(who: &Instance, doc: DocumentId) -> Vec<IndividualId> {
+    let mut ids: Vec<_> = who
+        .cgka_members_for(doc)
+        .await
+        .expect("knows the document")
+        .expect("an initialized tree")
+        .into_iter()
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// The key agreement operation heads for `doc` as `who` sees them.
+async fn cgka_heads(who: &Instance, doc: DocumentId) -> Vec<Digest<Signed<CgkaOperation>>> {
+    let ops = who.cgka_ops_for_doc(&doc).await.unwrap().unwrap();
+    let referenced: BTreeSet<_> = ops
+        .iter()
+        .flat_map(|op| op.payload.predecessors())
+        .collect();
+    ops.iter()
+        .map(|op| Digest::hash(op.as_ref()))
+        .filter(|d| !referenced.contains(d))
+        .collect()
+}
+
+async fn a_prekey_of(who: &Instance, doc: DocumentId) -> ShareKey {
+    let indie = who
+        .get_individual(who.id())
+        .await
+        .expect("a known individual");
+    let guard = indie.lock().await;
+    *guard.pick_prekey(doc)
+}
+
+#[tokio::test]
+async fn a_peer_sent_a_concurrent_removal_still_applies_later_ones() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let erin = ctx.individual("erin").await?;
+    let dave = ctx.individual("dave").await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    for who in [&bob, &carol, &erin, &dave] {
+        alice.add_member(who.id(), design_doc, Read, &[]).await?;
+    }
+    ctx.sync_all_unsent().await?;
+    // Dave's heads before carol is removed, so the removal below reaches him
+    // concurrent with the one he already has rather than in sequence.
+    let before_the_removal = cgka_heads(&dave, design_doc).await;
+
+    let update = alice.revoke_member(carol.id(), true, design_doc).await?;
+    let leaf_idx = update
+        .cgka_ops()
+        .iter()
+        .find_map(|op| match op.payload() {
+            CgkaOperation::Remove { leaf_idx, .. } => Some(*leaf_idx),
+            _ => None,
+        })
+        .expect("a removal of carol");
+    ctx.sync(&alice, &dave).await?;
+
+    // Another removal of carol, differing from the one dave holds only in a
+    // field nothing reads, so it is a distinct operation rather than one he
+    // deduplicates away.
+    let again = CgkaOperation::Remove {
+        id: MemberId(carol.id().verifying_key()),
+        leaf_idx,
+        removed_keys: vec![a_prekey_of(&bob, design_doc).await],
+        predecessors: before_the_removal,
+        doc_id: TreeId(design_doc.verifying_key()),
+    };
+    dave.receive_cgka_op(alice.try_sign(again).await?)
+        .await
+        .map_err(|e| TestError::Other(e.to_string()))?;
+
+    alice.revoke_member(erin.id(), true, design_doc).await?;
+    ctx.sync(&alice, &dave).await?;
+
+    assert_eq!(
+        tree_members(&dave, design_doc).await,
+        tree_members(&alice, design_doc).await,
+        "dave stopped applying membership changes after the concurrent removal"
+    );
     Ok(())
 }
