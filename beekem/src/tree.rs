@@ -875,7 +875,7 @@ mod tests {
 
         tree.sort_leaves_and_blank_paths_for_concurrent_membership_changes(
             Set::from_iter([joiner]),
-            BTreeSet::from_iter([(owner, freed)]),
+            Set::from_iter([(owner, freed)]),
         );
 
         assert!(

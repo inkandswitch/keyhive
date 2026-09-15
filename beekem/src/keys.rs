@@ -9,6 +9,9 @@ use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 
+/// A key pair at a BeeKEM leaf.
+pub type LeafKeyPair = (ShareKey, ShareSecretKey);
+
 /// A [`ShareKeyMap`] stores the secret keys for all of the public keys
 /// on your path that you have encountered so far (either because you added them
 /// to your path as part of an update or decrypted them when decrypting your path).

@@ -11,7 +11,7 @@ use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
     id::{MemberId, TreeId},
-    keys::ShareKeyMap,
+    keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaEpoch, CgkaOperation},
     pcs_key::{ApplicationSecret, PcsKey},
 };
@@ -129,6 +129,7 @@ impl Cgka {
         &mut self.0.owner_sks
     }
 
+    #[allow(clippy::type_complexity)]
     pub async fn new_app_secret_for<
         F: FutureForm,
         S: AsyncSigner<F>,
@@ -141,7 +142,14 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+    ) -> Result<
+        (
+            ApplicationSecret<T>,
+            Option<Signed<CgkaOperation>>,
+            Option<LeafKeyPair>,
+        ),
+        CgkaError,
+    > {
         self.0
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
             .await
@@ -180,14 +188,19 @@ impl Cgka {
         self.0.remove(MemberId(id.verifying_key()), signer).await
     }
 
+    #[allow(clippy::type_complexity)]
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>, Option<LeafKeyPair>), CgkaError> {
         self.0.update(new_pk, new_sk, signer, csprng).await
+    }
+
+    pub fn owner_leaf_key(&self) -> Option<ShareKey> {
+        self.0.owner_leaf_key()
     }
 
     pub fn group_size(&self) -> u32 {
