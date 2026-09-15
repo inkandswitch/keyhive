@@ -9,6 +9,7 @@ use super::{
     membered::Membered,
 };
 use crate::{
+    access::Access,
     listener::{membership::MembershipListener, no_listener::NoListener},
     principal::group::delegation::Delegation,
     util::content_addressed_map::CaMap,
@@ -76,6 +77,23 @@ fn push_readers<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipLi
     }
 }
 
+/// The same as [`push_readers`] for members a resource has revoked.
+fn push_revoked_readers<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    readers: &mut Vec<Agent<F, S, T, L>>,
+    revoked: &HashMap<Identifier, (Agent<F, S, T, L>, Access)>,
+) {
+    for (agent, access) in revoked.values() {
+        if access.is_reader() {
+            readers.push(agent.dupe());
+        }
+    }
+}
+
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
     Agent<F, S, T, L>
 {
@@ -102,6 +120,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     ///
     /// Someone reachable only by relay is not entitled to decrypt anything.
     pub async fn individual_ids(&self) -> HashSet<IndividualId> {
+        self.reachable_individual_ids(false).await
+    }
+
+    /// The individuals reachable from this agent by delegations of
+    /// [`Access::Read`](crate::access::Access::Read) or better, as well as
+    /// individuals a group has since revoked.
+    pub async fn individual_ids_ever(&self) -> HashSet<IndividualId> {
+        self.reachable_individual_ids(true).await
+    }
+
+    async fn reachable_individual_ids(&self, include_revoked: bool) -> HashSet<IndividualId> {
         let mut ids = HashSet::new();
         let mut seen = HashSet::new();
         let mut readers: Vec<Self> = vec![self.dupe()];
@@ -118,10 +147,18 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     ids.insert(i_id);
                 }
                 Agent::Group(_, g) => {
-                    push_readers(&mut readers, g.lock().await.members());
+                    let locked = g.lock().await;
+                    push_readers(&mut readers, locked.members());
+                    if include_revoked {
+                        push_revoked_readers(&mut readers, &locked.revoked_members());
+                    }
                 }
                 Agent::Document(_, d) => {
-                    push_readers(&mut readers, d.lock().await.members());
+                    let locked = d.lock().await;
+                    push_readers(&mut readers, locked.members());
+                    if include_revoked {
+                        push_revoked_readers(&mut readers, &locked.revoked_members());
+                    }
                 }
             }
         }

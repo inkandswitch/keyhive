@@ -58,7 +58,8 @@ use crate::{
 use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
-    keys::{LeafKeyPair, ShareKeyMap},
+    id::MemberId,
+    keys::{LeafKeyPair, NodeKey, ShareKeyMap},
     operation::{CgkaAuthorization, CgkaOperation},
     pcs_key::PcsKey,
 };
@@ -2029,6 +2030,131 @@ impl<
         Ok(())
     }
 
+    /// Whether the membership graph authorizes `signed_op` on this document.
+    ///
+    /// An add or a remove cites the membership operation that generated it. An
+    /// update does not cite anything and is checked against the leaf it rotates.
+    async fn cgka_op_is_authorized(
+        &self,
+        signed_op: &Signed<CgkaOperation>,
+        doc: &Arc<Mutex<Document<F, S, T, L>>>,
+        doc_id: DocumentId,
+    ) -> bool {
+        let op_issuer = signed_op.issuer;
+        let access_to_this_doc_ever = |subject: Identifier| {
+            let doc = doc.dupe();
+            async move {
+                if subject == Identifier::from(doc_id) {
+                    return Some(Access::Admin);
+                }
+                let locked = doc.lock().await;
+                if let Some((_, a)) = locked.transitive_members().await.get(&subject) {
+                    return Some(*a);
+                }
+                locked.revoked_members().get(&subject).map(|(_, a)| *a)
+            }
+        };
+        match &signed_op.payload {
+            CgkaOperation::Add {
+                authorization,
+                added_id,
+                ..
+            } => {
+                let CgkaAuthorization::Delegation(dlg_hash) = authorization else {
+                    return false;
+                };
+                let dlg = { self.delegations.lock().await.get(&Digest::from(*dlg_hash)) };
+                match dlg {
+                    None => false,
+                    Some(dlg) => {
+                        // Public can't add members.
+                        if Identifier(dlg.issuer) == Public.id() {
+                            return false;
+                        }
+                        // Only readers or above can add members.
+                        if !dlg.payload.can.is_reader() {
+                            return false;
+                        }
+                        // A founding delegation is signed by the document's own
+                        // key, which is discarded once the document exists, so
+                        // no more of them can ever be made.
+                        let is_founding = dlg.payload.proof.is_none()
+                            && dlg.subject_id() == Identifier::from(doc_id);
+                        if is_founding {
+                            let issuer_founded_with_admin = {
+                                let locked = doc.lock().await;
+                                locked
+                                    .get_capability(&Identifier::from(op_issuer))
+                                    .is_some_and(|cap| {
+                                        cap.payload.proof.is_none()
+                                            && cap.subject_id() == Identifier::from(doc_id)
+                                            && cap.payload.can >= Access::Admin
+                                    })
+                            };
+                            if !issuer_founded_with_admin {
+                                return false;
+                            }
+                        } else if dlg.issuer != op_issuer {
+                            return false;
+                        }
+                        if !is_founding {
+                            let access = access_to_this_doc_ever(dlg.subject_id()).await;
+                            if !access.is_some_and(|a| dlg.payload.can.min(a).is_reader()) {
+                                return false;
+                            }
+                        }
+                        dlg.payload
+                            .delegate
+                            .individual_ids_ever()
+                            .await
+                            .contains(&IndividualId::from(*added_id))
+                    }
+                }
+            }
+            CgkaOperation::Remove {
+                authorization, id, ..
+            } => {
+                let CgkaAuthorization::Revocation(rev_hash) = authorization else {
+                    return false;
+                };
+                let Some(rev) = ({ self.revocations.lock().await.get(&Digest::from(*rev_hash)) })
+                else {
+                    return false;
+                };
+                // Public can't remove members.
+                if Identifier(rev.issuer) == Public.id() {
+                    return false;
+                }
+                if rev.issuer != op_issuer {
+                    return false;
+                }
+                let bounded_by_subject = access_to_this_doc_ever(rev.subject_id())
+                    .await
+                    .is_some_and(|a| rev.payload.revoke.payload.can.min(a).is_reader());
+
+                bounded_by_subject
+                    && rev
+                        .payload
+                        .revoke
+                        .payload
+                        .delegate
+                        .individual_ids_ever()
+                        .await
+                        .contains(&IndividualId::from(*id))
+            }
+            CgkaOperation::Update { new_path, .. } => {
+                // A public key rotation should still keep the Public identity's
+                // well-known key at the leaf.
+                if new_path.leaf_id == MemberId::public() {
+                    return new_path.leaf_pk == NodeKey::ShareKey(Public.share_key());
+                }
+                // A path rotation must be signed by the owner of the leaf it
+                // rotates.
+                new_path.leaf_id.0 == op_issuer
+            }
+        }
+    }
+
     #[instrument(skip_all)]
     pub async fn receive_cgka_op(
         &self,
@@ -2044,6 +2170,10 @@ impl<
                 .ok_or(ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)))?
                 .dupe()
         };
+
+        if !self.cgka_op_is_authorized(&signed_op, &doc, doc_id).await {
+            return Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(Box::new(doc_id)));
+        }
 
         let signed_op = Arc::new(signed_op);
         if let CgkaOperation::Add { added_id, pk, .. } = signed_op.payload {
@@ -3212,6 +3342,9 @@ pub enum ReceiveCgkaOpError {
 
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
     UnknownInvitePrekey(ShareKey),
+
+    #[error("CGKA op for {0} is not authorized by this document's membership")]
+    UnauthorizedCgkaOp(Box<DocumentId>),
 }
 
 impl ReceiveCgkaOpError {
@@ -3221,6 +3354,8 @@ impl ReceiveCgkaOpError {
             Self::VerificationError(_) => false,
             Self::UnknownDocument(_) => false,
             Self::UnknownInvitePrekey(_) => false,
+            // The authorizing delegation or revocation may not have arrived yet.
+            Self::UnauthorizedCgkaOp(_) => true,
         }
     }
 }

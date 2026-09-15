@@ -607,11 +607,10 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     let alice_on_bob_id = alice_on_bob.lock().await.id();
     assert!(bob.register_individual(alice_on_bob.dupe()).await);
 
-    // Alice creates doc with Bob as Admin
-    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-
-    alice
-        .add_member(bob_on_alice_id, doc_id, Access::Admin, &[])
+    // Alice creates the doc with Bob as a co-founder, so Bob holds a founding
+    // delegation he may enact himself.
+    let doc_id = alice
+        .generate_doc(vec![bob_on_alice_id.into()], nonempty![[0u8; 32]])
         .await?;
 
     // Share only delegation events (no CGKA) to Bob
@@ -630,6 +629,13 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     {
         let bob_active_id = bob.active().lock().await.id();
         let bob_pk = bob.active().lock().await.pick_prekey(doc_id).await;
+        let bob_founding = doc_on_bob
+            .lock()
+            .await
+            .get_capability(&Identifier::from(bob_active_id))
+            .ok_or("bob holds a founding delegation")?
+            .digest()
+            .into();
 
         let mut bob_tree =
             keyhive_core::cgka::Cgka::new(doc_id, bob_active_id, beekem::keys::ShareKeyMap::new());
@@ -637,7 +643,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
             .add::<future_form::Sendable, _>(
                 bob_active_id,
                 bob_pk,
-                beekem::operation::CgkaAuthorization::Delegation([0; 32]),
+                beekem::operation::CgkaAuthorization::Delegation(bob_founding),
                 &bob_signer,
             )
             .await?
