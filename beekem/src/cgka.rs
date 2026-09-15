@@ -242,11 +242,13 @@ impl Cgka {
         pk: ShareKey,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if self.tree.contains_id(&id) {
-            return Ok(None);
-        }
         if self.should_replay() {
             self.replay_ops_graph()?;
+        }
+        // Check after replay since a concurrent add of the same member might
+        // have been pending.
+        if self.tree.contains_id(&id) {
+            return Ok(None);
         }
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -285,11 +287,13 @@ impl Cgka {
         id: MemberId,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if !self.tree.contains_id(&id) {
-            return Ok(None);
-        }
         if self.should_replay() {
             self.replay_ops_graph()?;
+        }
+        // Check after replay since a concurrent add of the same member might
+        // have been pending.
+        if !self.tree.contains_id(&id) {
+            return Ok(None);
         }
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
@@ -425,7 +429,10 @@ impl Cgka {
         }
         match op.payload {
             CgkaOperation::Add { added_id, pk, .. } => {
-                self.tree.push_leaf(added_id, pk.into());
+                // A concurrent history might have added the same member.
+                if !self.tree.contains_id(&added_id) {
+                    self.tree.push_leaf(added_id, pk.into());
+                }
             }
             CgkaOperation::Remove { id, .. } => {
                 match self.tree.remove_id(id) {
@@ -662,3 +669,6 @@ impl Cgka {
         self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
     }
 }
+
+#[cfg(test)]
+mod concurrent_membership_changes;
