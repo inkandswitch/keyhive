@@ -23,6 +23,17 @@ use keyhive_crypto::{digest::Digest, share_key::ShareKey, signed::Signed};
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 
+/// The membership operation authorizing a [`CgkaOperation`].
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub enum CgkaAuthorization {
+    /// The digest of the delegation that generated an add.
+    Delegation([u8; 32]),
+
+    /// The digest of the revocation that generated a remove.
+    Revocation([u8; 32]),
+}
+
 /// An ordered [`NonEmpty`] of concurrent [`CgkaOperation`]s.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CgkaEpoch(NonEmpty<Arc<Signed<CgkaOperation>>>);
@@ -59,6 +70,7 @@ pub enum CgkaOperation {
         leaf_index: u32,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
+        authorization: CgkaAuthorization,
     },
     Remove {
         id: MemberId,
@@ -66,6 +78,7 @@ pub enum CgkaOperation {
         removed_keys: Vec<ShareKey>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
+        authorization: CgkaAuthorization,
     },
     Update {
         id: MemberId,
@@ -351,6 +364,7 @@ mod causal_graph_tests {
             leaf_index,
             predecessors: Vec::new(),
             doc_id,
+            authorization: CgkaAuthorization::Delegation([0; 32]),
         };
         async_signer::try_sign_async::<future_form::Local, _, _>(signer, op)
             .await

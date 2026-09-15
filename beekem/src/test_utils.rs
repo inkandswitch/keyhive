@@ -3,7 +3,7 @@ use crate::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::ShareKeyMap,
-    operation::CgkaOperation,
+    operation::{CgkaAuthorization, CgkaOperation},
     pcs_key::PcsKey,
 };
 use alloc::{
@@ -22,6 +22,10 @@ use keyhive_crypto::{
     verifiable::Verifiable,
 };
 use rand::rngs::StdRng;
+
+/// Placeholder authorizations. These tests do not build real delegations or revocations.
+pub const ADD_AUTH: CgkaAuthorization = CgkaAuthorization::Delegation([0; 32]);
+pub const REMOVE_AUTH: CgkaAuthorization = CgkaAuthorization::Revocation([0; 32]);
 
 /// A member of a test group, holding everything needed to act as one.
 pub struct Member {
@@ -113,7 +117,7 @@ impl Group {
     ) -> Option<Arc<Signed<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
-            .add::<Local, _>(id, pk, signer)
+            .add::<Local, _>(id, pk, ADD_AUTH, signer)
             .await
             .expect("creating the add succeeds")
             .map(Arc::new)
@@ -135,7 +139,7 @@ impl Group {
     ) -> Option<Arc<Signed<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
-            .remove::<Local, _>(target, signer)
+            .remove::<Local, _>(target, REMOVE_AUTH, signer)
             .await
             .expect("creating the removal succeeds")
             .map(Arc::new)

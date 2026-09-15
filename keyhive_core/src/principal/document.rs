@@ -32,7 +32,7 @@ use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaEpoch, CgkaOperation},
+    operation::{CgkaAuthorization, CgkaEpoch, CgkaOperation},
 };
 use derivative::Derivative;
 use derive_where::derive_where;
@@ -208,20 +208,38 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             .get(&owner_share_key)
             .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
 
+        // Each founding add cites the founding delegation for the member
+        // it delegates so the receiving side can correlate the add to that individual.
+        let mut authorizations: HashMap<IndividualId, CgkaAuthorization> = HashMap::new();
+        for delegations in group.members().values() {
+            for delegation in delegations.iter() {
+                let authorization = CgkaAuthorization::Delegation(delegation.digest().into());
+                for individual in delegation.payload().delegate.individual_ids().await {
+                    authorizations.entry(individual).or_insert(authorization);
+                }
+            }
+        }
+        let authorization_for = |id: &IndividualId| {
+            authorizations
+                .get(id)
+                .copied()
+                .ok_or(GenerateDocError::MissingFoundingDelegation)
+        };
+
         let mut owner_leaf_sks = ShareKeyMap::new();
         owner_leaf_sks.insert(owner_share_key, owner_share_secret_key);
         let mut cgka = Cgka::new(doc_id, owner_id, owner_leaf_sks);
 
         // The owner is added first so that the `Cgka`'s causal root is
         // always its creator's.
-        let mut rest: Vec<(IndividualId, ShareKey)> = prekeys
+        let mut rest: Vec<(IndividualId, ShareKey, CgkaAuthorization)> = prekeys
             .iter()
             .filter(|(id, _)| **id != owner_id)
-            .map(|(id, pk)| (*id, *pk))
-            .collect();
-        rest.sort_by_key(|(id, _)| *id);
+            .map(|(id, pk)| Ok((*id, *pk, authorization_for(id)?)))
+            .collect::<Result<_, GenerateDocError>>()?;
+        rest.sort_by_key(|(id, _, _)| *id);
         let members = NonEmpty {
-            head: (owner_id, owner_share_key),
+            head: (owner_id, owner_share_key, authorization_for(&owner_id)?),
             tail: rest,
         };
         let mut ops = cgka.add_multiple(members, signer).await?;
@@ -288,8 +306,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 .delegate
                 .pick_individual_prekeys(self.doc_id())
                 .await;
-            let cgka_ops_for_this_doc =
-                self.add_cgka_members_from_prekeys(&prekeys, signer).await?;
+            let authorization = CgkaAuthorization::Delegation(update.delegation.digest().into());
+            let cgka_ops_for_this_doc = self
+                .add_cgka_members_from_prekeys(&prekeys, authorization, signer)
+                .await?;
             update.cgka_ops.extend(cgka_ops_for_this_doc);
         }
         Ok(update)
@@ -303,11 +323,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub(crate) async fn add_cgka_members_from_prekeys(
         &mut self,
         prekeys: &HashMap<IndividualId, ShareKey>,
+        authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
-            if let Some(op) = self.cgka_mut()?.add(*id, *prekey, signer).await? {
+            if let Some(op) = self
+                .cgka_mut()?
+                .add(*id, *prekey, authorization, signer)
+                .await?
+            {
                 acc.push(op);
             }
         }
@@ -348,9 +373,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let still_reachable = self.group.individual_ids().await;
         ids_to_remove.retain(|id| !still_reachable.contains(id));
 
+        let authorization = CgkaAuthorization::Revocation(
+            revocations.first().map_or([0u8; 32], |r| r.digest().into()),
+        );
+
         let mut ops = cgka_ops;
         for id in ids_to_remove {
-            if let Some(op) = self.cgka_mut()?.remove(id, signer).await? {
+            if let Some(op) = self.cgka_mut()?.remove(id, authorization, signer).await? {
                 ops.push(op);
             }
         }
@@ -361,13 +390,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         })
     }
 
+    /// `authorization` refers to the revocation that removed `id`.
     #[instrument(skip_all)]
     pub async fn remove_cgka_member(
         &mut self,
         id: IndividualId,
+        authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.cgka_mut()?.remove(id, signer).await
+        self.cgka_mut()?.remove(id, authorization, signer).await
     }
 
     pub async fn get_agent_revocations(
@@ -825,6 +856,8 @@ pub enum GenerateDocError {
 
     #[error("no secret key for the prekey the document's owner is added with")]
     OwnerHoldsNoPrekeySecret,
+    #[error("the creator has no founding delegation")]
+    MissingFoundingDelegation,
 }
 
 #[derive(Debug, Error)]

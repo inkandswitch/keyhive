@@ -634,7 +634,12 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         let mut bob_tree =
             keyhive_core::cgka::Cgka::new(doc_id, bob_active_id, beekem::keys::ShareKeyMap::new());
         let bob_add = bob_tree
-            .add::<future_form::Sendable, _>(bob_active_id, bob_pk, &bob_signer)
+            .add::<future_form::Sendable, _>(
+                bob_active_id,
+                bob_pk,
+                beekem::operation::CgkaAuthorization::Delegation([0; 32]),
+                &bob_signer,
+            )
             .await?
             .ok_or("bob is not yet in his own tree, so adding him yields an op")?;
 

@@ -59,7 +59,7 @@ use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::CgkaOperation,
+    operation::{CgkaAuthorization, CgkaOperation},
     pcs_key::PcsKey,
 };
 use derive_where::derive_where;
@@ -492,6 +492,8 @@ impl<
                 // (possibly with a reverse index lookup).
                 if can.is_reader() {
                     let group_identifier: Identifier = (*group_id).into();
+                    let authorization =
+                        CgkaAuthorization::Delegation(update.delegation.digest().into());
                     let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
                     for doc in &docs {
                         let (group_access, doc_id) = {
@@ -524,7 +526,7 @@ impl<
                             .await;
                         let mut locked_doc = doc.lock().await;
                         let ops = locked_doc
-                            .add_cgka_members_from_prekeys(&prekeys, &signer)
+                            .add_cgka_members_from_prekeys(&prekeys, authorization, &signer)
                             .await
                             .map_err(AddMemberError::from)?;
                         update.cgka_ops.extend(ops);
@@ -613,6 +615,12 @@ impl<
         if let Membered::Group(group_id, _) = &resource {
             if !revoked_individual_ids.is_empty() {
                 let group_identifier: Identifier = (*group_id).into();
+                let authorization = CgkaAuthorization::Revocation(
+                    update
+                        .revocations
+                        .first()
+                        .map_or([0u8; 32], |r| r.digest().into()),
+                );
                 let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
                 for doc in &docs {
                     let transitive = {
@@ -634,7 +642,10 @@ impl<
                         if still_reachable.contains(&id) {
                             continue;
                         }
-                        if let Ok(Some(op)) = locked_doc.remove_cgka_member(id, &signer).await {
+                        if let Ok(Some(op)) = locked_doc
+                            .remove_cgka_member(id, authorization, &signer)
+                            .await
+                        {
                             update.cgka_ops.push(op);
                         }
                     }
