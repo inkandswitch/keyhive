@@ -1998,7 +1998,7 @@ impl<
                 // it may only now be the one this document needs. Release the active
                 // guard first.
                 drop(locked_active);
-                self.adopt_leaf_secret(&doc).await;
+                self.adopt_leaf_secrets(&doc, Vec::new()).await;
                 if merged {
                     self.event_listener.on_cgka_op(&signed_op).await;
                 }
@@ -2006,7 +2006,13 @@ impl<
             }
         }
         let merged = doc.lock().await.merge_cgka_op(signed_op.clone())?;
-        self.adopt_leaf_secret(&doc).await;
+        let mut leaf_keys = Vec::new();
+        if let CgkaOperation::Update { id, new_path, .. } = &signed_op.payload {
+            if IndividualId::from(*id) == self.active.lock().await.id() {
+                leaf_keys.extend(new_path.leaf_pk.keys());
+            }
+        }
+        self.adopt_leaf_secrets(&doc, leaf_keys).await;
         if merged {
             self.event_listener.on_cgka_op(&signed_op).await;
         }
@@ -2015,24 +2021,40 @@ impl<
 
     /// Move the secret for our own leaf in `doc` from the shareable secrets into the
     /// document, if we hold it and the document does not.
-    async fn adopt_leaf_secret(&self, doc: &Arc<Mutex<Document<F, S, T, L>>>) {
-        let wanted = {
+    ///
+    /// Considers the current leaf key plus any in `also`.
+    async fn adopt_leaf_secrets(
+        &self,
+        doc: &Arc<Mutex<Document<F, S, T, L>>>,
+        also: Vec<ShareKey>,
+    ) {
+        let wanted: Vec<ShareKey> = {
             let locked_doc = doc.lock().await;
             let Ok(cgka) = locked_doc.cgka() else { return };
-            match cgka.owner_leaf_key() {
-                Some(pk) if !cgka.owner_sks().contains_key(&pk) => pk,
-                _ => return,
-            }
+            let mut leaf_keys = also;
+            leaf_keys.extend(cgka.owner_leaf_key());
+            leaf_keys.retain(|pk| !cgka.owner_sks().contains_key(pk));
+            leaf_keys
         };
-        let held = {
+        if wanted.is_empty() {
+            return;
+        }
+        let held: Vec<_> = {
             let locked_active = self.active.lock().await;
             let pairs = locked_active.key_pairs.lock().await;
-            pairs.get(&wanted).copied()
+            wanted
+                .into_iter()
+                .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, *sk)))
+                .collect()
         };
-        let Some(sk) = held else { return };
+        if held.is_empty() {
+            return;
+        }
         match doc.lock().await.cgka_mut() {
             Ok(cgka) => {
-                cgka.owner_sks_mut().insert(wanted, sk);
+                for (pk, sk) in held {
+                    cgka.owner_sks_mut().insert(pk, sk);
+                }
             }
             Err(e) => tracing::warn!("document lost its key tree while adopting: {e}"),
         }
@@ -2042,7 +2064,51 @@ impl<
     async fn adopt_all_leaf_secrets(&self) {
         let docs: Vec<_> = self.docs.lock().await.values().cloned().collect();
         for doc in docs {
-            self.adopt_leaf_secret(&doc).await;
+            self.adopt_seated_leaf_secrets(&doc).await;
+        }
+    }
+
+    /// Move into `doc` every secret we hold for a key the document has ever placed at our
+    /// leaf.
+    async fn adopt_seated_leaf_secrets(&self, doc: &Arc<Mutex<Document<F, S, T, L>>>) {
+        let me = { self.active.lock().await.id() };
+        let wanted: Vec<ShareKey> = {
+            let locked_doc = doc.lock().await;
+            let Ok(cgka) = locked_doc.cgka() else { return };
+            let mut leaf_keys: Vec<ShareKey> = cgka.owner_leaf_key().into_iter().collect();
+            if let Ok(epochs) = locked_doc.cgka_ops() {
+                for op in epochs.iter().flat_map(|epoch| epoch.iter()) {
+                    if let CgkaOperation::Update { id, new_path, .. } = &op.payload {
+                        if IndividualId::from(*id) == me {
+                            leaf_keys.extend(new_path.leaf_pk.keys());
+                        }
+                    }
+                }
+            }
+            leaf_keys.retain(|pk| !cgka.owner_sks().contains_key(pk));
+            leaf_keys
+        };
+        if wanted.is_empty() {
+            return;
+        }
+        let held: Vec<_> = {
+            let locked_active = self.active.lock().await;
+            let pairs = locked_active.key_pairs.lock().await;
+            wanted
+                .into_iter()
+                .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, *sk)))
+                .collect()
+        };
+        if held.is_empty() {
+            return;
+        }
+        match doc.lock().await.cgka_mut() {
+            Ok(cgka) => {
+                for (pk, sk) in held {
+                    cgka.owner_sks_mut().insert(pk, sk);
+                }
+            }
+            Err(e) => tracing::warn!("document lost its key tree while adopting: {e}"),
         }
     }
 

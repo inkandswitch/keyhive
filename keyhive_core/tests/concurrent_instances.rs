@@ -168,9 +168,11 @@ async fn writes_made_during_a_partition_survive_the_merge() -> Result<()> {
     // Each instance rotates without seeing the other and writes under the key it just
     // rotated. One of those two keys is about to lose the merge.
     alice.force_pcs_update(doc).await?;
-    let from_alice = ctx.encrypt(&alice, doc, b"written in the partition").await?;
+    let from_alice = ctx
+        .encrypt(&alice, doc, b"written in the partition")
+        .await?;
     alice_replica.force_pcs_update(doc).await?;
-    let from_replica = ctx
+    let from_alice_replica = ctx
         .encrypt(&alice_replica, doc, b"also written in the partition")
         .await?;
 
@@ -179,16 +181,20 @@ async fn writes_made_during_a_partition_survive_the_merge() -> Result<()> {
     ctx.share_prekey_secrets(&alice_replica, &alice).await?;
     ctx.sync_all_unsent().await?;
 
-    for (name, who) in [("alice", &alice), ("her replica", &alice_replica), ("bob", &bob)] {
+    for (name, who) in [
+        ("the first", &alice),
+        ("the second", &alice_replica),
+        ("bob", &bob),
+    ] {
         assert_eq!(
             who.try_decrypt_content(doc, &from_alice).await?,
             b"written in the partition".to_vec(),
-            "{name} reads what alice wrote during the partition"
+            "{name} reads what the first instance wrote during the partition"
         );
         assert_eq!(
-            who.try_decrypt_content(doc, &from_replica).await?,
+            who.try_decrypt_content(doc, &from_alice_replica).await?,
             b"also written in the partition".to_vec(),
-            "{name} reads what her replica wrote during the partition"
+            "{name} reads what the second instance wrote during the partition"
         );
     }
     Ok(())
