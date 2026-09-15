@@ -454,8 +454,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     /// Rotate our CGKA key.
     ///
-    /// The second element of the return is the key pair new key pair or [`None`] when
-    /// the owner is not in the tree and the update fell back to Public's existing key.
+    /// The second element of the return is the new key pair or [`None`] when the owner
+    /// is not in the tree and the update fell back to Public's existing key.
     #[instrument(skip_all)]
     #[allow(clippy::type_complexity)]
     pub async fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
