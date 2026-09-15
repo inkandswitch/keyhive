@@ -1,4 +1,4 @@
-use beekem::{cgka::Cgka, error::CgkaError, id::MemberId};
+use beekem::{cgka::Cgka, error::CgkaError, id::MemberId, operation::CgkaAuthorization};
 use future_form::Sendable;
 use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
@@ -9,6 +9,10 @@ use rand::{rngs::OsRng, CryptoRng, RngCore};
 use std::sync::Arc;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// Placeholder authorizations. These tests do not build real delegations or revocations.
+const ADD_AUTH: CgkaAuthorization = CgkaAuthorization::Delegation([0; 32]);
+const REMOVE_AUTH: CgkaAuthorization = CgkaAuthorization::Revocation([0; 32]);
 
 /// A fresh member identity and the share key it joins with.
 fn member<R: CryptoRng + RngCore>(rng: &mut R) -> (MemberId, ShareKey) {
@@ -25,12 +29,12 @@ async fn cgka_with<R: CryptoRng + RngCore>(
     let signer = MemorySigner::generate(rng);
     let (owner_id, owner_pk) = member(rng);
     let tree_id = beekem::id::TreeId::from(signer.verifying_key());
-    let mut cgka = Cgka::new::<Sendable, _>(tree_id, owner_id, owner_pk, &signer).await?;
+    let mut cgka = Cgka::new::<Sendable, _>(tree_id, owner_id, owner_pk, ADD_AUTH, &signer).await?;
 
     let mut members = Vec::new();
     for _ in 0..extra {
         let (id, pk) = member(rng);
-        cgka.add::<Sendable, _>(id, pk, &signer).await?;
+        cgka.add::<Sendable, _>(id, pk, ADD_AUTH, &signer).await?;
         members.push(id);
     }
     Ok((cgka, signer, members))
@@ -55,8 +59,11 @@ async fn settle<R: CryptoRng + RngCore>(
     rng: &mut R,
 ) -> Result<(Vec<String>, Vec<String>)> {
     let (probe, probe_pk) = member(rng);
-    left.add::<Sendable, _>(probe, probe_pk, signer).await?;
-    right.add::<Sendable, _>(probe, probe_pk, signer).await?;
+    left.add::<Sendable, _>(probe, probe_pk, ADD_AUTH, signer)
+        .await?;
+    right
+        .add::<Sendable, _>(probe, probe_pk, ADD_AUTH, signer)
+        .await?;
     Ok((ids(left), ids(right)))
 }
 
@@ -71,13 +78,16 @@ async fn a_concurrent_add_and_remove_retains_the_add() -> Result<()> {
         // Left removes an existing member; right concurrently adds a new one.
         let member_to_remove = members[round % members.len()];
         let Some(remove_op) = left
-            .remove::<Sendable, _>(member_to_remove, &signer)
+            .remove::<Sendable, _>(member_to_remove, REMOVE_AUTH, &signer)
             .await?
         else {
             continue;
         };
         let (new_id, new_pk) = member(&mut OsRng);
-        let Some(add_op) = right.add::<Sendable, _>(new_id, new_pk, &signer).await? else {
+        let Some(add_op) = right
+            .add::<Sendable, _>(new_id, new_pk, ADD_AUTH, &signer)
+            .await?
+        else {
             continue;
         };
 
@@ -111,7 +121,7 @@ async fn a_remove_concurrent_with_several_adds_retains_the_adds() -> Result<()> 
 
         let member_to_remove = members[round % members.len()];
         let Some(remove_op) = left
-            .remove::<Sendable, _>(member_to_remove, &signer)
+            .remove::<Sendable, _>(member_to_remove, REMOVE_AUTH, &signer)
             .await?
         else {
             continue;
@@ -121,7 +131,7 @@ async fn a_remove_concurrent_with_several_adds_retains_the_adds() -> Result<()> 
         let mut added = Vec::new();
         for _ in 0..3 {
             let (id, pk) = member(&mut OsRng);
-            if let Some(op) = right.add::<Sendable, _>(id, pk, &signer).await? {
+            if let Some(op) = right.add::<Sendable, _>(id, pk, ADD_AUTH, &signer).await? {
                 add_ops.push(op);
                 added.push(id);
             }
@@ -194,12 +204,18 @@ async fn scenario(seed: u64) -> Result<Option<String>> {
             match op {
                 CgkaOp::Add => {
                     let (id, pk) = member(&mut rng);
-                    if let Some(o) = replica.add::<Sendable, _>(id, pk, &signer).await? {
+                    if let Some(o) = replica
+                        .add::<Sendable, _>(id, pk, ADD_AUTH, &signer)
+                        .await?
+                    {
                         ops.push(o);
                     }
                 }
                 CgkaOp::Remove(i) => {
-                    if let Ok(Some(o)) = replica.remove::<Sendable, _>(members[i], &signer).await {
+                    if let Ok(Some(o)) = replica
+                        .remove::<Sendable, _>(members[i], REMOVE_AUTH, &signer)
+                        .await
+                    {
                         ops.push(o);
                     }
                 }
@@ -240,7 +256,10 @@ async fn scenario(seed: u64) -> Result<Option<String>> {
     let (probe, probe_pk) = member(&mut rng);
     let mut views = Vec::new();
     for (i, replica) in replicas.iter_mut().enumerate() {
-        match replica.add::<Sendable, _>(probe, probe_pk, &signer).await {
+        match replica
+            .add::<Sendable, _>(probe, probe_pk, ADD_AUTH, &signer)
+            .await
+        {
             Ok(_) => views.push(ids(replica)),
             Err(e) => {
                 return Ok(Some(format!(
@@ -301,18 +320,18 @@ async fn a_duplicate_remove_should_not_create_an_invalid_state() -> Result<()> {
 
     // Left: remove a member.
     let rm_left = left
-        .remove::<Sendable, _>(member_to_remove, &signer)
+        .remove::<Sendable, _>(member_to_remove, REMOVE_AUTH, &signer)
         .await?
         .expect("the removed member is present");
 
     // Right: add someone else, then remove the same member removed above.
     let (extra, extra_pk) = member(&mut OsRng);
     let add_right = right
-        .add::<Sendable, _>(extra, extra_pk, &signer)
+        .add::<Sendable, _>(extra, extra_pk, ADD_AUTH, &signer)
         .await?
         .expect("a fresh member is added");
     let rm_right = right
-        .remove::<Sendable, _>(member_to_remove, &signer)
+        .remove::<Sendable, _>(member_to_remove, REMOVE_AUTH, &signer)
         .await?
         .expect("the removed member is present here too");
 
@@ -337,11 +356,11 @@ async fn a_duplicate_remove_should_not_create_an_invalid_state() -> Result<()> {
     }
 
     let (probe, probe_pk) = member(&mut OsRng);
-    left.add::<Sendable, _>(probe, probe_pk, &signer)
+    left.add::<Sendable, _>(probe, probe_pk, ADD_AUTH, &signer)
         .await
         .map_err(|e| format!("left could not add a member afterwards: {e:?}"))?;
     right
-        .add::<Sendable, _>(probe, probe_pk, &signer)
+        .add::<Sendable, _>(probe, probe_pk, ADD_AUTH, &signer)
         .await
         .map_err(|e| format!("right could not add a member afterwards: {e:?}"))?;
 
@@ -354,7 +373,8 @@ async fn a_group_can_be_emptied_and_refilled() -> Result<()> {
     let (mut cgka, signer, _) = cgka_with(&mut OsRng, 0).await?;
     let owner = cgka.member_ids().next().expect("the owner");
 
-    cgka.remove::<Sendable, _>(owner, &signer).await?;
+    cgka.remove::<Sendable, _>(owner, REMOVE_AUTH, &signer)
+        .await?;
     assert_eq!(
         cgka.group_size(),
         0,
@@ -373,7 +393,8 @@ async fn a_group_can_be_emptied_and_refilled() -> Result<()> {
     );
 
     let rejoin_pk = ShareSecretKey::generate(&mut OsRng).share_key();
-    cgka.add::<Sendable, _>(owner, rejoin_pk, &signer).await?;
+    cgka.add::<Sendable, _>(owner, rejoin_pk, ADD_AUTH, &signer)
+        .await?;
     let rotate = ShareSecretKey::generate(&mut OsRng);
     cgka.update::<Sendable, _, _>(rotate.share_key(), rotate, &signer, &mut OsRng)
         .await?;
