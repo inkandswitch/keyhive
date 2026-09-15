@@ -112,7 +112,9 @@ async fn a_rotated_away_intermediate_prekey_does_not_survive() -> Result<()> {
 async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
 
     let k1 = alice.expand_prekeys().await?.payload().share_key;
     ctx.sync_all_unsent().await?;

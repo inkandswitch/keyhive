@@ -22,7 +22,9 @@ async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let bob = ctx.individual("bob").await?;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let design_doc = ctx.doc(&bob, "design_doc").await?;
 
     bob.add_member(alice.id(), design_doc, Read, &[]).await?;
@@ -48,7 +50,9 @@ async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
 async fn either_instance_signs_as_the_identity() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let carol = ctx.individual("carol").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.sync_all_unsent().await?;
@@ -83,7 +87,9 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     let mut ctx = TestContext::new().await;
     let bob = ctx.individual("bob").await?;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let design_doc = ctx.doc(&bob, "design_doc").await?;
 
     bob.add_member(alice.id(), design_doc, Read, &[]).await?;
@@ -145,7 +151,9 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
 async fn two_instances_creating_documents_independently_converge() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let reader = ctx.individual("reader").await?;
 
     // Each instance holds the other's prekey secrets, like two clients sharing storage.
@@ -212,7 +220,9 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
 async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let reader = ctx.individual("reader").await?;
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
@@ -262,7 +272,9 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
 async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let bob = ctx.individual("bob").await?;
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
@@ -376,7 +388,9 @@ async fn a_second_instance_takes_its_name_too() -> Result<()> {
 async fn the_second_instance_writes_and_a_member_reads_it() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let bob = ctx.individual("bob").await?;
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
@@ -401,7 +415,9 @@ async fn the_second_instance_writes_and_a_member_reads_it() -> Result<()> {
 async fn the_second_instance_writes_to_a_document_owned_through_a_group() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let bob = ctx.individual("bob").await?;
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
@@ -429,7 +445,9 @@ async fn the_second_instance_writes_to_a_document_owned_through_a_group() -> Res
 async fn a_public_reader_reads_what_the_second_instance_wrote() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let bob = ctx.individual("bob").await?;
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
@@ -460,7 +478,9 @@ async fn a_public_reader_reads_what_the_second_instance_wrote() -> Result<()> {
 async fn a_relay_carries_the_second_instances_write_to_a_public_reader() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     let relay = ctx.individual("relay").await?;
     let bob = ctx.individual("bob").await?;
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
@@ -506,7 +526,9 @@ async fn two_instances_of_one_writer(
     alice.add_member(bob.id(), design_doc, can, &[]).await?;
     ctx.sync_all_unsent().await?;
 
-    let alice_replica = ctx.new_keyhive_instance_for(&alice, "alice-replica").await?;
+    let alice_replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
     ctx.sync_all_unsent().await?;
     Ok((alice, alice_replica, bob, design_doc))
