@@ -134,7 +134,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     /// The individuals in this document's CGKA tree.
     ///
     /// Returns [`CgkaError::NotInitialized`] if this document has no CGKA yet.
-    pub fn cgka_members(&self) -> Result<impl Iterator<Item = IndividualId> + '_, CgkaError> {
+    pub fn cgka_members(&mut self) -> Result<impl Iterator<Item = IndividualId> + '_, CgkaError> {
+        self.cgka_mut()?.replay_if_necessary()?;
         Ok(self.cgka()?.member_ids())
     }
 

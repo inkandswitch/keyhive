@@ -245,9 +245,7 @@ impl Cgka {
         if self.tree.contains_id(&id) {
             return Ok(None);
         }
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
+        self.replay_if_necessary()?;
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
         let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
@@ -288,9 +286,7 @@ impl Cgka {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
+        self.replay_if_necessary()?;
         if self.group_size() == 1 {
             return Err(CgkaError::RemoveLastMember);
         }
@@ -320,9 +316,7 @@ impl Cgka {
         signer: &S,
         csprng: &mut R,
     ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
+        self.replay_if_necessary()?;
         let (update_id, update_pk, update_sk) = if self.tree.contains_id(&self.owner_id) {
             (self.owner_id, new_pk, new_sk)
         } else {
@@ -364,6 +358,14 @@ impl Cgka {
         self.tree.member_count()
     }
 
+    /// Apply any operations held back for a concurrent membership change.
+    pub fn replay_if_necessary(&mut self) -> Result<(), CgkaError> {
+        if self.should_replay() {
+            self.replay_ops_graph()?;
+        }
+        Ok(())
+    }
+
     /// The members currently in the tree.
     pub fn member_ids(&self) -> impl Iterator<Item = MemberId> + '_ {
         self.tree.member_ids()
@@ -389,21 +391,19 @@ impl Cgka {
         }
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
-            if self.pending_ops_for_structural_change {
-                self.ops_graph.add_op(&op, &predecessors);
-            } else if matches!(
-                op.payload,
-                CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
-            ) {
+            if self.pending_ops_for_structural_change
+                || matches!(
+                    op.payload,
+                    CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
+                )
+            {
                 self.pending_ops_for_structural_change = true;
                 self.ops_graph.add_op(&op, &predecessors);
             } else {
                 self.apply_operation(op)?;
             }
         } else {
-            if self.should_replay() {
-                self.replay_ops_graph()?;
-            }
+            self.replay_if_necessary()?;
             self.apply_operation(op)?;
         }
         Ok(true)
