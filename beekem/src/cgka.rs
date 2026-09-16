@@ -535,13 +535,13 @@ impl Cgka {
                 self.pending_ops_for_structural_change = true;
                 self.ops_graph.add_op(&op, &predecessors);
             } else {
-                self.apply_operation(op)?;
+                self.apply_operation_and_record_root_secret(op)?;
             }
         } else {
             if self.should_replay() {
                 self.replay_ops_graph()?;
             }
-            self.apply_operation(op)?;
+            self.apply_operation_and_record_root_secret(op)?;
         }
         Ok(true)
     }
@@ -554,9 +554,29 @@ impl Cgka {
         self.ops_graph.contains_predecessors(preds)
     }
 
-    /// Apply a [`CgkaOperation`].
+    /// Apply a [`CgkaOperation`]. If it's a [`CgkaOperation::Update`],
+    /// record the corresponding root secret.
     #[instrument(skip_all)]
-    fn apply_operation(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
+    fn apply_operation_and_record_root_secret(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
+        if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
+            return Ok(());
+        }
+        let is_update = matches!(op.payload, CgkaOperation::Update { .. });
+        self.apply_operation_to_tree(op)?;
+        if is_update {
+            // Record while the tree has the root secret this update produced.
+            // Otherwise, a later update rebuilds the history to derive it again.
+            self.record_tree_root_secret();
+        }
+        Ok(())
+    }
+
+    /// Apply a [`CgkaOperation`] without recording a root secret.
+    ///
+    /// A replay applies the whole history. Always recording per update would
+    /// derive a root secret for every update when only the last one is needed.
+    #[instrument(skip_all)]
+    fn apply_operation_to_tree(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
         if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(());
         }
@@ -573,11 +593,6 @@ impl Cgka {
             CgkaOperation::Invite { .. } => self.record_invitation(&op),
         }
         self.ops_graph.add_op(&op, &op.payload.predecessors());
-        if matches!(op.payload, CgkaOperation::Update { .. }) {
-            // Record it while the tree is in the state this update produced.
-            // Otherwise a later update rebuilds the history to derive it again.
-            self.record_tree_root_secret();
-        }
         Ok(())
     }
 
@@ -587,7 +602,7 @@ impl Cgka {
     fn apply_epochs(&mut self, epochs: &NonEmpty<CgkaEpoch>) -> Result<(), CgkaError> {
         for epoch in epochs {
             if epoch.len() == 1 {
-                self.apply_operation(epoch[0].clone())?;
+                self.apply_operation_to_tree(epoch[0].clone())?;
             } else {
                 // If no operation in this epoch changes the tree's structure, we can
                 // apply them directly and move on to the next epoch.
@@ -598,7 +613,7 @@ impl Cgka {
                     )
                 }) {
                     for op in epoch.iter() {
-                        self.apply_operation(op.clone())?;
+                        self.apply_operation_to_tree(op.clone())?;
                     }
                     continue;
                 }
@@ -617,7 +632,7 @@ impl Cgka {
                         }
                         _ => {}
                     }
-                    self.apply_operation(op.clone())?;
+                    self.apply_operation_to_tree(op.clone())?;
                 }
                 self.tree
                     .sort_leaves_and_blank_paths_for_concurrent_membership_changes(
@@ -783,6 +798,9 @@ impl Cgka {
         let (Some(op_hash), None) = (ancestors.next(), ancestors.next()) else {
             return None;
         };
+        if let Some(pcs_key) = self.pcs_keys_by_update.get(&op_hash).copied() {
+            return Some((op_hash, pcs_key));
+        }
         let pcs_key = self.pcs_key_from_tree_root().ok()?;
         self.insert_pcs_key(&pcs_key, op_hash);
         Some((op_hash, pcs_key))
@@ -1364,10 +1382,10 @@ mod cgka_tests {
                 if Digest::hash(&**op) == Digest::hash(&update_op) {
                     continue;
                 }
-                bob.apply_operation(op.clone()).unwrap();
+                bob.apply_operation_and_record_root_secret(op.clone()).unwrap();
             }
         }
-        bob.apply_operation(Arc::new(tampered_op)).unwrap();
+        bob.apply_operation_and_record_root_secret(Arc::new(tampered_op)).unwrap();
 
         let bob_sk2 = ShareSecretKey::generate(&mut csprng);
         let (_, bob_op) = bob
