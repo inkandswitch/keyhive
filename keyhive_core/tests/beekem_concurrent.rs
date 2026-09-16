@@ -36,8 +36,12 @@ async fn cgka_with<R: CryptoRng + RngCore>(
     Ok((cgka, signer, members))
 }
 
-fn ids(cgka: &Cgka) -> Vec<String> {
-    let mut v: Vec<String> = cgka.member_ids().map(|m| format!("{m}")).collect();
+fn ids(cgka: &mut Cgka) -> Vec<String> {
+    let mut v: Vec<String> = cgka
+        .member_ids()
+        .expect("resolving outstanding membership changes succeeds")
+        .map(|m| format!("{m}"))
+        .collect();
     v.sort();
     v
 }
@@ -175,8 +179,8 @@ async fn scenario(seed: u64) -> Result<Option<String>> {
     if trace {
         eprintln!("seed {seed}: replicas={replica_count} base_members={base_members}");
     }
-    let (base, signer, _) = cgka_with(&mut rng, base_members).await?;
-    let members: Vec<MemberId> = base.member_ids().collect();
+    let (mut base, signer, _) = cgka_with(&mut rng, base_members).await?;
+    let members: Vec<MemberId> = base.member_ids()?.collect();
 
     let mut replicas: Vec<Cgka> = (0..replica_count).map(|_| base.clone()).collect();
     let mut ops = Vec::new();
@@ -345,14 +349,14 @@ async fn a_duplicate_remove_should_not_create_an_invalid_state() -> Result<()> {
         .await
         .map_err(|e| format!("right could not add a member afterwards: {e:?}"))?;
 
-    assert_eq!(ids(&left), ids(&right), "replicas disagree");
+    assert_eq!(ids(&mut left), ids(&mut right), "replicas disagree");
     Ok(())
 }
 
 #[tokio::test]
 async fn a_group_can_be_emptied_and_refilled() -> Result<()> {
     let (mut cgka, signer, _) = cgka_with(&mut OsRng, 0).await?;
-    let owner = cgka.member_ids().next().expect("the owner");
+    let owner = cgka.member_ids()?.next().expect("the owner");
 
     cgka.remove::<Sendable, _>(owner, &signer).await?;
     assert_eq!(
