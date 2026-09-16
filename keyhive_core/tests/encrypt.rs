@@ -933,7 +933,7 @@ async fn test_the_chain_survives_a_member_that_only_ever_held_an_invitation() ->
         .await;
 
     // Carol writes without reading. Her only root secret came from her invitation,
-    // and her add blanked the root, so this rotates and has to seal that secret.
+    // and her add blanked the root, so this rotates and has to add that secret to the chain.
     let doc_on_carol = carol.get_document(doc_id).await.unwrap();
     carol
         .try_encrypt_content(
