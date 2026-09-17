@@ -65,11 +65,7 @@ async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
 
 /// A revocation issued inside a group has to reach a peer who holds the parent document
 /// directly, not only the members of the group it was issued in.
-///
-/// The same revocation issued on the document itself does reach Dave, so the gap is
-/// specific to a revocation one level up the membership chain.
 #[tokio::test]
-#[ignore = "a revocation inside a group is not sent to a peer of the parent document"]
 async fn a_revocation_inside_a_group_reaches_a_peer_of_the_parent() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
