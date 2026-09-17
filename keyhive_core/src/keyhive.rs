@@ -815,6 +815,7 @@ impl<
     }
 
     /// Walk back from `encrypted` through the ancestors it lists.
+    #[allow(clippy::result_large_err)]
     pub async fn try_causal_decrypt_content(
         &self,
         doc: DocumentId,

@@ -154,12 +154,14 @@ impl Cgka {
         self.0.decryption_key_for(encrypted)
     }
 
+    /// Add a member, returning its add operation and a [`CgkaOperation::Invite`].
+    /// Empty if the member is already in the tree.
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
         pk: ShareKey,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         self.0.add(MemberId(id.verifying_key()), pk, signer).await
     }
 
