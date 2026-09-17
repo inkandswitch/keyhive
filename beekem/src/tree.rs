@@ -9,11 +9,7 @@ use crate::{
     secret_store::SecretStore,
     treemath,
 };
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    vec,
-    vec::Vec,
-};
+use alloc::{collections::BTreeMap, vec, vec::Vec};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -117,7 +113,7 @@ impl BeeKem {
     pub fn sort_leaves_and_blank_paths_for_concurrent_membership_changes(
         &mut self,
         mut added_ids: Set<MemberId>,
-        removed_ids: BTreeSet<(MemberId, u32)>,
+        removed_ids: Set<(MemberId, u32)>,
     ) {
         let mut leaves_to_sort = Vec::new();
         for (id, idx) in removed_ids {
@@ -125,12 +121,12 @@ impl BeeKem {
 
             if let Some(leaf_idx) = self.id_to_leaf_idx.remove(&id) {
                 self.blank_leaf_and_path(leaf_idx);
-                continue;
             }
 
             // The member is already gone, but a concurrent update along the
             // recorded path may have left keys it can still decrypt. The leaf
-            // is now either blank or contains a different member.
+            // is now either blank or contains a different member. We only
+            // blank its path.
             if (idx as usize) < self.leaves.len() {
                 self.blank_path(treemath::parent(LeafNodeIndex::new(idx).into()));
             }
@@ -678,7 +674,7 @@ mod tests {
     fn a_removal_blanks_the_leaf_the_removed_member_occupies() {
         let (mut tree, [_owner, alice, _bob, carol], _) = seeded();
 
-        let removed = BTreeSet::from([(alice, 3)]);
+        let removed = Set::from([(alice, 3)]);
         tree.sort_leaves_and_blank_paths_for_concurrent_membership_changes(Set::new(), removed);
 
         assert!(
@@ -688,6 +684,51 @@ mod tests {
         assert!(
             tree.node_key_for_id(carol).is_ok(),
             "carol was not removed and lost her leaf"
+        );
+    }
+
+    #[test]
+    fn removals_of_one_member_at_two_leaves_blank_both_paths() {
+        let (mut seeded_tree, [_owner, _alice, _bob, carol], new_path) = seeded();
+        seeded_tree.apply_path(&new_path);
+        // Leaf 0's path fills inner node 0, the parent of leaves 0 and 1.
+        assert!(seeded_tree.inner_node(InnerNodeIndex::new(0)).is_some());
+
+        // Two concurrent removals of carol, one where she was at leaf 0
+        // and one where she was at leaf 3.
+        let remove_in_order = |first: (MemberId, u32), second: (MemberId, u32)| {
+            let mut tree = seeded_tree.clone();
+            for removal in [first, second] {
+                tree.sort_leaves_and_blank_paths_for_concurrent_membership_changes(
+                    Set::new(),
+                    Set::from([removal]),
+                );
+            }
+            tree
+        };
+        let leaf_0_first = remove_in_order((carol, 0), (carol, 3));
+        let leaf_3_first = remove_in_order((carol, 3), (carol, 0));
+
+        for (order, tree) in [
+            ("leaf 0 first", &leaf_0_first),
+            ("leaf 3 first", &leaf_3_first),
+        ] {
+            assert!(
+                !tree.contains_id(&carol),
+                "{order}: carol was removed and is still here"
+            );
+            assert!(
+                tree.inner_node(InnerNodeIndex::new(0)).is_none(),
+                "{order}: the path from a leaf carol was removed from still contains keys"
+            );
+            assert!(
+                tree.inner_node(InnerNodeIndex::new(2)).is_none(),
+                "{order}: the path from a leaf carol was removed from still contains keys"
+            );
+        }
+        assert!(
+            leaf_0_first == leaf_3_first,
+            "the order of the removals changed the resulting tree"
         );
     }
 
