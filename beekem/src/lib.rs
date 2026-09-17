@@ -32,3 +32,8 @@ pub mod topsort;
 pub mod transact;
 pub mod tree;
 pub mod treemath;
+
+#[cfg(test)]
+mod tests {
+    mod concurrent_membership_changes;
+}
