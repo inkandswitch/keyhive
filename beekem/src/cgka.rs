@@ -244,11 +244,11 @@ impl Cgka {
         pk: ShareKey,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if self.tree.contains_id(&id) {
-            return Ok(None);
-        }
         if self.should_replay() {
             self.replay_ops_graph()?;
+        }
+        if self.tree.contains_id(&id) {
+            return Ok(None);
         }
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -289,11 +289,11 @@ impl Cgka {
         id: MemberId,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if !self.tree.contains_id(&id) {
-            return Ok(None);
-        }
         if self.should_replay() {
             self.replay_ops_graph()?;
+        }
+        if !self.tree.contains_id(&id) {
+            return Ok(None);
         }
         let (leaf_idx, removed_keys) = self.tree.remove_id(id)?;
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -370,9 +370,23 @@ impl Cgka {
         self.tree.member_count()
     }
 
+    /// Rebuild the tree from the operation graph if a concurrent membership
+    /// change is still outstanding.
+    fn resolve_structural_changes(&mut self) -> Result<(), CgkaError> {
+        if self.pending_ops_for_structural_change {
+            self.replay_ops_graph()?;
+        }
+        Ok(())
+    }
+
     /// The members currently in the tree.
-    pub fn member_ids(&self) -> impl Iterator<Item = MemberId> + '_ {
-        self.tree.member_ids()
+    ///
+    /// Resolves any outstanding concurrent membership change first so the
+    /// answer reflects every operation received rather than only those already
+    /// applied.
+    pub fn member_ids(&mut self) -> Result<impl Iterator<Item = MemberId> + '_, CgkaError> {
+        self.resolve_structural_changes()?;
+        Ok(self.tree.member_ids())
     }
 
     /// Merges concurrent [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.
@@ -395,12 +409,12 @@ impl Cgka {
         }
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
-            if self.pending_ops_for_structural_change {
-                self.ops_graph.add_op(&op, &predecessors);
-            } else if matches!(
-                op.payload,
-                CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
-            ) {
+            if self.pending_ops_for_structural_change
+                || matches!(
+                    op.payload,
+                    CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
+                )
+            {
                 self.pending_ops_for_structural_change = true;
                 self.ops_graph.add_op(&op, &predecessors);
             } else {
@@ -434,11 +448,9 @@ impl Cgka {
                 self.tree.push_leaf(added_id, pk.into());
             }
             CgkaOperation::Remove { id, .. } => {
-                match self.tree.remove_id(id) {
-                    Ok(_) => {}
-                    // A concurrent history might have removed the same member.
-                    Err(CgkaError::IdentifierNotFound) => {}
-                    Err(e) => return Err(e),
+                // A concurrent history may have removed this member already.
+                if self.tree.contains_id(&id) {
+                    self.tree.remove_id(id)?;
                 }
             }
             CgkaOperation::Update { ref new_path, .. } => {
