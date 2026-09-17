@@ -16,7 +16,7 @@ use crate::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{NodeKey, ShareKeyMap},
-    operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph},
+    operation::{CgkaAuthorization, CgkaEpoch, CgkaOperation, CgkaOperationGraph},
     pcs_key::{ApplicationSecret, PcsKey},
     transact::{Fork, Merge},
     tree::BeeKem,
@@ -94,9 +94,10 @@ impl Cgka {
         doc_id: TreeId,
         owner_id: MemberId,
         owner_pk: ShareKey,
+        authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Self, CgkaError> {
-        let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk);
+        let init_add_op = CgkaOperation::init_add(doc_id, owner_id, owner_pk, authorization);
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, init_add_op).await?;
         Self::new_from_init_add(doc_id, owner_id, owner_pk, signed_op)
     }
@@ -237,11 +238,14 @@ impl Cgka {
     }
 
     /// Add member to group.
+    ///
+    /// `authorization` refers to the membership delegation that generated this add.
     #[instrument(skip_all)]
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: MemberId,
         pk: ShareKey,
+        authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if self.tree.contains_id(&id) {
@@ -260,6 +264,7 @@ impl Cgka {
             predecessors,
             add_predecessors,
             doc_id: self.doc_id,
+            authorization,
         };
 
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
@@ -270,23 +275,26 @@ impl Cgka {
     /// Add multiple members to group.
     pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        members: NonEmpty<(MemberId, ShareKey)>,
+        members: NonEmpty<(MemberId, ShareKey, CgkaAuthorization)>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let mut ops = Vec::new();
         for m in members {
-            ops.push(self.add::<F, S>(m.0, m.1, signer).await?);
+            ops.push(self.add::<F, S>(m.0, m.1, m.2, signer).await?);
         }
         Ok(ops.into_iter().flatten().collect())
     }
 
     /// Remove member from group.
     ///
+    /// `authorization` refers to the membership revocation that generated this removal.
+    ///
     /// Returns `Ok(None)` if the member is not in the group.
     #[instrument(skip_all)]
     pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: MemberId,
+        authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         if !self.tree.contains_id(&id) {
@@ -303,6 +311,7 @@ impl Cgka {
             removed_keys,
             predecessors,
             doc_id: self.doc_id,
+            authorization,
         };
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
         self.ops_graph.add_local_op(&signed_op);

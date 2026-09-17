@@ -3,7 +3,7 @@
 use keyhive_core::{
     access::Access::{Admin, Edit, Read, Relay},
     principal::public::Public,
-    test_utils::{TestContext, TestResult as Result},
+    test_utils::{content_ref, TestContext, TestResult as Result},
 };
 use std::collections::BTreeMap;
 
@@ -229,6 +229,102 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
         bob.try_decrypt_content(design_doc, &ct).await?,
         b"announcement".to_vec(),
         "and he can read it"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_public_editor_writes_by_rotating_the_public_leaf() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let peer = ctx.individual("peer").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    alice.add_member(Public.id(), design_doc, Edit, &[]).await?;
+    ctx.sync_as_public(&alice, &peer).await?;
+
+    let written = peer
+        .try_encrypt_content(
+            design_doc,
+            &content_ref(b"from the public peer"),
+            &vec![],
+            b"from the public peer",
+        )
+        .await?;
+
+    let rotated_leaf_is_public = matches!(
+        written.update_op().as_ref().map(|op| op.payload()),
+        Some(beekem::operation::CgkaOperation::Update { new_path, .. })
+            if new_path.leaf_id == beekem::id::MemberId::public()
+    );
+    assert!(
+        rotated_leaf_is_public,
+        "the peer is not in the tree so the rotation uses the public identity's key"
+    );
+
+    ctx.sync(&peer, &alice).await?;
+    assert_eq!(
+        alice
+            .try_decrypt_content(design_doc, written.encrypted_content())
+            .await?,
+        b"from the public peer".to_vec(),
+        "alice received the rotation so she reads what the peer wrote"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_public_leaf_keeps_its_well_known_key() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let peer = ctx.individual("peer").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(Public.id(), design_doc, Edit, &[]).await?;
+    ctx.sync_as_public(&alice, &peer).await?;
+
+    let written = peer
+        .try_encrypt_content(design_doc, &content_ref(b"hello"), &vec![], b"hello")
+        .await?;
+    let beekem::operation::CgkaOperation::Update {
+        id,
+        new_path,
+        predecessors,
+        doc_id,
+    } = written
+        .update_op()
+        .as_ref()
+        .expect("a peer with no leaf of its own rotates the public one")
+        .payload()
+        .clone()
+    else {
+        panic!("expected an update")
+    };
+
+    // The same path, with the public leaf given a key only the sender holds.
+    let other_key =
+        keyhive_crypto::share_key::ShareSecretKey::generate(&mut rand::rngs::OsRng).share_key();
+    let mut swapped = new_path.clone();
+    swapped.leaf_pk = beekem::keys::NodeKey::ShareKey(other_key);
+    swapped.removed_keys = vec![Public.share_key()];
+
+    let result = alice
+        .receive_cgka_op(
+            peer.try_sign(beekem::operation::CgkaOperation::Update {
+                id,
+                new_path: swapped,
+                predecessors,
+                doc_id,
+            })
+            .await?,
+        )
+        .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(keyhive_core::keyhive::ReceiveCgkaOpError::UnauthorizedCgkaOp(_))
+        ),
+        "every other public peer reads that path with the well-known key; {result:?}"
     );
     Ok(())
 }
