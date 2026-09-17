@@ -6,13 +6,11 @@ use dupe::Dupe;
 use future_form::Local;
 use keyhive_core::principal::peer::Peer;
 use wasm_bindgen::prelude::*;
-use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = Peer)]
 #[derive(Debug, Clone, Dupe)]
 pub struct JsPeer(pub(crate) Peer<Local, JsSigner, JsChangeId, JsEventHandler>);
 
-#[wasm_refgen(js_ref = JsPeerRef)]
 #[wasm_bindgen(js_class = Peer)]
 impl JsPeer {
     #[wasm_bindgen(getter)]
@@ -32,17 +30,17 @@ impl JsPeer {
             })
     }
 
-    #[wasm_bindgen(js_name = isIndividual)]
+    #[wasm_bindgen(getter, js_name = isIndividual)]
     pub fn is_individual(&self) -> bool {
         matches!(self.0, Peer::Individual(_, _))
     }
 
-    #[wasm_bindgen(js_name = isGroup)]
+    #[wasm_bindgen(getter, js_name = isGroup)]
     pub fn is_group(&self) -> bool {
         matches!(self.0, Peer::Group(_, _))
     }
 
-    #[wasm_bindgen(js_name = isDocument)]
+    #[wasm_bindgen(getter, js_name = isDocument)]
     pub fn is_document(&self) -> bool {
         matches!(self.0, Peer::Document(_, _))
     }

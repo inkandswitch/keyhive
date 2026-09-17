@@ -25,9 +25,14 @@ impl JsSigned {
         self.0.try_verify().is_ok()
     }
 
-    #[wasm_bindgen(getter)]
+    /// Copies the payload out of wasm memory on every call.
     pub fn payload(&self) -> Vec<u8> {
         self.0.payload().clone()
+    }
+
+    #[wasm_bindgen(getter, js_name = payloadLength)]
+    pub fn payload_length(&self) -> usize {
+        self.0.payload().len()
     }
 
     #[wasm_bindgen(getter, js_name = verifyingKey)]

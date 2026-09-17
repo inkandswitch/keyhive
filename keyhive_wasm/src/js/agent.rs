@@ -30,17 +30,17 @@ impl JsAgent {
             })
     }
 
-    #[wasm_bindgen(js_name = isIndividual)]
+    #[wasm_bindgen(getter, js_name = isIndividual)]
     pub fn is_individual(&self) -> bool {
         matches!(self.0, Agent::Individual(_, _))
     }
 
-    #[wasm_bindgen(js_name = isGroup)]
+    #[wasm_bindgen(getter, js_name = isGroup)]
     pub fn is_group(&self) -> bool {
         matches!(self.0, Agent::Group(_, _))
     }
 
-    #[wasm_bindgen(js_name = isDocument)]
+    #[wasm_bindgen(getter, js_name = isDocument)]
     pub fn is_document(&self) -> bool {
         matches!(self.0, Agent::Document(_, _))
     }

@@ -85,7 +85,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     ctx.sync_all_unsent().await?;
 
     // Both instances know the document and both are members.
-    assert!(alice_worker.get_document(design_doc).await.is_some());
+    assert!(alice_worker.has_document(design_doc).await);
     assert_eq!(
         bob.access_for_doc(alice_worker.id(), design_doc).await,
         Some(Read)
@@ -161,11 +161,11 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
     ctx.sync(&alice_worker, &alice).await?;
 
     assert!(
-        alice.get_document(from_worker).await.is_some(),
+        alice.has_document(from_worker).await,
         "alice learned about the document the worker made"
     );
     assert!(
-        alice_worker.get_document(from_alice).await.is_some(),
+        alice_worker.has_document(from_alice).await,
         "and the worker about alice's"
     );
     assert_eq!(alice.stats().await.pending_total(), 0);
@@ -271,7 +271,7 @@ async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
     // Everything alice has, which is everything except the worker's write.
     ctx.sync(&alice, &bob).await?;
     assert!(
-        bob.get_document(design_doc).await.is_some(),
+        bob.has_document(design_doc).await,
         "bob has the document itself"
     );
     assert!(

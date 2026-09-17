@@ -21,7 +21,12 @@ pub struct JsEventHandler(pub(crate) js_sys::Function);
 
 impl JsEventHandler {
     pub fn call(&self, event: JsEvent) {
-        self.0.call1(&JsValue::NULL, &event.into()).unwrap();
+        // A listener is application code and may throw. The event is dispatched
+        // while a lock is held, so unwrapping the error unwinds without dropping
+        // the guard, and every later locking call then blocks forever.
+        if let Err(err) = self.0.call1(&JsValue::NULL, &event.into()) {
+            tracing::warn!(?err, "event listener threw");
+        }
     }
 }
 

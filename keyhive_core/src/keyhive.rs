@@ -1571,6 +1571,24 @@ impl<
         self.docs.lock().await.get(&id).duped()
     }
 
+    /// Whether a document with this id is known.
+    #[instrument(skip_all)]
+    pub async fn has_document(&self, id: DocumentId) -> bool {
+        self.docs.lock().await.contains_key(&id)
+    }
+
+    /// Whether a group with this id is known.
+    #[instrument(skip_all)]
+    pub async fn has_group(&self, id: GroupId) -> bool {
+        self.groups.lock().await.contains_key(&id)
+    }
+
+    /// Whether an individual with this id is known.
+    #[instrument(skip_all)]
+    pub async fn has_individual(&self, id: IndividualId) -> bool {
+        self.individuals.lock().await.contains_key(&id)
+    }
+
     #[instrument(skip_all)]
     pub async fn get_peer(&self, id: Identifier) -> Option<Peer<F, S, T, L>> {
         let indie_id = IndividualId(id);
