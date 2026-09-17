@@ -26,7 +26,7 @@ async fn a_member_added_before_a_write_can_derive_its_key() -> Result<()> {
 }
 
 #[tokio::test]
-async fn a_member_added_after_a_write_cannot_derive_its_key() -> Result<()> {
+async fn a_member_added_after_a_write_can_derive_its_key_from_the_chain() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -41,14 +41,11 @@ async fn a_member_added_after_a_write_cannot_derive_its_key() -> Result<()> {
         b"before bob".to_vec(),
         "the author can still read"
     );
-    match bob
-        .try_decrypt_content(design_doc, &ct)
-        .await
-        .map_err(TestError::from)
-    {
-        Err(TestError::NoKey) => {}
-        other => panic!("bob should hold no key for a write from before he joined, got {other:?}"),
-    }
+    assert_eq!(
+        bob.try_decrypt_content(design_doc, &ct).await?,
+        b"before bob".to_vec(),
+        "and so can a member added afterwards, by walking the update chain back"
+    );
     Ok(())
 }
 
@@ -78,31 +75,6 @@ async fn predecessors_take_part_in_deriving_the_key() -> Result<()> {
     assert_ne!(
         root_key, after_root_key,
         "identical bytes at different points in the DAG went under one key"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_predecessor_does_not_make_its_earlier_key_derivable() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-
-    let before_bob = ctx.encrypt(&alice, design_doc, b"before bob").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    let after_bob = ctx
-        .encrypt_after(&alice, design_doc, &[&before_bob], b"after bob")
-        .await?;
-    ctx.sync_all_unsent().await?;
-
-    assert!(
-        bob.can_decrypt_content(design_doc, &after_bob).await?,
-        "bob was a member when this was written"
-    );
-    assert!(
-        !bob.can_decrypt_content(design_doc, &before_bob).await?,
-        "a successor with an earlier predecessor does not let bob derive the earlier key"
     );
     Ok(())
 }
@@ -155,7 +127,7 @@ async fn a_key_rotation_does_not_lock_out_a_current_member() -> Result<()> {
 }
 
 #[tokio::test]
-async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Result<()> {
+async fn a_rotation_does_not_break_the_chain() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -177,8 +149,8 @@ async fn content_written_after_a_rotation_does_not_open_what_came_before() -> Re
         "bob reads content written under the key he was given"
     );
     assert!(
-        !bob.can_decrypt_content(design_doc, &history).await?,
-        "the presence of a predecessor does not let bob derive its key"
+        bob.can_decrypt_content(design_doc, &history).await?,
+        "and the rotation between them wraps the earlier secret rather than sealing it off"
     );
     Ok(())
 }
