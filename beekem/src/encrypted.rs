@@ -131,6 +131,22 @@ impl<T: core::hash::Hash, Cr: ContentRef> core::hash::Hash for EncryptedContent<
     }
 }
 
+/// A Diffie-Hellman key, with the public key it was derived against.
+pub struct PairedKey {
+    key: SymmetricKey,
+    paired_pk: ShareKey,
+}
+
+impl PairedKey {
+    /// Derive the key `paired_pk`'s holder needs to decrypt what `sk` encrypts.
+    pub fn new(sk: &ShareSecretKey, paired_pk: &ShareKey) -> Self {
+        PairedKey {
+            key: sk.derive_symmetric_key(paired_pk),
+            paired_pk: *paired_pk,
+        }
+    }
+}
+
 /// Encrypt a secret key for a tree node, paired with the given public key.
 pub fn encrypt_secret(
     doc_id: &[u8],
@@ -138,9 +154,18 @@ pub fn encrypt_secret(
     sk: &ShareSecretKey,
     paired_pk: &ShareKey,
 ) -> Result<EncryptedSecret<ShareSecretKey>, CgkaError> {
-    let key = sk.derive_symmetric_key(paired_pk);
+    encrypt_secret_with(&PairedKey::new(sk, paired_pk), doc_id, secret)
+}
+
+/// Encrypt a secret key under an already derived [`PairedKey`].
+pub fn encrypt_secret_with(
+    paired: &PairedKey,
+    doc_id: &[u8],
+    secret: ShareSecretKey,
+) -> Result<EncryptedSecret<ShareSecretKey>, CgkaError> {
+    let PairedKey { key, paired_pk } = paired;
     let mut ciphertext: Vec<u8> = (&secret).into();
-    let nonce = Siv::new(&key, &ciphertext, doc_id);
+    let nonce = Siv::new(key, &ciphertext, doc_id);
     key.try_encrypt(nonce, &mut ciphertext)
         .map_err(CgkaError::Encryption)?;
     Ok(EncryptedSecret::new(nonce, ciphertext, *paired_pk))

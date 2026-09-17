@@ -3031,8 +3031,17 @@ pub enum CausalDecryptError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<
     #[error(transparent)]
     NotFound(#[from] NotFound),
 
+    /// Boxed because it is far larger than the other variants
     #[error(transparent)]
-    Document(#[from] DocCausalDecryptionError<F, T, P, C>),
+    Document(Box<DocCausalDecryptionError<F, T, P, C>>),
+}
+
+impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
+    From<DocCausalDecryptionError<F, T, P, C>> for CausalDecryptError<F, T, P, C>
+{
+    fn from(error: DocCausalDecryptionError<F, T, P, C>) -> Self {
+        CausalDecryptError::Document(Box::new(error))
+    }
 }
 
 /// Why content could not be written into an [`Envelope`](crate::crypto::envelope::Envelope).

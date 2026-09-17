@@ -162,6 +162,8 @@ impl Cgka {
         self.0.decryption_key_for(encrypted)
     }
 
+    /// Add a member, returning its add operation or `None` if the member
+    /// is already in the tree.
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
