@@ -54,7 +54,7 @@ pub struct Cgka {
     pub owner_id: MemberId,
     /// The secret keys of the member who owns this tree.
     pub owner_sks: ShareKeyMap,
-    tree: BeeKem,
+    pub(crate) tree: BeeKem,
     /// Graph of all operations seen (but not necessarily applied) so far.
     ops_graph: CgkaOperationGraph,
     /// Whether there are ops in the graph that have not been applied to the
@@ -709,6 +709,3 @@ impl Cgka {
         self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
     }
 }
-
-#[cfg(test)]
-mod concurrent_membership_changes;

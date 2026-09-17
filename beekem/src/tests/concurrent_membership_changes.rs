@@ -1,3 +1,5 @@
+//! Tests concurrent membership changes.
+
 use crate::{
     cgka::Cgka,
     id::{MemberId, TreeId},
@@ -23,6 +25,10 @@ use keyhive_crypto::{
 };
 use rand::{rngs::StdRng, SeedableRng};
 
+
+//////////////////////////
+// Test helpers
+//////////////////////////
 struct Member {
     id: MemberId,
     signer: MemorySigner,
@@ -308,6 +314,9 @@ fn name_for(i: usize) -> String {
     ["a", "b", "c", "d", "e", "f", "g", "h"][i].to_string()
 }
 
+///////////////////
+// Tests
+///////////////////
 #[tokio::test]
 async fn duplicate_adds_fill_one_leaf() {
     let mut rng = StdRng::seed_from_u64(0xd00b_1111);
