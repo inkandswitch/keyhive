@@ -124,12 +124,8 @@ pub enum CgkaOperation {
         id: MemberId,
         new_path: Box<PathChange>,
         /// The root secrets of the immediate update ancestors of this one and
-        /// any formerly unreachable ancestors we were able to derive.
+        /// of any older unchained updates, for the ones we could derive.
         predecessor_secrets: Vec<PredecessorSecret>,
-        /// Updates corresponding to ancestor root secrets we could not derive.
-        /// They are propagated until they can be derived, and so can include ancestors
-        /// of our nearest update ancestors.
-        unreachable_ancestors: Vec<Digest<Signed<CgkaOperation>>>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
@@ -192,6 +188,15 @@ pub struct CgkaOperationGraph {
     pub cgka_op_heads: Set<Digest<Signed<CgkaOperation>>>,
 
     pub add_heads: Set<Digest<Signed<CgkaOperation>>>,
+
+    /// Updates that a descendent update lists in its predecessor secrets.
+    pub chained_updates: Set<Digest<Signed<CgkaOperation>>>,
+
+    /// Updates that a descendent update left out of its predecessor secrets,
+    /// usually because its author could not derive the secret. A member that
+    /// can derive one adds it as a predecessor on its next update, which puts
+    /// it into the chain.
+    pub unchained_updates: Set<Digest<Signed<CgkaOperation>>>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -212,6 +217,9 @@ impl Hash for CgkaOperationGraph {
             .hash(state);
 
         self.add_heads.iter().collect::<BTreeSet<_>>().hash(state);
+
+        // chained_updates and unchained_updates are derived from the operations
+        // hashed above, so they are left out.
     }
 }
 
@@ -230,6 +238,10 @@ impl Merge for CgkaOperationGraph {
             .extend(fork.cgka_ops_predecessors);
         self.cgka_op_heads.extend(fork.cgka_op_heads);
         self.add_heads.extend(fork.add_heads);
+        self.chained_updates.extend(fork.chained_updates);
+        self.unchained_updates.extend(fork.unchained_updates);
+        self.unchained_updates
+            .retain(|hash| !self.chained_updates.contains(hash));
     }
 }
 
@@ -240,6 +252,8 @@ impl CgkaOperationGraph {
             cgka_ops_predecessors: Map::new(),
             cgka_op_heads: Set::new(),
             add_heads: Set::new(),
+            chained_updates: Set::new(),
+            unchained_updates: Set::new(),
         }
     }
 
@@ -312,6 +326,24 @@ impl CgkaOperationGraph {
                 .all(|p| self.cgka_ops.contains_key(p)),
             "predecessors should be in the graph before a descendent op"
         );
+        // An update lists the root secrets of the nearest update ancestors its
+        // author could derive. One it leaves out is recorded so a later update
+        // can derive it instead.
+        if let CgkaOperation::Update {
+            predecessor_secrets,
+            ..
+        } = &op.payload
+        {
+            for entry in predecessor_secrets {
+                self.chained_updates.insert(entry.update_op_hash);
+                self.unchained_updates.remove(&entry.update_op_hash);
+            }
+            for ancestor in self.nearest_update_ancestors(&op_predecessors) {
+                if !self.chained_updates.contains(&ancestor) {
+                    self.unchained_updates.insert(ancestor);
+                }
+            }
+        }
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
     }
 
@@ -352,6 +384,14 @@ impl CgkaOperationGraph {
     fn is_add_op(&self, hash: &Digest<Signed<CgkaOperation>>) -> bool {
         let op = self.cgka_ops.get(hash).expect("op to be in history");
         matches!(&op.payload, &CgkaOperation::Add { .. })
+    }
+
+    /// Whether `hash` names an update operation we have.
+    pub(crate) fn is_update_op(&self, hash: &Digest<Signed<CgkaOperation>>) -> bool {
+        matches!(
+            self.cgka_ops.get(hash).map(|op| &op.payload),
+            Some(CgkaOperation::Update { .. })
+        )
     }
 
     pub fn predecessors_for(
@@ -550,10 +590,56 @@ mod nearest_update_ancestor_tests {
                 removed_keys: Vec::new(),
             }),
             predecessor_secrets: Vec::new(),
-            unreachable_ancestors: Vec::new(),
             predecessors: Vec::new(),
             doc_id,
         }
+    }
+
+    #[tokio::test]
+    async fn the_chained_and_unchained_sets_do_not_depend_on_arrival_order() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+
+        let u1 = sign(&signer, update_op(doc_id)).await;
+        let u1_hash = Digest::hash(&u1);
+        let u3 = sign(&signer, update_op(doc_id)).await;
+        let u3_hash = Digest::hash(&u3);
+        // u2 claims to add its concurrent sibling u3 to the chain. The graph never
+        // decrypts, so an empty ciphertext is enough.
+        let mut u2_op = update_op(doc_id);
+        let CgkaOperation::Update {
+            ref mut predecessor_secrets,
+            ..
+        } = u2_op
+        else {
+            panic!("update_op should build an Update")
+        };
+        predecessor_secrets.push(PredecessorSecret {
+            update_op_hash: u3_hash,
+            encrypted_root_secret: Vec::new(),
+        });
+        let u2 = sign(&signer, u2_op).await;
+
+        let mut forward = CgkaOperationGraph::new();
+        forward.add_local_op(&u1);
+        forward.add_op(&u2, &Set::from_iter([u1_hash]));
+        forward.add_op(&u3, &Set::from_iter([u1_hash]));
+
+        let mut reversed = CgkaOperationGraph::new();
+        reversed.add_local_op(&u1);
+        reversed.add_op(&u3, &Set::from_iter([u1_hash]));
+        reversed.add_op(&u2, &Set::from_iter([u1_hash]));
+
+        assert_eq!(forward.chained_updates, reversed.chained_updates);
+        assert_eq!(forward.unchained_updates, reversed.unchained_updates);
+        assert!(
+            forward.chained_updates.contains(&u3_hash),
+            "a claim naming an operation that arrives later should still count"
+        );
+        assert!(
+            forward.unchained_updates.contains(&u1_hash),
+            "an update neither sibling adds to the chain should be in unchained"
+        );
     }
 
     #[tokio::test]

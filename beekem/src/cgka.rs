@@ -82,16 +82,6 @@ pub struct Cgka {
     init_add_op: Signed<CgkaOperation>,
 }
 
-/// The root secrets an update or an invitation should wrap.
-struct AncestorSecrets {
-    /// The root secrets we could derive, paired with the update that produced each.
-    reached: Vec<(Digest<Signed<CgkaOperation>>, PcsKey)>,
-
-    /// Updates whose root secret we could not derive. They are propagated so a
-    /// later update, possibly by another member, can derive it.
-    unreachable: Vec<Digest<Signed<CgkaOperation>>>,
-}
-
 impl Hash for Cgka {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.doc_id.hash(state);
@@ -285,7 +275,7 @@ impl Cgka {
         // put them in an invitation.
         let heads = self.ops_graph.cgka_op_heads.clone();
         let ancestors = self.reachable_ancestor_secrets(&heads);
-        let invitation = self.invitation_for(id, pk, &ancestors.reached);
+        let invitation = self.invitation_for(id, pk, &ancestors);
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
         let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
@@ -472,16 +462,12 @@ impl Cgka {
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let heads = self.ops_graph.cgka_op_heads.clone();
             let predecessors = Vec::from_iter(heads.iter().cloned());
-            let mut ancestors = self.reachable_ancestor_secrets(&heads);
-            let (predecessor_secrets, unencrypted) =
-                self.predecessor_secrets(&pcs_key, &ancestors.reached);
-            ancestors.unreachable.extend(unencrypted);
-            ancestors.unreachable.sort();
+            let ancestors = self.reachable_ancestor_secrets(&heads);
+            let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestors);
             let op = CgkaOperation::Update {
                 id: update_id,
                 new_path: Box::new(new_path),
                 predecessor_secrets,
-                unreachable_ancestors: ancestors.unreachable,
                 predecessors,
                 doc_id: self.doc_id,
             };
@@ -535,13 +521,13 @@ impl Cgka {
                 self.pending_ops_for_structural_change = true;
                 self.ops_graph.add_op(&op, &predecessors);
             } else {
-                self.apply_operation(op)?;
+                self.apply_operation_and_record_root_secret(op)?;
             }
         } else {
             if self.should_replay() {
                 self.replay_ops_graph()?;
             }
-            self.apply_operation(op)?;
+            self.apply_operation_and_record_root_secret(op)?;
         }
         Ok(true)
     }
@@ -554,9 +540,77 @@ impl Cgka {
         self.ops_graph.contains_predecessors(preds)
     }
 
-    /// Apply a [`CgkaOperation`].
+    /// Apply a [`CgkaOperation`]. If it's a [`CgkaOperation::Update`],
+    /// record the corresponding root secret.
     #[instrument(skip_all)]
-    fn apply_operation(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
+    fn apply_operation_and_record_root_secret(
+        &mut self,
+        op: Arc<Signed<CgkaOperation>>,
+    ) -> Result<(), CgkaError> {
+        if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
+            return Ok(());
+        }
+        let is_update = matches!(op.payload, CgkaOperation::Update { .. });
+        self.apply_operation_to_tree(op.clone())?;
+        if is_update {
+            // Record while the tree has the root secret this update produced.
+            // Otherwise, a later update rebuilds the history to derive it again.
+            if let Some((op_hash, pcs_key)) = self.record_tree_root_secret() {
+                self.apply_operation_and_record_root_secret(op)?;
+                self.validate_predecessor_claims(op_hash, &pcs_key);
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate the predecessor secret entries of the update `op_hash` against its
+    /// root secret. Run at the point of application so the root secret is present.
+    fn validate_predecessor_claims(
+        &mut self,
+        op_hash: Digest<Signed<CgkaOperation>>,
+        pcs_key: &PcsKey,
+    ) {
+        // Validate only if the root secret corresponds to the update
+        if self.root_share_key_for(&op_hash) != Some(pcs_key.0.share_key()) {
+            return;
+        }
+        let Some(op) = self.ops_graph.cgka_ops.get(&op_hash).cloned() else {
+            return;
+        };
+        let CgkaOperation::Update {
+            predecessor_secrets,
+            ..
+        } = &op.payload
+        else {
+            return;
+        };
+        let key = pcs_key.derive_predecessor_secrets_key();
+        for entry in predecessor_secrets {
+            // Without a root share key we have nothing to validate against.
+            let Some(named_pk) = self.root_share_key_for(&entry.update_op_hash) else {
+                continue;
+            };
+            match Self::decrypt_predecessor_secret(&key, entry) {
+                Some(found) if found.0.share_key() == named_pk => {
+                    self.insert_pcs_key(&found, entry.update_op_hash);
+                }
+                _ => {
+                    debug!(
+                        op_hash = ?entry.update_op_hash,
+                        "a chained predecessor secret does not match the update it is \
+                        supposed to correspond to"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Apply a [`CgkaOperation`] without recording a root secret.
+    ///
+    /// A replay applies the whole history. Always recording per update would
+    /// derive a root secret for every update when only the last one is needed.
+    #[instrument(skip_all)]
+    fn apply_operation_to_tree(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<(), CgkaError> {
         if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(());
         }
@@ -573,11 +627,6 @@ impl Cgka {
             CgkaOperation::Invite { .. } => self.record_invitation(&op),
         }
         self.ops_graph.add_op(&op, &op.payload.predecessors());
-        if matches!(op.payload, CgkaOperation::Update { .. }) {
-            // Record it while the tree is in the state this update produced.
-            // Otherwise a later update rebuilds the history to derive it again.
-            self.record_tree_root_secret();
-        }
         Ok(())
     }
 
@@ -587,7 +636,7 @@ impl Cgka {
     fn apply_epochs(&mut self, epochs: &NonEmpty<CgkaEpoch>) -> Result<(), CgkaError> {
         for epoch in epochs {
             if epoch.len() == 1 {
-                self.apply_operation(epoch[0].clone())?;
+                self.apply_operation_to_tree(epoch[0].clone())?;
             } else {
                 // If no operation in this epoch changes the tree's structure, we can
                 // apply them directly and move on to the next epoch.
@@ -598,7 +647,7 @@ impl Cgka {
                     )
                 }) {
                     for op in epoch.iter() {
-                        self.apply_operation(op.clone())?;
+                        self.apply_operation_to_tree(op.clone())?;
                     }
                     continue;
                 }
@@ -617,7 +666,7 @@ impl Cgka {
                         }
                         _ => {}
                     }
-                    self.apply_operation(op.clone())?;
+                    self.apply_operation_to_tree(op.clone())?;
                 }
                 self.tree
                     .sort_leaves_and_blank_paths_for_concurrent_membership_changes(
@@ -688,82 +737,60 @@ impl Cgka {
         self.derive_pcs_key_for_op(update_op_hash)
     }
 
-    /// The root secrets of the nearest update ancestors of `heads`, plus any
-    /// ancestors those updates recorded as unreachable.
+    /// The root secrets we can derive, for the nearest update ancestors of
+    /// `heads` and for every update recorded as outside of the predecessor
+    /// secrets chain.
     #[instrument(skip_all)]
     fn reachable_ancestor_secrets(
         &mut self,
         heads: &Set<Digest<Signed<CgkaOperation>>>,
-    ) -> AncestorSecrets {
-        let nearest = self.ops_graph.nearest_update_ancestors(heads);
-        // Also retry the ancestors those updates could not reach, so a member that
-        // can derive one now puts it back into the chain.
-        let mut targets = nearest.clone();
-        for op_hash in &nearest {
-            if let Some(CgkaOperation::Update {
-                unreachable_ancestors,
-                ..
-            }) = self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload)
-            {
-                targets.extend(unreachable_ancestors.iter().copied().filter(|h| {
-                    // Only an update produces a root secret.
-                    matches!(
-                        self.ops_graph.cgka_ops.get(h).map(|op| &op.payload),
-                        Some(CgkaOperation::Update { .. })
-                    )
-                }));
-            }
-        }
+    ) -> Vec<(Digest<Signed<CgkaOperation>>, PcsKey)> {
+        let mut targets = self.ops_graph.nearest_update_ancestors(heads);
+        targets.extend(self.ops_graph.unchained_updates.iter().copied());
 
         let mut found = Vec::new();
-        let mut unreachable = Vec::new();
         for op_hash in targets {
-            if let Some(secret) = self.root_secret_for(&op_hash) {
+            let secret = self.root_secret_for(&op_hash).or_else(|| {
+                // Failing to derive is expected for a root secret from before
+                // we joined the tree.
+                self.derive_pcs_key_for_op(&op_hash).ok()?;
+                self.root_secret_for(&op_hash)
+            });
+            if let Some(secret) = secret {
                 found.push((op_hash, secret));
-                continue;
-            }
-            match self.derive_pcs_key_for_op(&op_hash) {
-                Ok(_) => match self.root_secret_for(&op_hash) {
-                    Some(secret) => found.push((op_hash, secret)),
-                    None => unreachable.push(op_hash),
-                },
-                // Expected for a root secret from before we joined the tree.
-                Err(_e) => unreachable.push(op_hash),
             }
         }
         // The ancestors are an unordered set, so sort to keep the bytes stable.
         found.sort_by_key(|(op_hash, _)| *op_hash);
-        AncestorSecrets {
-            reached: found,
-            unreachable,
-        }
+        found
     }
 
     /// Encrypt each of `ancestor_secrets` under a key derived from `pcs_key` so that
-    /// a member who can derive `pcs_key` can derive those too. Returns a pair of
-    /// successfully encrypted secrets and the operations for any failed encryptions.
+    /// a member who can derive `pcs_key` can derive those too. A secret that fails
+    /// to encrypt is dropped. It will be added to the chain in the future by someone
+    /// who can decrypt it.
     #[instrument(skip_all)]
     fn predecessor_secrets(
         &self,
         pcs_key: &PcsKey,
         ancestor_secrets: &[(Digest<Signed<CgkaOperation>>, PcsKey)],
-    ) -> (Vec<PredecessorSecret>, Vec<Digest<Signed<CgkaOperation>>>) {
+    ) -> Vec<PredecessorSecret> {
         let key = pcs_key.derive_predecessor_secrets_key();
-        let mut encrypted = Vec::new();
-        let mut failed = Vec::new();
-        for (op_hash, secret) in ancestor_secrets {
-            match key.try_seal(secret.0.as_slice(), self.doc_id.as_bytes()) {
-                Ok(encrypted_root_secret) => encrypted.push(PredecessorSecret {
-                    update_op_hash: *op_hash,
-                    encrypted_root_secret,
-                }),
-                Err(e) => {
-                    warn!(?e, ?op_hash, "could not encrypt a predecessor root secret");
-                    failed.push(*op_hash);
+        ancestor_secrets
+            .iter()
+            .filter_map(|(op_hash, secret)| {
+                match key.try_seal(secret.0.as_slice(), self.doc_id.as_bytes()) {
+                    Ok(encrypted_root_secret) => Some(PredecessorSecret {
+                        update_op_hash: *op_hash,
+                        encrypted_root_secret,
+                    }),
+                    Err(e) => {
+                        warn!(?e, ?op_hash, "could not encrypt a predecessor root secret");
+                        None
+                    }
                 }
-            }
-        }
-        (encrypted, failed)
+            })
+            .collect()
     }
 
     /// Derive the current root secret and record it for the update that
@@ -783,6 +810,9 @@ impl Cgka {
         let (Some(op_hash), None) = (ancestors.next(), ancestors.next()) else {
             return None;
         };
+        if let Some(pcs_key) = self.pcs_keys_by_update.get(&op_hash).copied() {
+            return Some((op_hash, pcs_key));
+        }
         let pcs_key = self.pcs_key_from_tree_root().ok()?;
         self.insert_pcs_key(&pcs_key, op_hash);
         Some((op_hash, pcs_key))
@@ -790,19 +820,12 @@ impl Cgka {
 
     /// The root secret `op_hash` produced, if we can reach it without a rebuild.
     fn root_secret_for(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> Option<PcsKey> {
-        if !matches!(
-            self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload),
-            Some(CgkaOperation::Update { .. })
-        ) {
+        if !self.ops_graph.is_update_op(op_hash) {
             return None;
         }
         self.pcs_keys_by_update.get(op_hash).copied().or_else(|| {
-            // Validate that the update op described the correct secret/op pairing.
-            let root_share_key = self.root_share_key_for(op_hash)?;
             self.invited_root_secrets()
-                .find(|(invited_op, key)| {
-                    invited_op == op_hash && key.0.share_key() == root_share_key
-                })
+                .find(|(invited_op, _)| invited_op == op_hash)
                 .map(|(_, key)| key)
         })
     }
@@ -815,17 +838,14 @@ impl Cgka {
         self.pcs_keys_by_update
             .iter()
             .map(|(op_hash, key)| (*op_hash, *key))
-            // Validate the invited root secrets are correctly paired
-            .chain(self.invited_root_secrets().filter(|(op_hash, key)| {
-                self.root_share_key_for(op_hash) == Some(key.0.share_key())
-            }))
+            .chain(self.invited_root_secrets())
     }
 
     /// Return the requested PCS key and the update that produced it, if we can
     /// derive it from the predecessor secrets chain.
     #[instrument(skip_all)]
     fn pcs_key_from_predecessor_secrets(
-        &self,
+        &mut self,
         pcs_key_hash: &Digest<PcsKey>,
     ) -> Option<(Digest<Signed<CgkaOperation>>, PcsKey)> {
         let mut frontier: Vec<(Digest<Signed<CgkaOperation>>, PcsKey)> =
@@ -847,13 +867,29 @@ impl Cgka {
             };
             let key = pcs_key.derive_predecessor_secrets_key();
             for predecessor in predecessor_secrets {
-                let Some(found) = Self::decrypt_predecessor_secret(&key, predecessor) else {
+                let found = Self::decrypt_predecessor_secret(&key, predecessor);
+                if let Some(found) = found {
+                    if Digest::hash(&found) == *pcs_key_hash {
+                        return Some((predecessor.update_op_hash, found));
+                    }
+                }
+                // Without the update's own root key there is nothing to
+                // validate the entry against.
+                let Some(named_pk) = self.root_share_key_for(&predecessor.update_op_hash) else {
                     continue;
                 };
-                if Digest::hash(&found) == *pcs_key_hash {
-                    return Some((predecessor.update_op_hash, found));
+                match found {
+                    Some(found) if found.0.share_key() == named_pk => {
+                        frontier.push((predecessor.update_op_hash, found));
+                    }
+                    _ => {
+                        debug!(
+                            op_hash = ?predecessor.update_op_hash,
+                            "a chained predecessor secret does not match the update it supposedly \
+                            corresponds to"
+                        );
+                    }
                 }
-                frontier.push((predecessor.update_op_hash, found));
             }
         }
         None
@@ -889,10 +925,13 @@ impl Cgka {
                         )
                         .ok()?;
                     let bytes = <[u8; 32]>::try_from(plaintext).ok()?;
-                    Some((
-                        invited.update_op_hash,
-                        PcsKey::new(ShareSecretKey::force_from_bytes(bytes)),
-                    ))
+                    let pcs_key = PcsKey::new(ShareSecretKey::force_from_bytes(bytes));
+                    // An inviter claims that this is an update op paired with this root secret.
+                    // Validate this claim and filter out if invalid.
+                    if self.root_share_key_for(&invited.update_op_hash)? != pcs_key.0.share_key() {
+                        return None;
+                    }
+                    Some((invited.update_op_hash, pcs_key))
                 })
             })
     }
@@ -1148,13 +1187,239 @@ mod cgka_tests {
     }
 
     #[tokio::test]
-    async fn ancestors_are_only_propagated_if_they_are_updates() {
+    async fn a_secret_is_not_recorded_for_an_update_that_did_not_produce_it() {
+        let mut csprng = rand::thread_rng();
+        let alice_signer = MemorySigner::generate(&mut csprng);
+        let doc_id = TreeId::from(alice_signer.verifying_key());
+        let alice_id = MemberId(alice_signer.verifying_key());
+        let alice_sk = ShareSecretKey::generate(&mut csprng);
+        let alice_pk = alice_sk.share_key();
+        let mut alice =
+            Cgka::new::<future_form::Local, _>(doc_id, alice_id, alice_pk, &alice_signer)
+                .await
+                .unwrap();
+        alice.owner_sks.insert(alice_pk, alice_sk);
+
+        let bob_signer = MemorySigner::generate(&mut csprng);
+        let bob_sk = ShareSecretKey::generate(&mut csprng);
+        alice
+            .add::<future_form::Local, _>(
+                MemberId(bob_signer.verifying_key()),
+                bob_sk.share_key(),
+                &alice_signer,
+            )
+            .await
+            .unwrap();
+
+        let sk1 = ShareSecretKey::generate(&mut csprng);
+        let (root1, _) = alice
+            .update::<future_form::Local, _, _>(sk1.share_key(), sk1, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let sk2 = ShareSecretKey::generate(&mut csprng);
+        let (root2, op2) = alice
+            .update::<future_form::Local, _, _>(sk2.share_key(), sk2, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let op2_hash = Digest::hash(&op2);
+        assert_ne!(root1, root2, "the two rotations produce different secrets");
+
+        alice.pcs_keys_by_update.remove(&op2_hash);
+        assert_eq!(
+            alice.root_secret_for(&op2_hash),
+            None,
+            "precondition: nothing is recorded for op2"
+        );
+
+        alice.insert_pcs_key(&root1, op2_hash);
+        assert_eq!(
+            alice.root_secret_for(&op2_hash),
+            None,
+            "a secret op2 did not produce should not be recorded for it"
+        );
+
+        alice.insert_pcs_key(&root2, op2_hash);
+        assert_eq!(
+            alice.root_secret_for(&op2_hash),
+            Some(root2),
+            "the secret op2 did produce should be"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_it() {
         let mut csprng = rand::thread_rng();
         let alice_signer = MemorySigner::generate(&mut csprng);
         let bob_signer = MemorySigner::generate(&mut csprng);
         let doc_id = TreeId::from(alice_signer.verifying_key());
         let alice_id = MemberId(alice_signer.verifying_key());
         let bob_id = MemberId(bob_signer.verifying_key());
+        let alice_sk = ShareSecretKey::generate(&mut csprng);
+        let alice_pk = alice_sk.share_key();
+        let mut alice =
+            Cgka::new::<future_form::Local, _>(doc_id, alice_id, alice_pk, &alice_signer)
+                .await
+                .unwrap();
+        alice.owner_sks.insert(alice_pk, alice_sk);
+        let bob_sk = ShareSecretKey::generate(&mut csprng);
+        let bob_pk = bob_sk.share_key();
+        alice
+            .add::<future_form::Local, _>(bob_id, bob_pk, &alice_signer)
+            .await
+            .unwrap();
+        let sk1 = ShareSecretKey::generate(&mut csprng);
+        let (root1, _) = alice
+            .update::<future_form::Local, _, _>(sk1.share_key(), sk1, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let sk2 = ShareSecretKey::generate(&mut csprng);
+        let (root2, op2) = alice
+            .update::<future_form::Local, _, _>(sk2.share_key(), sk2, &alice_signer, &mut csprng)
+            .await
+            .unwrap();
+        let op2_hash = Digest::hash(&op2);
+        assert_ne!(root1, root2, "the two rotations produce different secrets");
+
+        let mut bob_sks = ShareKeyMap::new();
+        bob_sks.insert(bob_pk, bob_sk);
+        let mut bob = Cgka::new_from_init_add(doc_id, alice_id, alice_pk, alice.init_add_op())
+            .unwrap()
+            .with_new_owner(bob_id, bob_sks)
+            .unwrap();
+        for epoch in alice.ops().unwrap() {
+            for op in epoch.iter() {
+                bob.merge_concurrent_operation(op.clone()).unwrap();
+            }
+        }
+
+        // An inviter chooses the op hash and the encrypted root secret, which
+        // could be selected to be incorrect.
+        let inviter_sk = ShareSecretKey::generate(&mut csprng);
+        let inviter_pk = inviter_sk.share_key();
+        let invitation = |secret: PcsKey| Invitation {
+            invitee_id: bob_id,
+            invitee_pk: bob_pk,
+            inviter_pk,
+            head_secrets: vec![InvitationSecret {
+                update_op_hash: op2_hash,
+                encrypted_root_secret: encrypt_secret(
+                    doc_id.as_bytes(),
+                    secret.0,
+                    &inviter_sk,
+                    &bob_pk,
+                )
+                .unwrap(),
+            }],
+        };
+        let signed = |invitation| async {
+            async_signer::try_sign_async::<future_form::Local, _, _>(
+                &alice_signer,
+                CgkaOperation::Invite {
+                    invitation: Box::new(invitation),
+                    predecessors: Vec::new(),
+                    doc_id,
+                },
+            )
+            .await
+            .unwrap()
+        };
+
+        bob.record_invitation(&signed(invitation(root1)).await);
+        assert!(
+            !bob.invited_root_secrets()
+                .any(|(op_hash, key)| op_hash == op2_hash && key == root1),
+            "an invitation wrapping op2 with a secret it did not produce should be ignored"
+        );
+
+        bob.record_invitation(&signed(invitation(root2)).await);
+        assert!(
+            bob.invited_root_secrets()
+                .any(|(op_hash, key)| op_hash == op2_hash && key == root2),
+            "an invitation wrapping op2 with the secret it did produce should be used"
+        );
+    }
+
+    async fn rotate<S: AsyncSigner<future_form::Local>, R: rand::CryptoRng + rand::RngCore>(
+        cgka: &mut Cgka,
+        signer: &S,
+        csprng: &mut R,
+    ) -> (PcsKey, Signed<CgkaOperation>) {
+        let sk = ShareSecretKey::generate(csprng);
+        cgka.update::<future_form::Local, _, _>(sk.share_key(), sk, signer, csprng)
+            .await
+            .unwrap()
+    }
+
+    fn predecessor_secrets(op: &Signed<CgkaOperation>) -> &[PredecessorSecret] {
+        let CgkaOperation::Update {
+            predecessor_secrets,
+            ..
+        } = &op.payload
+        else {
+            panic!("an update should be an Update op")
+        };
+        predecessor_secrets
+    }
+
+    fn added_to_chain(op: &Signed<CgkaOperation>, hash: &Digest<Signed<CgkaOperation>>) -> bool {
+        predecessor_secrets(op)
+            .iter()
+            .any(|s| s.update_op_hash == *hash)
+    }
+
+    /// A new member's [`Cgka`] built by applying every operation `source` holds.
+    fn view_of(source: &Cgka, id: MemberId, sks: ShareKeyMap) -> Cgka {
+        let (original_id, original_pk) = source.original_member;
+        let mut view = Cgka::new_from_init_add(
+            source.doc_id,
+            original_id,
+            original_pk,
+            source.init_add_op(),
+        )
+        .unwrap()
+        .with_new_owner(id, sks)
+        .unwrap();
+        view.apply_epochs(&source.ops().unwrap()).unwrap();
+        view
+    }
+
+    /// Re-sign `op` with its predecessor secrets replaced by `entries`.
+    async fn with_entries(
+        signer: &MemorySigner,
+        op: &Signed<CgkaOperation>,
+        entries: Vec<PredecessorSecret>,
+    ) -> Signed<CgkaOperation> {
+        let CgkaOperation::Update {
+            id,
+            ref new_path,
+            ref predecessors,
+            ..
+        } = op.payload
+        else {
+            panic!("an update should be an Update op")
+        };
+        let rebuilt = CgkaOperation::Update {
+            id,
+            new_path: new_path.clone(),
+            predecessor_secrets: entries,
+            predecessors: predecessors.clone(),
+            doc_id: *op.payload.doc_id(),
+        };
+        async_signer::try_sign_async::<future_form::Local, _, _>(signer, rebuilt)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_update_adds_an_ancestor_secret_an_earlier_update_could_not_to_the_chain() {
+        let mut csprng = rand::thread_rng();
+        let alice_signer = MemorySigner::generate(&mut csprng);
+        let bob_signer = MemorySigner::generate(&mut csprng);
+        let charlie_signer = MemorySigner::generate(&mut csprng);
+        let doc_id = TreeId::from(alice_signer.verifying_key());
+        let alice_id = MemberId(alice_signer.verifying_key());
+        let bob_id = MemberId(bob_signer.verifying_key());
+        let charlie_id = MemberId(charlie_signer.verifying_key());
 
         let alice_sk = ShareSecretKey::generate(&mut csprng);
         let alice_pk = alice_sk.share_key();
@@ -1170,38 +1435,173 @@ mod cgka_tests {
             .add::<future_form::Local, _>(bob_id, bob_pk, &alice_signer)
             .await
             .unwrap();
-        let sk = ShareSecretKey::generate(&mut csprng);
-        let (_, update_op) = alice
-            .update::<future_form::Local, _, _>(sk.share_key(), sk, &alice_signer, &mut csprng)
+        let mut bob_sks = ShareKeyMap::new();
+        bob_sks.insert(bob_pk, bob_sk);
+        let mut bob = view_of(&alice, bob_id, bob_sks);
+
+        // Concurrently, Alice rotates and adds Charlie while Bob rotates.
+        let (_, alice_op1) = rotate(&mut alice, &alice_signer, &mut csprng).await;
+        let alice_op1_hash = Digest::hash(&alice_op1);
+        let charlie_sk = ShareSecretKey::generate(&mut csprng);
+        let charlie_pk = charlie_sk.share_key();
+        alice
+            .add::<future_form::Local, _>(charlie_id, charlie_pk, &alice_signer)
+            .await
+            .unwrap();
+        let (_, bob_op) = rotate(&mut bob, &bob_signer, &mut csprng).await;
+        let bob_op_hash = Digest::hash(&bob_op);
+        alice.merge_concurrent_operation(Arc::new(bob_op)).unwrap();
+
+        // Charlie builds his view from the merged history and updates first.
+        let mut charlie_sks = ShareKeyMap::new();
+        charlie_sks.insert(charlie_pk, charlie_sk);
+        let mut charlie = view_of(&alice, charlie_id, charlie_sks);
+        let (_, charlie_op) = rotate(&mut charlie, &charlie_signer, &mut csprng).await;
+        let charlie_op_hash = Digest::hash(&charlie_op);
+        assert!(
+            added_to_chain(&charlie_op, &alice_op1_hash),
+            "Charlie should add the ancestor secret his invitation carries to the chain"
+        );
+        assert!(
+            !added_to_chain(&charlie_op, &bob_op_hash),
+            "Charlie should not add a secret he cannot derive to the chain"
+        );
+
+        alice
+            .merge_concurrent_operation(Arc::new(charlie_op))
+            .unwrap();
+        assert!(
+            alice.ops_graph.unchained_updates.contains(&bob_op_hash),
+            "an update nothing added to the chain should be recorded as unchained"
+        );
+        assert_eq!(
+            alice
+                .ops_graph
+                .nearest_update_ancestors(&alice.ops_graph.cgka_op_heads),
+            Set::from_iter([charlie_op_hash]),
+            "Charlie's update should cover Bob's, leaving the unchained record as the only route to it"
+        );
+
+        let (_, alice_op2) = rotate(&mut alice, &alice_signer, &mut csprng).await;
+        assert!(
+            added_to_chain(&alice_op2, &bob_op_hash),
+            "a member that can derive an unchained ancestor secret should add it to the chain"
+        );
+        assert!(
+            !alice.ops_graph.unchained_updates.contains(&bob_op_hash),
+            "an update in the chain should leave the unchained set"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mislabelled_predecessor_secret_is_never_used() {
+        let mut csprng = rand::thread_rng();
+        let alice_signer = MemorySigner::generate(&mut csprng);
+        let bob_signer = MemorySigner::generate(&mut csprng);
+        let doc_id = TreeId::from(alice_signer.verifying_key());
+        let alice_id = MemberId(alice_signer.verifying_key());
+        let bob_id = MemberId(bob_signer.verifying_key());
+
+        let alice_sk = ShareSecretKey::generate(&mut csprng);
+        let alice_pk = alice_sk.share_key();
+        let mut alice =
+            Cgka::new::<future_form::Local, _>(doc_id, alice_id, alice_pk, &alice_signer)
+                .await
+                .unwrap();
+        alice.owner_sks.insert(alice_pk, alice_sk);
+        let bob_sk = ShareSecretKey::generate(&mut csprng);
+        let bob_pk = bob_sk.share_key();
+        alice
+            .add::<future_form::Local, _>(bob_id, bob_pk, &alice_signer)
             .await
             .unwrap();
 
-        // An add is an operation Bob holds that produces no root secret, so no honest
-        // update could have found it unreachable.
-        let add_hash = Digest::hash(&alice.init_add_op());
-        let CgkaOperation::Update {
-            id,
-            ref new_path,
-            ref predecessor_secrets,
-            ref predecessors,
-            ..
-        } = update_op.payload
-        else {
-            panic!("an update should be an Update op")
+        let (root1, op1) = rotate(&mut alice, &alice_signer, &mut csprng).await;
+        let op1_hash = Digest::hash(&op1);
+        let (root2, op2) = rotate(&mut alice, &alice_signer, &mut csprng).await;
+
+        // Rebuild the second update with its entry for op1 adding a secret
+        // op1 did not produce to the chain.
+        let wrong_secret = PcsKey::new(ShareSecretKey::generate(&mut csprng));
+        let entry = PredecessorSecret {
+            update_op_hash: op1_hash,
+            encrypted_root_secret: root2
+                .derive_predecessor_secrets_key()
+                .try_seal(wrong_secret.0.as_slice(), doc_id.as_bytes())
+                .unwrap(),
         };
-        let unknown_hash: Digest<Signed<CgkaOperation>> = [9u8; 32].into();
-        let tampered = CgkaOperation::Update {
-            id,
-            new_path: new_path.clone(),
-            predecessor_secrets: predecessor_secrets.clone(),
-            unreachable_ancestors: vec![add_hash, unknown_hash],
-            predecessors: predecessors.clone(),
-            doc_id,
-        };
-        let tampered_op =
-            async_signer::try_sign_async::<future_form::Local, _, _>(&alice_signer, tampered)
+        let tampered_op = with_entries(&alice_signer, &op2, vec![entry]).await;
+
+        // Bob takes Alice's history with her second update replaced by the
+        // tampered one.
+        let mut bob_sks = ShareKeyMap::new();
+        bob_sks.insert(bob_pk, bob_sk);
+        let mut bob = Cgka::new_from_init_add(doc_id, alice_id, alice_pk, alice.init_add_op())
+            .unwrap()
+            .with_new_owner(bob_id, bob_sks)
+            .unwrap();
+        for epoch in alice.ops().unwrap() {
+            for op in epoch.iter() {
+                if Digest::hash(&**op) == Digest::hash(&op2) {
+                    continue;
+                }
+                bob.apply_operation_to_tree(op.clone()).unwrap();
+            }
+        }
+        bob.apply_operation_to_tree(Arc::new(tampered_op)).unwrap();
+        assert!(
+            bob.ops_graph.chained_updates.contains(&op1_hash),
+            "precondition: the mislabelled entry marks op1 added to the chain"
+        );
+        assert!(
+            !bob.ops_graph.unchained_updates.contains(&op1_hash),
+            "precondition: the mislabelled entry keeps op1 out of the unchained set"
+        );
+        assert!(
+            bob.pcs_key_from_predecessor_secrets(&Digest::hash(&root1))
+                .is_none(),
+            "a mislabelled secret should never be returned by the traversal"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_correct_secret_under_a_wrong_label_is_still_returned() {
+        let mut csprng = rand::thread_rng();
+        let alice_signer = MemorySigner::generate(&mut csprng);
+        let bob_signer = MemorySigner::generate(&mut csprng);
+        let doc_id = TreeId::from(alice_signer.verifying_key());
+        let alice_id = MemberId(alice_signer.verifying_key());
+        let bob_id = MemberId(bob_signer.verifying_key());
+
+        let alice_sk = ShareSecretKey::generate(&mut csprng);
+        let alice_pk = alice_sk.share_key();
+        let mut alice =
+            Cgka::new::<future_form::Local, _>(doc_id, alice_id, alice_pk, &alice_signer)
                 .await
                 .unwrap();
+        alice.owner_sks.insert(alice_pk, alice_sk);
+        let bob_sk = ShareSecretKey::generate(&mut csprng);
+        let bob_pk = bob_sk.share_key();
+        alice
+            .add::<future_form::Local, _>(bob_id, bob_pk, &alice_signer)
+            .await
+            .unwrap();
+
+        let (_, op1) = rotate(&mut alice, &alice_signer, &mut csprng).await;
+        let op1_hash = Digest::hash(&op1);
+        let (root2, _) = rotate(&mut alice, &alice_signer, &mut csprng).await;
+        let (root3, op3) = rotate(&mut alice, &alice_signer, &mut csprng).await;
+
+        // Rebuild the third update so its only entry carries root2 labelled
+        // with op1, an update that did not produce it.
+        let entry = PredecessorSecret {
+            update_op_hash: op1_hash,
+            encrypted_root_secret: root3
+                .derive_predecessor_secrets_key()
+                .try_seal(root2.0.as_slice(), doc_id.as_bytes())
+                .unwrap(),
+        };
+        let tampered_op = with_entries(&alice_signer, &op3, vec![entry]).await;
 
         let mut bob_sks = ShareKeyMap::new();
         bob_sks.insert(bob_pk, bob_sk);
@@ -1209,41 +1609,20 @@ mod cgka_tests {
             .unwrap()
             .with_new_owner(bob_id, bob_sks)
             .unwrap();
-        // Bob takes Alice's history with her update replaced by the tampered one.
         for epoch in alice.ops().unwrap() {
             for op in epoch.iter() {
-                if Digest::hash(&**op) == Digest::hash(&update_op) {
+                if Digest::hash(&**op) == Digest::hash(&op3) {
                     continue;
                 }
-                bob.apply_operation(op.clone()).unwrap();
+                bob.apply_operation_and_record_root_secret(op.clone()).unwrap();
             }
         }
-        bob.apply_operation(Arc::new(tampered_op)).unwrap();
+        bob.apply_operation_and_record_root_secret(Arc::new(tampered_op)).unwrap();
 
-        let bob_sk2 = ShareSecretKey::generate(&mut csprng);
-        let (_, bob_op) = bob
-            .update::<future_form::Local, _, _>(
-                bob_sk2.share_key(),
-                bob_sk2,
-                &bob_signer,
-                &mut csprng,
-            )
-            .await
-            .unwrap();
-        let CgkaOperation::Update {
-            ref unreachable_ancestors,
-            ..
-        } = bob_op.payload
-        else {
-            panic!("an update should be an Update op")
-        };
+        let found = bob.pcs_key_from_predecessor_secrets(&Digest::hash(&root2));
         assert!(
-            !unreachable_ancestors.contains(&unknown_hash),
-            "a hash with no corresponding op should be dropped"
-        );
-        assert!(
-            !unreachable_ancestors.contains(&add_hash),
-            "an entry containing an add should be rejected rather than replayed and propagated as unreachable"
+            matches!(found, Some((_, key)) if key == root2),
+            "a secret whose digest matches the request should come back whatever its label"
         );
     }
 
@@ -1341,7 +1720,7 @@ mod cgka_tests {
         assert!(
             predecessor_secrets
                 .iter()
-                .any(|sealed| Cgka::decrypt_predecessor_secret(&key, sealed) == Some(root2)),
+                .any(|chained| Cgka::decrypt_predecessor_secret(&key, chained) == Some(root2)),
             "Bob's update should encrypt the secret op2 really produced, or nothing \
              downstream will be able to reach it by the predecessor key chain again"
         );
