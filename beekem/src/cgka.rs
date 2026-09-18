@@ -578,12 +578,11 @@ impl Cgka {
         }
         self.clear_answered_disproofs(&op);
         let is_update = matches!(op.payload, CgkaOperation::Update { .. });
-        self.apply_operation_to_tree(op.clone())?;
+        self.apply_operation_to_tree(op)?;
         if is_update {
             // Record while the tree has the root secret this update produced.
             // Otherwise, a later update rebuilds the history to derive it again.
             if let Some((op_hash, pcs_key)) = self.record_tree_root_secret() {
-                self.apply_operation_and_record_root_secret(op)?;
                 self.validate_predecessor_claims(op_hash, &pcs_key);
             }
         }
