@@ -636,6 +636,45 @@ impl<
         }
     }
 
+    /// The graph a *static* membership event was dispatched to, resolved without
+    /// materializing the event.
+    ///
+    /// [`Self::static_event_to_event`] needs the *delegate's* installed [`Agent`]
+    /// (`static_delegation_to_delegation` -> `get_agent`), so a replica that only observes
+    /// a graph — and is therefore never sent that agent's record — cannot name even the
+    /// graph the event belongs to. Naming it needs no agent: the subject is the proof
+    /// chain's root issuer, every link of that chain is a delegation this hive stores, and
+    /// [`SignedSubjectId`] already performs exactly that walk for the live types.
+    ///
+    /// `None` means the chain is not (yet) resolvable here — a proof digest this hive has
+    /// not applied — or that the event is not a membership event at all (prekeys, CGKA).
+    #[instrument(skip_all)]
+    pub async fn static_membership_subject(&self, event: &StaticEvent<T>) -> Option<Identifier> {
+        match event {
+            StaticEvent::Delegated(delegation) => {
+                let Some(proof) = &delegation.payload.proof else {
+                    // No proof: this delegation is itself the chain's head.
+                    return Some(delegation.issuer.into());
+                };
+                let head = self.delegations.lock().await.get(&proof.coerce())?;
+                Some(head.subject_id())
+            }
+            // A revocation names the same graph as the delegation it revokes, and that
+            // revoked delegation is what carries the chain.
+            StaticEvent::Revoked(revocation) => {
+                let revoked = self
+                    .delegations
+                    .lock()
+                    .await
+                    .get(&revocation.payload.revoke.coerce())?;
+                Some(revoked.subject_id())
+            }
+            StaticEvent::CgkaOperation(_)
+            | StaticEvent::PrekeysExpanded(_)
+            | StaticEvent::PrekeyRotated(_) => None,
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     pub async fn add_member_with_manual_content(
         &self,
