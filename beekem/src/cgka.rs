@@ -78,11 +78,6 @@ pub struct Cgka {
     /// Every invitation we have seen by invite member.
     invitations: Map<MemberId, BTreeMap<Digest<Invitation>, Invitation>>,
 
-    /// Updates whose entry in the chain we decrypted and found not to match the
-    /// update it was supposed to correspond to. Encrypted and added to the chain
-    /// again.
-    disproved_chain_entries: Set<Digest<Signed<CgkaOperation>>>,
-
     original_member: (MemberId, ShareKey),
     init_add_op: Signed<CgkaOperation>,
 }
@@ -104,10 +99,6 @@ impl Hash for Cgka {
         self.invitations
             .iter()
             .collect::<BTreeMap<_, _>>()
-            .hash(state);
-        self.disproved_chain_entries
-            .iter()
-            .collect::<BTreeSet<_>>()
             .hash(state);
         self.original_member.hash(state);
         self.init_add_op.hash(state);
@@ -144,7 +135,6 @@ impl Cgka {
             pcs_keys: CaMap::new(),
             pcs_keys_by_update: Map::new(),
             invitations: Map::new(),
-            disproved_chain_entries: Set::new(),
             original_member: (owner_id, owner_pk),
             init_add_op: init_add_op.clone(),
         };
@@ -483,7 +473,6 @@ impl Cgka {
             };
 
             let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-            self.clear_answered_disproofs(&signed_op);
             self.ops_graph.add_local_op(&signed_op);
             self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
             Ok((pcs_key, signed_op))
@@ -524,7 +513,6 @@ impl Cgka {
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
             if self.pending_ops_for_structural_change {
-                self.clear_answered_disproofs(&op);
                 self.ops_graph.add_op(&op, &predecessors);
             } else if matches!(
                 op.payload,
@@ -552,20 +540,6 @@ impl Cgka {
         self.ops_graph.contains_predecessors(preds)
     }
 
-    /// A new claim for a disproved update answers the disproof. A claim that
-    /// is itself false comes back the next time a walk decrypts it.
-    fn clear_answered_disproofs(&mut self, op: &Signed<CgkaOperation>) {
-        if let CgkaOperation::Update {
-            predecessor_secrets,
-            ..
-        } = &op.payload
-        {
-            for entry in predecessor_secrets {
-                self.disproved_chain_entries.remove(&entry.update_op_hash);
-            }
-        }
-    }
-
     /// Apply a [`CgkaOperation`]. If it's a [`CgkaOperation::Update`],
     /// record the corresponding root secret.
     #[instrument(skip_all)]
@@ -576,60 +550,14 @@ impl Cgka {
         if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(());
         }
-        self.clear_answered_disproofs(&op);
         let is_update = matches!(op.payload, CgkaOperation::Update { .. });
         self.apply_operation_to_tree(op)?;
         if is_update {
             // Record while the tree has the root secret this update produced.
             // Otherwise, a later update rebuilds the history to derive it again.
-            if let Some((op_hash, pcs_key)) = self.record_tree_root_secret() {
-                self.validate_predecessor_claims(op_hash, &pcs_key);
-            }
+            self.record_tree_root_secret();
         }
         Ok(())
-    }
-
-    /// Validate the predecessor secret entries of the update `op_hash` against its
-    /// root secret. Run at the point of application so the root secret is present.
-    fn validate_predecessor_claims(
-        &mut self,
-        op_hash: Digest<Signed<CgkaOperation>>,
-        pcs_key: &PcsKey,
-    ) {
-        // Validate only if the root secret corresponds to the update
-        if self.root_share_key_for(&op_hash) != Some(pcs_key.0.share_key()) {
-            return;
-        }
-        let Some(op) = self.ops_graph.cgka_ops.get(&op_hash).cloned() else {
-            return;
-        };
-        let CgkaOperation::Update {
-            predecessor_secrets,
-            ..
-        } = &op.payload
-        else {
-            return;
-        };
-        let key = pcs_key.derive_predecessor_secrets_key();
-        for entry in predecessor_secrets {
-            // Without a root share key we have nothing to validate against.
-            let Some(named_pk) = self.root_share_key_for(&entry.update_op_hash) else {
-                continue;
-            };
-            match Self::decrypt_predecessor_secret(&key, entry) {
-                Some(found) if found.0.share_key() == named_pk => {
-                    self.insert_pcs_key(&found, entry.update_op_hash);
-                }
-                _ => {
-                    debug!(
-                        op_hash = ?entry.update_op_hash,
-                        "a chained predecessor secret does not match the update it is \
-                        supposed to correspond to"
-                    );
-                    self.disproved_chain_entries.insert(entry.update_op_hash);
-                }
-            }
-        }
     }
 
     /// Apply a [`CgkaOperation`] without recording a root secret.
@@ -765,8 +693,8 @@ impl Cgka {
     }
 
     /// The root secrets we can derive, for the nearest update ancestors of
-    /// `heads`, for every update recorded as outside of the predecessor
-    /// secrets chain, and for every update whose recorded seal we disproved.
+    /// `heads` and for every update recorded as outside of the predecessor
+    /// secrets chain.
     #[instrument(skip_all)]
     fn reachable_ancestor_secrets(
         &mut self,
@@ -774,7 +702,6 @@ impl Cgka {
     ) -> Vec<(Digest<Signed<CgkaOperation>>, PcsKey)> {
         let mut targets = self.ops_graph.nearest_update_ancestors(heads);
         targets.extend(self.ops_graph.unchained_updates.iter().copied());
-        targets.extend(self.disproved_chain_entries.iter().copied());
 
         let mut found = Vec::new();
         for op_hash in targets {
@@ -895,31 +822,13 @@ impl Cgka {
             };
             let key = pcs_key.derive_predecessor_secrets_key();
             for predecessor in predecessor_secrets {
-                let found = Self::decrypt_predecessor_secret(&key, predecessor);
-                if let Some(found) = found {
-                    if Digest::hash(&found) == *pcs_key_hash {
-                        return Some((predecessor.update_op_hash, found));
-                    }
-                }
-                // Without the update's own root key there is nothing to
-                // validate the entry against.
-                let Some(named_pk) = self.root_share_key_for(&predecessor.update_op_hash) else {
+                let Some(found) = Self::decrypt_predecessor_secret(&key, predecessor) else {
                     continue;
                 };
-                match found {
-                    Some(found) if found.0.share_key() == named_pk => {
-                        frontier.push((predecessor.update_op_hash, found));
-                    }
-                    _ => {
-                        debug!(
-                            op_hash = ?predecessor.update_op_hash,
-                            "a chained predecessor secret does not match the update it supposedly \
-                            corresponds to"
-                        );
-                        self.disproved_chain_entries
-                            .insert(predecessor.update_op_hash);
-                    }
+                if Digest::hash(&found) == *pcs_key_hash {
+                    return Some((predecessor.update_op_hash, found));
                 }
+                frontier.push((predecessor.update_op_hash, found));
             }
         }
         None
@@ -1141,8 +1050,6 @@ impl Merge for Cgka {
         self.pcs_keys.merge(fork.pcs_keys);
         self.pcs_keys_by_update
             .extend(fork.pcs_keys_by_update.iter());
-        self.disproved_chain_entries
-            .extend(fork.disproved_chain_entries);
         self.receive_invitations(&fork.invitations);
         self.replay_ops_graph()
             .expect("two valid graphs should always merge causal consistency");
@@ -1526,7 +1433,7 @@ mod cgka_tests {
     }
 
     #[tokio::test]
-    async fn a_mislabelled_predecessor_secret_is_never_used_and_gets_resealed() {
+    async fn a_mislabelled_predecessor_secret_is_never_returned() {
         let mut csprng = rand::thread_rng();
         let alice_signer = MemorySigner::generate(&mut csprng);
         let bob_signer = MemorySigner::generate(&mut csprng);
@@ -1592,32 +1499,9 @@ mod cgka_tests {
             "precondition: the mislabelled entry keeps op1 out of the unchained set"
         );
         assert!(
-            bob.disproved_chain_entries.contains(&op1_hash),
-            "delivery should disprove the mislabelled entry"
-        );
-
-        // A peer that could not validate at delivery because the graph had
-        // concurrent heads or the history predates its add validates on first
-        // decrypt instead. Clear the delivery verdict to exercise that path.
-        bob.disproved_chain_entries.clear();
-        assert!(
             bob.pcs_key_from_predecessor_secrets(&Digest::hash(&root1))
                 .is_none(),
             "a mislabelled secret should never be returned by the traversal"
-        );
-        assert!(
-            bob.disproved_chain_entries.contains(&op1_hash),
-            "the traversal should disprove the mislabelled entry"
-        );
-
-        let (_, bob_op) = rotate(&mut bob, &bob_signer, &mut csprng).await;
-        assert!(
-            added_to_chain(&bob_op, &op1_hash),
-            "a member holding the true secret should add it to the chain"
-        );
-        assert!(
-            !bob.disproved_chain_entries.contains(&op1_hash),
-            "our adding it back to the chain should answer the disproof"
         );
     }
 
