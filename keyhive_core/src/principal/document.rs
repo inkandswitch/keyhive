@@ -15,7 +15,7 @@ use crate::{
             delegation::{Delegation, DelegationError},
             error::AddError,
             revocation::Revocation,
-            Group, RevokeMemberError, SignerAuthority,
+            Group, RevokeMemberError, SharedMembership, SignerAuthority,
         },
         identifier::Identifier,
     },
@@ -180,14 +180,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     signer,
                     verifier,
                     parents,
-                    delegations,
-                    revocations,
+                    SharedMembership {
+                        delegations,
+                        revocations,
+                        generation,
+                    },
                     BTreeMap::from_iter([(
                         DocumentId(verifier.into()),
                         initial_content_heads.iter().cloned().collect::<Vec<_>>(),
                     )]),
                     listener,
-                    Arc::clone(&generation),
                 )
             })
         };
@@ -228,14 +230,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 signer,
                 verifier,
                 parents,
-                delegations,
-                revocations,
+                SharedMembership {
+                    delegations,
+                    revocations,
+                    generation,
+                },
                 BTreeMap::from_iter([(
                     DocumentId(verifier.into()),
                     initial_content_heads.iter().cloned().collect::<Vec<_>>(),
                 )]),
                 listener,
-                    Arc::clone(&generation),
             )
         });
         Self::finish_generate(
@@ -834,14 +838,23 @@ pub enum GenerateDocError {
 
 #[derive(Debug, Error)]
 pub enum DocCausalDecryptionError<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>> {
+    /// Boxed because it is far larger than the other variants
     #[error(transparent)]
-    CausalDecryptionError(#[from] CausalDecryptionError<F, T, P, C>),
+    CausalDecryptionError(Box<CausalDecryptionError<F, T, P, C>>),
 
     #[error("{0}")]
     GetCiphertextError(C::GetCiphertextError),
 
     #[error("Cannot decrypt entrypoint: {0}")]
     EntrypointDecryptError(#[from] DecryptError),
+}
+
+impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
+    From<CausalDecryptionError<F, T, P, C>> for DocCausalDecryptionError<F, T, P, C>
+{
+    fn from(error: CausalDecryptionError<F, T, P, C>) -> Self {
+        DocCausalDecryptionError::CausalDecryptionError(Box::new(error))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

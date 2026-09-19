@@ -882,7 +882,7 @@ impl<
         let doc = self
             .get_document(doc_id)
             .await
-            .ok_or(ImportLocalCgkaSecretError::UnknownDocument(doc_id))?;
+            .ok_or_else(|| ImportLocalCgkaSecretError::UnknownDocument(Box::new(doc_id)))?;
         doc.lock()
             .await
             .cgka_mut()?
@@ -1874,7 +1874,7 @@ impl<
         let delegate: Agent<F, S, T, L> = self
             .get_agent(delegate_id)
             .await
-            .ok_or(StaticEventConversionError::UnknownAgent(delegate_id))?;
+            .ok_or_else(|| StaticEventConversionError::UnknownAgent(Box::new(delegate_id)))?;
 
         let mut after_revocations = Vec::new();
         for static_rev_hash in static_dlg.payload().after_revocations.iter() {
@@ -2195,7 +2195,7 @@ impl<
             let locked_docs = self.docs.lock().await;
             locked_docs
                 .get(&doc_id)
-                .ok_or(ReceiveCgkaOpError::UnknownDocument(doc_id))?
+                .ok_or_else(|| ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)))?
                 .dupe()
         };
 
@@ -3120,7 +3120,7 @@ pub enum ReceiveStaticDelegationError<
     GroupReceiveError(#[from] AddError),
 
     #[error("Missing agent: {0}")]
-    UnknownAgent(Identifier),
+    UnknownAgent(Box<Identifier>),
 }
 
 impl<F, S, T, L> ReceiveStaticDelegationError<F, S, T, L>
@@ -3157,7 +3157,7 @@ pub enum StaticEventConversionError<
     MissingRevocation(Digest<Signed<Revocation<F, S, T, L>>>),
 
     #[error("Unknown agent: {0}")]
-    UnknownAgent(Identifier),
+    UnknownAgent(Box<Identifier>),
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
@@ -3214,7 +3214,7 @@ pub enum ReceiveCgkaOpError {
     VerificationError(#[from] VerificationError),
 
     #[error("Unknown document recipient for recieved CGKA op: {0}")]
-    UnknownDocument(DocumentId),
+    UnknownDocument(Box<DocumentId>),
 
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
     UnknownInvitePrekey(ShareKey),
@@ -3242,7 +3242,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 #[derive(Debug, Error)]
 pub enum ImportLocalCgkaSecretError {
     #[error("Unknown document: {0}")]
-    UnknownDocument(DocumentId),
+    UnknownDocument(Box<DocumentId>),
 
     #[error("Local CGKA share key does not match its secret key")]
     MismatchedShareKey,
@@ -3469,7 +3469,7 @@ mod tests {
         let active = hive.active.dupe();
         let delegations = hive.delegations.dupe();
         let revocations = hive.revocations.dupe();
-        let listener = hive.event_listener.clone();
+        let listener = hive.event_listener;
         let csprng = hive.csprng.dupe();
         let before = delegations.lock().await.len();
         let generate = tokio::spawn(async move {
