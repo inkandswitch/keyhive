@@ -88,6 +88,24 @@ pub struct Group<
     pub(crate) listener: L,
 }
 
+/// The hive-wide membership state a principal is generated against: the shared
+/// delegation and revocation stores, and the state generation counter those
+/// stores' mutations bump.
+///
+/// They travel as one value because a new principal's own head stores are bound
+/// to the same counter as the shared stores they feed; passed separately, a
+/// counter could be paired with the stores of another hive.
+pub(crate) struct SharedMembership<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+> {
+    pub(crate) delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
+    pub(crate) revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+    pub(crate) generation: Arc<AtomicU64>,
+}
+
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
     Group<F, S, T, L>
 {
@@ -150,11 +168,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     signer,
                     verifier,
                     parents,
-                    delegations,
-                    revocations,
+                    SharedMembership {
+                        delegations,
+                        revocations,
+                        generation,
+                    },
                     Default::default(),
                     listener,
-                    Arc::clone(&generation),
                 )
             });
 
@@ -166,12 +186,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         signer: Box<dyn SyncSignerBasic>,
         verifier: ed25519_dalek::VerifyingKey,
         parents: NonEmpty<Agent<F, S, T, L>>,
-        delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
-        revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
+        shared: SharedMembership<F, S, T, L>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
         listener: L,
-        generation: Arc<AtomicU64>,
     ) -> Result<Self, SigningError> {
+        let SharedMembership {
+            delegations,
+            revocations,
+            generation,
+        } = shared;
         let id = verifier.into();
         let group_id = GroupId(id);
         let mut delegation_heads = DelegationStore::with_generation(Arc::clone(&generation));
@@ -289,7 +312,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn transitive_members(&self) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-        transitive_members_walk(self.id().into(), self.direct_members_with_caps()).await
+        transitive_members_walk(self.id(), self.direct_members_with_caps()).await
     }
 
     /// The group's direct members and their capabilities.
@@ -935,6 +958,202 @@ pub enum RevokeMemberError {
 
     #[error("Redelagation error")]
     RedelegationError(#[from] AddGroupMemberError),
+}
+
+/// Transitive-membership walk over the membered graph.
+///
+/// Never holds a doc/group lock across an await that acquires another lock.
+/// The root's direct members are passed in (snapshotted by the caller under a
+/// short lock); every visited node is then locked only long enough to clone
+/// its direct members + capabilities before the lock is dropped, so at most
+/// one lock is held at any instant. Concurrent walks rooted at different
+/// docs/groups therefore cannot ABBA-deadlock with each other or with
+/// materialization decrypts that briefly lock a single document.
+pub(crate) async fn transitive_members_walk<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    root_id: Identifier,
+    direct: Vec<(Agent<F, S, T, L>, Access)>,
+) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
+    let mut explore: Vec<(Membered<F, S, T, L>, Access)> = vec![];
+    let mut expanded: HashMap<Identifier, Access> = HashMap::new();
+    let mut caps: HashMap<Identifier, (Agent<F, S, T, L>, Access)> = HashMap::new();
+
+    let enqueue = |agent: Agent<F, S, T, L>,
+                   access: Access,
+                   caps: &mut HashMap<Identifier, (Agent<F, S, T, L>, Access)>,
+                   expanded: &mut HashMap<Identifier, Access>,
+                   explore: &mut Vec<(Membered<F, S, T, L>, Access)>| {
+        let id = agent.id();
+        if id == root_id {
+            return;
+        }
+        if caps
+            .get(&id)
+            .is_none_or(|(_, existing_access)| *existing_access < access)
+        {
+            caps.insert(id, (agent.dupe(), access));
+        }
+        if let Some(membered) = agent.as_membered() {
+            if expanded
+                .get(&id)
+                .is_none_or(|existing_access| *existing_access < access)
+            {
+                expanded.insert(id, access);
+                explore.push((membered, access));
+            }
+        }
+    };
+
+    for (delegate, can) in direct {
+        enqueue(delegate, can, &mut caps, &mut expanded, &mut explore);
+    }
+
+    while let Some((membered, access)) = explore.pop() {
+        let members = membered.members().await;
+        for (mem_id, dlgs) in members.iter() {
+            let dlg = membered
+                .get_capability(mem_id)
+                .await
+                .expect("members have capabilities by definition");
+            let member_access = access.min(dlg.payload.can);
+            if caps
+                .get(mem_id)
+                .is_none_or(|(_, existing_access)| *existing_access < member_access)
+            {
+                caps.insert(*mem_id, (dlg.payload.delegate.dupe(), member_access));
+            }
+            for sub_dlg in dlgs.iter() {
+                enqueue(
+                    sub_dlg.payload.delegate.dupe(),
+                    access.min(sub_dlg.payload.can),
+                    &mut caps,
+                    &mut expanded,
+                    &mut explore,
+                );
+            }
+        }
+    }
+
+    caps
+}
+
+/// Signer-authority proofs per access level, precomputed by the caller
+/// (lock-free) and consumed by the group/document `revoke_member` paths.
+pub(crate) type SignerAuthority<F, S, T, L> =
+    HashMap<Access, Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError>>;
+
+/// Compute the membership proof for adding a member at access level `can`,
+/// without holding any document/group lock.
+///
+/// `members` must be a snapshot of the resource's direct membership (cloned
+/// under a short lock by the caller). The transitive walk acquires only short
+/// per-node locks, so it must never run while another lock is held — callers
+/// must take their snapshot, drop the lock, and only then call this.
+///
+/// Returns `Ok(None)` when the signer is the resource's own signing key.
+pub(crate) async fn compute_add_proof<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    root_vk: ed25519_dalek::VerifyingKey,
+    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+    signer_vk: ed25519_dalek::VerifyingKey,
+    can: Access,
+) -> Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError> {
+    if root_vk == signer_vk {
+        return Ok(None);
+    }
+    let signer_id = Identifier::from(signer_vk);
+    if let Some(p) = members.get(&signer_id).and_then(|dlgs| {
+        dlgs.iter()
+            .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
+    }) {
+        // Signer is a direct member of this group.
+        if can > p.payload.can {
+            return Err(AddGroupMemberError::AddError(AddError::Escalation {
+                wanted: can,
+                held: p.payload().can,
+            }));
+        }
+        return Ok(Some(p.dupe()));
+    }
+    compute_transitive_proof(members, signer_id, can).await
+}
+
+/// Compute the proof authorizing a revocation at access level `can`.
+///
+/// Unlike [`compute_add_proof`], the signer's own direct delegation is NOT a
+/// valid revocation proof: `add_revocation` validates the proof through
+/// `is_transitive_member_of(proof.delegate, revoker, ..)`, which requires the
+/// proof's delegate to be a membered group/doc intermediary — an Individual
+/// delegate fails that check. So the direct-member shortcut is skipped and
+/// only the transitive (membered-intermediary) search is performed, matching
+/// the pre-lock-refactor behavior of `revoke_member`.
+pub(crate) async fn compute_revoke_proof<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    root_vk: ed25519_dalek::VerifyingKey,
+    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+    signer_vk: ed25519_dalek::VerifyingKey,
+    can: Access,
+) -> Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError> {
+    if root_vk == signer_vk {
+        return Ok(None);
+    }
+    compute_transitive_proof(members, Identifier::from(signer_vk), can).await
+}
+
+/// Single-pass transitive search: find a membered (group/doc) direct member
+/// whose transitive members include `signer_id` at access >= `can`, and return
+/// that member's delegation as the proof.
+async fn compute_transitive_proof<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+    signer_id: Identifier,
+    can: Access,
+) -> Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError> {
+    let mut best_access: Option<Access> = None;
+
+    for delegations in members.values() {
+        let dlg = delegations
+            .iter()
+            .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
+            .expect("members have capabilities by definition");
+
+        if let Some(m) = dlg.payload.delegate.as_membered() {
+            let sub_members = m.transitive_members().await;
+            if let Some((_, sub_access)) = sub_members.get(&signer_id) {
+                if *sub_access >= can {
+                    return Ok(Some(dlg.dupe()));
+                }
+                if best_access.is_none_or(|a| *sub_access > a) {
+                    best_access = Some(*sub_access);
+                }
+            }
+        }
+    }
+
+    if let Some(access) = best_access {
+        Err(AddGroupMemberError::AddError(AddError::Escalation {
+            wanted: can,
+            held: access,
+        }))
+    } else {
+        Err(AddGroupMemberError::NoProof)
+    }
 }
 
 #[cfg(test)]
@@ -2553,9 +2772,9 @@ mod tests {
         let alice = Arc::new(Mutex::new(setup_user(&mut csprng).await));
         let alice_agent: Agent<Sendable, MemorySigner> =
             Agent::Active(alice.lock().await.id(), alice.dupe());
-        let (alice_id, alice_signer) = {
+        let alice_signer = {
             let locked = alice.lock().await;
-            (locked.id(), locked.signer.clone())
+            locked.signer.clone()
         };
 
         let bob = Arc::new(Mutex::new(setup_user(&mut csprng).await));
@@ -2639,201 +2858,3 @@ mod tests {
     }
 }
 
-/// Transitive-membership walk over the membered graph.
-///
-/// Never holds a doc/group lock across an await that acquires another lock.
-/// The root's direct members are passed in (snapshotted by the caller under a
-/// short lock); every visited node is then locked only long enough to clone
-/// its direct members + capabilities before the lock is dropped, so at most
-/// one lock is held at any instant. Concurrent walks rooted at different
-/// docs/groups therefore cannot ABBA-deadlock with each other or with
-/// materialization decrypts that briefly lock a single document.
-pub(crate) async fn transitive_members_walk<
-    F: FutureForm,
-    S: AsyncSigner<F>,
-    T: ContentRef,
-    L: MembershipListener<F, S, T>,
->(
-    root_id: Identifier,
-    direct: Vec<(Agent<F, S, T, L>, Access)>,
-) -> HashMap<Identifier, (Agent<F, S, T, L>, Access)> {
-    let mut explore: Vec<(Membered<F, S, T, L>, Access)> = vec![];
-    let mut expanded: HashMap<Identifier, Access> = HashMap::new();
-    let mut caps: HashMap<Identifier, (Agent<F, S, T, L>, Access)> = HashMap::new();
-
-    let enqueue = |agent: Agent<F, S, T, L>,
-                   access: Access,
-                   caps: &mut HashMap<Identifier, (Agent<F, S, T, L>, Access)>,
-                   expanded: &mut HashMap<Identifier, Access>,
-                   explore: &mut Vec<(Membered<F, S, T, L>, Access)>| {
-        let id = agent.id();
-        if id == root_id {
-            return;
-        }
-        if caps
-            .get(&id)
-            .is_none_or(|(_, existing_access)| *existing_access < access)
-        {
-            caps.insert(id, (agent.dupe(), access));
-        }
-        if let Some(membered) = agent.as_membered() {
-            if expanded
-                .get(&id)
-                .is_none_or(|existing_access| *existing_access < access)
-            {
-                expanded.insert(id, access);
-                explore.push((membered, access));
-            }
-        }
-    };
-
-    for (delegate, can) in direct {
-        enqueue(delegate, can, &mut caps, &mut expanded, &mut explore);
-    }
-
-    while let Some((membered, access)) = explore.pop() {
-        let members = membered.members().await;
-        for (mem_id, dlgs) in members.iter() {
-            let dlg = membered
-                .get_capability(mem_id)
-                .await
-                .expect("members have capabilities by definition");
-            let member_access = access.min(dlg.payload.can);
-            if caps
-                .get(mem_id)
-                .is_none_or(|(_, existing_access)| *existing_access < member_access)
-            {
-                caps.insert(*mem_id, (dlg.payload.delegate.dupe(), member_access));
-            }
-            for sub_dlg in dlgs.iter() {
-                enqueue(
-                    sub_dlg.payload.delegate.dupe(),
-                    access.min(sub_dlg.payload.can),
-                    &mut caps,
-                    &mut expanded,
-                    &mut explore,
-                );
-            }
-        }
-    }
-
-    caps
-}
-
-/// Signer-authority proofs per access level, precomputed by the caller
-/// (lock-free) and consumed by the group/document `revoke_member` paths.
-pub(crate) type SignerAuthority<F, S, T, L> =
-    HashMap<Access, Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError>>;
-
-/// Compute the membership proof for adding a member at access level `can`,
-/// without holding any document/group lock.
-///
-/// `members` must be a snapshot of the resource's direct membership (cloned
-/// under a short lock by the caller). The transitive walk acquires only short
-/// per-node locks, so it must never run while another lock is held — callers
-/// must take their snapshot, drop the lock, and only then call this.
-///
-/// Returns `Ok(None)` when the signer is the resource's own signing key.
-pub(crate) async fn compute_add_proof<
-    F: FutureForm,
-    S: AsyncSigner<F>,
-    T: ContentRef,
-    L: MembershipListener<F, S, T>,
->(
-    root_vk: ed25519_dalek::VerifyingKey,
-    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
-    signer_vk: ed25519_dalek::VerifyingKey,
-    can: Access,
-) -> Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError> {
-    if root_vk == signer_vk {
-        return Ok(None);
-    }
-    let signer_id = Identifier::from(signer_vk);
-    if let Some(p) = members.get(&signer_id).and_then(|dlgs| {
-        dlgs.iter()
-            .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
-    }) {
-        // Signer is a direct member of this group.
-        if can > p.payload.can {
-            return Err(AddGroupMemberError::AddError(AddError::Escalation {
-                wanted: can,
-                held: p.payload().can,
-            }));
-        }
-        return Ok(Some(p.dupe()));
-    }
-    compute_transitive_proof(members, signer_id, can).await
-}
-
-/// Compute the proof authorizing a revocation at access level `can`.
-///
-/// Unlike [`compute_add_proof`], the signer's own direct delegation is NOT a
-/// valid revocation proof: `add_revocation` validates the proof through
-/// `is_transitive_member_of(proof.delegate, revoker, ..)`, which requires the
-/// proof's delegate to be a membered group/doc intermediary — an Individual
-/// delegate fails that check. So the direct-member shortcut is skipped and
-/// only the transitive (membered-intermediary) search is performed, matching
-/// the pre-lock-refactor behavior of `revoke_member`.
-pub(crate) async fn compute_revoke_proof<
-    F: FutureForm,
-    S: AsyncSigner<F>,
-    T: ContentRef,
-    L: MembershipListener<F, S, T>,
->(
-    root_vk: ed25519_dalek::VerifyingKey,
-    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
-    signer_vk: ed25519_dalek::VerifyingKey,
-    can: Access,
-) -> Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError> {
-    if root_vk == signer_vk {
-        return Ok(None);
-    }
-    compute_transitive_proof(members, Identifier::from(signer_vk), can).await
-}
-
-/// Single-pass transitive search: find a membered (group/doc) direct member
-/// whose transitive members include `signer_id` at access >= `can`, and return
-/// that member's delegation as the proof.
-async fn compute_transitive_proof<
-    F: FutureForm,
-    S: AsyncSigner<F>,
-    T: ContentRef,
-    L: MembershipListener<F, S, T>,
->(
-    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
-    signer_id: Identifier,
-    can: Access,
-) -> Result<Option<Arc<Signed<Delegation<F, S, T, L>>>>, AddGroupMemberError> {
-    let mut best_access: Option<Access> = None;
-
-    for (member_id, _) in members.iter() {
-        let dlg = members
-            .get(member_id)
-            .and_then(|dlgs| {
-                dlgs.iter()
-                    .max_by(|d1, d2| d1.payload().can.cmp(&d2.payload().can))
-            })
-            .expect("members have capabilities by definition");
-
-        if let Some(m) = dlg.payload.delegate.as_membered() {
-            let sub_members = m.transitive_members().await;
-            if let Some((_, sub_access)) = sub_members.get(&signer_id) {
-                if *sub_access >= can {
-                    return Ok(Some(dlg.dupe()));
-                }
-                if best_access.is_none_or(|a| *sub_access > a) {
-                    best_access = Some(*sub_access);
-                }
-            }
-        }
-    }
-
-    if let Some(access) = best_access {
-        Err(AddGroupMemberError::AddError(AddError::Escalation {
-            wanted: can,
-            held: access,
-        }))
-    } else {
-        Err(AddGroupMemberError::NoProof)
-    }
-}
