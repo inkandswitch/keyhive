@@ -15,7 +15,7 @@ use crate::{
             delegation::{Delegation, DelegationError},
             error::AddError,
             revocation::Revocation,
-            Group, RevokeMemberError, SignerAuthority,
+            Group, RevokeMemberError, SharedMembership, SignerAuthority,
         },
         identifier::Identifier,
     },
@@ -189,14 +189,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     signer,
                     verifier,
                     parents,
-                    delegations,
-                    revocations,
+                    SharedMembership {
+                        delegations,
+                        revocations,
+                        generation,
+                    },
                     BTreeMap::from_iter([(
                         DocumentId(verifier.into()),
                         initial_content_heads.iter().cloned().collect::<Vec<_>>(),
                     )]),
                     listener,
-                    Arc::clone(&generation),
                 )
             })
         };
@@ -237,14 +239,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 signer,
                 verifier,
                 parents,
-                delegations,
-                revocations,
+                SharedMembership {
+                    delegations,
+                    revocations,
+                    generation,
+                },
                 BTreeMap::from_iter([(
                     DocumentId(verifier.into()),
                     initial_content_heads.iter().cloned().collect::<Vec<_>>(),
                 )]),
                 listener,
-                    Arc::clone(&generation),
             )
         });
         Self::finish_generate(

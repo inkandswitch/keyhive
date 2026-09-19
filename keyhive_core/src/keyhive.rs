@@ -868,7 +868,7 @@ impl<
         let doc = self
             .get_document(doc_id)
             .await
-            .ok_or(ImportLocalCgkaSecretError::UnknownDocument(doc_id))?;
+            .ok_or_else(|| ImportLocalCgkaSecretError::UnknownDocument(Box::new(doc_id)))?;
         doc.lock()
             .await
             .cgka_mut()?
@@ -3617,7 +3617,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 #[derive(Debug, Error)]
 pub enum ImportLocalCgkaSecretError {
     #[error("Unknown document: {0}")]
-    UnknownDocument(DocumentId),
+    UnknownDocument(Box<DocumentId>),
 
     #[error("Local CGKA share key does not match its secret key")]
     MismatchedShareKey,
@@ -3846,7 +3846,7 @@ mod tests {
         let active = hive.active.dupe();
         let delegations = hive.delegations.dupe();
         let revocations = hive.revocations.dupe();
-        let listener = hive.event_listener.clone();
+        let listener = hive.event_listener;
         let csprng = hive.csprng.dupe();
         let before = delegations.lock().await.len();
         let generate = tokio::spawn(async move {
