@@ -175,7 +175,7 @@ impl Group {
             .await
         {
             Ok((_pcs_key, op, _)) => Some(Arc::new(op)),
-            Err(CgkaError::IdentifierNotFound) => None,
+            Err(CgkaError::IdentifierNotFound) | Err(CgkaError::NoMembers) => None,
             Err(e) => panic!("creating the rotation failed: {e:?}"),
         }
     }
@@ -189,30 +189,29 @@ impl Group {
 
     /// Deliver `op` to the replicas named by `to`, recording it in the log.
     pub fn deliver(&mut self, op: &Arc<Signed<CgkaOperation>>, to: &[usize]) {
-        let held = self.try_deliver(op, to);
+        let could_not_apply = self.try_deliver(op, to);
         assert!(
-            held.is_empty(),
-            "operations are delivered in causal order, but replicas {held:?} could not apply one"
+            could_not_apply.is_empty(),
+            "operations are delivered in causal order, but replicas {could_not_apply:?} could not apply one"
         );
     }
 
     /// Deliver `op` to the replicas named by `to`, recording it in the log, and
     /// report which of them could not apply it.
-    ///
-    /// A replica refuses an operation whose predecessors it has not seen, so a
-    /// caller delivering in an arbitrary order should expect to retry.
     pub fn try_deliver(&mut self, op: &Arc<Signed<CgkaOperation>>, to: &[usize]) -> Vec<usize> {
-        if self.logged.insert(Digest::hash(op.as_ref())) {
-            self.log.push(op.clone());
-        }
-        to.iter()
+        let could_not_apply: Vec<usize> = to
+            .iter()
             .copied()
             .filter(|&i| {
                 self.replicas[i]
                     .merge_concurrent_operation(op.clone())
                     .is_err()
             })
-            .collect()
+            .collect();
+        if could_not_apply.len() < to.len() && self.logged.insert(Digest::hash(op.as_ref())) {
+            self.log.push(op.clone());
+        }
+        could_not_apply
     }
 
     /// Deliver `op` to every replica.
@@ -380,6 +379,6 @@ impl Group {
 }
 
 /// A one-letter name for member `i`. Panics for `i` above 7.
-fn name_for(i: usize) -> String {
+pub fn name_for(i: usize) -> String {
     ["a", "b", "c", "d", "e", "f", "g", "h"][i].to_string()
 }

@@ -627,9 +627,6 @@ impl BeeKem {
     /// Returns one message per disagreement between the tree's fields. It checks
     /// `leaves` and `inner_nodes` against `tree_size`, and `leaves` against
     /// `id_to_leaf_idx` and `next_leaf_idx`.
-    ///
-    /// A merge can leave these disagreeing without returning an error, so a merge
-    /// that completes is not evidence the tree is intact.
     pub(crate) fn invariant_violations(&self) -> Vec<alloc::string::String> {
         use alloc::format;
 
@@ -659,14 +656,14 @@ impl BeeKem {
             match self.leaves.get(idx.usize()) {
                 Some(Some(leaf)) if leaf.id == *id => {}
                 Some(Some(leaf)) => violations.push(format!(
-                    "{id:?} is counted at leaf {idx}, which holds {:?}",
+                    "{id:?} is reported at leaf {idx}, which actually has {:?}",
                     leaf.id
                 )),
                 Some(None) => violations.push(format!(
-                    "{id:?} is counted as a member but leaf {idx} is blank"
+                    "{id:?} is reported as a member but leaf {idx} is blank"
                 )),
                 None => violations.push(format!(
-                    "{id:?} is counted at leaf {idx}, past the {} slots that exist",
+                    "{id:?} is reported at leaf {idx}, past the {} slots that exist",
                     self.leaves.len()
                 )),
             }
@@ -676,12 +673,13 @@ impl BeeKem {
             match self.id_to_leaf_idx.get(&leaf.id) {
                 Some(idx) if idx.usize() == i => {}
                 Some(idx) => violations.push(format!(
-                    "leaf {i} holds {:?}, whom the map places at leaf {idx}",
+                    "leaf {i} contains {:?}, whom the map places at leaf {idx}",
                     leaf.id
                 )),
-                None => {
-                    violations.push(format!("leaf {i} holds {:?}, who is not a member", leaf.id))
-                }
+                None => violations.push(format!(
+                    "leaf {i} contains {:?}, who is not a member",
+                    leaf.id
+                )),
             }
             if i >= self.next_leaf_idx.usize() {
                 violations.push(format!(
@@ -960,24 +958,48 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_tree_whose_map_and_leaves_disagree_is_reported_as_corrupt() {
-        let (mut tree, [a, b, ..], _) = seeded();
-        let a_idx = *tree.leaf_index_for_id(a).expect("a has a leaf");
-        let b_idx = *tree.leaf_index_for_id(b).expect("b has a leaf");
-        tree.id_to_leaf_idx.insert(a, b_idx);
-        tree.id_to_leaf_idx.insert(b, a_idx);
+    fn assert_invariant_violation(invariant_test: impl FnOnce(&mut BeeKem, [MemberId; 4])) {
+        let (mut tree, ids, _) = seeded();
+        invariant_test(&mut tree, ids);
+        assert!(
+            !tree.invariant_violations().is_empty(),
+            "the invariant violation was not caught"
+        );
+    }
 
-        let violations = tree.invariant_violations();
-        assert!(
-            violations.iter().any(|v| v.contains("which holds")),
-            "a member counted at a leaf holding somebody else went unreported: {violations:?}"
-        );
-        assert!(
-            violations
-                .iter()
-                .any(|v| v.contains("whom the map places at leaf")),
-            "a leaf whose occupant the map places elsewhere went unreported: {violations:?}"
-        );
+    #[test]
+    fn a_member_reported_at_a_leaf_holding_somebody_else_is_caught() {
+        assert_invariant_violation(|tree, [a, b, ..]| {
+            let a_idx = *tree.leaf_index_for_id(a).expect("a has a leaf");
+            let b_idx = *tree.leaf_index_for_id(b).expect("b has a leaf");
+            tree.id_to_leaf_idx.insert(a, b_idx);
+            tree.leaves[a_idx.usize()] = None;
+        });
+    }
+
+    #[test]
+    fn a_leaf_whose_occupant_the_map_places_elsewhere_is_caught() {
+        assert_invariant_violation(|tree, [a, b, ..]| {
+            let a_idx = *tree.leaf_index_for_id(a).expect("a has a leaf");
+            let b_idx = *tree.leaf_index_for_id(b).expect("b has a leaf");
+            let a_leaf = tree.leaves[a_idx.usize()].clone();
+            tree.leaves[b_idx.usize()] = a_leaf;
+            tree.id_to_leaf_idx.remove(&b);
+        });
+    }
+
+    #[test]
+    fn a_member_incorrectly_reported_at_a_blank_leaf_is_caught() {
+        assert_invariant_violation(|tree, [a, ..]| {
+            let a_idx = *tree.leaf_index_for_id(a).expect("a has a leaf");
+            tree.leaves[a_idx.usize()] = None;
+        });
+    }
+
+    #[test]
+    fn a_leaf_containing_a_non_member_is_caught() {
+        assert_invariant_violation(|tree, [a, ..]| {
+            tree.id_to_leaf_idx.remove(&a);
+        });
     }
 }

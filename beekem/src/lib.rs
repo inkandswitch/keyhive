@@ -39,4 +39,5 @@ pub mod test_utils;
 #[cfg(test)]
 mod tests {
     mod concurrent_membership_changes;
+    mod group_lifecycle;
 }
