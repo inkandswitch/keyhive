@@ -63,7 +63,7 @@ The tree tracks a "next leaf index" pointer. New members are always placed at th
 
 ## Initialization
 
-A new BeeKEM tree is created with a single member. That member's identity and DH public key are placed at leaf 0. All inner nodes are blank. There is no root secret yet; an update (path encryption) must be performed first.
+A new BeeKEM tree is created empty, with every leaf and inner node blank. Members are added one at a time, starting at leaf 0. There is no root secret until a member performs an update (path encryption).
 
 ## Path Encryption (Update/Key Rotation)
 

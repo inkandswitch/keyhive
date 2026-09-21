@@ -54,6 +54,7 @@ async fn either_instance_signs_as_the_identity() -> Result<()> {
         .new_keyhive_instance_for(&alice, "alice-replica")
         .await?;
     let carol = ctx.individual("carol").await?;
+    ctx.share_prekey_secrets(&alice, &alice_replica).await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.sync_all_unsent().await?;
 

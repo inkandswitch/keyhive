@@ -543,15 +543,10 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
 }
 
 #[tokio::test]
-async fn test_competing_cgka_init_adds() -> TestResult {
-    // Scenario: Two peers independently initialize CGKA for the same doc.
-    // This simulates what would happen if a workaround for "CGKA not initialized"
-    // was to create a new CGKA from scratch on the second device.
-    //
-    // Alice creates doc (CGKA initialized with Alice's init add).
-    // Bob receives only delegation events (no CGKA), then independently
-    // initializes CGKA with his own init add.
-    // Then they try to sync CGKA ops.
+async fn a_peer_that_started_its_own_tree_converges_when_the_creators_ops_arrive() -> TestResult {
+    // Bob builds a tree from an add he signed himself, which is what a workaround
+    // for "CGKA not initialized" would do, and only afterwards receives alice's.
+    // Both concurrent adds were at leaf 0.
     test_utils::init_logging();
 
     let bob_signer = MemorySigner::generate(&mut rand::rngs::OsRng);
@@ -610,8 +605,14 @@ async fn test_competing_cgka_init_adds() -> TestResult {
 
         let doc_tree_id: beekem::id::TreeId = doc_id.verifying_key().into();
         let bob_member_id: beekem::id::MemberId = bob_active_id.verifying_key().into();
-        let init_add =
-            beekem::operation::CgkaOperation::init_add(doc_tree_id, bob_member_id, bob_pk);
+        let init_add = beekem::operation::CgkaOperation::Add {
+            added_id: bob_member_id,
+            pk: bob_pk,
+            leaf_index: 0,
+            predecessors: Vec::new(),
+            add_predecessors: Vec::new(),
+            doc_id: doc_tree_id,
+        };
         let signed_init = keyhive_crypto::signer::async_signer::try_sign_async::<
             future_form::Sendable,
             _,
@@ -619,7 +620,7 @@ async fn test_competing_cgka_init_adds() -> TestResult {
         >(&bob_signer, init_add)
         .await?;
 
-        locked.merge_cgka_op(std::sync::Arc::new(signed_init))?;
+        locked.merge_cgka_op(std::sync::Arc::new(signed_init), bob_active_id)?;
     }
 
     // Now Alice sends her CGKA ops to Bob (including Alice's init add)
@@ -629,23 +630,18 @@ async fn test_competing_cgka_init_adds() -> TestResult {
         .filter(|(_, event)| matches!(event, keyhive_core::event::Event::CgkaOperation(_)))
         .collect();
 
-    // Try to ingest Alice's CGKA ops — this is where competing init adds collide
-    let result = bob.ingest_event_table(cgka_only).await;
-    eprintln!("Ingest result: {:?}", result);
+    bob.ingest_event_table(cgka_only)
+        .await
+        .map_err(|e| format!("alice's ops should merge with the tree bob started: {e:?}"))?;
 
-    // Even if ingest succeeded, try to use the CGKA to see if it's consistent.
-    // Bob tries to add Public as a reader — this exercises the CGKA add path.
-    let add_result = bob.add_member(Public.id(), doc_id, Access::Read, &[]).await;
-    eprintln!(
-        "Add Public after competing init adds: {:?}",
-        add_result.as_ref().map(|_| "ok")
-    );
+    bob.add_member(Public.id(), doc_id, Access::Read, &[])
+        .await
+        .map_err(|e| format!("bob's tree should still take an add: {e:?}"))?;
 
-    // Check: can Bob still see the doc's transitive members?
-    let bob_public_reachable = bob.docs_reachable_by_agent(Public.id()).await;
-    eprintln!(
-        "Public reachable on Bob after competing init adds: {}",
-        bob_public_reachable.len()
+    assert_eq!(
+        bob.docs_reachable_by_agent(Public.id()).await.len(),
+        1,
+        "the document bob just admitted Public to should be reachable by Public"
     );
 
     Ok(())

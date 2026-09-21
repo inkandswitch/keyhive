@@ -76,16 +76,6 @@ pub enum CgkaOperation {
 }
 
 impl CgkaOperation {
-    pub fn init_add(doc_id: TreeId, added_id: MemberId, pk: ShareKey) -> Self {
-        Self::Add {
-            added_id,
-            pk,
-            leaf_index: 0,
-            predecessors: Vec::new(),
-            doc_id,
-        }
-    }
-
     /// The zero or more immediate causal predecessors of this operation.
     pub fn predecessors(&self) -> Set<Digest<Signed<CgkaOperation>>> {
         match self {

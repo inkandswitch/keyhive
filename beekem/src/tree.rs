@@ -76,11 +76,7 @@ pub struct BeeKem {
 }
 
 impl BeeKem {
-    pub fn new(
-        doc_id: TreeId,
-        initial_member_id: MemberId,
-        initial_member_pk: ShareKey,
-    ) -> Result<Self, CgkaError> {
+    pub fn new(doc_id: TreeId) -> Self {
         let mut tree = Self {
             doc_id,
             next_leaf_idx: LeafNodeIndex::new(0),
@@ -90,8 +86,7 @@ impl BeeKem {
             id_to_leaf_idx: BTreeMap::new(),
         };
         tree.grow_tree_to_size();
-        tree.push_leaf(initial_member_id, initial_member_pk.into());
-        Ok(tree)
+        tree
     }
 
     pub fn contains_id(&self, id: &MemberId) -> bool {
@@ -711,7 +706,8 @@ mod tests {
     fn one_member_tree(rng: &mut StdRng, sks: &mut ShareKeyMap) -> (BeeKem, MemberId) {
         let doc_id = TreeId::from(SigningKey::generate(rng).verifying_key());
         let (owner, owner_pk) = join_new_member_to_share_key_map(rng, sks);
-        let tree = BeeKem::new(doc_id, owner, owner_pk).expect("a one-member tree");
+        let mut tree = BeeKem::new(doc_id);
+        tree.push_leaf(owner, owner_pk.into());
         (tree, owner)
     }
 
@@ -728,7 +724,8 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0);
         let doc_id = TreeId::from(SigningKey::generate(&mut rng).verifying_key());
         let (owner, owner_pk, owner_sk) = member(&mut rng);
-        let mut tree = BeeKem::new(doc_id, owner, owner_pk).expect("a one-member tree");
+        let mut tree = BeeKem::new(doc_id);
+        tree.push_leaf(owner, owner_pk.into());
         let mut ids = [owner; 4];
         for id in ids.iter_mut().skip(1) {
             let (next, pk, _) = member(&mut rng);

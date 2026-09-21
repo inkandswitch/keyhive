@@ -173,7 +173,23 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     /// Pseudorandomly select a prekey out of the current prekeys.
     pub async fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
         tracing::trace!("picking prekey for document {doc_id}",);
-        self.individual.lock().await.pick_prekey(doc_id).dupe()
+        let (picked, published) = {
+            let locked = self.individual.lock().await;
+            (*locked.pick_prekey(doc_id), locked.prekeys().clone())
+        };
+        // It's possible a sibling instance for our keyhive identity has not yet
+        // shared the secret for `picked`. If we don't have it, we pick a prekey
+        // we do have the secret for.
+        let local_pairs = self.key_pairs.lock().await;
+        if local_pairs.contains_key(&picked) {
+            return picked;
+        }
+        published
+            .iter()
+            .filter(|pk| local_pairs.contains_key(pk))
+            .min()
+            .copied()
+            .unwrap_or(picked)
     }
 
     /// Replace a particular prekey with a new one.
