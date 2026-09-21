@@ -2,11 +2,13 @@
 
 use crate::{
     keys::{NodeKey, ShareKeyMap},
-    test_utils::{member, Group},
+    operation::CgkaOperation,
+    test_utils::{member, Group, Member},
 };
-use alloc::{collections::BTreeSet, format, string::ToString, sync::Arc};
+use alloc::{collections::BTreeSet, format, string::ToString, sync::Arc, vec::Vec};
+use bolero::{gen, TypeGenerator, ValueGenerator};
 use future_form::Local;
-use keyhive_crypto::share_key::ShareSecretKey;
+use keyhive_crypto::{share_key::ShareSecretKey, signed::Signed};
 use rand::{rngs::StdRng, SeedableRng};
 
 #[tokio::test]
@@ -209,4 +211,141 @@ async fn a_rotation_before_the_merge_does_not_lock_out_the_added_member() {
          two prekeys, so the sweep never covered the case where it drops the one \
          the rotation encrypted to"
     );
+}
+
+/// One operation as created by the generator.
+#[derive(Clone, Copy, Debug, TypeGenerator)]
+enum CgkaOp {
+    Add { joiner: u8 },
+    Remove { target: u8 },
+    Update,
+}
+
+/// One step of a run. The operation created and whether everything authored so far is
+/// synced to every replica before the next step.
+#[derive(Clone, Copy, Debug, TypeGenerator)]
+struct Step {
+    op: CgkaOp,
+    deliver_after: bool,
+}
+
+/// A randomly generated run of concurrent operations.
+///
+/// `seed` determines key generation only. The operations themselves come from the
+/// generator.
+#[derive(Debug)]
+struct Scenario {
+    seed: u64,
+    extra_members: u8,
+    ops: Vec<Step>,
+}
+
+/// Deliver `undelivered` to every replica, retrying until nothing more applies.
+fn deliver_all(
+    group: &mut Group,
+    undelivered: &mut Vec<Arc<Signed<CgkaOperation>>>,
+    everyone: &[usize],
+) {
+    let synced = undelivered.len();
+    loop {
+        let before = undelivered.len();
+        undelivered.retain(|op| !group.try_deliver(op, everyone).is_empty());
+        if undelivered.is_empty() {
+            break;
+        }
+        assert!(
+            undelivered.len() < before,
+            "{} of {synced} operations never became deliverable",
+            undelivered.len(),
+        );
+    }
+}
+
+const MIN_OPS: usize = 3;
+const MAX_OPS: usize = 12;
+const JOINERS: usize = 3;
+
+/// Every member creates concurrent operations. Then every operation is delivered
+/// to every replica and they are made to settle. The replicas must then have the
+/// same tree and every member still in the tree must derive the same root key.
+///
+/// Member 0 is never a removal target so the scenario always ends with a member
+/// who can create the settling rotation and a key the others must agree with.
+async fn run(scenario: &Scenario) {
+    use rand::{rngs::StdRng, SeedableRng};
+    let mut rng = StdRng::seed_from_u64(scenario.seed);
+
+    let member_count = 2 + scenario.extra_members as usize % 4;
+    let mut group = Group::new(member_count, &mut rng).await;
+    let joiners: Vec<Member> = (0..JOINERS).map(|_| member(&mut rng)).collect();
+
+    let everyone: Vec<usize> = (0..member_count).collect();
+    let mut undelivered = Vec::new();
+    let mut applied = 0usize;
+    for (position, step) in scenario.ops.iter().enumerate() {
+        let author = position % member_count;
+        let op = match step.op {
+            CgkaOp::Add { joiner } => {
+                let joiner = &joiners[joiner as usize % JOINERS];
+                let (id, pk) = (joiner.id, joiner.pk);
+                group.try_add(author, id, pk).await
+            }
+            CgkaOp::Remove { target } => {
+                // Targets start at 1 so member 0 survives every scenario.
+                // Nobody removes themselves so a member can always keep
+                // operating on its own replica.
+                let target = 1 + target as usize % (member_count - 1);
+                if target == author {
+                    None
+                } else {
+                    let target = group.id(target);
+                    group.try_remove(author, target).await
+                }
+            }
+            CgkaOp::Update => group.try_rotate(author, &mut rng).await,
+        };
+        applied += op.is_some() as usize;
+        undelivered.extend(op);
+        if step.deliver_after {
+            deliver_all(&mut group, &mut undelivered, &everyone);
+        }
+    }
+    deliver_all(&mut group, &mut undelivered, &everyone);
+    assert!(
+        applied > 0,
+        "every generated operation was a no-op, so this run observed nothing: {scenario:?}"
+    );
+
+    // Deliver everything to everyone, retrying until nothing more applies. An
+    // operation is refused until its predecessors arrive, and every operation
+    // here is offered to every replica.
+    // Delivery only queues an operation. A replica replays its graph when a
+    // later structural change forces it so the trees are compared after the
+    // settling rotation rather than here.
+    group.settle(0, &mut rng).await;
+
+    let context = "after a rotation re-established a root key";
+    group.check(context);
+    group.assert_key_agreement(context);
+}
+
+#[test]
+fn replicas_converge_over_random_concurrent_operations() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("building a runtime succeeds");
+    bolero::check!()
+        .with_generator(
+            (
+                gen::<u64>(),
+                gen::<u8>(),
+                gen::<Vec<Step>>().with().len(MIN_OPS..=MAX_OPS),
+            )
+                .map_gen(|(seed, extra_members, ops)| Scenario {
+                    seed,
+                    extra_members,
+                    ops,
+                }),
+        )
+        .for_each(|scenario| runtime.block_on(run(scenario)));
 }

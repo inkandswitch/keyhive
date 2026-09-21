@@ -1,5 +1,6 @@
 use crate::{
     cgka::Cgka,
+    error::CgkaError,
     id::{MemberId, TreeId},
     keys::ShareKeyMap,
     operation::CgkaOperation,
@@ -109,36 +110,74 @@ impl Group {
         id: MemberId,
         pk: ShareKey,
     ) -> Arc<Signed<CgkaOperation>> {
+        self.try_add(author, id, pk)
+            .await
+            .expect("the added member is new")
+    }
+
+    /// Create an add on `author`'s replica without delivering it, or `None` if
+    /// `author`'s history already covers seating `id`.
+    pub async fn try_add(
+        &mut self,
+        author: usize,
+        id: MemberId,
+        pk: ShareKey,
+    ) -> Option<Arc<Signed<CgkaOperation>>> {
         let signer = &self.members[author].signer;
-        let op = self.replicas[author]
+        self.replicas[author]
             .add::<Local, _>(id, pk, signer)
             .await
             .expect("creating the add succeeds")
-            .expect("the added member is new");
-        Arc::new(op)
+            .map(Arc::new)
     }
 
     /// Create a removal on `author`'s replica without delivering it.
     pub async fn remove(&mut self, author: usize, target: MemberId) -> Arc<Signed<CgkaOperation>> {
+        self.try_remove(author, target)
+            .await
+            .expect("the removed member is present")
+    }
+
+    /// Create a removal on `author`'s replica without delivering it, or `None`
+    /// if `author`'s history already removes `target`.
+    pub async fn try_remove(
+        &mut self,
+        author: usize,
+        target: MemberId,
+    ) -> Option<Arc<Signed<CgkaOperation>>> {
         let signer = &self.members[author].signer;
-        let op = self.replicas[author]
+        self.replicas[author]
             .remove::<Local, _>(target, signer)
             .await
             .expect("creating the removal succeeds")
-            .expect("the removed member is present");
-        Arc::new(op)
+            .map(Arc::new)
     }
 
     /// Create a rotation on `author`'s replica without delivering it.
     pub async fn rotate(&mut self, author: usize, rng: &mut StdRng) -> Arc<Signed<CgkaOperation>> {
+        self.try_rotate(author, rng)
+            .await
+            .expect("the rotating member is present")
+    }
+
+    /// Create a rotation on `author`'s replica without delivering it or `None`
+    /// if `author` is no longer in the tree.
+    pub async fn try_rotate(
+        &mut self,
+        author: usize,
+        rng: &mut StdRng,
+    ) -> Option<Arc<Signed<CgkaOperation>>> {
         let sk = ShareSecretKey::generate(rng);
         let pk = sk.share_key();
         let signer = &self.members[author].signer;
-        let (_pcs_key, op, _) = self.replicas[author]
+        match self.replicas[author]
             .update::<Local, _, StdRng>(pk, sk, signer, rng)
             .await
-            .expect("creating the rotation succeeds");
-        Arc::new(op)
+        {
+            Ok((_pcs_key, op, _)) => Some(Arc::new(op)),
+            Err(CgkaError::IdentifierNotFound) => None,
+            Err(e) => panic!("creating the rotation succeeds: {e:?}"),
+        }
     }
 
     /// Rotate and deliver everywhere, causing every replica to play pending
@@ -150,14 +189,30 @@ impl Group {
 
     /// Deliver `op` to the replicas named by `to`, recording it in the log.
     pub fn deliver(&mut self, op: &Arc<Signed<CgkaOperation>>, to: &[usize]) {
+        let held = self.try_deliver(op, to);
+        assert!(
+            held.is_empty(),
+            "operations are delivered in causal order, but replicas {held:?} could not apply one"
+        );
+    }
+
+    /// Deliver `op` to the replicas named by `to`, recording it in the log, and
+    /// report which of them could not apply it.
+    ///
+    /// A replica refuses an operation whose predecessors it has not seen, so a
+    /// caller delivering in an arbitrary order should expect to retry.
+    pub fn try_deliver(&mut self, op: &Arc<Signed<CgkaOperation>>, to: &[usize]) -> Vec<usize> {
         if self.logged.insert(Digest::hash(op.as_ref())) {
             self.log.push(op.clone());
         }
-        for &i in to {
-            self.replicas[i]
-                .merge_concurrent_operation(op.clone())
-                .expect("operations are delivered in causal order");
-        }
+        to.iter()
+            .copied()
+            .filter(|&i| {
+                self.replicas[i]
+                    .merge_concurrent_operation(op.clone())
+                    .is_err()
+            })
+            .collect()
     }
 
     /// Deliver `op` to every replica.

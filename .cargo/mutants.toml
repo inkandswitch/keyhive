@@ -4,14 +4,18 @@
 # both read this file.
 
 # keyhive_wasm only runs on wasm32 (its tests need a JS runtime), so its
-# mutants cannot be tested by the host `cargo test`. test-utils is test
-# tooling, not product code.
-exclude_globs = ["keyhive_wasm/**", "test-utils/**"]
+# mutants cannot be tested by the host `cargo test`. test-utils and
+# beekem/src/test_utils.rs are test tooling, not product code.
+exclude_globs = ["keyhive_wasm/**", "test-utils/**", "beekem/src/test_utils.rs"]
 
 # Feature set needed for the full test suite to build.
 additional_cargo_args = ["--features", "test_utils"]
 
 # Mutating `Debug`/`Display` impls just produces noisy survivors.
-exclude_re = ["impl (core::|std::)?(fmt::)?(Debug|Display) for"]
+# `BeeKem::tree_members` is just used to print leaves in a test failure message.
+exclude_re = [
+  "impl (core::|std::)?(fmt::)?(Debug|Display) for",
+  "BeeKem::tree_members",
+]
 
 timeout_multiplier = 3.0

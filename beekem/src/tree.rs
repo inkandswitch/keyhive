@@ -967,4 +967,25 @@ mod tests {
             "the removal blanked the added member's leaf"
         );
     }
+
+    #[test]
+    fn a_tree_whose_map_and_leaves_disagree_is_reported_as_corrupt() {
+        let (mut tree, [a, b, ..], _) = seeded();
+        let a_idx = *tree.leaf_index_for_id(a).expect("a has a leaf");
+        let b_idx = *tree.leaf_index_for_id(b).expect("b has a leaf");
+        tree.id_to_leaf_idx.insert(a, b_idx);
+        tree.id_to_leaf_idx.insert(b, a_idx);
+
+        let violations = tree.invariant_violations();
+        assert!(
+            violations.iter().any(|v| v.contains("is counted at leaf")),
+            "a member counted at a leaf holding somebody else went unreported: {violations:?}"
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("whom the map places at leaf")),
+            "a leaf whose occupant the map places elsewhere went unreported: {violations:?}"
+        );
+    }
 }

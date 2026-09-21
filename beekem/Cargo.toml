@@ -28,6 +28,8 @@ arbitrary = { workspace = true, optional = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true }
+bolero.workspace = true
+beekem = { path = ".", features = ["arbitrary"] }
 tokio = { version = "1.43", features = ["macros", "rt"] }
 
 [features]
