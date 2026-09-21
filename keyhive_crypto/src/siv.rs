@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Note that ChaCha having a very different foundation, this is not the well-known SIV mode from AES.
 ///
 /// XChaCha uses a 24-byte nonce which is considered safe to use when
-/// a nonce-collions could result during random generation.
+/// a nonce-collisions could result during random generation.
 /// However, this doesn't commit the key, and is thus left open to [Invisible Salamanders]
 /// and there are some cases where the key could be phished.
 ///

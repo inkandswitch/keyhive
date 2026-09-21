@@ -4,23 +4,70 @@ This directory contains the design rationale for the core components of Keyhive.
 
 ## Overview
 
-The Keyhive project focuses on the [authorization][auth n vs z] (authZ) of updates to [local-first][LoFi] data such as [Automerge]. It includes end-to-end encryption (E2EE), continuous group key agreement (CGKA), and a capability system. We designed Keyhive to run both natively and in the browser. It aims to "do one thing well" (local-first access control), and be agnostic about questions of identity and account recovery so that so that it will be compatible with [PKI] and [identity] systems including [DID]s, [Keyoxide], [KERI], [OpenPGP], [petnames], [edgenames], [ATProto], etc.
+The Keyhive project focuses on the [authorization][auth n vs z] (authZ) of updates to [local-first][LoFi] data such as [Automerge]. It includes end-to-end encryption (E2EE), continuous group key agreement (CGKA), and a capability system. We designed Keyhive to run both natively and in the browser. It aims to "do one thing well" (local-first access control), and be agnostic about questions of identity and account recovery so that it will be compatible with [PKI] and [identity] systems including [DID]s, [Keyoxide], [KERI], [OpenPGP], [petnames], [edgenames], [ATProto], etc.
 
-Below is a high level overview of how the parts fit together. We have included dashed boxes to show where ID and recovery systems would fit, but we emphasize that implementing these are not in scope.
+Below is a high level overview of how the parts fit together. We have included dashed boxes to show where ID, recovery, and sync systems fit, but we emphasize that implementing these is not in scope for this repository (sync is [Subduction]).
 
-![](./assets/overview.png)
+```mermaid
+flowchart TB
+    sync["Sync Protocol<br>(Subduction)"]:::external
+
+    subgraph caps[Capabilities]
+        mutation[Mutation Control]
+        concap[Convergent Capabilities]
+        cgka[Continuous Group Key Agreement<br>BeeKEM]
+    end
+
+    subgraph enc[Encryption]
+        causal[Causal Encryption]
+    end
+
+    ed[Ed25519]
+    x[X25519]
+    chacha[XChaCha20-Poly1305]
+
+    identity[Identity]:::external
+    recovery[Key Recovery]:::external
+
+    sync -.-> mutation
+    sync -.-> causal
+
+    mutation --> concap
+    cgka --> concap
+    concap --> ed
+    cgka --> x
+    cgka --> chacha
+    causal --> chacha
+
+    identity -.-> ed
+    recovery -.-> ed
+
+    classDef external stroke-dasharray: 5 5
+```
+
+The capability graph decides _who_ may read or edit; BeeKEM turns that membership into a shared key; causal encryption uses those keys to protect content while keeping the CRDT's history intact. Each layer is documented separately:
+
+| Document | Topic |
+|----------|-------|
+| [Convergent Capabilities](./convergent_capabilities.md) | Why the capability model is a CRDT, and how it differs from ocap and SPKI |
+| [Group Membership](./group_membership.md) | Agents, delegations, revocations, seniority, worked examples |
+| [Causal Encryption](./causal_encryption.md) | Per-chunk keys that embed their predecessors' keys |
+| [BeeKEM](../beekem/README.md) | The concurrent TreeKEM variant that supplies group keys |
+| [Cipher Suite](./ciphersuite.md) | Primitives, domain separation, the synthetic-nonce construction |
+| [Threat Model](./threat_model.md) | Adversaries, mitigations, and explicit non-goals |
+| [Glossary](./glossary.md) | Vocabulary, with the mapping from design terms to code |
 
 Automerge was designed for the local-first use case. This precludes network-based auth protocols like [OPAQUE], which is a network-based authentication (authN) protocol and thus depends on the encapsulation provided by the network to keep the information on the client and server separate. Crucially, local-first apps require [partition tolerance], so the entire application runs at every replica based on their [eventually-consistent][EC] view of the data, and thus we cannot rely on a network boundary like in OPAQUE (in addition to being authZ not authN). Our authorization needs are very simple: signing and verifying data with public key crypto (in our case: [Ed25519]).
 
-This project uses similar techniques to E2EE messaging, but collaborative documents have different constraints which require different solutions. By way of a single example: in messaging, delivery is the most important, and there is generally no hard dependency between messages. Dropped messages in messaging or gaps in history is often acceptable (e.g. adding someone to a chat and not seeing the prior group's message history). In an op-based [CRDT] like Automerge, any gap in history prevents the application from applying future messages; omitting old history is not possible.
+This project uses similar techniques to E2EE messaging, but collaborative documents have different constraints which require different solutions. By way of a single example: in messaging, delivery matters most and messages rarely depend on one another. Dropped messages or gaps in history are often acceptable (e.g. adding someone to a chat and not seeing the prior group's message history). In an op-based [CRDT] like Automerge, any gap in history prevents the application from applying future messages; omitting old history is not possible.
 
-Keyhive itself is made of two parts: mutation control with a [capabilities][caps] and read control with [encryption-at-rest][DARE]. Both interact directly with compression and data sync since more access to CRDT graph metadata makes sync more efficient but access control seeks to protect as much data as possible. To this end, we designed Beelay (the Keyhive Relay) which syncs E2EE chunks. We include special provisions in the protocol for relays and sync servers which can store (but not read) E2EE content, yet needs to efficiently send diffs to authorized clients.
+Keyhive itself is made of two parts: mutation control with [capabilities][caps] and read control with [encryption-at-rest][DARE]. Both interact directly with compression and data sync since more access to CRDT graph metadata makes sync more efficient but access control seeks to protect as much data as possible. To this end, we designed [Subduction] (the Keyhive sync protocol, successor to Beelay) which syncs E2EE chunks. We include special provisions in the protocol for relays and sync servers which can store (but not read) E2EE content, yet need to efficiently send diffs to authorized clients.
 
 <img src="./assets/causal-encryption.png" style="width:500px" />
 
-For Keyhive, we have developed a CRDT-focused variant of certificate capabilities (cert cap) that includes some of the statefulness of [object capabilities][ocap] (OCAP). We are calling this category "convergent capabilities" (concap). It would be possible to express the same semantics in certificate capabilities, but with significantly (often exponential) more certificates to enable our desired revocation semantics, which is contraindicated by our real world requirement to keep Automerge documents as small as possible. Concap gets closer to OCAP's simple authority graph model, but without the fail-stop semantics of object capabilities (since Automerge needs partition tolerance, the opposite of OCAP's [fail-stop]). One way of thinking about this is like how certificate capabilities act like a simulation of a capability network; convergent capabilities extend this to include more of the network by maintaining a stateful view. You can think of this as "a CRDT for capabilities". Beyond mutation control, this stateful view also is helpful for other parts of the system like continuous group key agreement (described later).
+For Keyhive, we have developed a CRDT-focused variant of certificate capabilities (cert cap) that includes some of the statefulness of [object capabilities][ocap] (OCAP). We are calling this category "convergent capabilities" (concap). It would be possible to express the same semantics in certificate capabilities, but with significantly (often exponentially) more certificates to enable our desired revocation semantics, which is contraindicated by our real world requirement to keep Automerge documents as small as possible. Concap gets closer to OCAP's simple authority graph model, but without the fail-stop semantics of object capabilities (since Automerge needs partition tolerance, the opposite of OCAP's [fail-stop]). One way of thinking about this is like how certificate capabilities act like a simulation of a capability network; convergent capabilities extend this to include more of the network by maintaining a stateful view. You can think of this as "a CRDT for capabilities". Beyond mutation control, this stateful view is also helpful for other parts of the system like continuous group key agreement (described later).
 
-Upon receipt of an CRDT update/patch, we check the associated capability. Since we have causal delivery, the capability system needs to be aware of the data's causal history. Data from a source that is later discovered to have been revoked cannot simply be [tombstoned][tombstone], because revocation cascades can revoke the revoker. We have instead developed a visibility index for operations: they need to stay available to retain causality, but depending on the auth graph may or may not materialize.
+Upon receipt of a CRDT update/patch, we check the associated capability. Since we have causal delivery, the capability system needs to be aware of the data's causal history. Data from a source that is later discovered to have been revoked cannot simply be [tombstoned][tombstone], because revocation cascades can revoke the revoker. We have instead developed a visibility index for operations: they need to stay available to retain causality, but depending on the auth graph may or may not materialize.
 
 Our encryption-at-rest layer is made of two parts: causal encryption, and continuous group key agreement (CGKA). Causal encryption is straightforward: instead of needing to re-derive keys for any chunk, we include the keys to causal predecessors. This is related to systems like [Cryptree]: it allows access to a document at a point in time. Because of how op-based CRDTs work, we must give up forward secrecy[^fs] (FS), but retain the ability to remove access (PCS) to future updates with the CGKA.
 
@@ -29,11 +76,11 @@ Our encryption-at-rest layer is made of two parts: causal encryption, and contin
 > FS vs PCS, adapted from [Cohn-Gordon et al][PCS].
 
 
-For CGKA, we have developed a concurrent variant of [TreeKEM] (which underlies [MLS]). TreeKEM itself requires strict linearizability, and thus does not work in weaker consistency models. Several proposals have been made to add concurrency to TreeKEM, but they either increase communication cost exponentially, or depend on less common cryptographic primitives (such as commutative asymmetric keys). We have found a way to implement a causal variant of TreeKEM with widely-supported cryptography ([X25519] & [ChaCha]). There should be no issues replacing X25519 and ChaCha as the state of the art evolves (e.g. [PQC]), with the only restriction being that the new algorithms must support asymmetric key exchange. We believe this flexibility to be a major future-looking advantage of our approach. Our capability system drives the CGKA: it determines who's ECDH keys have read (decryption) access and should be included in the CGKA —  something not possible with standard certificate capabilities alone.
+For CGKA, we have developed a concurrent variant of [TreeKEM] (which underlies [MLS]). TreeKEM itself requires strict linearizability, and thus does not work in weaker consistency models. Several proposals have been made to add concurrency to TreeKEM, but they either increase communication cost exponentially, or depend on less common cryptographic primitives (such as commutative asymmetric keys). We have found a way to implement a causal variant of TreeKEM with widely-supported cryptography ([X25519] & [ChaCha]). There should be no issues replacing X25519 and ChaCha as the state of the art evolves (e.g. [PQC]), with the only restriction being that the new algorithms must support asymmetric key exchange. We believe this flexibility to be a major future-looking advantage of our approach. Our capability system drives the CGKA: it determines whose ECDH keys have read (decryption) access and should be included in the CGKA — something not possible with standard certificate capabilities alone.
 
-For our sync system (Beelay), application-level requests are stateless and run over [TLS] or [mTLS]. The statelessness is useful for those that need to scale horizontally. We do not require IP addresses by default. The only requirement is that patches eventually get from one machine to another, so P2P, sync servers, sneakernets, and carrier pigeon are all feasible in this model. All data is E2EE, but all cryptography is eventually breakable. To mitigate this in a defense-in-depth strategy, we do require that a requester prove that they have the capability to pull data from other replicas, which is managed under the capability system that we describe elsewhere.
+For our sync system ([Subduction]), application-level requests are stateless and run over [TLS] or [mTLS]. The statelessness is useful for those that need to scale horizontally. We do not require IP addresses by default. The only requirement is that patches eventually get from one machine to another, so P2P, sync servers, sneakernets, and carrier pigeon are all feasible in this model. All data is E2EE, but all cryptography is eventually breakable. To mitigate this in a defense-in-depth strategy, we do require that a requester prove that they have the capability to pull data from other replicas, which is managed under the capability system that we describe elsewhere.
 
-The sync system does not require identities. As long as you can invoke a capability, then the other end can calculate what data you should be able to pull or edit. These connections do not in themselves depend on IP addresses, but if you use e.g. an HTTP transport then you will expose your IP address. We are interested in adding a mixnet transport or similar eventually, but is currently out of scope.
+The sync system does not require identities. As long as you can invoke a capability, then the other end can calculate what data you should be able to pull or edit. These connections do not in themselves depend on IP addresses, but if you use e.g. an HTTP transport then you will expose your IP address. We are interested in adding a mixnet transport or similar eventually, but this is currently out of scope.
 
 The underlying data and auth layers are CRDTs, so they don't depend on sessions or identities beyond public key crypto. If you are delegated to, and can sign with the related key, your update will be accepted by delegation chain self-certification. We have kept those other questions out of the system so that Keyhive can "do one thing well", and be composable with such systems.
 
@@ -61,6 +108,7 @@ The underlying data and auth layers are CRDTs, so they don't depend on sessions 
 [PCS]: https://eprint.iacr.org/2016/221.pdf
 [PKI]: https://en.wikipedia.org/wiki/Public_key_infrastructure
 [PQC]: https://en.wikipedia.org/wiki/Post-quantum_cryptography
+[Subduction]: https://github.com/inkandswitch/subduction
 [TLS]: https://en.wikipedia.org/wiki/Transport_Layer_Security
 [TreeKEM]: https://inria.hal.science/hal-02425247/file/treekem+(1).pdf
 [X25519]: https://datatracker.ietf.org/doc/html/rfc8410

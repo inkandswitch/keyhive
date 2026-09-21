@@ -262,7 +262,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         Ok(op)
     }
 
-    /// Asyncronously sign a payload.
+    /// Asynchronously sign a payload.
     pub async fn try_sign_async<U: Serialize + std::fmt::Debug>(
         &self,
         payload: U,

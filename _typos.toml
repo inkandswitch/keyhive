@@ -1,0 +1,6 @@
+[default.extend-words]
+# Deliberate spelling, used throughout the BeeKEM API surface
+encrypter = "encrypter"
+
+[default.extend-identifiers]
+r_ba = "r_ba"

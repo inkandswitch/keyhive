@@ -1,0 +1,58 @@
+name: Bolero Tests
+
+# Property-test sweep. There are no `bolero::check!` harnesses in the workspace
+# yet, so today this is the host test suite under another name; it runs on a
+# schedule (not per PR) until the first harness lands. When it does, add
+# `pull_request:` back and move `ci-bolero` into the `ci` aggregate in flake.nix.
+
+on:
+  schedule:
+    # Nightly; offset from :00 to avoid the cron rush.
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  property-tests:
+    name: ${{ matrix.label }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            iterations: 1000
+            label: Thorough
+          - os: macos-latest
+            iterations: 100
+            label: Quick
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          # Reads rust-toolchain.toml; defer caching to Swatinem below.
+          cache: false
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bolero-${{ matrix.os }}
+
+      - name: Run property tests (${{ matrix.label }})
+        env:
+          BOLERO_RANDOM_ITERATIONS: ${{ matrix.iterations }}
+          RUST_BACKTRACE: 1
+        run: cargo test --workspace --exclude keyhive_wasm --features test_utils --tests
