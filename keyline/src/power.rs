@@ -22,7 +22,8 @@ use keyhive_codec::{
 /// and so no rehashing of certificates already in a set. Nothing may derive the
 /// order from the tag: `A` is the top of the lattice and the lowest byte of the
 /// four.
-// TODO(keyhive_types): `keyhive_core::Power` is the same type; unify.
+// TODO(keyhive_types): `keyhive_core::Access` is the same type under its old
+// name; unify at integration and settle which name survives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]

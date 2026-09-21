@@ -11,7 +11,7 @@ use crate::{
     certificate::Certificate, delegation::Delegation, id::Id, power::Power, revocation::Revocation,
     test_utils::id,
 };
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, vec::Vec};
 use arbitrary::{Arbitrary, Result, Unstructured};
 use keyhive_codec::traits::{Decode, Encode};
 
@@ -75,6 +75,20 @@ impl<C: Clone + Encode + Decode> CertSet<C> {
 
 fn pick_id(u: &mut Unstructured<'_>) -> Result<Id> {
     Ok(id(u.int_in_range(1..=POOL)?))
+}
+
+/// Retention watermarks over pool subjects, for [`Revocation::retains`].
+///
+/// Often empty, so both codec paths occur. Evaluation must ignore whatever
+/// lands here, and the naive oracle cannot read it at all, so running the
+/// oracle law with a variable-length `C` is what proves the two agree.
+fn retains<'a, C: Arbitrary<'a>>(u: &mut Unstructured<'a>) -> Result<BTreeMap<Id, C>> {
+    let mut watermarks = BTreeMap::new();
+    for _ in 0..u.int_in_range(0..=2)? {
+        watermarks.insert(pick_id(u)?, u.arbitrary()?);
+    }
+
+    Ok(watermarks)
 }
 
 impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C> {
@@ -155,7 +169,11 @@ impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C
                 1 => target.audience,
                 _ => pick_id(u)?,
             };
-            certs.push(Revocation::new(revoker, target.digest()).into());
+            certs.push(
+                Revocation::new(revoker, target.digest())
+                    .retaining(retains(u)?)
+                    .into(),
+            );
         }
 
         // Re-issues past a revocation, so heals and `cites` collisions happen.
