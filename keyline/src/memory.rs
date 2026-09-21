@@ -743,6 +743,32 @@ mod tests {
         laws::queries_are_consistent::<MemoryKeyline>();
     }
 
+    /// A watermark type with a variable-length encoding.
+    ///
+    /// Every law above runs at `C = ()`, whose encoding is empty, so none of
+    /// them can tell "evaluation ignores `retains`" apart from "there was
+    /// nothing there to ignore". The two below re-run the load-bearing pair
+    /// against watermarks that carry bytes.
+    #[cfg(feature = "arbitrary")]
+    type Retained = Vec<u8>;
+
+    /// The naive oracle keeps only `(issuer, revokes)`, so it cannot read a
+    /// watermark even by accident. Agreement therefore witnesses that the
+    /// evaluator does not read one either.
+    #[cfg(feature = "arbitrary")]
+    #[test]
+    fn retains_do_not_affect_authority() {
+        laws::matches_naive_oracle_with_revocations::<MemoryKeyline<Retained>>();
+    }
+
+    /// The converse: `retains` is covered by the certificate digest, so two
+    /// revocations differing only there are two certificates, not one.
+    #[cfg(feature = "arbitrary")]
+    #[test]
+    fn retains_are_part_of_set_identity() {
+        laws::digest_identifies_the_set::<MemoryKeyline<Retained>>();
+    }
+
     #[test]
     fn inherent_accessors() {
         let (g, _, _) = standard::<MemoryKeyline>();
