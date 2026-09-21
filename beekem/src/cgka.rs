@@ -314,9 +314,6 @@ impl Cgka {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
-        if self.group_size() == 1 {
-            return Err(CgkaError::RemoveLastMember);
-        }
         let (leaf_idx, removed_keys) = self.tree.remove_id(id)?;
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
         let op = CgkaOperation::Remove {

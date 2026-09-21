@@ -622,10 +622,10 @@ pub struct LeafNode {
     pub pk: NodeKey,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test_utils"))]
 impl BeeKem {
-    /// Which member sits at which leaf, by ascending [`MemberId`].
-    pub(crate) fn seating(&self) -> Vec<(MemberId, u32)> {
+    /// The tree members by ascending [`MemberId`].
+    pub(crate) fn tree_members(&self) -> Vec<(MemberId, u32)> {
         self.id_to_leaf_idx
             .iter()
             .map(|(id, idx)| (*id, idx.u32()))
@@ -821,7 +821,7 @@ mod tests {
     #[test]
     fn a_path_whose_indices_are_out_of_range_updates_only_the_leaf() {
         let (mut tree, [owner, ..], genuine) = seeded();
-        let owner_idx = *tree.leaf_index_for_id(owner).expect("the owner is seated");
+        let owner_idx = *tree.leaf_index_for_id(owner).expect("the owner has a leaf");
         let mine = treemath::direct_path(owner_idx.into(), tree.tree_size);
 
         // As many indices as a real direct path, so a check on the length alone

@@ -33,6 +33,9 @@ pub mod transact;
 pub mod tree;
 pub mod treemath;
 
+#[cfg(any(test, feature = "test_utils"))]
+pub mod test_utils;
+
 #[cfg(test)]
 mod tests {
     mod concurrent_membership_changes;
