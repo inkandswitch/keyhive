@@ -31,7 +31,7 @@ use crate::{
 use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
-    keys::ShareKeyMap,
+    keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaEpoch, CgkaOperation},
 };
 use derivative::Derivative;
@@ -211,7 +211,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         if let Some(others) = NonEmpty::from_vec(other_members) {
             ops.extend(cgka.add_multiple(others, signer).await?.iter().cloned());
         }
-        let (_pcs_key, update_op) = cgka
+        let (_pcs_key, update_op, _new_key_pair) = cgka
             .update(
                 owner_share_key,
                 owner_share_secret_key,
@@ -452,27 +452,33 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.cgka()?.ops()
     }
 
+    /// Rotate our CGKA key.
+    ///
+    /// The second element of the return is the new key pair or [`None`] when the owner
+    /// is not in the tree and the update fell back to Public's existing key.
     #[instrument(skip_all)]
+    #[allow(clippy::type_complexity)]
     pub async fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Signed<CgkaOperation>, ShareKey, ShareSecretKey), EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, Option<LeafKeyPair>), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
-        let (_, op) = self
+        let (_, op, new_key_pair) = self
             .cgka_mut()
             .map_err(EncryptError::UnableToPcsUpdate)?
             .update(new_share_key, new_share_secret_key, signer, csprng)
             .await
             .map_err(EncryptError::UnableToPcsUpdate)?;
-        Ok((op, new_share_key, new_share_secret_key))
+        Ok((op, new_key_pair))
     }
 
     /// Encrypt `content` in an [`Envelope`], listing its ancestors and carrying the keys to
     /// open them.
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(skip_all)]
+    #[allow(clippy::type_complexity)]
     pub async fn try_encrypt_content_in_envelope<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         content_ref: &T,
@@ -480,7 +486,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<EncryptedContentWithUpdate<T>, EncryptInEnvelopeError<T>>
+    ) -> Result<(EncryptedContentWithUpdate<T>, Option<LeafKeyPair>), EncryptInEnvelopeError<T>>
     where
         T: for<'de> Deserialize<'de>,
     {
@@ -500,13 +506,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         };
         let bytes = bincode::serialize(&envelope)?;
 
-        let (encrypted, _key) = self
+        let (encrypted, _key, sampled) = self
             .try_encrypt_content_keyed(content_ref, &bytes, pred_refs, signer, csprng)
             .await?;
-        Ok(encrypted)
+        Ok((encrypted, sampled))
     }
 
+    /// The third element of the return is the key pair a rotation sampled for our leaf.
     #[instrument(skip_all)]
+    #[allow(clippy::type_complexity)]
     pub async fn try_encrypt_content_keyed<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         content_ref: &T,
@@ -514,8 +522,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptError> {
-        let (app_secret, maybe_update_op) = self
+    ) -> Result<
+        (
+            EncryptedContentWithUpdate<T>,
+            SymmetricKey,
+            Option<LeafKeyPair>,
+        ),
+        EncryptError,
+    > {
+        let (app_secret, maybe_update_op, new_key_pair) = self
             .cgka_mut()
             .map_err(EncryptError::FailedToMakeAppSecret)?
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
@@ -536,6 +551,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 update_op: maybe_update_op,
             },
             application_secret_key,
+            new_key_pair,
         ))
     }
 

@@ -15,7 +15,7 @@ use crate::{
     encrypted::EncryptedContent,
     error::CgkaError,
     id::{MemberId, TreeId},
-    keys::{NodeKey, ShareKeyMap},
+    keys::{LeafKeyPair, NodeKey, ShareKeyMap},
     operation::{CgkaEpoch, CgkaOperation, CgkaOperationGraph},
     pcs_key::{ApplicationSecret, PcsKey},
     transact::{Fork, Merge},
@@ -152,9 +152,14 @@ impl Cgka {
     /// to encrypt.
     ///
     /// If the tree does not currently contain a root key, then we must first
-    /// perform a leaf key rotation.
+    /// perform a leaf key rotation. The new key pair is returned as the third element,
+    /// which is `None` when there was no rotation.
     ///
     /// Returns a [`CgkaError::NoMembers`] error if the group is empty.
+    ///
+    /// # Security
+    ///
+    /// The returned key pair contains unencrypted secret key material.
     #[instrument(skip_all)]
     #[allow(clippy::type_complexity)]
     pub async fn new_app_secret_for<
@@ -169,14 +174,23 @@ impl Cgka {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(ApplicationSecret<T>, Option<Signed<CgkaOperation>>), CgkaError> {
+    ) -> Result<
+        (
+            ApplicationSecret<T>,
+            Option<Signed<CgkaOperation>>,
+            Option<LeafKeyPair>,
+        ),
+        CgkaError,
+    > {
         let mut op = None;
+        let mut new_key_pair = None;
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
-            let (pcs_key, update_op) = self
+            let (pcs_key, update_op, sampled_key_pair) = self
                 .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
+            new_key_pair = sampled_key_pair;
             self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
             op = Some(update_op);
             pcs_key
@@ -204,6 +218,7 @@ impl Cgka {
                     .expect("PcsKey hash should be present because we derived it above"),
             ),
             op,
+            new_key_pair,
         ))
     }
 
@@ -322,13 +337,14 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>, Option<LeafKeyPair>), CgkaError> {
         if self.should_replay() {
             self.replay_ops_graph()?;
         }
         if self.group_size() == 0 {
             return Err(CgkaError::NoMembers);
         }
+        let mut is_public = false;
         let (update_id, update_pk, update_sk) = if self.tree.contains_id(&self.owner_id) {
             (self.owner_id, new_pk, new_sk)
         } else {
@@ -341,6 +357,7 @@ impl Cgka {
                 return Err(CgkaError::ShareKeyNotFound);
             };
             let sk = *self.owner_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
+            is_public = true;
             (public_id, pk, sk)
         };
         self.owner_sks.insert(update_pk, update_sk);
@@ -359,9 +376,25 @@ impl Cgka {
             let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
             self.ops_graph.add_local_op(&signed_op);
             self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
-            Ok((pcs_key, signed_op))
+            let new_key_pair = if is_public {
+                None
+            } else {
+                Some((update_pk, update_sk))
+            };
+            Ok((pcs_key, signed_op, new_key_pair))
         } else {
             Err(CgkaError::IdentifierNotFound)
+        }
+    }
+
+    /// The [`ShareKey`] currently at the owner's leaf.
+    ///
+    /// Returns [`None`] when the owner is not in the tree.
+    pub fn owner_leaf_key(&self) -> Option<ShareKey> {
+        match self.tree.node_key_for_id(self.owner_id).ok()? {
+            NodeKey::ShareKey(pk) => Some(pk),
+            // `insert_leaf_at` keeps only the lowest key per leaf so this is purely defensive.
+            NodeKey::ConflictKeys(keys) => Some(keys.iter().copied().min()?),
         }
     }
 

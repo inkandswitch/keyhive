@@ -205,7 +205,7 @@ async fn scenario(seed: u64) -> Result<Option<String>> {
                 }
                 CgkaOp::Update => {
                     let sk = ShareSecretKey::generate(&mut rng);
-                    if let Ok((_, o)) = replica
+                    if let Ok((_, o, _)) = replica
                         .update::<Sendable, _, _>(sk.share_key(), sk, &signer, &mut rng)
                         .await
                     {
