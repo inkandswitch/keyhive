@@ -624,14 +624,6 @@ pub struct LeafNode {
 
 #[cfg(any(test, feature = "test_utils"))]
 impl BeeKem {
-    /// The tree members by ascending [`MemberId`].
-    pub(crate) fn tree_members(&self) -> Vec<(MemberId, u32)> {
-        self.id_to_leaf_idx
-            .iter()
-            .map(|(id, idx)| (*id, idx.u32()))
-            .collect()
-    }
-
     /// Returns one message per disagreement between the tree's fields. It checks
     /// `leaves` and `inner_nodes` against `tree_size`, and `leaves` against
     /// `id_to_leaf_idx` and `next_leaf_idx`.
@@ -978,7 +970,7 @@ mod tests {
 
         let violations = tree.invariant_violations();
         assert!(
-            violations.iter().any(|v| v.contains("is counted at leaf")),
+            violations.iter().any(|v| v.contains("which holds")),
             "a member counted at a leaf holding somebody else went unreported: {violations:?}"
         );
         assert!(

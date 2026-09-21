@@ -50,7 +50,7 @@ pub struct Group {
     pub names: BTreeMap<MemberId, String>,
     doc_id: TreeId,
     init_add_op: Signed<CgkaOperation>,
-    /// Every operation delivered so far, in causal order, so a member who was
+    /// Every operation synced so far, in the order it was synced, so a member
     /// added part way through can be given a replica of their own.
     log: Vec<Arc<Signed<CgkaOperation>>>,
     logged: BTreeSet<Digest<Signed<CgkaOperation>>>,
@@ -115,8 +115,8 @@ impl Group {
             .expect("the added member is new")
     }
 
-    /// Create an add on `author`'s replica without delivering it, or `None` if
-    /// `author`'s history already covers seating `id`.
+    /// Create an add on `author`'s replica without delivering it or `None` if
+    /// `author`'s history already places `id`.
     pub async fn try_add(
         &mut self,
         author: usize,
@@ -138,7 +138,7 @@ impl Group {
             .expect("the removed member is present")
     }
 
-    /// Create a removal on `author`'s replica without delivering it, or `None`
+    /// Create a removal on `author`'s replica without delivering it or `None`
     /// if `author`'s history already removes `target`.
     pub async fn try_remove(
         &mut self,
@@ -176,7 +176,7 @@ impl Group {
         {
             Ok((_pcs_key, op, _)) => Some(Arc::new(op)),
             Err(CgkaError::IdentifierNotFound) => None,
-            Err(e) => panic!("creating the rotation succeeds: {e:?}"),
+            Err(e) => panic!("creating the rotation failed: {e:?}"),
         }
     }
 
@@ -234,11 +234,13 @@ impl Group {
 
     /// The tree members on `replica`, by ascending leaf index.
     fn tree_members(&self, replica: usize) -> Vec<(u32, MemberId)> {
-        let mut tree_members: Vec<(u32, MemberId)> = self.replicas[replica]
-            .tree
-            .tree_members()
-            .into_iter()
-            .map(|(id, idx)| (idx, id))
+        let tree = &self.replicas[replica].tree;
+        let mut tree_members: Vec<(u32, MemberId)> = tree
+            .member_ids()
+            .map(|id| {
+                let idx = tree.leaf_index_for_id(id).expect("a member has a leaf");
+                (idx.u32(), id)
+            })
             .collect();
         tree_members.sort();
         tree_members
@@ -377,7 +379,7 @@ impl Group {
     }
 }
 
-/// A one-letter name for member `i`. Panics past `h`, which no scenario reaches.
+/// A one-letter name for member `i`. Panics for `i` above 7.
 fn name_for(i: usize) -> String {
     ["a", "b", "c", "d", "e", "f", "g", "h"][i].to_string()
 }
