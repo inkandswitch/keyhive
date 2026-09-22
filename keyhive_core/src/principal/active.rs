@@ -21,7 +21,7 @@ use crate::{
     principal::{
         agent::id::AgentId,
         group::delegation::{Delegation, DelegationError},
-        individual::ReceivePrekeyOpError,
+        individual::{MissingPrekeys, ReceivePrekeyOpError},
         membered::Membered,
     },
     transact::{
@@ -105,6 +105,16 @@ pub enum ImportPrekeyStateError {
     Verification(#[from] VerificationError),
     #[error("prekey state delta contains an operation for a different individual: {0}")]
     Receive(#[from] ReceivePrekeyOpError),
+}
+
+/// Errors from [`Active::generate_private_prekey`] and the contact card carrying its result.
+#[derive(Debug, Error)]
+pub enum GeneratePrivatePrekeyError {
+    #[error(transparent)]
+    Signing(#[from] SigningError),
+
+    #[error(transparent)]
+    MissingPrekeys(#[from] MissingPrekeys),
 }
 
 /// The current user agent (which can sign and encrypt).
@@ -223,11 +233,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<Arc<Signed<RotateKeyOp>>, GeneratePrivatePrekeyError> {
         let share_key = {
             // TODO total hack
             let locked = self.individual.lock().await;
-            locked.pick_prekey(DocumentId(self.id().into())).dupe()
+            *locked.pick_prekey(DocumentId(self.id().into()))?
         };
         let contact_key = self.rotate_prekey(share_key, csprng.dupe()).await?;
         self.rotate_prekey(contact_key.payload.new, csprng).await?;
@@ -235,9 +245,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 
     /// Pseudorandomly select a prekey out of the current prekeys.
-    pub async fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
+    pub async fn pick_prekey(&self, doc_id: DocumentId) -> Result<ShareKey, MissingPrekeys> {
         tracing::trace!("picking prekey for document {doc_id}",);
-        self.individual.lock().await.pick_prekey(doc_id).dupe()
+        Ok(*self.individual.lock().await.pick_prekey(doc_id)?)
     }
 
     /// Replace a particular prekey with a new one.

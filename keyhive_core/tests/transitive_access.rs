@@ -625,7 +625,13 @@ async fn test_competing_cgka_init_adds() -> TestResult {
     {
         let mut locked = doc_on_bob.lock().await;
         let bob_active_id = bob.active().lock().await.id();
-        let bob_pk = bob.active().lock().await.pick_prekey(doc_id).await;
+        let bob_pk = bob
+            .active()
+            .lock()
+            .await
+            .pick_prekey(doc_id)
+            .await
+            .expect("bob's active individual has published prekeys");
 
         let doc_tree_id: beekem::id::TreeId = doc_id.verifying_key().into();
         let bob_member_id: beekem::id::MemberId = bob_active_id.verifying_key().into();

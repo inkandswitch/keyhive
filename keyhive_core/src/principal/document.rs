@@ -2,7 +2,10 @@ pub mod archive;
 pub mod id;
 
 use self::archive::DocumentArchive;
-use super::{group::AddGroupMemberError, individual::id::IndividualId};
+use super::{
+    group::AddGroupMemberError,
+    individual::{id::IndividualId, MissingPrekeys},
+};
 use crate::{
     access::Access,
     cgka::{Cgka, LocalCgkaSecret},
@@ -284,7 +287,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             ShareSecretKey::generate(&mut *locked_csprng)
         };
         let owner_share_key = owner_share_secret_key.share_key();
-        let group_members = group.pick_individual_prekeys(doc_id).await;
+        let group_members = group.pick_individual_prekeys(doc_id).await?;
         let other_members: Vec<(IndividualId, ShareKey)> = group_members
             .iter()
             .filter(|(id, _sk)| **id != owner_id)
@@ -348,7 +351,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 .payload
                 .delegate
                 .pick_individual_prekeys(self.doc_id())
-                .await;
+                .await?;
             let cgka_ops_for_this_doc =
                 self.add_cgka_members_from_prekeys(&prekeys, signer).await?;
             update.cgka_ops.extend(cgka_ops_for_this_doc);
@@ -873,6 +876,9 @@ pub enum AddMemberError {
     AddMemberError(#[from] AddGroupMemberError),
 
     #[error(transparent)]
+    MissingPrekeys(#[from] MissingPrekeys),
+
+    #[error(transparent)]
     CgkaError(#[from] CgkaError),
 }
 
@@ -915,6 +921,9 @@ pub enum GenerateDocError {
 
     #[error(transparent)]
     SigningError(#[from] SigningError),
+
+    #[error(transparent)]
+    MissingPrekeys(#[from] MissingPrekeys),
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),

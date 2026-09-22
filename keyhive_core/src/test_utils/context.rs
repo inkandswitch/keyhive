@@ -174,7 +174,12 @@ macro_rules! other_from {
     )+};
 }
 
-other_from!(CgkaError, SigningError, ReceivePrekeyOpError);
+other_from!(
+    CgkaError,
+    SigningError,
+    ReceivePrekeyOpError,
+    crate::principal::active::GeneratePrivatePrekeyError
+);
 
 impl From<GenerateDocError> for TestError {
     fn from(e: GenerateDocError) -> Self {

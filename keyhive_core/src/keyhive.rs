@@ -11,7 +11,7 @@ use crate::{
     event::{Event, static_event::StaticEvent},
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
-        active::{Active, ImportPrekeyStateError},
+        active::{Active, GeneratePrivatePrekeyError, ImportPrekeyStateError},
         agent::{id::AgentId, Agent},
         document::{
             AddMemberError, AddMemberUpdate, DecryptError, DocCausalDecryptionError, Document,
@@ -472,7 +472,7 @@ impl<
     /// Use [`Keyhive::get_existing_contact_card`] to read a current contact card without
     /// generating one.
     #[instrument(skip_all)]
-    pub async fn generate_contact_card(&self) -> Result<ContactCard, SigningError> {
+    pub async fn generate_contact_card(&self) -> Result<ContactCard, GeneratePrivatePrekeyError> {
         let rot_key_op = self
             .active
             .lock()
@@ -677,7 +677,7 @@ impl<
                         .payload
                         .delegate
                         .pick_individual_prekeys(doc_id)
-                        .await;
+                        .await?;
                     let mut locked_doc = doc.lock().await;
                     let ops = locked_doc
                         .add_cgka_members_from_prekeys(&prekeys, &signer)

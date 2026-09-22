@@ -5,7 +5,7 @@ use super::{
     document::{id::DocumentId, Document},
     group::{id::GroupId, Group, IdOrIndividual},
     identifier::Identifier,
-    individual::{id::IndividualId, op::KeyOp, Individual},
+    individual::{id::IndividualId, op::KeyOp, MissingPrekeys, Individual},
     membered::Membered,
 };
 use crate::{
@@ -134,7 +134,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn pick_individual_prekeys(
         &self,
         doc_id: DocumentId,
-    ) -> HashMap<IndividualId, ShareKey> {
+    ) -> Result<HashMap<IndividualId, ShareKey>, MissingPrekeys> {
         let mut result = HashMap::new();
         let mut seen = HashSet::new();
         let mut readers: Vec<Self> = vec![self.dupe()];
@@ -148,7 +148,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     let (id, prekey) = {
                         let locked = a.lock().await;
                         let id = locked.id();
-                        let prekey = locked.pick_prekey(doc_id).await;
+                        let prekey = locked.pick_prekey(doc_id).await?;
                         (id, prekey)
                     };
                     result.insert(id, prekey);
@@ -156,7 +156,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 Agent::Individual(_, i) => {
                     let (id, prekey) = {
                         let guard = i.lock().await;
-                        (guard.id(), *guard.pick_prekey(doc_id))
+                        (guard.id(), *guard.pick_prekey(doc_id)?)
                     };
                     result.insert(id, prekey);
                 }
@@ -169,7 +169,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             }
         }
 
-        result
+        Ok(result)
     }
 
     pub fn as_membered(&self) -> Option<Membered<F, S, T, L>> {

@@ -372,13 +372,13 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = contactCard)]
-    pub async fn contact_card(&self) -> Result<JsContactCard, JsSigningError> {
+    pub async fn contact_card(&self) -> Result<JsContactCard, JsError> {
         init_span!("JsKeyhive::contact_card");
         self.0
             .generate_contact_card()
             .await
             .map(Into::into)
-            .map_err(Into::into)
+            .map_err(|error| JsError::new(&error.to_string()))
     }
 
     #[wasm_bindgen(js_name = getExistingContactCard)]

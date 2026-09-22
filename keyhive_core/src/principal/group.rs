@@ -19,7 +19,7 @@ use super::{
     agent::{id::AgentId, Agent},
     document::{id::DocumentId, AddMemberUpdate, Document, RevokeMemberUpdate},
     identifier::Identifier,
-    individual::{id::IndividualId, Individual},
+    individual::{id::IndividualId, MissingPrekeys, Individual},
     membered::Membered,
 };
 use crate::{
@@ -281,7 +281,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn pick_individual_prekeys(
         &self,
         doc_id: DocumentId,
-    ) -> HashMap<IndividualId, ShareKey> {
+    ) -> Result<HashMap<IndividualId, ShareKey>, MissingPrekeys> {
         let mut prekeys = HashMap::new();
         let public_id = crate::principal::public::Public.id();
         for (id, (agent, access)) in self.transitive_members().await {
@@ -299,10 +299,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             } else if matches!(agent, Agent::Individual(_, _) | Agent::Active(_, _)) {
                 // Nested groups and documents are already flattened into
                 // `transitive_members` so we only look up individuals.
-                prekeys.extend(agent.pick_individual_prekeys(doc_id).await);
+                let member_prekeys = agent.pick_individual_prekeys(doc_id).await?;
+                prekeys.extend(member_prekeys.iter());
             }
         }
-        prekeys
+        Ok(prekeys)
     }
 
     #[allow(clippy::type_complexity)]
