@@ -3,7 +3,7 @@ use super::{
     document::{id::DocumentId, Document},
     group::{id::GroupId, Group},
     identifier::Identifier,
-    individual::{id::IndividualId, Individual},
+    individual::{id::IndividualId, MissingPrekeys, Individual},
 };
 use crate::listener::{membership::MembershipListener, no_listener::NoListener};
 use derive_more::{From, TryInto};
@@ -62,12 +62,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn pick_individual_prekeys(
         &self,
         doc_id: DocumentId,
-    ) -> HashMap<IndividualId, ShareKey> {
+    ) -> Result<HashMap<IndividualId, ShareKey>, MissingPrekeys> {
         match self {
             Peer::Individual(id, i) => {
                 let locked = i.lock().await;
-                let prekey = locked.pick_prekey(doc_id);
-                HashMap::from_iter([(*id, *prekey)])
+                let prekey = locked.pick_prekey(doc_id)?;
+                Ok(HashMap::from_iter([(*id, *prekey)]))
             }
             Peer::Group(_, g) => g.lock().await.pick_individual_prekeys(doc_id).await,
             Peer::Document(_, d) => d.lock().await.group.pick_individual_prekeys(doc_id).await,

@@ -116,14 +116,23 @@ impl Individual {
     }
 
     #[instrument(skip(self), fields(indie_id = %self.id))]
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> Result<&ShareKey, MissingPrekeys> {
         let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
         bytes.extend_from_slice(&doc_id.to_bytes());
 
         let prekeys_len = self.prekeys.len();
+        if prekeys_len == 0 {
+            // An individual whose Add/rotate prekey ops have not been ingested yet has nothing
+            // to pick from. That is a recoverable race — the ops arrive by sync — so it is an
+            // error the caller can retry, not a panic that takes the whole process down.
+            return Err(MissingPrekeys::NoPublishedPrekey(Box::new(self.id)));
+        }
         let idx = pseudorandom_in_range(bytes.as_slice(), prekeys_len);
 
-        self.prekeys.iter().nth(idx).expect("index to be in range")
+        self.prekeys
+            .iter()
+            .nth(idx)
+            .ok_or(MissingPrekeys::NoPublishedPrekey(Box::new(self.id)))
     }
 
     pub fn prekey_ops(&self) -> &CaMap<KeyOp> {
@@ -196,6 +205,16 @@ pub enum ReceivePrekeyOpError {
     VerificationError(#[from] VerificationError),
 }
 
+/// Errors from selecting a published prekey.
+#[derive(Debug, Error)]
+pub enum MissingPrekeys {
+    /// The individual has published no prekey to select from. The id is boxed because
+    /// [`IndividualId`] carries a decompressed curve point, which would otherwise inflate
+    /// every error enum this variant is embedded in (clippy's `result_large_err`).
+    #[error("individual {0} has published no prekey to select from")]
+    NoPublishedPrekey(Box<IndividualId>),
+}
+
 fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
     let bound = u64::from_be_bytes(bytes)
         .checked_shl(offset_bits as u32)
@@ -241,7 +260,7 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::principal::individual::op::add_key::AddKeyOp;
+    use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
     use keyhive_crypto::signer::memory::MemorySigner;
 
     #[test]
@@ -335,5 +354,82 @@ mod tests {
 
         assert_eq!(index1, 0);
         assert_eq!(index1, index2);
+    }
+
+    /// Regression: a stale rotation cycle (rotate A→B then B→A) must never
+    /// empty the published prekey set. `pick_prekey` reports [`MissingPrekeys`]
+    /// on an empty set, and the documented invariant is that an individual
+    /// always keeps at least one published prekey.
+    #[test]
+    fn rotation_cycle_keeps_prekeys_nonempty() {
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+        let sk = MemorySigner::generate(&mut csprng);
+
+        // Publish a single prekey.
+        let k1 = AddKeyOp::generate(&mut csprng);
+        let add_op = sk.try_sign_sync(k1.clone()).unwrap();
+        let mut individual = Individual::new(Arc::new(add_op).into());
+        assert_eq!(individual.prekeys.len(), 1);
+
+        // Rotate k1 -> k2.
+        let k2 = ShareKey::generate(&mut csprng);
+        let rot1 = sk
+            .try_sign_sync(RotateKeyOp {
+                old: k1.share_key,
+                new: k2,
+            })
+            .unwrap();
+        individual
+            .receive_prekey_op(KeyOp::Rotate(Arc::new(rot1)))
+            .unwrap();
+        assert_eq!(individual.prekeys.len(), 1);
+
+        // Rotate k2 -> k1: the rotation cycle. The published set must stay
+        // non-empty and pick_prekey must not panic.
+        let rot2 = sk
+            .try_sign_sync(RotateKeyOp {
+                old: k2,
+                new: k1.share_key,
+            })
+            .unwrap();
+        individual
+            .receive_prekey_op(KeyOp::Rotate(Arc::new(rot2)))
+            .unwrap();
+        assert!(
+            !individual.prekeys.is_empty(),
+            "rotation cycle must not empty the published prekey set"
+        );
+        assert!(
+            individual
+                .pick_prekey(DocumentId::generate(&mut csprng))
+                .is_ok(),
+            "a non-empty published prekey set still selects a prekey"
+        );
+    }
+
+    /// Regression: an individual whose prekey ops have not been ingested yet carries an empty
+    /// published set (a state a deserialized archive can represent). Selecting a prekey must
+    /// report that as a typed error — the caller retries once the ops land — instead of
+    /// panicking with "index to be in range".
+    #[test]
+    fn empty_prekey_set_reports_missing_prekeys() {
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+        let sk = MemorySigner::generate(&mut csprng);
+        let add_op = AddKeyOp::generate(&mut csprng);
+        let mut individual = Individual::new(Arc::new(sk.try_sign_sync(add_op).unwrap()).into());
+        assert_eq!(individual.prekeys.len(), 1);
+
+        individual.prekeys.clear();
+        individual.prekey_state = PrekeyState::empty_for_tests();
+
+        let error = individual
+            .pick_prekey(DocumentId::generate(&mut csprng))
+            .expect_err("an empty published prekey set has nothing to pick");
+        assert!(
+            matches!(&error, MissingPrekeys::NoPublishedPrekey(id) if **id == individual.id()),
+            "the error names the individual that published no prekey: {error:?}"
+        );
     }
 }

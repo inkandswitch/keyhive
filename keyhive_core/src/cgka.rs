@@ -7,6 +7,7 @@ use crate::{
     principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
     transact::{fork::Fork, merge::Merge},
 };
+pub use beekem::cgka::LocalCgkaSecret;
 use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
@@ -146,7 +147,7 @@ impl Cgka {
         (
             ApplicationSecret<T>,
             Option<Signed<CgkaOperation>>,
-            Option<LeafKeyPair>,
+            Option<LocalCgkaSecret>,
         ),
         CgkaError,
     > {

@@ -2,7 +2,13 @@ use dupe::Dupe;
 use keyhive_core::{
     access::Access,
     event::static_event::StaticEvent,
-    principal::{agent::Agent, document::id::DocumentId, identifier::Identifier, public::Public},
+    principal::{
+        agent::Agent,
+        document::id::DocumentId,
+        identifier::Identifier,
+        membered::Membered,
+        public::Public,
+    },
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
@@ -66,17 +72,14 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
         .await?;
 
     // Bob adds Carol to Doc B
-    {
-        let mut locked = doc_b.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(carol_id, carol_on_alice.dupe()),
-                Access::Edit,
-                &bob_signer,
-                &[],
-            )
-            .await?;
-    }
+    Membered::Document(doc_b_id, doc_b.dupe())
+        .add_member(
+            Agent::Individual(carol_id, carol_on_alice.dupe()),
+            Access::Edit,
+            &bob_signer,
+            &[],
+        )
+        .await?;
 
     // Verify Carol can reach Doc B
     let carol_reachable = alice.docs_reachable_by_agent(carol_id).await;
@@ -87,18 +90,15 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     );
 
     // Bob revokes Carol from Doc B
-    {
-        let carol_identifier: Identifier = carol_id.into();
-        let mut locked = doc_b.lock().await;
-        locked
-            .revoke_member(
-                carol_identifier,
-                true,
-                &bob_signer,
-                &mut std::collections::BTreeMap::new(),
-            )
-            .await?;
-    }
+    let carol_identifier: Identifier = carol_id.into();
+    Membered::Document(doc_b_id, doc_b.dupe())
+        .revoke_member(
+            carol_identifier,
+            true,
+            &bob_signer,
+            &mut std::collections::BTreeMap::new(),
+        )
+        .await?;
 
     // Verify Carol can no longer reach Doc B
     let carol_reachable_after = alice.docs_reachable_by_agent(carol_id).await;
@@ -149,31 +149,25 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
         .await?;
 
     // Bob adds Carol to Doc B
-    {
-        let mut locked = doc_b.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(carol_id, carol_on_alice.dupe()),
-                Access::Edit,
-                &bob_signer,
-                &[],
-            )
-            .await?;
-    }
+    Membered::Document(doc_b_id, doc_b.dupe())
+        .add_member(
+            Agent::Individual(carol_id, carol_on_alice.dupe()),
+            Access::Edit,
+            &bob_signer,
+            &[],
+        )
+        .await?;
 
     // Bob revokes Carol from Doc B
-    {
-        let carol_identifier: Identifier = carol_id.into();
-        let mut locked = doc_b.lock().await;
-        locked
-            .revoke_member(
-                carol_identifier,
-                true,
-                &bob_signer,
-                &mut std::collections::BTreeMap::new(),
-            )
-            .await?;
-    }
+    let carol_identifier: Identifier = carol_id.into();
+    Membered::Document(doc_b_id, doc_b.dupe())
+        .revoke_member(
+            carol_identifier,
+            true,
+            &bob_signer,
+            &mut std::collections::BTreeMap::new(),
+        )
+        .await?;
 
     // Verify Carol can no longer reach Doc B
     let carol_reachable = alice.docs_reachable_by_agent(carol_id).await;
@@ -277,56 +271,44 @@ async fn test_deep_chain_revocation() -> TestResult {
         .add_member(bob_id, group_id, Access::Admin, &[])
         .await?;
 
-    {
-        let mut locked = group.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(carol_id, carol_on_alice.dupe()),
-                Access::Admin,
-                &bob_signer,
-                &[],
-            )
-            .await?;
-    }
+    Membered::Group(group_id, group.dupe())
+        .add_member(
+            Agent::Individual(carol_id, carol_on_alice.dupe()),
+            Access::Admin,
+            &bob_signer,
+            &[],
+        )
+        .await?;
 
-    {
-        let mut locked = group.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(dave_id, dave_on_alice.dupe()),
-                Access::Admin,
-                &carol_signer,
-                &[],
-            )
-            .await?;
-    }
+    Membered::Group(group_id, group.dupe())
+        .add_member(
+            Agent::Individual(dave_id, dave_on_alice.dupe()),
+            Access::Admin,
+            &carol_signer,
+            &[],
+        )
+        .await?;
 
-    {
-        let mut locked = group.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(eve_id, eve_on_alice.dupe()),
-                Access::Edit,
-                &dave_signer,
-                &[],
-            )
-            .await?;
-    }
+    Membered::Group(group_id, group.dupe())
+        .add_member(
+            Agent::Individual(eve_id, eve_on_alice.dupe()),
+            Access::Edit,
+            &dave_signer,
+            &[],
+        )
+        .await?;
 
     // Carol revokes Eve — proof is Carol→Dave, lineage [Bob→Carol, Alice→Bob].
     // The old buggy fold would reject this at the second lineage hop.
-    {
-        let eve_identifier: Identifier = eve_id.into();
-        let mut locked = group.lock().await;
-        locked
-            .revoke_member(
-                eve_identifier,
-                true,
-                &carol_signer,
-                &std::collections::BTreeMap::new(),
-            )
-            .await?;
-    }
+    let eve_identifier: Identifier = eve_id.into();
+    Membered::Group(group_id, group.dupe())
+        .revoke_member(
+            eve_identifier,
+            true,
+            &carol_signer,
+            &mut std::collections::BTreeMap::new(),
+        )
+        .await?;
 
     // Verify Eve is no longer a member
     let members = { group.lock().await.members().clone() };
@@ -539,6 +521,43 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
         "Bob should still see Public on the doc"
     );
 
+    // Concurrent Adds leave the merged tree without a current group secret.
+    // The first encryption must create one post-merge Update; after that the
+    // epoch is settled and another encryption must reuse it rather than
+    // rotating again.
+    let first_content = b"first post-merge content".to_vec();
+    let first_ref = *blake3::hash(&first_content).as_bytes();
+    let first = alice
+        .try_encrypt_content(doc_id, &first_ref, &vec![], &first_content)
+        .await?;
+    assert!(
+        first.update_op().is_some(),
+        "first encryption after concurrent Adds must establish a post-merge epoch"
+    );
+
+    let update_events_for_bob = alice.events_for_agent(bob_on_alice_id).await;
+    bob.ingest_event_table(update_events_for_bob).await?;
+
+    let second_content = b"second post-merge content".to_vec();
+    let second_ref = *blake3::hash(&second_content).as_bytes();
+    let second = alice
+        .try_encrypt_content(doc_id, &second_ref, &vec![], &second_content)
+        .await?;
+    assert!(
+        second.update_op().is_none(),
+        "a settled post-merge epoch must be reused by later encryption"
+    );
+
+    let bob_content = b"receiver post-merge content".to_vec();
+    let bob_ref = *blake3::hash(&bob_content).as_bytes();
+    let bob_encrypted = bob
+        .try_encrypt_content(doc_id, &bob_ref, &vec![], &bob_content)
+        .await?;
+    assert!(
+        bob_encrypted.update_op().is_none(),
+        "a receiver must reuse the causally post-merge epoch"
+    );
+
     Ok(())
 }
 
@@ -606,7 +625,13 @@ async fn test_competing_cgka_init_adds() -> TestResult {
     {
         let mut locked = doc_on_bob.lock().await;
         let bob_active_id = bob.active().lock().await.id();
-        let bob_pk = bob.active().lock().await.pick_prekey(doc_id).await;
+        let bob_pk = bob
+            .active()
+            .lock()
+            .await
+            .pick_prekey(doc_id)
+            .await
+            .expect("bob's active individual has published prekeys");
 
         let doc_tree_id: beekem::id::TreeId = doc_id.verifying_key().into();
         let bob_member_id: beekem::id::MemberId = bob_active_id.verifying_key().into();

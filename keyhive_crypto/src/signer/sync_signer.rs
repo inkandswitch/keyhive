@@ -42,7 +42,7 @@ impl<F: FutureForm> AsyncSigner<F> for ed25519_dalek::SigningKey {
 /// This is less constrained and lower-level. It is used by
 /// [`EphemeralSigner`](crate::signer::ephemeral::EphemeralSigner)
 /// which takes a `Box<dyn SyncSignerBasic>`.
-pub trait SyncSignerBasic {
+pub trait SyncSignerBasic: Send {
     /// Sign a byte slice synchronously.
     ///
     /// # Examples

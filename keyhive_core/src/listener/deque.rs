@@ -3,6 +3,7 @@ use crate::{
     event::Event,
     principal::{
         group::{delegation::Delegation, revocation::Revocation},
+        identifier::Identifier,
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };
@@ -100,6 +101,7 @@ where
     fn on_prekeys_expanded<'a>(
         &'a self,
         new_prekey: &'a Arc<Signed<AddKeyOp>>,
+        _secret: Option<&'a crate::principal::active::LocalPrekeySecret>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey.dupe())).await })
     }
@@ -107,6 +109,7 @@ where
     fn on_prekey_rotated<'a>(
         &'a self,
         rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+        _secret: Option<&'a crate::principal::active::LocalPrekeySecret>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeyRotated(rotate_key.dupe())).await })
     }
@@ -120,6 +123,7 @@ where
 {
     fn on_delegation<'a>(
         &'a self,
+        _target: Identifier,
         data: &'a Arc<Signed<Delegation<F, S, T, Self>>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::Delegated(data.dupe())).await })
@@ -127,6 +131,7 @@ where
 
     fn on_revocation<'a>(
         &'a self,
+        _target: Identifier,
         data: &'a Arc<Signed<Revocation<F, S, T, Self>>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::Revoked(data.dupe())).await })

@@ -38,6 +38,14 @@ impl PrekeyState {
         Self { ops }
     }
 
+    /// An empty prekey state. Unreachable through this module's constructors, but representable
+    /// by deserializing an archive — and it is the state prekey selection has to survive
+    /// instead of panicking on.
+    #[cfg(test)]
+    pub(crate) fn empty_for_tests() -> Self {
+        Self { ops: CaMap::new() }
+    }
+
     /// Extend a [`PrekeyState`] with elements of an iterator of [`Signed<KeyOp>`]s.
     ///
     /// # Arguments
@@ -139,7 +147,13 @@ impl PrekeyState {
         }
 
         for tombstone in to_drop {
-            keys.remove(&tombstone);
+            // The published set must never become empty: a stale rotation
+            // cycle (rotate A->B then B->A) would otherwise tombstone every
+            // key and leave `pick_prekey` with nothing to pick. Skip a
+            // removal that would empty the set.
+            if keys.len() > 1 || !keys.contains(&tombstone) {
+                keys.remove(&tombstone);
+            }
         }
 
         keys
