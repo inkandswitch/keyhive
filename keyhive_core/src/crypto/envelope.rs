@@ -1,6 +1,5 @@
 //! The (plaintext) container for causal encryption.
 
-use derivative::Derivative;
 use keyhive_crypto::{
     content::reference::ContentRef, read_capability::ReadCap, symmetric_key::SymmetricKey,
 };
@@ -78,7 +77,7 @@ use std::{
 /// ```
 ///
 /// [causal encryption]: https://github.com/inkandswitch/keyhive/blob/main/design/causal_encryption.md
-#[derive(Debug, Clone, PartialEq, Eq, Derivative, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope<C: ContentRef + DeserializeOwned, T: Serialize> {
     /// The plaintext payload.
     pub plaintext: T,
@@ -87,10 +86,6 @@ pub struct Envelope<C: ContentRef + DeserializeOwned, T: Serialize> {
     #[serde(
         serialize_with = "ordered_map_serializer",
         deserialize_with = "ordered_map_deserializer"
-    )]
-    #[derivative(
-        PartialOrd(compare_with = "crate::util::partial_eq::hash_map_keys"),
-        Hash(hash_with = "crate::util::hasher::hash_map_keys")
     )]
     pub ancestors: HashMap<C, SymmetricKey>,
 }
