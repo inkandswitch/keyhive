@@ -54,7 +54,7 @@ pub struct Cgka {
     pub owner_id: MemberId,
     /// The secret keys of the member who owns this tree.
     pub owner_sks: ShareKeyMap,
-    tree: BeeKem,
+    pub(crate) tree: BeeKem,
     /// Graph of all operations seen (but not necessarily applied) so far.
     ops_graph: CgkaOperationGraph,
     /// Whether there are ops in the graph that have not been applied to the
@@ -259,11 +259,13 @@ impl Cgka {
         pk: ShareKey,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if self.tree.contains_id(&id) {
-            return Ok(None);
-        }
         if self.should_replay() {
             self.replay_ops_graph()?;
+        }
+        // Check after replay since a concurrent add of the same member might
+        // have been pending.
+        if self.tree.contains_id(&id) {
+            return Ok(None);
         }
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -304,11 +306,13 @@ impl Cgka {
         id: MemberId,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if !self.tree.contains_id(&id) {
-            return Ok(None);
-        }
         if self.should_replay() {
             self.replay_ops_graph()?;
+        }
+        // Check after replay since a concurrent add of the same member might
+        // have been pending.
+        if !self.tree.contains_id(&id) {
+            return Ok(None);
         }
         let (leaf_idx, removed_keys) = self.tree.remove_id(id)?;
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
@@ -464,7 +468,10 @@ impl Cgka {
         }
         match op.payload {
             CgkaOperation::Add { added_id, pk, .. } => {
-                self.tree.push_leaf(added_id, pk.into());
+                // A concurrent history might have added the same member.
+                if !self.tree.contains_id(&added_id) {
+                    self.tree.push_leaf(added_id, pk.into());
+                }
             }
             CgkaOperation::Remove { id, .. } => {
                 match self.tree.remove_id(id) {

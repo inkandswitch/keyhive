@@ -622,6 +622,76 @@ pub struct LeafNode {
     pub pk: NodeKey,
 }
 
+#[cfg(any(test, feature = "test_utils"))]
+impl BeeKem {
+    /// Returns one message per disagreement between the tree's fields. It checks
+    /// `leaves` and `inner_nodes` against `tree_size`, and `leaves` against
+    /// `id_to_leaf_idx` and `next_leaf_idx`.
+    pub(crate) fn invariant_violations(&self) -> Vec<alloc::string::String> {
+        use alloc::format;
+
+        let mut violations = Vec::new();
+        if self.leaves.len() != self.tree_size.leaf_count() as usize {
+            violations.push(format!(
+                "leaves has {} slots but tree_size calls for {}",
+                self.leaves.len(),
+                self.tree_size.leaf_count()
+            ));
+        }
+        if self.inner_nodes.len() != self.tree_size.inner_node_count() as usize {
+            violations.push(format!(
+                "inner_nodes has {} slots but tree_size calls for {}",
+                self.inner_nodes.len(),
+                self.tree_size.inner_node_count()
+            ));
+        }
+        if self.next_leaf_idx.usize() > self.leaves.len() {
+            violations.push(format!(
+                "next_leaf_idx is {} but there are only {} leaf slots",
+                self.next_leaf_idx,
+                self.leaves.len()
+            ));
+        }
+        for (id, idx) in &self.id_to_leaf_idx {
+            match self.leaves.get(idx.usize()) {
+                Some(Some(leaf)) if leaf.id == *id => {}
+                Some(Some(leaf)) => violations.push(format!(
+                    "{id:?} is reported at leaf {idx}, which actually has {:?}",
+                    leaf.id
+                )),
+                Some(None) => violations.push(format!(
+                    "{id:?} is reported as a member but leaf {idx} is blank"
+                )),
+                None => violations.push(format!(
+                    "{id:?} is reported at leaf {idx}, past the {} slots that exist",
+                    self.leaves.len()
+                )),
+            }
+        }
+        for (i, slot) in self.leaves.iter().enumerate() {
+            let Some(leaf) = slot else { continue };
+            match self.id_to_leaf_idx.get(&leaf.id) {
+                Some(idx) if idx.usize() == i => {}
+                Some(idx) => violations.push(format!(
+                    "leaf {i} contains {:?}, whom the map places at leaf {idx}",
+                    leaf.id
+                )),
+                None => violations.push(format!(
+                    "leaf {i} contains {:?}, who is not a member",
+                    leaf.id
+                )),
+            }
+            if i >= self.next_leaf_idx.usize() {
+                violations.push(format!(
+                    "leaf {i} is occupied but sits at or above next_leaf_idx ({})",
+                    self.next_leaf_idx
+                ));
+            }
+        }
+        violations
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,7 +811,7 @@ mod tests {
     #[test]
     fn a_path_whose_indices_are_out_of_range_updates_only_the_leaf() {
         let (mut tree, [owner, ..], genuine) = seeded();
-        let owner_idx = *tree.leaf_index_for_id(owner).expect("the owner is seated");
+        let owner_idx = *tree.leaf_index_for_id(owner).expect("the owner has a leaf");
         let mine = treemath::direct_path(owner_idx.into(), tree.tree_size);
 
         // As many indices as a real direct path, so a check on the length alone
@@ -886,5 +956,50 @@ mod tests {
             tree.node_key_for_id(joiner).is_ok(),
             "the removal blanked the added member's leaf"
         );
+    }
+
+    fn assert_invariant_violation(invariant_test: impl FnOnce(&mut BeeKem, [MemberId; 4])) {
+        let (mut tree, ids, _) = seeded();
+        invariant_test(&mut tree, ids);
+        assert!(
+            !tree.invariant_violations().is_empty(),
+            "the invariant violation was not caught"
+        );
+    }
+
+    #[test]
+    fn a_member_reported_at_a_leaf_holding_somebody_else_is_caught() {
+        assert_invariant_violation(|tree, [a, b, ..]| {
+            let a_idx = *tree.leaf_index_for_id(a).expect("a has a leaf");
+            let b_idx = *tree.leaf_index_for_id(b).expect("b has a leaf");
+            tree.id_to_leaf_idx.insert(a, b_idx);
+            tree.leaves[a_idx.usize()] = None;
+        });
+    }
+
+    #[test]
+    fn a_leaf_whose_occupant_the_map_places_elsewhere_is_caught() {
+        assert_invariant_violation(|tree, [a, b, ..]| {
+            let a_idx = *tree.leaf_index_for_id(a).expect("a has a leaf");
+            let b_idx = *tree.leaf_index_for_id(b).expect("b has a leaf");
+            let a_leaf = tree.leaves[a_idx.usize()].clone();
+            tree.leaves[b_idx.usize()] = a_leaf;
+            tree.id_to_leaf_idx.remove(&b);
+        });
+    }
+
+    #[test]
+    fn a_member_incorrectly_reported_at_a_blank_leaf_is_caught() {
+        assert_invariant_violation(|tree, [a, ..]| {
+            let a_idx = *tree.leaf_index_for_id(a).expect("a has a leaf");
+            tree.leaves[a_idx.usize()] = None;
+        });
+    }
+
+    #[test]
+    fn a_leaf_containing_a_non_member_is_caught() {
+        assert_invariant_violation(|tree, [a, ..]| {
+            tree.id_to_leaf_idx.remove(&a);
+        });
     }
 }

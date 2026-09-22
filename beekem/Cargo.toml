@@ -28,6 +28,8 @@ arbitrary = { workspace = true, optional = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true }
+bolero.workspace = true
+beekem = { path = ".", features = ["arbitrary"] }
 tokio = { version = "1.43", features = ["macros", "rt"] }
 
 [features]
@@ -45,7 +47,7 @@ std = [
     "tracing/std",
 ]
 arbitrary = ["dep:arbitrary", "keyhive_crypto/arbitrary"]
-test_utils = []
+test_utils = ["rand/std_rng"]
 
 [lints.clippy]
 doc_overindented_list_items = "allow"
