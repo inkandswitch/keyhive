@@ -647,7 +647,13 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     // causal root of the operation graph.
     {
         let bob_active_id = bob.active().lock().await.id();
-        let bob_pk = bob.active().lock().await.pick_prekey(doc_id).await;
+        let bob_pk = bob
+            .active()
+            .lock()
+            .await
+            .pick_prekey(doc_id)
+            .await
+            .expect("bob's active individual has published prekeys");
         let bob_founding = doc_on_bob
             .lock()
             .await

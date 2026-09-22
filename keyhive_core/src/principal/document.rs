@@ -2,7 +2,10 @@ pub mod archive;
 pub mod id;
 
 use self::archive::DocumentArchive;
-use super::{group::AddGroupMemberError, individual::id::IndividualId};
+use super::{
+    group::AddGroupMemberError,
+    individual::{id::IndividualId, MissingPrekeys},
+};
 use crate::{
     access::Access,
     cgka::{Cgka, LocalCgkaSecret},
@@ -190,7 +193,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         csprng: Arc<Mutex<R>>,
         generation: Arc<AtomicU64>,
     ) -> Result<Self, GenerateDocError> {
-        let (group_result, group_vk) = {
+        let (group_result, _group_vk) = {
             let mut locked_csprng = csprng.lock().await;
             EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
                 Group::generate_after_content(
@@ -212,7 +215,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         };
         Self::finish_generate(
             group_result,
-            group_vk,
             initial_content_heads,
             signer,
             owner_id,
@@ -245,7 +247,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         csprng: Arc<Mutex<R>>,
         generation: Arc<AtomicU64>,
     ) -> Result<Self, GenerateDocError> {
-        let group_vk = reserved_signer.verifying_key();
         let group_result = EphemeralSigner::with_signer_key(reserved_signer, |verifier, signer| {
             Group::generate_after_content(
                 signer,
@@ -265,7 +266,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         });
         Self::finish_generate(
             group_result,
-            group_vk,
             initial_content_heads,
             signer,
             owner_id,
@@ -281,7 +281,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     async fn finish_generate<R, Fut>(
         group_result: Fut,
-        group_vk: VerifyingKey,
         initial_content_heads: NonEmpty<T>,
         signer: &S,
         owner_id: IndividualId,
@@ -294,7 +293,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     {
         let group = group_result.await?;
         let doc_id = DocumentId(group.id());
-        let prekeys = group.pick_individual_prekeys(doc_id).await;
+        let prekeys = group.pick_individual_prekeys(doc_id).await?;
         let owner_share_key = *prekeys
             .get(&owner_id)
             .ok_or(GenerateDocError::OwnerCannotRead)?;
@@ -319,7 +318,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 .copied()
                 .ok_or(GenerateDocError::MissingFoundingDelegation)
         };
-
         let mut owner_leaf_sks = ShareKeyMap::new();
         owner_leaf_sks.insert(owner_share_key, owner_share_secret_key);
         let mut cgka = Cgka::new(doc_id, owner_id, owner_leaf_sks);
@@ -386,7 +384,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 .payload
                 .delegate
                 .pick_individual_prekeys(self.doc_id())
-                .await;
+                .await?;
             let authorization = CgkaAuthorization::Delegation(update.delegation.digest().into());
             let cgka_ops_for_this_doc = self
                 .add_cgka_members_from_prekeys(&prekeys, authorization, signer)
@@ -924,6 +922,9 @@ pub enum AddMemberError {
     AddMemberError(#[from] AddGroupMemberError),
 
     #[error(transparent)]
+    MissingPrekeys(#[from] MissingPrekeys),
+
+    #[error(transparent)]
     CgkaError(#[from] CgkaError),
 }
 
@@ -966,6 +967,9 @@ pub enum GenerateDocError {
 
     #[error(transparent)]
     SigningError(#[from] SigningError),
+
+    #[error(transparent)]
+    MissingPrekeys(#[from] MissingPrekeys),
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),

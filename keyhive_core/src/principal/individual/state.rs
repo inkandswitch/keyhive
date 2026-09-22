@@ -38,6 +38,14 @@ impl PrekeyState {
         Self { ops }
     }
 
+    /// An empty prekey state. Unreachable through this module's constructors, but representable
+    /// by deserializing an archive — and it is the state prekey selection has to survive
+    /// instead of panicking on.
+    #[cfg(test)]
+    pub(crate) fn empty_for_tests() -> Self {
+        Self { ops: CaMap::new() }
+    }
+
     /// Extend a [`PrekeyState`] with elements of an iterator of [`Signed<KeyOp>`]s.
     ///
     /// # Arguments

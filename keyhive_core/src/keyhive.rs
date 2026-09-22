@@ -11,7 +11,7 @@ use crate::{
     event::{Event, static_event::StaticEvent},
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
-        active::{Active, ImportPrekeyStateError},
+        active::{Active, GeneratePrivatePrekeyError, ImportPrekeyStateError},
         agent::{id::AgentId, Agent},
         document::{
             AddMemberError, AddMemberUpdate, DecryptError, DocCausalDecryptionError, Document,
@@ -488,7 +488,7 @@ impl<
     /// Use [`Keyhive::get_existing_contact_card`] to read a current contact card without
     /// generating one.
     #[instrument(skip_all)]
-    pub async fn generate_contact_card(&self) -> Result<ContactCard, SigningError> {
+    pub async fn generate_contact_card(&self) -> Result<ContactCard, GeneratePrivatePrekeyError> {
         let rot_key_op = self
             .active
             .lock()
@@ -695,7 +695,7 @@ impl<
                         .payload
                         .delegate
                         .pick_individual_prekeys(doc_id)
-                        .await;
+                        .await?;
                     let mut locked_doc = doc.lock().await;
                     let ops = locked_doc
                         .add_cgka_members_from_prekeys(&prekeys, authorization, &signer)
@@ -4134,6 +4134,13 @@ mod tests {
 
         let active_guard = hive.active.lock().await;
         let active_id = active_guard.id();
+        let active_sks = {
+            let mut sks = ShareKeyMap::new();
+            for (pk, sk) in active_guard.key_pairs.lock().await.iter() {
+                sks.insert(*pk, *sk);
+            }
+            sks
+        };
         let active = hive.active.dupe();
         let delegations = hive.delegations.dupe();
         let revocations = hive.revocations.dupe();
@@ -4148,6 +4155,8 @@ mod tests {
                 revocations,
                 listener,
                 &signer,
+                active_id,
+                active_sks,
                 csprng,
                 Arc::new(AtomicU64::new(0)),
             )
