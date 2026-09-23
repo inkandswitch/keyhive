@@ -510,3 +510,254 @@ impl CgkaOperationGraph {
         Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"))
     }
 }
+
+#[cfg(test)]
+mod op_test_helpers {
+    use super::*;
+    use crate::id::TreeId;
+    use keyhive_crypto::{
+        share_key::ShareSecretKey,
+        signer::{async_signer, memory::MemorySigner},
+        verifiable::Verifiable,
+    };
+
+    pub(super) async fn sign(signer: &MemorySigner, op: CgkaOperation) -> Signed<CgkaOperation> {
+        async_signer::try_sign_async::<future_form::Local, _, _>(signer, op)
+            .await
+            .unwrap()
+    }
+
+    pub(super) fn share_key() -> ShareKey {
+        ShareSecretKey::generate(&mut rand::thread_rng()).share_key()
+    }
+
+    pub(super) fn member_id() -> MemberId {
+        MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key())
+    }
+
+    /// Add a new member that no other operation adds.
+    pub(super) fn add_op(doc_id: TreeId, leaf_index: u32) -> CgkaOperation {
+        CgkaOperation::Add {
+            added_id: member_id(),
+            pk: share_key(),
+            leaf_index,
+            invitation: None,
+            predecessors: Vec::new(),
+            add_predecessors: Vec::new(),
+            doc_id,
+        }
+    }
+}
+
+#[cfg(test)]
+mod nearest_update_ancestor_tests {
+    use super::{
+        op_test_helpers::{add_op, member_id, share_key, sign},
+        *,
+    };
+    use crate::{id::TreeId, keys::NodeKey, tree::PathChange};
+    use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
+
+    /// A new update by a fresh member. The path is empty because only the
+    /// operation's kind matters here.
+    fn update_op(doc_id: TreeId) -> CgkaOperation {
+        let id = member_id();
+        let leaf_pk = share_key();
+        CgkaOperation::Update {
+            id,
+            new_path: Box::new(PathChange {
+                leaf_id: id,
+                leaf_idx: 0,
+                leaf_pk: NodeKey::ShareKey(leaf_pk),
+                path: Vec::new(),
+                removed_keys: Vec::new(),
+            }),
+            predecessor_secrets: Vec::new(),
+            predecessors: Vec::new(),
+            doc_id,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_chained_and_unchained_sets_do_not_depend_on_arrival_order() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+
+        let u1 = sign(&signer, update_op(doc_id)).await;
+        let u1_hash = Digest::hash(&u1);
+        let u3 = sign(&signer, update_op(doc_id)).await;
+        let u3_hash = Digest::hash(&u3);
+        // u2 claims to add its concurrent sibling u3 to the chain. The graph never
+        // decrypts, so an empty ciphertext is enough.
+        let mut u2_op = update_op(doc_id);
+        let CgkaOperation::Update {
+            ref mut predecessor_secrets,
+            ..
+        } = u2_op
+        else {
+            panic!("update_op should build an Update")
+        };
+        predecessor_secrets.push(PredecessorSecret {
+            update_op_hash: u3_hash,
+            encrypted_root_secret: Vec::new(),
+        });
+        let u2 = sign(&signer, u2_op).await;
+
+        let mut forward = CgkaOperationGraph::new();
+        forward.add_local_op(&u1);
+        forward.add_op(&u2, &Set::from_iter([u1_hash]));
+        forward.add_op(&u3, &Set::from_iter([u1_hash]));
+
+        let mut reversed = CgkaOperationGraph::new();
+        reversed.add_local_op(&u1);
+        reversed.add_op(&u3, &Set::from_iter([u1_hash]));
+        reversed.add_op(&u2, &Set::from_iter([u1_hash]));
+
+        assert_eq!(forward.chained_updates, reversed.chained_updates);
+        assert_eq!(forward.unchained_updates, reversed.unchained_updates);
+        assert!(
+            forward.chained_updates.contains(&u3_hash),
+            "a claim naming an operation that arrives later should still count"
+        );
+        assert!(
+            forward.unchained_updates.contains(&u1_hash),
+            "an update neither sibling adds to the chain should be in unchained"
+        );
+    }
+
+    #[tokio::test]
+    async fn merging_a_side_that_added_an_update_to_the_chain_removes_it_from_unchained() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+
+        let u1 = sign(&signer, update_op(doc_id)).await;
+        let u1_hash = Digest::hash(&u1);
+        let mut base = CgkaOperationGraph::new();
+        base.add_local_op(&u1);
+
+        // One side updates without encrypting u1 and records u1 as unchained.
+        let mut left = base.fork();
+        let plain = sign(&signer, update_op(doc_id)).await;
+        left.add_op(&plain, &Set::from_iter([u1_hash]));
+        assert!(
+            left.unchained_updates.contains(&u1_hash),
+            "precondition: the side that can't derive u1 records it as unchained"
+        );
+
+        // The other side encrypts u1 and adds it to the chain.
+        let mut right = base.fork();
+        let mut sealing_op = update_op(doc_id);
+        let CgkaOperation::Update {
+            ref mut predecessor_secrets,
+            ..
+        } = sealing_op
+        else {
+            panic!("update_op should create an Update")
+        };
+        predecessor_secrets.push(PredecessorSecret {
+            update_op_hash: u1_hash,
+            encrypted_root_secret: Vec::new(),
+        });
+        let sealing = sign(&signer, sealing_op).await;
+        right.add_op(&sealing, &Set::from_iter([u1_hash]));
+        assert!(
+            right.chained_updates.contains(&u1_hash),
+            "precondition: the side that encrypts u1 adds it to the chain"
+        );
+
+        left.merge(right);
+        assert!(
+            !left.unchained_updates.contains(&u1_hash),
+            "an update one side added to the chain should not remain in unchained after a merge"
+        );
+    }
+
+    #[tokio::test]
+    async fn traversal_skips_operations_that_produce_no_root_secret() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+
+        // An update, then two adds on top of it.
+        let update = sign(&signer, update_op(doc_id)).await;
+        let update_hash = Digest::hash(&update);
+        graph.add_local_op(&update);
+        let add = sign(&signer, add_op(doc_id, 1)).await;
+        let add_hash = Digest::hash(&add);
+        graph.add_op(&add, &Set::from_iter([update_hash]));
+        let later_add = sign(&signer, add_op(doc_id, 2)).await;
+        let later_add_hash = Digest::hash(&later_add);
+        graph.add_op(&later_add, &Set::from_iter([add_hash]));
+
+        assert_eq!(
+            graph.nearest_update_ancestors(&Set::from_iter([later_add_hash])),
+            Set::from_iter([update_hash]),
+            "the two adds produce no root secret, so the traversal should skip them"
+        );
+
+        // A head that is itself an update is returned rather than skipped.
+        assert_eq!(
+            graph.nearest_update_ancestors(&Set::from_iter([update_hash])),
+            Set::from_iter([update_hash])
+        );
+
+        // No ops are found for a head with no updates in its ancestry.
+        let orphan = sign(&signer, add_op(doc_id, 3)).await;
+        let orphan_hash = Digest::hash(&orphan);
+        graph.add_op(&orphan, &Set::new());
+        assert_eq!(
+            graph.nearest_update_ancestors(&Set::from_iter([orphan_hash])),
+            Set::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn each_head_contributes_its_own_nearest_update() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+
+        let root = sign(&signer, add_op(doc_id, 0)).await;
+        let root_hash = Digest::hash(&root);
+        graph.add_local_op(&root);
+
+        // Two concurrent branches, each an update followed by an add.
+        let mut expected = Set::new();
+        let mut heads = Set::new();
+        for leaf_index in 1..=2u32 {
+            let update = sign(&signer, update_op(doc_id)).await;
+            let update_hash = Digest::hash(&update);
+            graph.add_op(&update, &Set::from_iter([root_hash]));
+            expected.insert(update_hash);
+
+            let add = sign(&signer, add_op(doc_id, leaf_index)).await;
+            graph.add_op(&add, &Set::from_iter([update_hash]));
+            heads.insert(Digest::hash(&add));
+        }
+
+        assert_eq!(graph.nearest_update_ancestors(&heads), expected);
+    }
+
+    #[tokio::test]
+    async fn only_the_nearest_update_on_a_path_is_returned() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+
+        let earlier = sign(&signer, update_op(doc_id)).await;
+        let earlier_hash = Digest::hash(&earlier);
+        graph.add_local_op(&earlier);
+        let later = sign(&signer, update_op(doc_id)).await;
+        let later_hash = Digest::hash(&later);
+        graph.add_op(&later, &Set::from_iter([earlier_hash]));
+        let add = sign(&signer, add_op(doc_id, 1)).await;
+        let add_hash = Digest::hash(&add);
+        graph.add_op(&add, &Set::from_iter([later_hash]));
+
+        assert_eq!(
+            graph.nearest_update_ancestors(&Set::from_iter([add_hash])),
+            Set::from_iter([later_hash]),
+            "the traversal should stop at the first update on the path and not go past it"
+        );
+    }
+}

@@ -77,6 +77,7 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
     let op = CgkaOperation::Update {
         id,
         new_path,
+        predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&bob, design_doc).await,
         doc_id: TreeId(design_doc.verifying_key()),
     };

@@ -85,24 +85,25 @@ async fn a_later_member_recovers_earlier_content_by_walking_back() -> Result<()>
     ctx.sync_all_unsent().await?;
 
     assert!(
-        !bob.can_decrypt_content(design_doc, &history).await?,
-        "bob cannot derive the key for content written before he joined"
-    );
-    assert!(
         bob.can_decrypt_content(design_doc, &entry_point).await?,
         "he can open the write that came after"
+    );
+    assert!(
+        bob.can_decrypt_content(design_doc, &history).await?,
+        "and the update chain reaches the key for the write before he joined, so the \
+         traversal below is not the only route to it"
     );
 
     ctx.give_content(&bob, &history).await?;
     ctx.give_content(&bob, &entry_point).await?;
-    let walked = bob
+    let traversed = bob
         .try_causal_decrypt_content(design_doc, &entry_point)
         .await?;
 
     assert_eq!(
-        walked.recovered(),
+        traversed.recovered(),
         contents(&[b"written before bob"]),
-        "and the write he can open carries the key to the one he cannot"
+        "and traversing back from it reports the earlier write"
     );
     Ok(())
 }
@@ -132,7 +133,6 @@ async fn a_reader_can_name_an_ancestor_they_decrypted_rather_than_wrote() -> Res
         "bob can open the genesis write"
     );
 
-    // Carol joins afterwards, so she cannot derive that key for herself.
     alice.add_member(carol.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
     alice.force_pcs_update(design_doc).await?;
@@ -146,17 +146,17 @@ async fn a_reader_can_name_an_ancestor_they_decrypted_rather_than_wrote() -> Res
     ctx.give_content(&carol, &genesis).await?;
     ctx.give_content(&carol, &head).await?;
     assert!(
-        !carol.can_decrypt_content(design_doc, &genesis).await?,
-        "carol cannot open the genesis write on her own"
+        carol.can_decrypt_content(design_doc, &genesis).await?,
+        "carol joined after the genesis write, but her invitation reaches its key, so \
+         the traversal below is not the only route to it"
     );
-
-    let walked = carol.try_causal_decrypt_content(design_doc, &head).await?;
+    let traversed = carol.try_causal_decrypt_content(design_doc, &head).await?;
     assert_eq!(
-        walked.recovered(),
+        traversed.recovered(),
         contents(&[b"genesis"]),
-        "so the key can only have come from the envelope bob wrote"
+        "the traversal reports the ancestor bob named"
     );
-    assert_eq!(walked.missing(), 0);
+    assert_eq!(traversed.missing(), 0);
     Ok(())
 }
 
