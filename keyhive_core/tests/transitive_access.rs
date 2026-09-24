@@ -544,14 +544,42 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
 
 #[tokio::test]
 async fn a_peer_that_started_its_own_tree_converges_when_the_creators_ops_arrive() -> TestResult {
-    // Bob builds a tree from an add he signed himself, which is what a workaround
-    // for "CGKA not initialized" would do, and only afterwards receives alice's.
-    // Both concurrent adds were at leaf 0.
+    // Bob has the document but none of its CGKA ops. He starts a tree of his
+    // own by adding himself. Only afterwards does he receive Alice's ops.
+    // Their self-adds are concurrent roots, both at leaf 0.
     test_utils::init_logging();
 
-    let bob_signer = MemorySigner::generate(&mut rand::rngs::OsRng);
+    // Replaying the ops sorts the concurrent roots by id. When Bob's id sorts
+    // first, the sorted tree differs from the order in which either peer first
+    // applied the roots. When Alice's does, the two orders match.
+    for bob_sorts_first in [true, false] {
+        own_tree_converges_with_creators_ops(bob_sorts_first)
+            .await
+            .map_err(|e| format!("bob_sorts_first = {bob_sorts_first}: {e:?}"))?;
+    }
+    Ok(())
+}
 
-    let alice = make_simple_keyhive().await?;
+async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResult {
+    let mut signers = [
+        MemorySigner::generate(&mut rand::rngs::OsRng),
+        MemorySigner::generate(&mut rand::rngs::OsRng),
+    ];
+    signers.sort_by_key(|signer| signer.verifying_key().to_bytes());
+    let [first, second] = signers;
+    let (bob_signer, alice_signer) = if bob_sorts_first {
+        (first, second)
+    } else {
+        (second, first)
+    };
+
+    let alice = keyhive_core::keyhive::Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
+        alice_signer,
+        keyhive_core::store::ciphertext::memory::MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
+        keyhive_core::listener::no_listener::NoListener,
+        rand::rngs::OsRng,
+    )
+    .await?;
     let bob = keyhive_core::keyhive::Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
         bob_signer.clone(),
         keyhive_core::store::ciphertext::memory::MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
@@ -576,7 +604,7 @@ async fn a_peer_that_started_its_own_tree_converges_when_the_creators_ops_arrive
             keyhive_core::principal::individual::op::KeyOp::Add(alice_prekey_op),
         ),
     ));
-    let _alice_on_bob_id = alice_on_bob.lock().await.id();
+    let alice_on_bob_id = alice_on_bob.lock().await.id();
     assert!(bob.register_individual(alice_on_bob.dupe()).await);
 
     // Alice creates doc with Bob as Admin
@@ -597,33 +625,26 @@ async fn a_peer_that_started_its_own_tree_converges_when_the_creators_ops_arrive
     // Bob has the doc but with cgka=None
     let doc_on_bob = bob.get_document(doc_id).await.unwrap();
 
-    // Bob independently initializes CGKA with his own init add.
+    // Bob starts his own tree. His add has no predecessors, so it is a
+    // causal root of the operation graph.
     {
-        let mut locked = doc_on_bob.lock().await;
         let bob_active_id = bob.active().lock().await.id();
         let bob_pk = bob.active().lock().await.pick_prekey(doc_id).await;
 
-        let doc_tree_id: beekem::id::TreeId = doc_id.verifying_key().into();
-        let bob_member_id: beekem::id::MemberId = bob_active_id.verifying_key().into();
-        let init_add = beekem::operation::CgkaOperation::Add {
-            added_id: bob_member_id,
-            pk: bob_pk,
-            leaf_index: 0,
-            predecessors: Vec::new(),
-            add_predecessors: Vec::new(),
-            doc_id: doc_tree_id,
-        };
-        let signed_init = keyhive_crypto::signer::async_signer::try_sign_async::<
-            future_form::Sendable,
-            _,
-            _,
-        >(&bob_signer, init_add)
-        .await?;
+        let mut bob_tree =
+            keyhive_core::cgka::Cgka::new(doc_id, bob_active_id, beekem::keys::ShareKeyMap::new());
+        let bob_add = bob_tree
+            .add::<future_form::Sendable, _>(bob_active_id, bob_pk, &bob_signer)
+            .await?
+            .ok_or("bob is not yet in his own tree, so adding him yields an op")?;
 
-        locked.merge_cgka_op(std::sync::Arc::new(signed_init), bob_active_id)?;
+        doc_on_bob
+            .lock()
+            .await
+            .merge_cgka_op(std::sync::Arc::new(bob_add), bob_active_id)?;
     }
 
-    // Now Alice sends her CGKA ops to Bob (including Alice's init add)
+    // Now Alice sends her CGKA ops to Bob, starting with her add of herself
     let all_events_for_bob = alice.events_for_agent(bob_on_alice_id).await;
     let cgka_only: std::collections::HashMap<_, _> = all_events_for_bob
         .into_iter()
@@ -643,6 +664,74 @@ async fn a_peer_that_started_its_own_tree_converges_when_the_creators_ops_arrive
         1,
         "the document bob just admitted Public to should be reachable by Public"
     );
+
+    // Exchange everything in both directions. The two trees should now agree.
+    bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await)
+        .await?;
+    alice
+        .ingest_event_table(bob.events_for_agent(alice_on_bob_id).await)
+        .await?;
+
+    let doc_on_alice = alice.get_document(doc_id).await.unwrap();
+    let (alice_members, alice_ops) = {
+        let locked = doc_on_alice.lock().await;
+        let cgka = locked.cgka()?;
+        let members: std::collections::BTreeSet<_> = cgka.member_ids().collect();
+        (members, cgka.ops_count())
+    };
+    let (bob_members, bob_ops) = {
+        let locked = doc_on_bob.lock().await;
+        let cgka = locked.cgka()?;
+        let members: std::collections::BTreeSet<_> = cgka.member_ids().collect();
+        (members, cgka.ops_count())
+    };
+    assert_eq!(
+        alice_members, bob_members,
+        "both trees hold the same members"
+    );
+    assert_eq!(alice_ops, bob_ops, "both trees hold the same ops");
+
+    // Each can read what the other writes, even when they write concurrently.
+    // Neither tree has a root key yet, so each write performs an update. To read
+    // the other's write, each peer rebuilds the tree up to that update.
+    let from_alice = alice
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"from alice")
+        .await?;
+    let from_bob = bob
+        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"from bob")
+        .await?;
+    bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await)
+        .await?;
+    alice
+        .ingest_event_table(bob.events_for_agent(alice_on_bob_id).await)
+        .await?;
+    assert_eq!(
+        bob.try_decrypt_content(doc_id, from_alice.encrypted_content())
+            .await?,
+        b"from alice".to_vec()
+    );
+    assert_eq!(
+        alice
+            .try_decrypt_content(doc_id, from_bob.encrypted_content())
+            .await?,
+        b"from bob".to_vec()
+    );
+
+    // The concurrent updates leave two heads. Alice's next write resolves them
+    // with another update, after which both derive the same PCS key.
+    let after = alice
+        .try_encrypt_content(doc_id, &[3u8; 32], &vec![[1u8; 32]], b"after")
+        .await?;
+    bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await)
+        .await?;
+    assert_eq!(
+        bob.try_decrypt_content(doc_id, after.encrypted_content())
+            .await?,
+        b"after".to_vec()
+    );
+    let alice_pcs = doc_on_alice.lock().await.cgka_mut()?.try_pcs_key_hash()?;
+    let bob_pcs = doc_on_bob.lock().await.cgka_mut()?.try_pcs_key_hash()?;
+    assert_eq!(alice_pcs, bob_pcs, "both trees derive the same PCS key");
 
     Ok(())
 }
