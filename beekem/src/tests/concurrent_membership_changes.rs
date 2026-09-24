@@ -43,6 +43,31 @@ async fn duplicate_adds_fill_one_leaf() {
 }
 
 #[tokio::test]
+async fn a_resolved_concurrent_add_leaves_every_replica_with_a_pcs_key() {
+    let mut rng = StdRng::seed_from_u64(0xa11d_5eed);
+    let mut group = Group::new(3, &mut rng).await;
+    let d = member(&mut rng);
+    let e = member(&mut rng);
+
+    let by_a = group.add(0, d.id, d.pk).await;
+    let by_b = group.add(1, e.id, e.pk).await;
+    group.broadcast(&by_a);
+    group.broadcast(&by_b);
+    group.settle(0, &mut rng).await;
+
+    let context = "after a rotation resolved two concurrent adds";
+    group.check(context);
+    group.assert_key_agreement(context);
+    for i in 0..group.replicas.len() {
+        assert!(
+            group.replicas[i].has_pcs_key(),
+            "{context}, replica {} reports no PCS key",
+            name_for(i)
+        );
+    }
+}
+
+#[tokio::test]
 async fn local_add_sees_a_pending_concurrent_add() {
     let mut rng = StdRng::seed_from_u64(0xb0f0_0000);
     let mut group = Group::new(3, &mut rng).await;

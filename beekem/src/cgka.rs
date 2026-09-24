@@ -246,9 +246,7 @@ impl Cgka {
     }
 
     pub fn has_pcs_key(&self) -> bool {
-        self.tree.has_root_key()
-            && self.ops_graph.has_single_head()
-            && self.ops_graph.add_heads.len() < 2
+        self.tree.has_root_key() && self.ops_graph.has_single_head()
     }
 
     /// Add member to group.
