@@ -11,7 +11,6 @@ use alloc::{
     format,
     string::{String, ToString},
     sync::Arc,
-    vec,
     vec::Vec,
 };
 use future_form::Local;
@@ -49,7 +48,6 @@ pub struct Group {
     /// Short names for readable failures.
     pub names: BTreeMap<MemberId, String>,
     doc_id: TreeId,
-    init_add_op: Signed<CgkaOperation>,
     /// Every operation synced so far, in the order it was synced, so a member
     /// added part way through can be given a replica of their own.
     log: Vec<Arc<Signed<CgkaOperation>>>,
@@ -63,24 +61,14 @@ impl Group {
         let doc_id = TreeId(doc_signer.verifying_key());
         let members: Vec<Member> = (0..n).map(|_| member(rng)).collect();
 
-        let mut creator =
-            Cgka::new::<Local, _>(doc_id, members[0].id, members[0].pk, &members[0].signer)
-                .await
-                .expect("creating the tree succeeds");
-        creator.owner_sks.insert(members[0].pk, members[0].sk);
-        let init_add_op = creator.init_add_op();
-
-        let mut replicas = vec![creator];
-        for m in &members[1..] {
-            let mut sks = ShareKeyMap::new();
-            sks.insert(m.pk, m.sk);
-            replicas.push(
-                Cgka::new_from_init_add(doc_id, members[0].id, members[0].pk, init_add_op.clone())
-                    .expect("creating a replica from the init add succeeds")
-                    .with_new_owner(m.id, sks)
-                    .expect("taking ownership of a replica succeeds"),
-            );
-        }
+        let replicas = members
+            .iter()
+            .map(|m| {
+                let mut sks = ShareKeyMap::new();
+                sks.insert(m.pk, m.sk);
+                Cgka::new(doc_id, m.id, sks)
+            })
+            .collect();
 
         let names = members
             .iter()
@@ -92,11 +80,11 @@ impl Group {
             replicas,
             names,
             doc_id,
-            init_add_op,
             log: Vec::new(),
             logged: BTreeSet::new(),
         };
-        for i in 1..n {
+        // Every tree starts empty, so member 0 places itself before the rest.
+        for i in 0..n {
             let op = group.add(0, group.members[i].id, group.members[i].pk).await;
             group.broadcast(&op);
         }
@@ -338,15 +326,7 @@ impl Group {
 
     /// A replica owned by `id`, applying every operation delivered so far.
     fn replica_for(&self, id: MemberId, sks: ShareKeyMap) -> Cgka {
-        let mut replica = Cgka::new_from_init_add(
-            self.doc_id,
-            self.members[0].id,
-            self.members[0].pk,
-            self.init_add_op.clone(),
-        )
-        .expect("creating a replica from the init add succeeds")
-        .with_new_owner(id, sks)
-        .expect("taking ownership of a replica succeeds");
+        let mut replica = Cgka::new(self.doc_id, id, sks);
         for op in &self.log {
             replica
                 .merge_concurrent_operation(op.clone())

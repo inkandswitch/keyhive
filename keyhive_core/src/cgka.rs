@@ -63,37 +63,14 @@ impl Cgka {
             .insert(Public.share_key(), Public.share_secret_key());
     }
 
-    pub async fn new<F: FutureForm, S: AsyncSigner<F>>(
-        doc_id: DocumentId,
-        owner_id: IndividualId,
-        owner_pk: ShareKey,
-        signer: &S,
-    ) -> Result<Self, CgkaError> {
+    pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
         let mut inner = beekem::cgka::Cgka::new(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
-            owner_pk,
-            signer,
-        )
-        .await?;
+            owner_sks,
+        );
         Self::insert_public_sks(&mut inner);
-        Ok(Cgka(inner))
-    }
-
-    pub fn new_from_init_add(
-        doc_id: DocumentId,
-        owner_id: IndividualId,
-        owner_pk: ShareKey,
-        init_add_op: Signed<CgkaOperation>,
-    ) -> Result<Self, CgkaError> {
-        let mut inner = beekem::cgka::Cgka::new_from_init_add(
-            TreeId(doc_id.verifying_key()),
-            MemberId(owner_id.verifying_key()),
-            owner_pk,
-            init_add_op,
-        )?;
-        Self::insert_public_sks(&mut inner);
-        Ok(Cgka(inner))
+        Cgka(inner)
     }
 
     pub fn with_new_owner(
@@ -106,10 +83,6 @@ impl Cgka {
             .with_new_owner(MemberId(my_id.verifying_key()), owner_sks)?;
         Self::insert_public_sks(&mut inner);
         Ok(Cgka(inner))
-    }
-
-    pub fn init_add_op(&self) -> Signed<CgkaOperation> {
-        self.0.init_add_op()
     }
 
     pub fn ops_count(&self) -> usize {

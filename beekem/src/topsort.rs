@@ -23,6 +23,12 @@ impl<T: Eq + Hash + Ord + Clone> TopologicalSort<T> {
         }
     }
 
+    /// Add a node, which may have no dependencies or dependents.
+    pub fn insert(&mut self, node: T) {
+        self.deps.entry(node.clone()).or_default();
+        self.rdeps.entry(node).or_default();
+    }
+
     /// Add a dependency: `dependent` depends on `dependency`.
     pub fn add_dependency(&mut self, dependency: T, dependent: T) {
         // Ensure both nodes exist in the dep map

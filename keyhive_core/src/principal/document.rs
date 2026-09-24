@@ -81,9 +81,11 @@ pub struct Document<
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
     Document<F, S, T, L>
 {
-    // FIXME: We need a signing key for initializing Cgka and we need to share
-    // the init add op.
-    // NOTE doesn't register into the top-level Keyhive context
+    /// Build a document from a group.
+    ///
+    /// The document has no [`Cgka`] until its first [`CgkaOperation::Add`]
+    /// arrives.
+    /// NOTE: doesn't register into the top-level Keyhive context
     #[instrument(skip_all)]
     pub async fn from_group(
         group: Group<F, S, T, L>,
@@ -171,10 +173,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
         signer: &S,
+        owner_id: IndividualId,
+        owner_sks: ShareKeyMap,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError> {
         let mut locked_csprng = csprng.lock().await;
-        let (group_result, group_vk) =
+        let (group_result, _group_vk) =
             EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
                 Group::generate_after_content(
                     signer,
@@ -191,26 +195,33 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             });
 
         let group = group_result.await?;
-        let owner_id = IndividualId(group_vk.into());
         let doc_id = DocumentId(group.id());
-        let owner_share_secret_key = ShareSecretKey::generate(&mut *locked_csprng);
-        let owner_share_key = owner_share_secret_key.share_key();
-        let group_members = group.pick_individual_prekeys(doc_id).await;
-        let other_members: Vec<(IndividualId, ShareKey)> = group_members
+        let prekeys = group.pick_individual_prekeys(doc_id).await;
+        let owner_share_key = *prekeys
+            .get(&owner_id)
+            .ok_or(GenerateDocError::OwnerCannotRead)?;
+        let owner_share_secret_key = *owner_sks
+            .get(&owner_share_key)
+            .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
+
+        let mut owner_leaf_sks = ShareKeyMap::new();
+        owner_leaf_sks.insert(owner_share_key, owner_share_secret_key);
+        let mut cgka = Cgka::new(doc_id, owner_id, owner_leaf_sks);
+
+        // The owner is added first so that the `Cgka`'s causal root is
+        // always its creator's.
+        let mut rest: Vec<(IndividualId, ShareKey)> = prekeys
             .iter()
-            .filter(|(id, _sk)| **id != owner_id)
+            .filter(|(id, _)| **id != owner_id)
             .map(|(id, pk)| (*id, *pk))
             .collect();
-        let mut owner_sks = ShareKeyMap::new();
-        owner_sks.insert(owner_share_key, owner_share_secret_key);
-        let mut cgka = Cgka::new(doc_id, owner_id, owner_share_key, signer)
-            .await?
-            .with_new_owner(owner_id, owner_sks)?;
-        let mut ops: Vec<Signed<CgkaOperation>> = Vec::new();
-        ops.push(cgka.init_add_op());
-        if let Some(others) = NonEmpty::from_vec(other_members) {
-            ops.extend(cgka.add_multiple(others, signer).await?.iter().cloned());
-        }
+        rest.sort_by_key(|(id, _)| *id);
+        let members = NonEmpty {
+            head: (owner_id, owner_share_key),
+            tail: rest,
+        };
+        let mut ops = cgka.add_multiple(members, signer).await?;
+
         let (_pcs_key, update_op, _new_key_pair) = cgka
             .update(
                 owner_share_key,
@@ -383,30 +394,27 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     /// Merges [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.
-    pub fn merge_cgka_op(&mut self, op: Arc<Signed<CgkaOperation>>) -> Result<bool, CgkaError> {
-        match &mut self.cgka {
-            Some(cgka) => return cgka.merge_concurrent_operation(op),
-            None => match op.payload.clone() {
-                CgkaOperation::Add {
-                    added_id,
-                    pk,
-                    ref predecessors,
-                    ..
-                } => {
-                    if !predecessors.is_empty() {
-                        return Err(CgkaError::OutOfOrderOperation);
-                    }
-                    self.cgka = Some(Cgka::new_from_init_add(
-                        self.doc_id(),
-                        IndividualId::from(added_id),
-                        pk,
-                        (*op).clone(),
-                    )?)
-                }
-                _ => return Err(CgkaError::UnexpectedInitialOperation),
-            },
+    pub fn merge_cgka_op(
+        &mut self,
+        op: Arc<Signed<CgkaOperation>>,
+        owner_id: IndividualId,
+    ) -> Result<bool, CgkaError> {
+        if self.cgka.is_none() {
+            let CgkaOperation::Add {
+                ref predecessors, ..
+            } = op.payload
+            else {
+                return Err(CgkaError::UnexpectedInitialOperation);
+            };
+            if !predecessors.is_empty() {
+                return Err(CgkaError::OutOfOrderOperation);
+            }
+            let mut cgka = Cgka::new(self.doc_id(), owner_id, ShareKeyMap::new());
+            let merged = cgka.merge_concurrent_operation(op)?;
+            self.cgka = Some(cgka);
+            return Ok(merged);
         }
-        Ok(true)
+        self.cgka_mut()?.merge_concurrent_operation(op)
     }
 
     /// Merges invite [`CgkaOperation`]. Returns `Ok(true)` if the merge is
@@ -426,6 +434,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         else {
             return Err(CgkaError::UnexpectedInviteOperation);
         };
+        let added_id = IndividualId::from(added_id);
+        if self.cgka.is_none() {
+            if !predecessors.is_empty() {
+                return Err(CgkaError::OutOfOrderOperation);
+            }
+            self.cgka = Some(Cgka::new(self.doc_id(), added_id, ShareKeyMap::new()));
+        }
         if !self
             .cgka()?
             .contains_predecessors(&HashSet::from_iter(predecessors.iter().cloned()))
@@ -434,11 +449,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
         let mut owner_sks = self.cgka()?.owner_sks().clone();
         owner_sks.insert(pk, *sk);
-        self.cgka = Some(
-            self.cgka()?
-                .with_new_owner(IndividualId::from(added_id), owner_sks)?,
-        );
-        self.merge_cgka_op(op)
+        self.cgka = Some(self.cgka()?.with_new_owner(added_id, owner_sks)?);
+        self.merge_cgka_op(op, added_id)
     }
 
     /// Reset the CGKA owner to `owner_id`, preserving `owner_sks`.
@@ -803,6 +815,12 @@ pub enum GenerateDocError {
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error("the document's owner is not one of its readers")]
+    OwnerCannotRead,
+
+    #[error("no secret key for the prekey the document's owner is added with")]
+    OwnerHoldsNoPrekeySecret,
 }
 
 #[derive(Debug, Error)]

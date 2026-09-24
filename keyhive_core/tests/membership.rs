@@ -977,3 +977,24 @@ async fn revoking_a_subgroup_takes_its_members_out_of_the_key_group() -> Result<
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn a_document_has_no_key_for_itself() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+
+    let members = alice
+        .cgka_members_for(design_doc)
+        .await?
+        .expect("the document has a tree");
+    assert_eq!(
+        members,
+        BTreeSet::from([alice.id(), bob.id()]),
+        "only the members have keys and the document is not one of them"
+    );
+    Ok(())
+}

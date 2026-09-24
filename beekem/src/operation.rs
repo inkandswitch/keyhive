@@ -76,16 +76,6 @@ pub enum CgkaOperation {
 }
 
 impl CgkaOperation {
-    pub fn init_add(doc_id: TreeId, added_id: MemberId, pk: ShareKey) -> Self {
-        Self::Add {
-            added_id,
-            pk,
-            leaf_index: 0,
-            predecessors: Vec::new(),
-            doc_id,
-        }
-    }
-
     /// The zero or more immediate causal predecessors of this operation.
     pub fn predecessors(&self) -> Set<Digest<Signed<CgkaOperation>>> {
         match self {
@@ -247,6 +237,9 @@ impl CgkaOperationGraph {
         let mut frontier = alloc::collections::VecDeque::new();
         let mut seen = Set::new();
         for head in heads {
+            // A head with no predecessors has no dependency edges. It must
+            // be added on its own or the sort would leave it out.
+            dependencies.insert(*head);
             frontier.push_back(*head);
             seen.insert(*head);
             successors.insert(*head, Set::new());
@@ -264,25 +257,6 @@ impl CgkaOperationGraph {
                 seen.insert(*update_pred);
                 frontier.push_back(*update_pred);
             }
-        }
-
-        if dependencies.is_empty() {
-            let single_epoch = heads
-                .iter()
-                .map(|hash| {
-                    self.cgka_ops
-                        .get(hash)
-                        .ok_or(CgkaError::OperationNotFound)
-                        .expect("head to be present")
-                        .clone()
-                })
-                .collect::<Vec<_>>();
-            op_hashes.push(
-                NonEmpty::from_vec(single_epoch)
-                    .expect("to have at least one op hash")
-                    .into(),
-            );
-            return Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"));
         }
 
         let mut epoch_heads = Set::new();
@@ -416,6 +390,38 @@ mod causal_graph_tests {
         assert!(
             trunk.cgka_op_heads.contains(&on_fork_hash),
             "the merged operation is not a head"
+        );
+    }
+
+    #[tokio::test]
+    async fn topsort_keeps_a_root_that_nothing_depends_on_yet() {
+        // Two concurrent roots. One already has a successor. The other is still
+        // a head on its own with no dependency edges.
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = add_op(&signer, doc_id, 0).await;
+        graph.add_local_op(&root);
+        let after_root = add_op(&signer, doc_id, 1).await;
+        graph.add_op(&after_root, &Set::from_iter([Digest::hash(&root)]));
+        let lone_root = add_op(&signer, doc_id, 0).await;
+        graph.add_op(&lone_root, &Set::new());
+
+        let sorted: Set<_> = graph
+            .topsort_graph()
+            .expect("the graph sorts")
+            .iter()
+            .flat_map(|epoch| epoch.iter().map(|op| Digest::hash(&**op)))
+            .collect();
+
+        assert_eq!(
+            sorted,
+            Set::from_iter([
+                Digest::hash(&root),
+                Digest::hash(&after_root),
+                Digest::hash(&lone_root)
+            ]),
+            "every operation in the graph should be in its topsort"
         );
     }
 

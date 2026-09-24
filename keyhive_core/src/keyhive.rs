@@ -56,7 +56,10 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::{
-    encrypted::EncryptedContent, error::CgkaError, keys::LeafKeyPair, operation::CgkaOperation,
+    encrypted::EncryptedContent,
+    error::CgkaError,
+    keys::{LeafKeyPair, ShareKeyMap},
+    operation::CgkaOperation,
     pcs_key::PcsKey,
 };
 use derive_where::derive_where;
@@ -288,12 +291,15 @@ impl<
             tail.push(self.agent_by_id(id).await?);
         }
 
-        let signer = {
+        let (signer, active_id, active_sks) = {
             let locked = self.active.lock().await;
-            locked.signer.clone()
+            let mut sks = ShareKeyMap::new();
+            for (pk, sk) in locked.key_pairs.lock().await.iter() {
+                sks.insert(*pk, *sk);
+            }
+            (locked.signer.clone(), locked.id(), sks)
         };
 
-        let active_id = { self.active.lock().await.id() };
         let new_doc = Document::generate(
             NonEmpty {
                 head: Agent::Active(active_id, self.active.dupe()),
@@ -304,6 +310,8 @@ impl<
             self.revocations.dupe(),
             self.event_listener.clone(),
             &signer,
+            active_id,
+            active_sks,
             self.csprng.dupe(),
         )
         .await?;
@@ -2005,7 +2013,11 @@ impl<
                 return Ok(());
             }
         }
-        let merged = doc.lock().await.merge_cgka_op(signed_op.clone())?;
+        let active_id = { self.active.lock().await.id() };
+        let merged = doc
+            .lock()
+            .await
+            .merge_cgka_op(signed_op.clone(), active_id)?;
         let mut leaf_keys = Vec::new();
         if let CgkaOperation::Update { id, new_path, .. } = &signed_op.payload {
             if IndividualId::from(*id) == self.active.lock().await.id() {
@@ -3445,7 +3457,7 @@ mod tests {
         assert!(!left_membered.contains_key(&left_group_id.into())); // not included because Public is not a member
 
         let left_to_mid_ops = left.events_for_agent(Public.id()).await;
-        assert_eq!(left_to_mid_ops.len(), 14);
+        assert_eq!(left_to_mid_ops.len(), 13);
 
         middle.ingest_event_table(left_to_mid_ops).await.unwrap();
 
@@ -3480,7 +3492,7 @@ mod tests {
         );
 
         let mid_to_right_ops = middle.events_for_agent(Public.id()).await;
-        assert_eq!(mid_to_right_ops.len(), 21);
+        assert_eq!(mid_to_right_ops.len(), 20);
 
         right.ingest_event_table(mid_to_right_ops).await.unwrap();
 
@@ -3529,7 +3541,7 @@ mod tests {
 
         // Check transitivity
         let transitive_right_to_mid_ops = right.events_for_agent(Public.id()).await;
-        assert_eq!(transitive_right_to_mid_ops.len(), 23);
+        assert_eq!(transitive_right_to_mid_ops.len(), 22);
 
         middle
             .ingest_event_table(transitive_right_to_mid_ops)
@@ -4237,9 +4249,9 @@ mod tests {
             .expect("the document has a tree")
             .len();
         assert_eq!(
-            with_one_route, 3,
-            "the document's own key, alice and frank, so frank really is in the tree \
-             by way of the group rather than absent from it"
+            with_one_route, 2,
+            "alice and frank, so frank really is in the tree by way of the group \
+             rather than absent from it"
         );
 
         // Frank is already reachable through the group. Adding him directly is a second
@@ -4417,7 +4429,8 @@ mod tests {
                     }
                 }
                 assert_eq!(dlg_count, 8);
-                assert_eq!(cgka_count, 4);
+                // An add for the creator, an add for bob, and the creator's update.
+                assert_eq!(cgka_count, 3);
                 assert_eq!(prekey_expanded_count, 1);
                 Ok::<_, String>(fork)
             },
