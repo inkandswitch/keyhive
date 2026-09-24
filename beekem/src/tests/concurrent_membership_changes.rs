@@ -43,7 +43,7 @@ async fn duplicate_adds_fill_one_leaf() {
 }
 
 #[tokio::test]
-async fn a_resolved_concurrent_add_leaves_every_replica_with_a_pcs_key() {
+async fn every_replica_has_a_pcs_key_after_rotation_resolves_concurrent_adds() {
     let mut rng = StdRng::seed_from_u64(0xa11d_5eed);
     let mut group = Group::new(3, &mut rng).await;
     let d = member(&mut rng);

@@ -58,7 +58,6 @@ pub enum CgkaOperation {
         pk: ShareKey,
         leaf_index: u32,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
-        add_predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
     Remove {
@@ -83,7 +82,6 @@ impl CgkaOperation {
             pk,
             leaf_index: 0,
             predecessors: Vec::new(),
-            add_predecessors: Vec::new(),
             doc_id,
         }
     }
@@ -123,8 +121,6 @@ pub struct CgkaOperationGraph {
         Map<Digest<Signed<CgkaOperation>>, Set<Digest<Signed<CgkaOperation>>>>,
 
     pub cgka_op_heads: Set<Digest<Signed<CgkaOperation>>>,
-
-    pub add_heads: Set<Digest<Signed<CgkaOperation>>>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -143,8 +139,6 @@ impl Hash for CgkaOperationGraph {
             .iter()
             .collect::<BTreeSet<_>>()
             .hash(state);
-
-        self.add_heads.iter().collect::<BTreeSet<_>>().hash(state);
     }
 }
 
@@ -162,7 +156,6 @@ impl Merge for CgkaOperationGraph {
         self.cgka_ops_predecessors
             .extend(fork.cgka_ops_predecessors);
         self.cgka_op_heads.extend(fork.cgka_op_heads);
-        self.add_heads.extend(fork.add_heads);
     }
 }
 
@@ -172,7 +165,6 @@ impl CgkaOperationGraph {
             cgka_ops: CaMap::new(),
             cgka_ops_predecessors: Map::new(),
             cgka_op_heads: Set::new(),
-            add_heads: Set::new(),
         }
     }
 
@@ -211,43 +203,23 @@ impl CgkaOperationGraph {
         let op_hash = Digest::hash(op);
         let mut op_predecessors = Set::new();
         self.cgka_ops.insert(op.clone().into());
-        let is_add = self.is_add_op(&op_hash);
         if let Some(heads) = external_heads {
             for h in heads {
                 op_predecessors.insert(*h);
                 self.cgka_op_heads.remove(h);
-            }
-            if let CgkaOperation::Add {
-                add_predecessors, ..
-            } = &op.payload
-            {
-                for h in add_predecessors {
-                    self.add_heads.remove(h);
-                }
             }
         } else {
             for h in self.cgka_op_heads.iter() {
                 op_predecessors.insert(*h);
             }
             self.cgka_op_heads.clear();
-            if is_add {
-                self.add_heads.clear();
-            }
         };
         self.cgka_op_heads.insert(op_hash);
-        if self.is_add_op(&op_hash) {
-            self.add_heads.insert(op_hash);
-        }
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
     }
 
     pub fn heads_contained_in(&self, heads: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
         self.cgka_op_heads.iter().all(|h| heads.contains(h))
-    }
-
-    fn is_add_op(&self, hash: &Digest<Signed<CgkaOperation>>) -> bool {
-        let op = self.cgka_ops.get(hash).expect("op to be in history");
-        matches!(&op.payload, &CgkaOperation::Add { .. })
     }
 
     pub fn predecessors_for(
