@@ -144,6 +144,11 @@ impl BeeKem {
             self.blank_leaf_and_path(leaf_idx);
             self.next_leaf_idx = leaf_idx;
         }
+        // Reclaim trailing blanks before placing the sorted leaves.
+        while self.next_leaf_idx.u32() > 0 && self.leaf(self.next_leaf_idx - 1).is_none() {
+            self.blank_path(treemath::parent((self.next_leaf_idx - 1).into()));
+            self.next_leaf_idx -= 1;
+        }
         leaves_to_sort.sort_by_key(|a| a.id);
         for leaf in leaves_to_sort {
             self.push_leaf(leaf.id, leaf.pk.clone());
