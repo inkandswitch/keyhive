@@ -3261,6 +3261,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn membership_predicates_consult_correct_registry() -> TestResult {
+        let hive = make_keyhive().await;
+        let peer = make_keyhive().await;
+        let indie_id = register_peer(&hive, &peer).await;
+        let group_id = hive.generate_group(vec![indie_id.into()]).await?;
+
+        assert!(hive.has_group(group_id).await);
+        let indie_id_from_group_id = IndividualId::new(group_id.into());
+        assert!(!hive.has_individual(indie_id_from_group_id).await);
+
+        assert!(hive.has_individual(indie_id).await);
+        let group_id_from_indie_id = GroupId::new(indie_id.into());
+        assert!(!hive.has_group(group_id_from_indie_id).await);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_archival_round_trip() -> TestResult {
         test_utils::init_logging();
 
