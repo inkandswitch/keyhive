@@ -8,7 +8,6 @@ use crate::{
     treemath::TreeNodeIndex,
 };
 use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
-use core::cmp::Ordering;
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
@@ -17,6 +16,8 @@ use serde::{Deserialize, Serialize};
 pub struct SecretStore {
     /// Every encrypted secret key (and hence version) corresponds to a single
     /// public key. There must be at least one.
+    ///
+    /// Kept sorted and free of duplicates.
     versions: NonEmpty<SecretStoreVersion>,
 }
 
@@ -25,11 +26,10 @@ pub struct SecretStore {
 #[cfg(any(test, feature = "arbitrary"))]
 impl<'a> arbitrary::Arbitrary<'a> for SecretStore {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let mut versions = NonEmpty::new(SecretStoreVersion::arbitrary(u)?);
+        versions.extend(Vec::<SecretStoreVersion>::arbitrary(u)?);
         Ok(Self {
-            versions: NonEmpty {
-                head: SecretStoreVersion::arbitrary(u)?,
-                tail: Vec::<SecretStoreVersion>::arbitrary(u)?,
-            },
+            versions: Self::sorted(versions),
         })
     }
 }
@@ -88,24 +88,26 @@ impl SecretStore {
 
     /// Drop the versions corresponding to `removed_keys` and then merge `other`.
     pub fn merge(&mut self, other: &SecretStore, removed_keys: &Set<ShareKey>) {
-        let kept: Vec<SecretStoreVersion> = self
-            .versions
-            .iter()
-            .filter(|version| !removed_keys.contains(&version.pk))
-            .cloned()
-            .collect();
+        let mut versions = other.versions.clone();
+        versions.extend(
+            self.versions
+                .iter()
+                .filter(|version| !removed_keys.contains(&version.pk))
+                .cloned(),
+        );
+        self.versions = Self::sorted(versions);
+    }
 
-        self.versions = match NonEmpty::from_vec(kept) {
-            Some(mut merged) => {
-                merged.extend(other.versions.iter().cloned());
-                merged
-            }
-            None => other.versions.clone(),
-        };
+    /// Sort `versions` and drop duplicates.
+    fn sorted(versions: NonEmpty<SecretStoreVersion>) -> NonEmpty<SecretStoreVersion> {
+        let mut sorted: Vec<SecretStoreVersion> = versions.into_iter().collect();
+        sorted.sort();
+        sorted.dedup();
+        NonEmpty::from_vec(sorted).expect("sorting a non-empty list leaves it non-empty")
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct SecretStoreVersion {
     /// Every encrypted secret key (and hence version) corresponds to a single public
@@ -159,17 +161,5 @@ impl SecretStoreVersion {
 
         let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;
         Ok(ShareSecretKey::force_from_bytes(arr))
-    }
-}
-
-impl Ord for SecretStoreVersion {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.pk.to_bytes().cmp(&other.pk.to_bytes())
-    }
-}
-
-impl PartialOrd for SecretStoreVersion {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
     }
 }
