@@ -757,8 +757,14 @@ mod concurrent_update_conflict_tests {
         group.deliver(&by_a, &[1]);
         group.deliver(&by_b, &[0]);
 
-        // A's next rotation must walk the resolution path over those
-        // conflicted siblings and resolve them instead of panicking.
-        group.rotate(0, &mut rng).await;
+        // Deliver the concurrent epoch to the other members before the
+        // covering rotation, so every replica receives its causal predecessors.
+        group.deliver(&by_a, &[2, 3]);
+        group.deliver(&by_b, &[2, 3]);
+
+        let resolving = group.rotate(0, &mut rng).await;
+        group.broadcast(&resolving);
+        group.check("after a covering rotation resolves concurrent updates");
+        group.assert_key_agreement("all members derive the resolved epoch key");
     }
 }

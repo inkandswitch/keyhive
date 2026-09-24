@@ -189,7 +189,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         listener: L,
         signer: &S,
         owner_id: IndividualId,
-        owner_sks: ShareKeyMap,
+        owner_sks: Arc<Mutex<BTreeMap<ShareKey, ShareSecretKey>>>,
         csprng: Arc<Mutex<R>>,
         generation: Arc<AtomicU64>,
     ) -> Result<Self, GenerateDocError> {
@@ -243,7 +243,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         listener: L,
         signer: &S,
         owner_id: IndividualId,
-        owner_sks: ShareKeyMap,
+        owner_sks: Arc<Mutex<BTreeMap<ShareKey, ShareSecretKey>>>,
         csprng: Arc<Mutex<R>>,
         generation: Arc<AtomicU64>,
     ) -> Result<Self, GenerateDocError> {
@@ -284,7 +284,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         initial_content_heads: NonEmpty<T>,
         signer: &S,
         owner_id: IndividualId,
-        owner_sks: ShareKeyMap,
+        owner_sks: Arc<Mutex<BTreeMap<ShareKey, ShareSecretKey>>>,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, GenerateDocError>
     where
@@ -297,7 +297,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let owner_share_key = *prekeys
             .get(&owner_id)
             .ok_or(GenerateDocError::OwnerCannotRead)?;
+        // Selection observes the current published prekeys. Rotation stores a
+        // new secret before publishing its prekey and retains old secrets, so
+        // read the live map after selection rather than a pre-generation snapshot.
         let owner_share_secret_key = *owner_sks
+            .lock()
+            .await
             .get(&owner_share_key)
             .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
 

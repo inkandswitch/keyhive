@@ -12,38 +12,38 @@ use crate::{
     listener::{log::Log, membership::MembershipListener, no_listener::NoListener},
     principal::{
         active::{Active, GeneratePrivatePrekeyError, ImportPrekeyStateError},
-        agent::{id::AgentId, Agent},
+        agent::{Agent, id::AgentId},
         document::{
             AddMemberError, AddMemberUpdate, DecryptError, DocCausalDecryptionError, Document,
             EncryptError, EncryptInEnvelopeError, EncryptedContentWithUpdate, GenerateDocError,
             MissingIndividualError, RevokeMemberUpdate, id::DocumentId,
         },
         group::{
+            Group, IdOrIndividual, RevokeMemberError,
             delegation::{Delegation, StaticDelegation},
             error::AddError,
             id::GroupId,
             membership_operation::{
-                bfs_extend_from_revocation, bfs_membership_ops, collect_membership_heads,
                 AllMembershipOps, MembershipOpMap, MembershipOperation, StaticMembershipOperation,
+                bfs_extend_from_revocation, bfs_membership_ops, collect_membership_heads,
             },
             revocation::{Revocation, StaticRevocation},
-            Group, IdOrIndividual, RevokeMemberError,
         },
         identifier::Identifier,
         individual::{
-            id::IndividualId,
-            op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, AllReachablePrekeyOps, KeyOp},
             Individual, ReceivePrekeyOpError,
+            id::IndividualId,
+            op::{AllReachablePrekeyOps, KeyOp, add_key::AddKeyOp, rotate_key::RotateKeyOp},
         },
-        membered::{id::MemberedId, Membered},
+        membered::{Membered, id::MemberedId},
         peer::Peer,
         public::Public,
     },
     stats::Stats,
     store::{
         ciphertext::{
-            memory::MemoryCiphertextStore, CausalDecryptionState, CiphertextStore,
-            CiphertextStoreExt,
+            CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
+            memory::MemoryCiphertextStore,
         },
         delegation::DelegationStore,
         revocation::RevocationStore,
@@ -58,7 +58,7 @@ use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
     id::MemberId,
-    keys::{LeafKeyPair, NodeKey, ShareKeyMap},
+    keys::{LeafKeyPair, NodeKey},
     operation::{CgkaAuthorization, CgkaOperation},
     pcs_key::PcsKey,
 };
@@ -78,13 +78,13 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -179,14 +179,14 @@ where
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > Keyhive<F, S, T, P, C, L, R>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> Keyhive<F, S, T, P, C, L, R>
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
@@ -229,12 +229,12 @@ impl<
             groups: Arc::new(Mutex::new(HashMap::new())),
             docs: Arc::new(Mutex::new(HashMap::new())),
             state_generation: Arc::clone(&state_generation),
-            delegations: Arc::new(Mutex::new(DelegationStore::with_generation(
-                Arc::clone(&state_generation),
-            ))),
-            revocations: Arc::new(Mutex::new(RevocationStore::with_generation(
-                Arc::clone(&state_generation),
-            ))),
+            delegations: Arc::new(Mutex::new(DelegationStore::with_generation(Arc::clone(
+                &state_generation,
+            )))),
+            revocations: Arc::new(Mutex::new(RevocationStore::with_generation(Arc::clone(
+                &state_generation,
+            )))),
             event_ingestion: Arc::new(Mutex::new(())),
             pending_events: Arc::new(Mutex::new(Vec::new())),
             ciphertext_store,
@@ -302,7 +302,6 @@ impl<
     pub fn note_direct_mutation(&self) {
         self.touch();
     }
-
 
     /// Get the [`Individual`] for the current Keyhive user.
     ///
@@ -375,11 +374,11 @@ impl<
 
         let (signer, active_id, active_sks) = {
             let locked = self.active.lock().await;
-            let mut sks = ShareKeyMap::new();
-            for (pk, sk) in locked.key_pairs.lock().await.iter() {
-                sks.insert(*pk, *sk);
-            }
-            (locked.signer.clone(), locked.id(), sks)
+            (
+                locked.signer.clone(),
+                locked.id(),
+                Arc::clone(&locked.key_pairs),
+            )
         };
 
         let new_doc = Document::generate(
@@ -441,11 +440,11 @@ impl<
 
         let (signer, active_id, active_sks) = {
             let locked = self.active.lock().await;
-            let mut sks = ShareKeyMap::new();
-            for (pk, sk) in locked.key_pairs.lock().await.iter() {
-                sks.insert(*pk, *sk);
-            }
-            (locked.signer.clone(), locked.id(), sks)
+            (
+                locked.signer.clone(),
+                locked.id(),
+                Arc::clone(&locked.key_pairs),
+            )
         };
         let parents = NonEmpty {
             head: Agent::Active(active_id, self.active.dupe()),
@@ -679,9 +678,8 @@ impl<
                     let members = Membered::Document(doc_id, doc.dupe())
                         .transitive_members()
                         .await;
-                    let Some(group_access) = members
-                        .get(&group_identifier)
-                        .map(|(_, access)| *access)
+                    let Some(group_access) =
+                        members.get(&group_identifier).map(|(_, access)| *access)
                     else {
                         continue;
                     };
@@ -3547,14 +3545,14 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef + Debug,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > Debug for Keyhive<F, S, T, P, C, L, R>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef + Debug,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> Debug for Keyhive<F, S, T, P, C, L, R>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_struct("Keyhive")
@@ -3571,14 +3569,14 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore + Clone,
-    > ForkAsync for Keyhive<F, S, T, P, C, L, R>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef + Clone,
+    P: for<'de> Deserialize<'de> + Clone,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore + Clone,
+> ForkAsync for Keyhive<F, S, T, P, C, L, R>
 where
     Log<F, S, T>: MembershipListener<F, S, T>,
 {
@@ -3600,14 +3598,14 @@ where
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de> + Clone,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore + Clone,
-    > MergeAsync for Arc<Mutex<Keyhive<F, S, T, P, C, L, R>>>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef + Clone,
+    P: for<'de> Deserialize<'de> + Clone,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore + Clone,
+> MergeAsync for Arc<Mutex<Keyhive<F, S, T, P, C, L, R>>>
 where
     Log<F, S, T>: MembershipListener<F, S, T>,
 {
@@ -3652,14 +3650,14 @@ where
 }
 
 impl<
-        F: FutureForm,
-        S: AsyncSigner<F> + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-        L: MembershipListener<F, S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > Verifiable for Keyhive<F, S, T, P, C, L, R>
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> Verifiable for Keyhive<F, S, T, P, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.verifying_key
@@ -3965,8 +3963,8 @@ mod tests {
     /// pending-set changes) and hold still across pure reads. Derived-cache
     /// consumers rely on this as a complete change signal.
     #[tokio::test]
-    async fn state_generation_tracks_all_projection_mutations(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn state_generation_tracks_all_projection_mutations()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let hive = Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
@@ -4022,8 +4020,7 @@ mod tests {
     /// counters, so this mutation was invisible to derived caches and peers were
     /// never offered the resulting events.
     #[tokio::test]
-    async fn shared_stores_carry_the_hive_generation(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn shared_stores_carry_the_hive_generation() -> Result<(), Box<dyn std::error::Error>> {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let hive = Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
@@ -4066,8 +4063,8 @@ mod tests {
     /// hive generation stayed put, so the advertisement cache early-exited and
     /// served pre-mutation state: a peer holding the grant never learned of it.
     #[tokio::test]
-    async fn principal_stores_carry_the_hive_generation(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn principal_stores_carry_the_hive_generation() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut csprng = rand::rngs::OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let hive = Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, NoListener, _>::generate(
@@ -4134,13 +4131,7 @@ mod tests {
 
         let active_guard = hive.active.lock().await;
         let active_id = active_guard.id();
-        let active_sks = {
-            let mut sks = ShareKeyMap::new();
-            for (pk, sk) in active_guard.key_pairs.lock().await.iter() {
-                sks.insert(*pk, *sk);
-            }
-            sks
-        };
+        let active_sks = Arc::clone(&active_guard.key_pairs);
         let active = hive.active.dupe();
         let delegations = hive.delegations.dupe();
         let revocations = hive.revocations.dupe();
@@ -4180,6 +4171,49 @@ mod tests {
         drop(rng_guard);
         drop(active_guard);
         generate.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn document_generation_reads_owner_secrets_after_prekey_rotation() -> TestResult {
+        let hive = make_keyhive().await;
+        let (signer, owner_id, owner_sks, published) = {
+            let active = hive.active.lock().await;
+            let owner_sks = Arc::clone(&active.key_pairs);
+            let published = active.individual.lock().await.prekeys().clone();
+            (active.signer.clone(), active.id(), owner_sks, published)
+        };
+        // Replace every published key after the constructor captures its owner
+        // material, before the awaited group construction selects a prekey.
+        for prekey in published {
+            hive.rotate_prekey(prekey).await?;
+        }
+        let mut document = Document::generate(
+            nonempty![Agent::Active(owner_id, hive.active.dupe())],
+            nonempty![[7u8; 32]],
+            hive.delegations.dupe(),
+            hive.revocations.dupe(),
+            NoListener,
+            &signer,
+            owner_id,
+            owner_sks,
+            hive.csprng.dupe(),
+            Arc::clone(&hive.state_generation),
+        )
+        .await?;
+        let (encrypted, _) = document
+            .try_encrypt_content_keyed(
+                &[7u8; 32],
+                b"owner still reads",
+                &vec![],
+                &signer,
+                &mut rand::rngs::OsRng,
+            )
+            .await?;
+        assert_eq!(
+            document.try_decrypt_content(&encrypted.encrypted_content)?,
+            b"owner still reads"
+        );
         Ok(())
     }
 
@@ -4288,14 +4322,16 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!restored
-            .active
-            .lock()
-            .await
-            .key_pairs
-            .lock()
-            .await
-            .contains_key(&share_key));
+        assert!(
+            !restored
+                .active
+                .lock()
+                .await
+                .key_pairs
+                .lock()
+                .await
+                .contains_key(&share_key)
+        );
 
         restored
             .import_local_prekey_secret(local_secret)
@@ -4383,7 +4419,6 @@ mod tests {
 
     /// Register a peer keyhive as an individual on `owner` and return its id.
     async fn register_peer(owner: &TestKeyhive, peer: &TestKeyhive) -> IndividualId {
-
         let add_op = peer.expand_prekeys().await.unwrap();
         let indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(add_op))));
         let id = indie.lock().await.id();
@@ -4584,7 +4619,6 @@ mod tests {
         assert_eq!(hive2.docs.lock().await.len(), 0);
     }
 
-
     #[tokio::test]
     async fn test_transitive_ops_for_agent() {
         test_utils::init_logging();
@@ -4605,11 +4639,12 @@ mod tests {
         assert_eq!(left.revocations.lock().await.len(), 0);
 
         assert_eq!(left.individuals.lock().await.len(), 2);
-        assert!(left
-            .individuals
-            .lock()
-            .await
-            .contains_key(&IndividualId(Public.id())));
+        assert!(
+            left.individuals
+                .lock()
+                .await
+                .contains_key(&IndividualId(Public.id()))
+        );
 
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
@@ -4903,6 +4938,289 @@ mod tests {
             bob_prekeys.len(),
             3,
             "the add and both rotations are reachable"
+        );
+    }
+
+    /// Regression: a contact card carries a rotation (`generate_contact_card` returns
+    /// `ContactCard(KeyOp::Rotate(..))`), so receiving one builds the sender's individual from a
+    /// rotation and nothing else. Before `KeyOp::topsort` treated such a rotation as its own head,
+    /// that individual serialized to zero ops: no peer could ever obtain its prekeys, and the next
+    /// grant naming it failed prekey selection.
+    #[tokio::test]
+    async fn a_received_contact_card_leaves_the_senders_prekeys_reachable() -> TestResult {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+
+        let card = bob.generate_contact_card().await.unwrap();
+        let bob_id = alice.receive_contact_card(&card).await.unwrap();
+
+        let prekeys = alice.reachable_prekey_ops_for_agent(bob_id).await;
+        let bob_prekeys = prekeys
+            .get(&bob_id.into())
+            .expect("bob's card must leave his prekeys reachable");
+        assert_eq!(
+            bob_prekeys.len(),
+            1,
+            "the card's rotation must be reachable from the receiving node"
+        );
+        Ok(())
+    }
+
+    async fn keyhive_with_its_signer() -> (TestKeyhive, MemorySigner) {
+        let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
+        let hive: TestKeyhive = Keyhive::generate(
+            signer.clone(),
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            rand::rngs::OsRng,
+        )
+        .await
+        .unwrap();
+        (hive, signer)
+    }
+
+    /// A delegation signed by `signer`, naming a delegate whose prekey op has never been seen.
+    ///
+    /// This is the shape a relay receives: the granter signs a delegation naming its delegate by
+    /// identifier, while the delegate's own prekey op travels on a separate channel. The delegate
+    /// exists on a node only once its prekey op (or contact card) arrives — `Individual` is built
+    /// from the op that names its id — so a node holding the naming event and not the material
+    /// cannot resolve the delegate at all.
+    ///
+    /// Returns the event to ingest, the unknown delegate's id, and the prekey op that would make
+    /// the delegate resolvable.
+    fn delegation_to_unknown_delegate(
+        signer: &MemorySigner,
+    ) -> (StaticEvent<[u8; 32]>, Identifier, Signed<AddKeyOp>) {
+        let mut csprng = rand::rngs::OsRng;
+        let delegate_signer = MemorySigner::generate(&mut csprng);
+        let delegate_id = Identifier::from(delegate_signer.verifying_key());
+        let delegate_prekey_op = delegate_signer
+            .try_sign_sync(AddKeyOp::generate(&mut csprng))
+            .unwrap();
+
+        let delegation = signer
+            .try_sign_sync(StaticDelegation::<[u8; 32]> {
+                can: Access::Read,
+                proof: None,
+                delegate: delegate_id,
+                after_revocations: vec![],
+                after_content: BTreeMap::new(),
+            })
+            .unwrap();
+
+        (
+            StaticEvent::Delegated(delegation),
+            delegate_id,
+            delegate_prekey_op,
+        )
+    }
+
+    /// Regression: a delegation naming an agent whose material has not arrived is parked, not
+    /// half-applied.
+    ///
+    /// The park/defer contract is what separates a delay from a permanent stall: an event that
+    /// cannot complete must leave no effect behind, so that replaying it later is the whole of its
+    /// application. Until now that contract lived only in the doc comments on
+    /// [`Keyhive::pending_event_hashes`], which callers classifying admission must consult.
+    #[tokio::test]
+    async fn a_delegation_whose_delegate_material_is_absent_is_parked_not_half_applied() {
+        test_utils::init_logging();
+
+        let (hive, signer) = keyhive_with_its_signer().await;
+        let (event, delegate_id, _delegate_prekey_op) = delegation_to_unknown_delegate(&signer);
+
+        // Why it cannot apply: the delegate is resolvable only through its own prekey op, which has
+        // not arrived. That is a missing dependency the sync layer can still supply, not
+        // corruption, so it must not be dropped on the floor.
+        let error = hive
+            .receive_static_event(event.clone())
+            .await
+            .expect_err("a delegation naming an unregistered delegate cannot resolve it");
+        assert!(
+            error.is_missing_dependency(),
+            "the delegate's absence is a missing dependency, not a permanent failure: {error:?}"
+        );
+        match error {
+            ReceiveStaticEventError::ReceiveStaticMembershipError(
+                ReceiveStaticDelegationError::UnknownAgent(id),
+            ) => assert_eq!(*id, delegate_id),
+            other => panic!("expected the unresolved delegate to be named, got {other:?}"),
+        }
+
+        let (pending, resolved_pending) = hive
+            .ingest_unsorted_static_events_with_pending_progress(vec![event.clone()])
+            .await;
+
+        assert_eq!(pending.len(), 1, "the delegation is parked, not dropped");
+        assert!(
+            !resolved_pending,
+            "this batch resolved nothing: it could not apply the event it was given"
+        );
+        let event_hash = keyhive_crypto::digest::Digest::hash(&event);
+        assert!(
+            hive.pending_event_hashes().await.contains(&event_hash),
+            "the parked event is reported to callers classifying admission"
+        );
+        assert!(
+            !hive.contains_incorporated_event(&event).await,
+            "a parked event leaves no effect behind"
+        );
+        assert!(
+            hive.get_agent(delegate_id).await.is_none(),
+            "the delegate is unknown precisely because its material has not arrived"
+        );
+    }
+
+    /// Regression: a prekey op arriving does not by itself replay the events parked on it.
+    ///
+    /// `receive_prekey_op` ends in `touch()` and returns `Ok(())` without re-driving ingestion, so
+    /// a delegation parked on the delegate's material stays parked until the next ingest batch
+    /// arrives from elsewhere. That is the difference between "self-heals under live traffic" and
+    /// "stalls indefinitely in a quiet graph", and it is the trigger the sync layer owes.
+    /// `import_prekey_state` does replay, which is the intended shape; `receive_prekey_op` — the
+    /// path a *remote* peer's material takes — does not.
+    #[tokio::test]
+    async fn prekey_arrival_does_not_replay_parked_events_until_the_next_ingest() {
+        test_utils::init_logging();
+
+        let (hive, signer) = keyhive_with_its_signer().await;
+        let (event, delegate_id, delegate_prekey_op) = delegation_to_unknown_delegate(&signer);
+
+        let (pending, _) = hive
+            .ingest_unsorted_static_events_with_pending_progress(vec![event.clone()])
+            .await;
+        assert_eq!(pending.len(), 1, "precondition: the delegation is parked");
+
+        hive.receive_prekey_op(&KeyOp::Add(Arc::new(delegate_prekey_op)))
+            .await
+            .expect("a peer's prekey op registers the individual it names");
+        assert!(
+            hive.get_agent(delegate_id).await.is_some(),
+            "the material that was missing is now held"
+        );
+
+        let event_hash = keyhive_crypto::digest::Digest::hash(&event);
+        assert!(
+            hive.pending_event_hashes().await.contains(&event_hash),
+            "arrival alone does not replay: the delegation is still parked"
+        );
+        assert!(
+            !hive.contains_incorporated_event(&event).await,
+            "arrival alone does not apply the parked delegation"
+        );
+
+        let (pending, resolved_pending) = hive
+            .ingest_unsorted_static_events_with_pending_progress(vec![])
+            .await;
+
+        assert!(pending.is_empty(), "the parked delegation now applies");
+        assert!(resolved_pending, "this batch cleared a parked event");
+        assert!(
+            hive.pending_event_hashes().await.is_empty(),
+            "nothing remains parked"
+        );
+        assert!(
+            hive.contains_incorporated_event(&event).await,
+            "the next ingest batch is the trigger that applies it"
+        );
+    }
+
+    /// Regression: the "name without material" state is a *registered* delegate holding no
+    /// published prekey, and it does NOT park.
+    ///
+    /// Parking is decided by whether the delegate resolves at all.
+    /// `static_delegation_to_delegation` resolves the delegate through `get_agent`, so a delegate
+    /// whose own prekey op never arrived has no `Individual` here, cannot be resolved, and the
+    /// delegation parks (`UnknownAgent`). A delegate that IS registered but holds no published
+    /// prekey resolves fine — `GroupState::add_delegation` does no prekey work — so the delegation
+    /// is applied and this node ends up holding a name it cannot co-sign with. The prekey
+    /// janitor's rotation window produces exactly that state on a live node, which is why prekey
+    /// selection has to report a typed error instead of assuming material is present. The contrast
+    /// is the invariant: registration, not material, decides parking.
+    #[tokio::test]
+    async fn a_delegate_registered_with_no_published_prekey_is_applied_not_parked() {
+        use crate::principal::individual::state::PrekeyState;
+
+        test_utils::init_logging();
+
+        let (hive, signer) = keyhive_with_its_signer().await;
+
+        // Two structurally identical delegations from this node, differing only in whether the
+        // delegate's material is registered here.
+        let (unregistered_event, unregistered_id, _) = delegation_to_unknown_delegate(&signer);
+        let (registered_event, registered_id, registered_prekey) =
+            delegation_to_unknown_delegate(&signer);
+        assert_ne!(
+            unregistered_id, registered_id,
+            "the two cases must name different delegates, or the contrast is vacuous"
+        );
+        let registered_hash = keyhive_crypto::digest::Digest::hash(&registered_event);
+        let unregistered_hash = keyhive_crypto::digest::Digest::hash(&unregistered_event);
+
+        // Phase 1: never registered. Nothing resolves the delegate, so the event parks. (That an
+        // absent delegate reports a missing dependency, and names the delegate, is pinned by
+        // `a_delegation_whose_delegate_material_is_absent_is_parked_not_half_applied`.)
+        let (pending, _) = hive
+            .ingest_unsorted_static_events_with_pending_progress(vec![unregistered_event])
+            .await;
+        assert_eq!(
+            pending.len(),
+            1,
+            "the delegation naming an unregistered delegate is parked, not dropped"
+        );
+        assert!(
+            hive.pending_event_hashes().await.contains(&unregistered_hash),
+            "the parked event is reported to callers classifying admission"
+        );
+
+        // Phase 2: registered, but with an empty published prekey set. The individual is built from
+        // the delegate's own add op, so it carries the delegate's id, and its published set is then
+        // emptied — the shape the janitor's rotation window leaves behind.
+        let mut delegate = Individual::new(KeyOp::Add(Arc::new(registered_prekey)));
+        let delegate_id: Identifier = delegate.id().into();
+        assert_eq!(
+            delegate_id, registered_id,
+            "the individual names the delegate the delegation is issued to"
+        );
+        delegate.prekeys.clear();
+        delegate.prekey_state = PrekeyState::empty_for_tests();
+        assert!(
+            hive.register_individual(Arc::new(Mutex::new(delegate))).await,
+            "the delegate is newly registered"
+        );
+
+        hive.receive_static_event(registered_event.clone())
+            .await
+            .expect("a registered delegate resolves, so the delegation applies");
+        assert!(
+            hive.contains_incorporated_event(&registered_event).await,
+            "the delegation naming a registered-but-empty delegate is applied"
+        );
+        assert!(
+            !hive.pending_event_hashes().await.contains(&registered_hash),
+            "and it is not parked: registration, not material, decides parking"
+        );
+        assert!(
+            hive.get_agent(registered_id).await.is_some(),
+            "the delegate is known here"
+        );
+
+        // What the applied delegation left behind is a name with no material to co-sign with.
+        let reachable = hive.reachable_prekey_ops_for_agent(registered_id).await;
+        let delegate_ops = reachable.get(&registered_id);
+        assert!(
+            delegate_ops.is_none_or(|ops| ops.is_empty()),
+            "a delegate with no published prekey advertises none: {delegate_ops:?}"
+        );
+
+        // Registering a *different* delegate resolved nothing: the phase-1 delegation is still
+        // parked, so the two cases really are distinguished by registration alone.
+        assert!(
+            hive.pending_event_hashes().await.contains(&unregistered_hash),
+            "the unregistered delegate's delegation is still parked"
         );
     }
 
