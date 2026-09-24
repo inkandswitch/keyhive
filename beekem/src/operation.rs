@@ -58,7 +58,6 @@ pub enum CgkaOperation {
         pk: ShareKey,
         leaf_index: u32,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
-        add_predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
     Remove {
@@ -83,7 +82,6 @@ impl CgkaOperation {
             pk,
             leaf_index: 0,
             predecessors: Vec::new(),
-            add_predecessors: Vec::new(),
             doc_id,
         }
     }
@@ -123,8 +121,6 @@ pub struct CgkaOperationGraph {
         Map<Digest<Signed<CgkaOperation>>, Set<Digest<Signed<CgkaOperation>>>>,
 
     pub cgka_op_heads: Set<Digest<Signed<CgkaOperation>>>,
-
-    pub add_heads: Set<Digest<Signed<CgkaOperation>>>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -143,8 +139,6 @@ impl Hash for CgkaOperationGraph {
             .iter()
             .collect::<BTreeSet<_>>()
             .hash(state);
-
-        self.add_heads.iter().collect::<BTreeSet<_>>().hash(state);
     }
 }
 
@@ -162,7 +156,6 @@ impl Merge for CgkaOperationGraph {
         self.cgka_ops_predecessors
             .extend(fork.cgka_ops_predecessors);
         self.cgka_op_heads.extend(fork.cgka_op_heads);
-        self.add_heads.extend(fork.add_heads);
     }
 }
 
@@ -172,7 +165,6 @@ impl CgkaOperationGraph {
             cgka_ops: CaMap::new(),
             cgka_ops_predecessors: Map::new(),
             cgka_op_heads: Set::new(),
-            add_heads: Set::new(),
         }
     }
 
@@ -211,43 +203,23 @@ impl CgkaOperationGraph {
         let op_hash = Digest::hash(op);
         let mut op_predecessors = Set::new();
         self.cgka_ops.insert(op.clone().into());
-        let is_add = self.is_add_op(&op_hash);
         if let Some(heads) = external_heads {
             for h in heads {
                 op_predecessors.insert(*h);
                 self.cgka_op_heads.remove(h);
-            }
-            if let CgkaOperation::Add {
-                add_predecessors, ..
-            } = &op.payload
-            {
-                for h in add_predecessors {
-                    self.add_heads.remove(h);
-                }
             }
         } else {
             for h in self.cgka_op_heads.iter() {
                 op_predecessors.insert(*h);
             }
             self.cgka_op_heads.clear();
-            if is_add {
-                self.add_heads.clear();
-            }
         };
         self.cgka_op_heads.insert(op_hash);
-        if self.is_add_op(&op_hash) {
-            self.add_heads.insert(op_hash);
-        }
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
     }
 
     pub fn heads_contained_in(&self, heads: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
         self.cgka_op_heads.iter().all(|h| heads.contains(h))
-    }
-
-    fn is_add_op(&self, hash: &Digest<Signed<CgkaOperation>>) -> bool {
-        let op = self.cgka_ops.get(hash).expect("op to be in history");
-        matches!(&op.payload, &CgkaOperation::Add { .. })
     }
 
     pub fn predecessors_for(
@@ -382,5 +354,91 @@ impl CgkaOperationGraph {
         }
 
         Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"))
+    }
+}
+
+#[cfg(test)]
+mod causal_graph_tests {
+    use super::*;
+    use keyhive_crypto::{
+        share_key::ShareSecretKey,
+        signer::{async_signer, memory::MemorySigner},
+        verifiable::Verifiable,
+    };
+
+    async fn add_op(
+        signer: &MemorySigner,
+        doc_id: TreeId,
+        leaf_index: u32,
+    ) -> Signed<CgkaOperation> {
+        let op = CgkaOperation::Add {
+            added_id: MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key()),
+            pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
+            leaf_index,
+            predecessors: Vec::new(),
+            doc_id,
+        };
+        async_signer::try_sign_async::<future_form::Local, _, _>(signer, op)
+            .await
+            .expect("signing succeeds")
+    }
+
+    fn hash_of(graph: &CgkaOperationGraph) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        graph.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[tokio::test]
+    async fn merging_a_fork_keeps_the_operations_it_added() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut trunk = CgkaOperationGraph::new();
+        let root = add_op(&signer, doc_id, 0).await;
+        trunk.add_local_op(&root);
+
+        let mut forked = trunk.fork();
+        let on_fork = add_op(&signer, doc_id, 1).await;
+        let on_fork_hash = Digest::hash(&on_fork);
+        forked.add_op(&on_fork, &Set::from_iter([Digest::hash(&root)]));
+
+        trunk.merge(forked);
+
+        assert!(
+            trunk.contains_op_hash(&on_fork_hash),
+            "an operation added on the fork is missing after the merge"
+        );
+        assert_eq!(
+            trunk.predecessors_for(&on_fork_hash),
+            Some(&Set::from_iter([Digest::hash(&root)])),
+            "the merged operation lost its predecessors"
+        );
+        assert!(
+            trunk.cgka_op_heads.contains(&on_fork_hash),
+            "the merged operation is not a head"
+        );
+    }
+
+    #[tokio::test]
+    async fn graphs_holding_different_operations_hash_differently() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut one = CgkaOperationGraph::new();
+        let root = add_op(&signer, doc_id, 0).await;
+        one.add_local_op(&root);
+        let mut two = one.fork();
+
+        assert_eq!(hash_of(&one), hash_of(&two), "equal graphs should agree");
+
+        two.add_op(
+            &add_op(&signer, doc_id, 1).await,
+            &Set::from_iter([Digest::hash(&root)]),
+        );
+
+        assert_ne!(
+            hash_of(&one),
+            hash_of(&two),
+            "a graph with an extra operation hashed the same as one without it"
+        );
     }
 }

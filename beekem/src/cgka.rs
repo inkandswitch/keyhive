@@ -246,9 +246,7 @@ impl Cgka {
     }
 
     pub fn has_pcs_key(&self) -> bool {
-        self.tree.has_root_key()
-            && self.ops_graph.has_single_head()
-            && self.ops_graph.add_heads.len() < 2
+        self.tree.has_root_key() && self.ops_graph.has_single_head()
     }
 
     /// Add member to group.
@@ -269,13 +267,11 @@ impl Cgka {
         }
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().cloned());
-        let add_predecessors = Vec::from_iter(self.ops_graph.add_heads.iter().cloned());
         let op = CgkaOperation::Add {
             added_id: id,
             pk,
             leaf_index,
             predecessors,
-            add_predecessors,
             doc_id: self.doc_id,
         };
 

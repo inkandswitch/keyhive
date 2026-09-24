@@ -193,7 +193,6 @@ mod tests {
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 42,
             predecessors: vec![],
-            add_predecessors: vec![],
             doc_id: TreeId(doc_id1.verifying_key()),
         })?;
 
@@ -210,7 +209,6 @@ mod tests {
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 11,
             predecessors: vec![],
-            add_predecessors: vec![],
             doc_id: TreeId(doc_id1.verifying_key()),
         })?;
 
