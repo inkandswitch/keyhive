@@ -15,9 +15,7 @@ test.describe("Signed", async () => {
         const { Signer } = window.keyhive;
         const key = await Signer.generate();
         const signed = await key.trySign(new Uint8Array(input.toSign));
-        const { payload, verifyingKey, signature } = signed;
-        const verified = signed.verify();
-        return { input, payload, verifyingKey, signature, verified, key };
+        return { verified: signed.verify() };
       },
       { toSign },
     );
@@ -31,7 +29,7 @@ test.describe("Signed", async () => {
         const { Signer } = window.keyhive;
         const key = await Signer.generate();
         const signed = await key.trySign(new Uint8Array(input.toSign));
-        return { payload: signed.payload };
+        return { payload: signed.payload() };
       },
       { toSign },
     );

@@ -9,7 +9,7 @@ pub struct JsDecryptedKeyed {
 
 #[wasm_bindgen(js_class = DecryptedKeyed)]
 impl JsDecryptedKeyed {
-    #[wasm_bindgen(getter)]
+    /// Copies the plaintext out of wasm memory on every call.
     pub fn plaintext(&self) -> Vec<u8> {
         self.plaintext.clone()
     }

@@ -1593,6 +1593,24 @@ impl<
         self.docs.lock().await.get(&id).duped()
     }
 
+    /// Whether a document with this id is known.
+    #[instrument(skip_all)]
+    pub async fn has_document(&self, id: DocumentId) -> bool {
+        self.docs.lock().await.contains_key(&id)
+    }
+
+    /// Whether a group with this id is known.
+    #[instrument(skip_all)]
+    pub async fn has_group(&self, id: GroupId) -> bool {
+        self.groups.lock().await.contains_key(&id)
+    }
+
+    /// Whether an individual with this id is known.
+    #[instrument(skip_all)]
+    pub async fn has_individual(&self, id: IndividualId) -> bool {
+        self.individuals.lock().await.contains_key(&id)
+    }
+
     #[instrument(skip_all)]
     pub async fn get_peer(&self, id: Identifier) -> Option<Peer<F, S, T, L>> {
         let indie_id = IndividualId(id);
@@ -3240,6 +3258,24 @@ mod tests {
         let id = indie.lock().await.id();
         assert!(owner.register_individual(indie).await);
         id
+    }
+
+    #[tokio::test]
+    async fn membership_predicates_consult_correct_registry() -> TestResult {
+        let hive = make_keyhive().await;
+        let peer = make_keyhive().await;
+        let indie_id = register_peer(&hive, &peer).await;
+        let group_id = hive.generate_group(vec![indie_id.into()]).await?;
+
+        assert!(hive.has_group(group_id).await);
+        let indie_id_from_group_id = IndividualId::new(group_id.into());
+        assert!(!hive.has_individual(indie_id_from_group_id).await);
+
+        assert!(hive.has_individual(indie_id).await);
+        let group_id_from_indie_id = GroupId::new(indie_id.into());
+        assert!(!hive.has_group(group_id_from_indie_id).await);
+
+        Ok(())
     }
 
     #[tokio::test]

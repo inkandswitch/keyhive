@@ -1,12 +1,15 @@
+use crate::js::identifier::JsIdentifier;
 use derive_more::{Display, From, Into};
 use keyhive_core::principal::{document::id::DocumentId, identifier::Identifier};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 #[wasm_bindgen(js_name = DocumentId)]
 #[derive(Debug, Clone, Copy, Display, From, Into)]
 pub struct JsDocumentId(pub(crate) keyhive_core::principal::document::id::DocumentId);
 
+#[wasm_refgen(js_ref = JsDocumentIdRef)]
 #[wasm_bindgen(js_class = DocumentId)]
 impl JsDocumentId {
     #[wasm_bindgen(constructor)]
@@ -32,6 +35,11 @@ impl JsDocumentId {
     #[wasm_bindgen(js_name = toBytes)]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.as_bytes().to_vec()
+    }
+
+    #[wasm_bindgen(js_name = toIdentifier)]
+    pub fn to_identifier(&self) -> JsIdentifier {
+        JsIdentifier(Identifier::from(self.0))
     }
 }
 

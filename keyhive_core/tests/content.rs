@@ -253,7 +253,7 @@ async fn a_non_member_is_not_even_sent_the_document() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert!(
-        mallory.get_document(design_doc).await.is_none(),
+        !mallory.has_document(design_doc).await,
         "a non-member is never told the document exists"
     );
     // So the question "can she derive the key" cannot be reached, and asking is an error
