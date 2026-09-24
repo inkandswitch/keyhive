@@ -356,3 +356,89 @@ impl CgkaOperationGraph {
         Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"))
     }
 }
+
+#[cfg(test)]
+mod causal_graph_tests {
+    use super::*;
+    use keyhive_crypto::{
+        share_key::ShareSecretKey,
+        signer::{async_signer, memory::MemorySigner},
+        verifiable::Verifiable,
+    };
+
+    async fn add_op(
+        signer: &MemorySigner,
+        doc_id: TreeId,
+        leaf_index: u32,
+    ) -> Signed<CgkaOperation> {
+        let op = CgkaOperation::Add {
+            added_id: MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key()),
+            pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
+            leaf_index,
+            predecessors: Vec::new(),
+            doc_id,
+        };
+        async_signer::try_sign_async::<future_form::Local, _, _>(signer, op)
+            .await
+            .expect("signing succeeds")
+    }
+
+    fn hash_of(graph: &CgkaOperationGraph) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        graph.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[tokio::test]
+    async fn merging_a_fork_keeps_the_operations_it_added() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut trunk = CgkaOperationGraph::new();
+        let root = add_op(&signer, doc_id, 0).await;
+        trunk.add_local_op(&root);
+
+        let mut forked = trunk.fork();
+        let on_fork = add_op(&signer, doc_id, 1).await;
+        let on_fork_hash = Digest::hash(&on_fork);
+        forked.add_op(&on_fork, &Set::from_iter([Digest::hash(&root)]));
+
+        trunk.merge(forked);
+
+        assert!(
+            trunk.contains_op_hash(&on_fork_hash),
+            "an operation added on the fork is missing after the merge"
+        );
+        assert_eq!(
+            trunk.predecessors_for(&on_fork_hash),
+            Some(&Set::from_iter([Digest::hash(&root)])),
+            "the merged operation lost its predecessors"
+        );
+        assert!(
+            trunk.cgka_op_heads.contains(&on_fork_hash),
+            "the merged operation is not a head"
+        );
+    }
+
+    #[tokio::test]
+    async fn graphs_holding_different_operations_hash_differently() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut one = CgkaOperationGraph::new();
+        let root = add_op(&signer, doc_id, 0).await;
+        one.add_local_op(&root);
+        let mut two = one.fork();
+
+        assert_eq!(hash_of(&one), hash_of(&two), "equal graphs should agree");
+
+        two.add_op(
+            &add_op(&signer, doc_id, 1).await,
+            &Set::from_iter([Digest::hash(&root)]),
+        );
+
+        assert_ne!(
+            hash_of(&one),
+            hash_of(&two),
+            "a graph with an extra operation hashed the same as one without it"
+        );
+    }
+}
