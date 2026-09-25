@@ -56,7 +56,7 @@ pub struct Cgka {
     pub owner_sks: ShareKeyMap,
     pub(crate) tree: BeeKem,
     /// Graph of all operations seen (but not necessarily applied) so far.
-    ops_graph: CgkaOperationGraph,
+    pub(crate) ops_graph: CgkaOperationGraph,
     /// Whether there are ops in the graph that have not been applied to the
     /// tree due to a structural change.
     pending_ops_for_structural_change: bool,
@@ -379,10 +379,10 @@ impl Cgka {
 
     /// Merges concurrent [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.
     ///
-    /// If we receive a concurrent membership change (i.e., add or remove), then
-    /// we add it to our ops graph but don't apply it yet. If there are no outstanding
-    /// membership changes and we receive a concurrent update, we can apply it
-    /// immediately.
+    /// If we receive a concurrent membership change (i.e., add or remove), or a
+    /// concurrent update that a replay would place in the same epoch as a
+    /// membership change, then we add it to our ops graph but don't apply it yet.
+    /// Any other concurrent update is merged into the tree immediately.
     #[instrument(skip_all)]
     pub fn merge_concurrent_operation(
         &mut self,
@@ -397,13 +397,15 @@ impl Cgka {
         }
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
-            if self.pending_ops_for_structural_change {
-                self.ops_graph.add_op(&op, &predecessors);
-            } else if matches!(
-                op.payload,
-                CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
-            ) {
+            if !self.pending_ops_for_structural_change
+                && (matches!(
+                    op.payload,
+                    CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
+                ) || self.ops_graph.epoch_has_membership_change(&predecessors))
+            {
                 self.pending_ops_for_structural_change = true;
+            }
+            if self.pending_ops_for_structural_change {
                 self.ops_graph.add_op(&op, &predecessors);
             } else {
                 self.apply_operation(op)?;
@@ -559,10 +561,9 @@ impl Cgka {
         self.rebuild_pcs_key(ops)
     }
 
-    /// Whether we have unresolved concurrency that requires a replay to resolve.
+    /// Whether operations were recorded but not applied.
     fn should_replay(&self) -> bool {
-        !self.ops_graph.cgka_op_heads.is_empty()
-            && (self.pending_ops_for_structural_change || !self.ops_graph.has_single_head())
+        self.pending_ops_for_structural_change
     }
 
     /// Replay all ops in our graph in a deterministic order.

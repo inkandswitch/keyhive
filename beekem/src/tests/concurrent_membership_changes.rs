@@ -349,6 +349,7 @@ async fn run(scenario: &Scenario) {
 
     let context = "after a rotation re-established a root key";
     group.check(context);
+    group.assert_trees_match_replay(context);
     group.assert_key_agreement(context);
     // Validate that the replicas are agreeing on the correct membership.
     let got: BTreeSet<MemberId> = group.replicas[0].tree.member_ids().collect();

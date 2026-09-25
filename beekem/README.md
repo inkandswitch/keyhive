@@ -163,12 +163,12 @@ This sorting step is what ensures all peers converge to the same tree structure 
 
 Operations form a causal graph (a DAG). Each operation records its causal predecessors (the set of operation hashes it was aware of when created).
 
-When the graph has unresolved concurrency (multiple heads), the system topologically sorts all operations and groups them into **epochs**. An epoch is a set of operations that are mutually concurrent. Epochs are then applied in causal order:
+When a replay is needed, the system topologically sorts all operations and groups them into **epochs**. An epoch is a set of operations that are mutually concurrent. Epochs are then applied in causal order:
 
 * If an epoch contains only updates, apply them one by one (each becomes a merge of concurrent paths).
 * If an epoch contains any adds or removes, apply all operations and then run the membership change cleanup (re-blank, re-sort).
 
-When concurrency is too complex to incrementally merge (e.g., after receiving a concurrent membership change), the entire tree is **replayed from scratch**: start from the initial state, topologically sort all known operations, and re-apply them in epoch order. This guarantees convergence regardless of the order in which operations were received.
+Concurrent updates are merged into the tree as they arrive. A concurrent add or remove is recorded but not applied (as is a concurrent update that a replay would put in the same epoch as an add or remove). In either case the tree is **replayed from scratch** before the next operation is created locally or before applying an operation whose predecessors include every head. Replay starts from the initial state, topologically sorts all known operations, and re-applies them in epoch order. This guarantees convergence regardless of the order in which operations were received.
 
 ## The Secret Store (Inner Node Data)
 
