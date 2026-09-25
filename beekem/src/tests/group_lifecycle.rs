@@ -44,3 +44,38 @@ async fn a_group_can_be_emptied_and_refilled() {
         "a refilled group did not recover a PCS key"
     );
 }
+
+#[tokio::test]
+async fn shrinking_into_a_subtree_makes_its_secret_the_root_secret() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_0002);
+    let mut group = Group::new(4, &mut rng).await;
+    for i in 0..4 {
+        let op = group.rotate(i, &mut rng).await;
+        group.broadcast(&op);
+    }
+    assert!(
+        group.replicas[0].has_pcs_key(),
+        "there should be a root secret after everyone rotated"
+    );
+
+    // The upper half leaves. The two who remain are in a subtree that the removals
+    // did not blank.
+    for target in [3, 2] {
+        let id = group.id(target);
+        let op = group.remove(0, id).await;
+        group.broadcast(&op);
+    }
+
+    assert_eq!(
+        group.replicas[0].group_size(),
+        2,
+        "the wrong members were removed"
+    );
+    assert!(
+        group.replicas[0].has_pcs_key(),
+        "shrinking into a subtree should makes its secret the root secret"
+    );
+    group.replicas[0]
+        .pcs_key_from_tree_root()
+        .expect("a member who remains can still derive the key");
+}

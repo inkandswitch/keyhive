@@ -144,7 +144,7 @@ impl BeeKem {
             self.blank_leaf_and_path(leaf_idx);
             self.next_leaf_idx = leaf_idx;
         }
-        // Reclaim trailing blanks before placing the sorted leaves.
+        // Reclaim trailing blanks before adding the sorted leaves.
         while self.next_leaf_idx.u32() > 0 && self.leaf(self.next_leaf_idx - 1).is_none() {
             self.blank_path(treemath::parent((self.next_leaf_idx - 1).into()));
             self.next_leaf_idx -= 1;
@@ -153,6 +153,7 @@ impl BeeKem {
         for leaf in leaves_to_sort {
             self.push_leaf(leaf.id, leaf.pk.clone());
         }
+        self.maybe_shrink_tree();
     }
 
     /// Blank the leaf at the provided [`LeafNodeIndex`] as well as its path
@@ -191,6 +192,7 @@ impl BeeKem {
             self.blank_path(treemath::parent((self.next_leaf_idx - 1).into()));
             self.next_leaf_idx -= 1;
         }
+        self.maybe_shrink_tree();
         Ok((l_idx.u32(), removed_keys))
     }
 
@@ -595,6 +597,25 @@ impl BeeKem {
         self.grow_tree_to_size();
     }
 
+    /// Shrink the tree if the populated leaves fit in a smaller one.
+    ///
+    /// Growing is irreversible without this option and it would be possible for
+    /// two replicas that applied the same changes in different orders to disagree
+    /// on the tree size.
+    fn maybe_shrink_tree(&mut self) {
+        while self.tree_size.can_dec() {
+            let mut shrunk = self.tree_size;
+            shrunk.dec();
+            if shrunk.leaf_count() < self.next_leaf_idx.u32() {
+                break;
+            }
+            self.tree_size = shrunk;
+            self.leaves.truncate(self.tree_size.leaf_count() as usize);
+            self.inner_nodes
+                .truncate(self.tree_size.inner_node_count() as usize);
+        }
+    }
+
     fn grow_tree_to_size(&mut self) {
         self.leaves
             .resize(self.tree_size.leaf_count() as usize, None);
@@ -767,6 +788,88 @@ mod tests {
             placed_first, placed_last,
             "an added member resolved to a different leaf depending on whether it \
              was placed before or after the removals"
+        );
+    }
+
+    #[test]
+    fn resolving_a_change_ignores_how_large_the_tree_grew_before() {
+        let mut rng = StdRng::seed_from_u64(0x0dd0_0002);
+        let mut sks = ShareKeyMap::new();
+        let (mut base, _owner) = one_member_tree(&mut rng, &mut sks);
+        let (x, x_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
+        let (y, y_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
+        base.push_leaf(x, x_pk.into());
+        base.push_leaf(y, y_pk.into());
+        let x_idx = base.id_to_leaf_idx[&x].u32();
+        let y_idx = base.id_to_leaf_idx[&y].u32();
+        let a = join_new_member_to_share_key_map(&mut rng, &mut sks);
+        let b = join_new_member_to_share_key_map(&mut rng, &mut sks);
+
+        // Applying the adds before the removals requires a larger tree
+        // than applying them after. Only one order would require growing the tree.
+        let mut placed_first = base.clone();
+        placed_first.push_leaf(a.0, a.1.into());
+        placed_first.push_leaf(b.0, b.1.into());
+        placed_first.remove_id(x).expect("x is present");
+        placed_first.remove_id(y).expect("y is present");
+        let mut placed_last = base.clone();
+        placed_last.remove_id(x).expect("x is present");
+        placed_last.remove_id(y).expect("y is present");
+        placed_last.push_leaf(a.0, a.1.into());
+        placed_last.push_leaf(b.0, b.1.into());
+        assert_ne!(
+            placed_first.tree_size, placed_last.tree_size,
+            "precondition: one order should have grown the tree and the other not"
+        );
+
+        resolve(&mut placed_first, &[a.0, b.0], &[(x, x_idx), (y, y_idx)]);
+        resolve(&mut placed_last, &[a.0, b.0], &[(x, x_idx), (y, y_idx)]);
+        assert_eq!(
+            placed_first, placed_last,
+            "the order of applying membership changes affected the resulting tree size"
+        );
+    }
+
+    #[test]
+    fn removing_enough_members_shrinks_a_tree_after_it_grew() {
+        let mut rng = StdRng::seed_from_u64(0x5121_0001);
+        let mut sks = ShareKeyMap::new();
+        let (mut tree, owner) = one_member_tree(&mut rng, &mut sks);
+        let smaller_tree = tree.tree_size;
+        let joiners: Vec<(MemberId, ShareKey)> = (0..3)
+            .map(|_| join_new_member_to_share_key_map(&mut rng, &mut sks))
+            .collect();
+        for (id, pk) in &joiners {
+            tree.push_leaf(*id, (*pk).into());
+        }
+        assert!(
+            tree.tree_size.u32() > smaller_tree.u32(),
+            "adding three more members should have widened the tree"
+        );
+        let larger_tree_treemath_root = treemath::root(tree.tree_size);
+
+        for (id, _) in joiners.iter().rev() {
+            tree.remove_id(*id).expect("the joiner is present");
+        }
+
+        assert_eq!(
+            tree.tree_size, smaller_tree,
+            "the tree kept the width it only needed for members that have left"
+        );
+        assert_ne!(
+            treemath::root(tree.tree_size),
+            larger_tree_treemath_root,
+            "a smaller tree has a treemath root at a different node"
+        );
+        assert_eq!(
+            tree.member_ids().collect::<Vec<_>>(),
+            vec![owner],
+            "shrinking lost or gained a member"
+        );
+        assert_eq!(
+            *tree.leaf_index_for_id(owner).expect("the owner is present"),
+            LeafNodeIndex::new(0),
+            "shrinking moved a member that should not have moved"
         );
     }
 

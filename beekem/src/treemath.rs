@@ -253,6 +253,20 @@ impl TreeSize {
     pub(super) fn inc(&mut self) {
         self.0 = self.0 * 2 + 1;
     }
+
+    /// Decrease the size if possible.
+    pub(super) fn dec(&mut self) {
+        if self.can_dec() {
+            self.0 = (self.0 - 1) / 2;
+        }
+    }
+
+    /// Whether [`TreeSize::dec`] would decrease the size of this tree.
+    ///
+    /// Returns `false` if the tree would no longer have a root at an inner node.
+    pub(super) fn can_dec(&self) -> bool {
+        self.0 > 3
+    }
 }
 
 #[test]
