@@ -10,7 +10,7 @@ use crate::{
     tree::PathChange,
 };
 use alloc::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
     sync::Arc,
     vec::Vec,
 };
@@ -89,6 +89,11 @@ impl CgkaOperation {
         }
     }
 
+    /// Whether this is an add or a remove.
+    pub fn is_membership_change(&self) -> bool {
+        matches!(self, Self::Add { .. } | Self::Remove { .. })
+    }
+
     /// Document/tree id.
     pub fn doc_id(&self) -> &TreeId {
         match self {
@@ -111,6 +116,10 @@ pub struct CgkaOperationGraph {
         Map<Digest<Signed<CgkaOperation>>, Set<Digest<Signed<CgkaOperation>>>>,
 
     pub cgka_op_heads: Set<Digest<Signed<CgkaOperation>>>,
+
+    /// The length of the longest chain of predecessors behind each operation.
+    /// An operation with no predecessors has depth 0.
+    depths: Map<Digest<Signed<CgkaOperation>>, u64>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -146,6 +155,7 @@ impl Merge for CgkaOperationGraph {
         self.cgka_ops_predecessors
             .extend(fork.cgka_ops_predecessors);
         self.cgka_op_heads.extend(fork.cgka_op_heads);
+        self.depths.extend(fork.depths);
     }
 }
 
@@ -155,6 +165,7 @@ impl CgkaOperationGraph {
             cgka_ops: CaMap::new(),
             cgka_ops_predecessors: Map::new(),
             cgka_op_heads: Set::new(),
+            depths: Map::new(),
         }
     }
 
@@ -205,7 +216,60 @@ impl CgkaOperationGraph {
             self.cgka_op_heads.clear();
         };
         self.cgka_op_heads.insert(op_hash);
+        let depth = op_predecessors
+            .iter()
+            .filter_map(|p| self.depths.get(p))
+            .max()
+            .map_or(0, |d| d + 1);
+        self.depths.insert(op_hash, depth);
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
+    }
+
+    /// Whether a replay would put an operation with these `predecessors` in the
+    /// same epoch as an add or remove.
+    ///
+    /// An epoch starts after any operation that every other operation
+    /// either happened-before or happened-after. This function traverses back from the
+    /// heads and `predecessors`, deepest first, until either it finds a membership
+    /// change (returns `true`) or only one operation remains in the queue (returns `false`).
+    ///
+    /// Returns `true` if an operation it reaches has no recorded depth to avoid panics
+    /// since triggering an unnecessary replay would still lead to a correct outcome.
+    pub(crate) fn epoch_has_membership_change(
+        &self,
+        predecessors: &Set<Digest<Signed<CgkaOperation>>>,
+    ) -> bool {
+        let mut seen = Set::new();
+        let mut queue = BinaryHeap::new();
+        for hash in predecessors.iter().chain(self.cgka_op_heads.iter()) {
+            if seen.insert(*hash) {
+                let Some(depth) = self.depths.get(hash) else {
+                    return true;
+                };
+                queue.push((*depth, *hash));
+            }
+        }
+        while let Some((_, hash)) = queue.pop() {
+            if queue.is_empty() {
+                break;
+            }
+            if self
+                .cgka_ops
+                .get(&hash)
+                .is_some_and(|op| op.payload.is_membership_change())
+            {
+                return true;
+            }
+            for pred in self.predecessors_for(&hash).into_iter().flatten() {
+                if seen.insert(*pred) {
+                    let Some(depth) = self.depths.get(pred) else {
+                        return true;
+                    };
+                    queue.push((*depth, *pred));
+                }
+            }
+        }
+        false
     }
 
     pub fn heads_contained_in(&self, heads: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
@@ -445,6 +509,49 @@ mod causal_graph_tests {
             hash_of(&one),
             hash_of(&two),
             "a graph with an extra operation hashed the same as one without it"
+        );
+    }
+
+    #[tokio::test]
+    async fn depth_is_the_longest_chain_of_predecessors() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = add_op(&signer, doc_id, 0).await;
+        graph.add_local_op(&root);
+        let short = add_op(&signer, doc_id, 1).await;
+        graph.add_op(&short, &Set::from_iter([Digest::hash(&root)]));
+        let long = add_op(&signer, doc_id, 2).await;
+        graph.add_op(&long, &Set::from_iter([Digest::hash(&root)]));
+        let longer = add_op(&signer, doc_id, 3).await;
+        graph.add_op(&longer, &Set::from_iter([Digest::hash(&long)]));
+        let join = add_op(&signer, doc_id, 4).await;
+        graph.add_local_op(&join);
+
+        assert_eq!(
+            graph.depths[&Digest::hash(&join)],
+            3,
+            "an operation after branches of length 1 and 2 should have depth 3"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_depth_falls_back_to_a_replay() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = add_op(&signer, doc_id, 0).await;
+        graph.add_local_op(&root);
+        let heads = graph.cgka_op_heads.clone();
+        assert!(
+            !graph.epoch_has_membership_change(&heads),
+            "an operation after the only head starts a new epoch"
+        );
+
+        graph.depths.clear();
+        assert!(
+            graph.epoch_has_membership_change(&heads),
+            "a graph missing a depth did not fall back to a replay"
         );
     }
 }

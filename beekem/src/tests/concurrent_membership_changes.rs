@@ -68,6 +68,22 @@ async fn every_replica_has_a_pcs_key_after_rotation_resolves_concurrent_adds() {
 }
 
 #[tokio::test]
+async fn a_concurrent_add_is_not_applied_before_a_replay() {
+    let mut rng = StdRng::seed_from_u64(0xb0f0_0001);
+    let mut group = Group::new(3, &mut rng).await;
+    let d = member(&mut rng);
+
+    let add_by_b = group.add(1, d.id, d.pk).await;
+    group.rotate(0, &mut rng).await;
+    group.deliver(&add_by_b, &[0]);
+
+    assert!(
+        !group.replicas[0].tree.contains_id(&d.id),
+        "an add concurrent with a rotation was applied to the tree without a replay"
+    );
+}
+
+#[tokio::test]
 async fn local_add_sees_a_pending_concurrent_add() {
     let mut rng = StdRng::seed_from_u64(0xb0f0_0000);
     let mut group = Group::new(3, &mut rng).await;
@@ -349,6 +365,7 @@ async fn run(scenario: &Scenario) {
 
     let context = "after a rotation re-established a root key";
     group.check(context);
+    group.assert_trees_match_replay(context);
     group.assert_key_agreement(context);
     // Validate that the replicas are agreeing on the correct membership.
     let got: BTreeSet<MemberId> = group.replicas[0].tree.member_ids().collect();
