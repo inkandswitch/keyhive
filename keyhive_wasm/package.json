@@ -1,6 +1,6 @@
 {
   "name": "@keyhive/keyhive",
-  "version": "0.2.0-alpha.1",
+  "version": "0.3.0-alpha.1",
   "description": "Keyhive: capabilities, group key agreement, and causal encryption for local-first data (Wasm bindings)",
   "keywords": [
     "authorization",
