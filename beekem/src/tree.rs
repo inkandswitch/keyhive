@@ -139,6 +139,11 @@ impl BeeKem {
             self.blank_leaf_and_path(leaf_idx);
             self.next_leaf_idx = leaf_idx;
         }
+        // Reclaim trailing blanks before placing the sorted leaves.
+        while self.next_leaf_idx.u32() > 0 && self.leaf(self.next_leaf_idx - 1).is_none() {
+            self.blank_path(treemath::parent((self.next_leaf_idx - 1).into()));
+            self.next_leaf_idx -= 1;
+        }
         leaves_to_sort.sort_by_key(|a| a.id);
         for leaf in leaves_to_sort {
             self.push_leaf(leaf.id, leaf.pk.clone());
@@ -701,6 +706,63 @@ mod tests {
         let sk = ShareSecretKey::generate(rng);
         sks.insert(sk.share_key(), sk);
         (id, sk.share_key())
+    }
+
+    /// Resolve `tree` for a membership change with `added` and `removed`.
+    fn resolve(tree: &mut BeeKem, added: &[MemberId], removed: &[(MemberId, u32)]) {
+        tree.sort_leaves_and_blank_paths_for_concurrent_membership_changes(
+            added.iter().copied().collect(),
+            removed.iter().copied().collect(),
+        );
+    }
+
+    #[test]
+    fn resolving_a_change_ignores_where_the_leaves_were_before_it() {
+        let mut rng = StdRng::seed_from_u64(0x0dd0_0001);
+        let mut sks = ShareKeyMap::new();
+        let (mut base, _owner) = one_member_tree(&mut rng, &mut sks);
+        let (x, x_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
+        let (y, y_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
+        base.push_leaf(x, x_pk.into());
+        base.push_leaf(y, y_pk.into());
+        let x_idx = base.id_to_leaf_idx[&x].u32();
+        let y_idx = base.id_to_leaf_idx[&y].u32();
+        let (joiner, joiner_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
+
+        // Whether a member added and removed in one epoch is in the tree when the
+        // resolution runs depends on which change arrived first.
+        let mut still_present = base.clone();
+        still_present.push_leaf(joiner, joiner_pk.into());
+        let mut already_gone = base.clone();
+        already_gone.push_leaf(joiner, joiner_pk.into());
+        already_gone
+            .remove_id(joiner)
+            .expect("the joiner was just added");
+        resolve(&mut still_present, &[joiner], &[(joiner, 3)]);
+        resolve(&mut already_gone, &[joiner], &[(joiner, 3)]);
+        assert_eq!(
+            still_present, already_gone,
+            "a member added and removed in one epoch resolved differently \
+             depending on whether it was still in the tree"
+        );
+
+        // Whether an added member is locally at a lower leaf then the ones freed
+        // by the two removals depends on the order the changes arrived in.
+        let mut placed_first = base.clone();
+        placed_first.push_leaf(joiner, joiner_pk.into());
+        placed_first.remove_id(x).expect("x is present");
+        placed_first.remove_id(y).expect("y is present");
+        let mut placed_last = base.clone();
+        placed_last.remove_id(x).expect("x is present");
+        placed_last.remove_id(y).expect("y is present");
+        placed_last.push_leaf(joiner, joiner_pk.into());
+        resolve(&mut placed_first, &[joiner], &[(x, x_idx), (y, y_idx)]);
+        resolve(&mut placed_last, &[joiner], &[(x, x_idx), (y, y_idx)]);
+        assert_eq!(
+            placed_first, placed_last,
+            "an added member resolved to a different leaf depending on whether it \
+             was placed before or after the removals"
+        );
     }
 
     fn one_member_tree(rng: &mut StdRng, sks: &mut ShareKeyMap) -> (BeeKem, MemberId) {
