@@ -1,9 +1,11 @@
 //! Syncing events between keyhives.
 
+use beekem::operation::CgkaOperation;
 use keyhive_core::{
     access::Access::{self, Edit, Read},
     event::Event,
-    test_utils::{EventKind, TestContext, TestResult as Result},
+    principal::{document::id::DocumentId, individual::id::IndividualId},
+    test_utils::{EventKind, Instance, TestContext, TestResult as Result},
 };
 use keyhive_crypto::{digest::Digest, signer::memory::MemorySigner};
 use std::collections::BTreeSet;
@@ -415,6 +417,98 @@ async fn all_agent_events_agrees_with_the_per_agent_walk() -> Result<()> {
             bulk,
             per_agent,
             "the bulk walk and the per-agent walk disagree for {}",
+            who.name()
+        );
+    }
+    Ok(())
+}
+
+/// The individual members in `who`'s CGKA tree for `doc`, sorted.
+async fn cgka_members(who: &Instance, doc: DocumentId) -> Vec<IndividualId> {
+    let mut ids: Vec<_> = who
+        .cgka_members_for(doc)
+        .await
+        .expect("knows the document")
+        .expect("an initialized tree")
+        .into_iter()
+        .collect();
+    ids.sort();
+    ids
+}
+
+#[tokio::test]
+async fn a_replica_sent_a_concurrent_removal_still_applies_later_ones() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let erin = ctx.individual("erin").await?;
+    let frank = ctx.individual("frank").await?;
+    let dave = ctx.individual("dave").await?;
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice
+        .add_member(dave.id(), design_doc, Access::Admin, &[])
+        .await?;
+    alice.add_member(erin.id(), design_doc, Read, &[]).await?;
+    ctx.sync_all_unsent().await?;
+    dave.add_member(frank.id(), design_doc, Read, &[]).await?;
+    ctx.sync_all_unsent().await?;
+
+    // Neither has seen the other's revocation of frank, so dave is sent a
+    // removal concurrent with the one he made himself.
+    alice.revoke_member(frank.id(), true, design_doc).await?;
+    dave.revoke_member(frank.id(), true, design_doc).await?;
+    ctx.sync(&alice, &dave).await?;
+
+    alice.revoke_member(erin.id(), true, design_doc).await?;
+    ctx.sync(&alice, &dave).await?;
+
+    assert_eq!(
+        cgka_members(&dave, design_doc).await,
+        cgka_members(&alice, design_doc).await,
+        "dave stopped applying membership changes after the concurrent removal"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_tree() -> Result<()>
+{
+    let mut ctx = TestContext::new().await;
+    let dave = ctx.individual("dave").await?;
+    let bob = ctx.individual("bob").await?;
+    let grace = ctx.individual("grace").await?;
+    let design_doc = ctx.doc(&dave, "design_doc").await?;
+    dave.add_member(bob.id(), design_doc, Read, &[]).await?;
+    let dave_replica = ctx.new_keyhive_instance_for(&dave, "dave-laptop").await?;
+    ctx.sync_all_unsent().await?;
+
+    dave_replica
+        .add_member(grace.id(), design_doc, Read, &[])
+        .await?;
+    // The original writes, so its heads move past what the replica's add's dependencies
+    // and that add reaches it as a concurrent change that is pending.
+    ctx.encrypt(&dave, design_doc, b"the phone writes").await?;
+    ctx.sync(&dave_replica, &dave).await?;
+
+    // Nothing may read the member list before this. Reading resolves the
+    // outstanding change, which is the state under test.
+    let update = dave.revoke_member(grace.id(), true, design_doc).await?;
+    assert!(
+        update.cgka_ops().iter().any(|op| matches!(
+            op.payload(),
+            CgkaOperation::Remove { id, .. } if IndividualId::from(*id) == grace.id()
+        )),
+        "the revocation produced no CGKA removal for the member it revoked"
+    );
+    ctx.sync_all_unsent().await?;
+
+    // The replica is left out on purpose. A second instance of one identity
+    // diverges here for different reasons and asserting on it would
+    // make this test fail for that instead.
+    for who in [&dave, &bob] {
+        assert!(
+            !cgka_members(who, design_doc).await.contains(&grace.id()),
+            "{} still keeps a revoked member",
             who.name()
         );
     }

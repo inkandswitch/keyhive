@@ -164,6 +164,37 @@ async fn local_remove_sees_a_pending_concurrent_add() {
     group.assert_key_agreement(context);
 }
 
+#[tokio::test]
+async fn member_ids_resolves_pending_concurrent_adds() {
+    let mut rng = StdRng::seed_from_u64(0x5ead_0001);
+    let mut group = Group::new(3, &mut rng).await;
+    let d = member(&mut rng);
+    let e = member(&mut rng);
+    group.names.insert(d.id, "d".to_string());
+    group.names.insert(e.id, "e".to_string());
+
+    // `b` and `c` each receive the other's add after applying their own.
+    let add_by_b = group.add(1, d.id, d.pk).await;
+    let add_by_c = group.add(2, e.id, e.pk).await;
+    group.deliver(&add_by_b, &[0, 2]);
+    group.deliver(&add_by_c, &[0, 1]);
+
+    for replica in 0..group.replicas.len() {
+        let mut got: Vec<&str> = group.replicas[replica]
+            .member_ids()
+            .expect("resolving pending changes succeeds")
+            .map(|id| group.names[&id].as_str())
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            ["a", "b", "c", "d", "e"],
+            "replica {replica} reported members without the pending concurrent add"
+        );
+    }
+    group.check("after reading members with concurrent adds pending");
+}
+
 async fn rotation_before_merge_scenario(seed: u64) -> bool {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut group = Group::new(3, &mut rng).await;
