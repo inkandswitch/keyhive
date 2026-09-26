@@ -365,14 +365,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let still_reachable = self.group.individual_ids().await;
         ids_to_remove.retain(|id| !still_reachable.contains(id));
 
-        let authorization = CgkaAuthorization::Revocation(
-            revocations.first().map_or([0u8; 32], |r| r.digest().into()),
-        );
-
+        // `ids_to_remove` is only non-empty if the member held a delegation,
+        // and the group revocation then returns at least one revocation. Any
+        // of them authorizes the removals, since they all revoke the same
+        // member.
         let mut ops = cgka_ops;
-        for id in ids_to_remove {
-            if let Some(op) = self.cgka_mut()?.remove(id, authorization, signer).await? {
-                ops.push(op);
+        if let Some(rev) = revocations.first() {
+            let authorization = CgkaAuthorization::Revocation(rev.digest().into());
+            for id in ids_to_remove {
+                if let Some(op) = self.cgka_mut()?.remove(id, authorization, signer).await? {
+                    ops.push(op);
+                }
             }
         }
         Ok(RevokeMemberUpdate {

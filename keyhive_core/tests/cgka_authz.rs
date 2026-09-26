@@ -126,7 +126,11 @@ async fn op_where(
 }
 
 fn refused(result: &Result<(), ReceiveCgkaOpError>) -> bool {
-    matches!(result, Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(_)))
+    matches!(
+        result,
+        Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(_)
+            | ReceiveCgkaOpError::PendingCgkaAuthorization(_))
+    )
 }
 
 #[tokio::test]
