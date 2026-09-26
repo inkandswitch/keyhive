@@ -674,16 +674,14 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
 
     let doc_on_alice = alice.get_document(doc_id).await.unwrap();
     let (alice_members, alice_ops) = {
-        let locked = doc_on_alice.lock().await;
-        let cgka = locked.cgka()?;
-        let members: std::collections::BTreeSet<_> = cgka.member_ids().collect();
-        (members, cgka.ops_count())
+        let mut locked = doc_on_alice.lock().await;
+        let members: std::collections::BTreeSet<_> = locked.cgka_members()?.collect();
+        (members, locked.cgka()?.ops_count())
     };
     let (bob_members, bob_ops) = {
-        let locked = doc_on_bob.lock().await;
-        let cgka = locked.cgka()?;
-        let members: std::collections::BTreeSet<_> = cgka.member_ids().collect();
-        (members, cgka.ops_count())
+        let mut locked = doc_on_bob.lock().await;
+        let members: std::collections::BTreeSet<_> = locked.cgka_members()?.collect();
+        (members, locked.cgka()?.ops_count())
     };
     assert_eq!(
         alice_members, bob_members,

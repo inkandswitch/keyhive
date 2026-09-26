@@ -480,6 +480,9 @@ async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_
     let design_doc = ctx.doc(&dave, "design_doc").await?;
     dave.add_member(bob.id(), design_doc, Read, &[]).await?;
     let dave_replica = ctx.new_keyhive_instance_for(&dave, "dave-laptop").await?;
+    // The tree adds dave with one of his prekeys. The replica needs that
+    // prekey's secret to merge the add.
+    ctx.share_prekey_secrets(&dave, &dave_replica).await?;
     ctx.sync_all_unsent().await?;
 
     dave_replica
