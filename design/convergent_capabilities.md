@@ -5,7 +5,7 @@ Convergent capabilities ("concap") are Keyhive's authorization model: a capabili
 This document explains why the model exists and how it differs from its ancestors. Worked examples are in [Group Membership](./group_membership.md). Terms are defined in the [glossary](./glossary.md).
 
 > [!NOTE]
-> [Keyline] is the successor design: a uniform authority graph over keys with jurisdiction-scoped revocation. This document describes the current model.
+> [Keyline] is the successor design: a uniform authority graph over keys with revocation scoped by the issuer's admin reach. This document describes the current model.
 
 ## Language
 
@@ -70,7 +70,7 @@ The set of operations is grow-only and merges by set union. A revocation is a ne
 Relay < Read < Edit < Admin
 ```
 
-A delegation's level MUST be at or below its proof's level. `Relay`, `Read`, and `Edit` are conveyance levels: what may travel along the edge. `Admin` is the governance level: authority over the graph itself. The [glossary](./glossary.md#authority) lists what each level permits.
+A delegation's level MUST be at or below its proof's level. `Relay`, `Read`, and `Edit` govern data: what may travel along the edge. `Admin` is the sole governance level: authority over the graph itself. The [glossary](./glossary.md#authority) lists what each level permits.
 
 ### Evaluation
 
@@ -105,7 +105,7 @@ The capability graph determines membership of a document's BeeKEM tree: every ag
 - _No delegator-independence._ If your standing is revoked, everything you delegated goes with it. This enables cascades and healing, but an administrator's mistake can be wide-reaching.
 - _Membership is visible to relays._ A `Relay` must see the graph to evaluate it.
 - _Causal, not temporal._ A genuinely old operation arriving late is indistinguishable from a back-dated one; see the [threat model](./threat_model.md#t5-back-dating).
-- _Tiebreaks are arbitrary._ Seniority and depth-then-digest are deterministic but do not reflect who ought to win. Keyline replaces them with explicit jurisdictions.
+- _Tiebreaks are arbitrary._ Seniority and depth-then-digest are deterministic but do not reflect who ought to win. Keyline replaces them with revocation scoped by admin reach.
 
 ## FAQ
 
@@ -127,7 +127,7 @@ No. Forbidding delegation leads users to share secret keys instead. Attenuate: d
 
 <!-- External Links -->
 [BCP 14]: https://datatracker.ietf.org/doc/bcp14/
-[Keyline]: https://github.com/inkandswitch/keyhive/tree/keyline/design/keyline
+[Keyline]: ./keyline/README.md
 [PoLA]: https://en.wikipedia.org/wiki/Principle_of_least_privilege
 [SPKI]: https://datatracker.ietf.org/doc/html/rfc2693
 [UCAN]: https://github.com/ucan-wg/spec
