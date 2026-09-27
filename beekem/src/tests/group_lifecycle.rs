@@ -51,6 +51,24 @@ async fn a_group_can_be_emptied_and_refilled() {
     );
 }
 
+#[tokio::test]
+async fn emptying_a_group_converges_across_replicas() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_0003);
+    let mut group = Group::new(2, &mut rng).await;
+
+    for i in 0..2 {
+        let op = group.remove(0, group.id(i)).await;
+        group.broadcast(&op);
+    }
+
+    assert_eq!(
+        group.replicas[1].group_size(),
+        0,
+        "a replica that received the removal of the last member still has members"
+    );
+    group.check("after removing every member");
+}
+
 fn hash_of(cgka: &Cgka) -> u64 {
     let mut hasher = DefaultHasher::new();
     cgka.hash(&mut hasher);
