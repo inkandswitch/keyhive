@@ -12,14 +12,30 @@ rust-version.workspace = true
 [dependencies]
 blake3 = { version = "1.5", default-features = false }
 chacha20poly1305 = { workspace = true }
-derive_more = { version = "1.0", default-features = false, features = ["debug", "deref", "display", "from", "into", "try_into"] }
-ed25519-dalek = { version = "2.1", default-features = false, features = ["rand_core", "serde"] }
+derive_more = { version = "1.0", default-features = false, features = [
+  "debug",
+  "deref",
+  "display",
+  "from",
+  "into",
+  "try_into",
+] }
+ed25519-dalek = { version = "2.1", default-features = false, features = [
+  "rand_core",
+  "serde",
+] }
 future_form = { workspace = true }
 futures = { workspace = true }
+keyhive_codec = { version = "0.1.0", path = "../keyhive_codec", default-features = false }
 rand = { version = "0.8.5", default-features = false }
-serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+serde = { version = "1.0", default-features = false, features = [
+  "alloc",
+  "derive",
+] }
 signature = { workspace = true }
-tracing = { version = "0.1.40", default-features = false, features = ["attributes"] }
+tracing = { version = "0.1.40", default-features = false, features = [
+  "attributes",
+] }
 x25519-dalek = { workspace = true }
 
 # std-only dependencies
@@ -36,19 +52,20 @@ tokio = { version = "1.43", features = ["macros", "rt"] }
 [features]
 default = ["std"]
 std = [
-    "bincode",
-    "blake3/std",
-    "derive_more/std",
-    "dupe",
-    "ed25519-dalek/std",
-    "rand/std",
-    "rand/std_rng",
-    "serde/std",
-    "serde/rc",
-    "thiserror",
-    "tracing/std",
+  "bincode",
+  "blake3/std",
+  "derive_more/std",
+  "dupe",
+  "ed25519-dalek/std",
+  "keyhive_codec/std",
+  "rand/std",
+  "rand/std_rng",
+  "serde/std",
+  "serde/rc",
+  "thiserror",
+  "tracing/std",
 ]
-arbitrary = ["dep:arbitrary"]
+arbitrary = ["dep:arbitrary", "std"]
 
 [lints.clippy]
 doc_overindented_list_items = "allow"

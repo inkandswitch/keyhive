@@ -22,17 +22,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # keyhive_core benches use divan (not Criterion): output is a text
-        # table on stdout, so we capture it to a file for the artifact.
-        bench:
-          - bench_cgka
-          - bench_cgka_propagation
-          - bench_ingest_unsorted_static_events
-          - bench_membership_ops_all
-          - bench_reachable_prekey_ops
-          - bench_reachable_prekey_ops_all
-          - bench_reverse_topsort
-          - bench_toggling_delegate_revoke
+        # All benches use divan (not Criterion): output is a text table on
+        # stdout, so we capture it to a file for the artifact.
+        include:
+          - { package: keyhive_core, bench: bench_cgka }
+          - { package: keyhive_core, bench: bench_cgka_propagation }
+          - { package: keyhive_core, bench: bench_ingest_unsorted_static_events }
+          - { package: keyhive_core, bench: bench_membership_ops_all }
+          - { package: keyhive_core, bench: bench_reachable_prekey_ops }
+          - { package: keyhive_core, bench: bench_reachable_prekey_ops_all }
+          - { package: keyhive_core, bench: bench_reverse_topsort }
+          - { package: keyhive_core, bench: bench_toggling_delegate_revoke }
+          - { package: keyline, bench: bench_evaluate }
 
     steps:
       - uses: actions/checkout@v4
@@ -44,25 +45,25 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # One cache entry for all benches: they share a single package,
-          # so per-bench keys would just duplicate the same artifacts.
-          shared-key: bench-keyhive_core
+          # One cache entry per package: benches within a package share
+          # artifacts, so per-bench keys would just duplicate them.
+          shared-key: bench-${{ matrix.package }}
           cache-all-crates: true
 
-      - name: Run ${{ matrix.bench }}
+      - name: Run ${{ matrix.package }} ${{ matrix.bench }}
         env:
           DIVAN_SORT: name
         # Explicit `bash` gives `-o pipefail`, so a failing bench is not masked by `tee`.
         shell: bash
         run: |
           mkdir -p bench-results
-          cargo bench --package keyhive_core --features test_utils \
+          cargo bench --package ${{ matrix.package }} --features test_utils \
             --bench ${{ matrix.bench }} \
-            | tee "bench-results/${{ matrix.bench }}.txt"
+            | tee "bench-results/${{ matrix.package }}-${{ matrix.bench }}.txt"
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results-${{ matrix.bench }}
+          name: benchmark-results-${{ matrix.package }}-${{ matrix.bench }}
           path: bench-results/
           retention-days: 90
