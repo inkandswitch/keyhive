@@ -146,7 +146,7 @@ impl BeeKem {
         }
         leaves_to_sort.sort_by_key(|a| a.id);
         for leaf in leaves_to_sort {
-            self.push_leaf(leaf.id, leaf.pk.clone());
+            self.push_leaf(leaf.id, leaf.pk.into());
         }
     }
 
@@ -227,7 +227,7 @@ impl BeeKem {
         let mut seen_idxs = vec![child_idx];
         // We will return this at the end once we've decrypted the root secret.
         let mut maybe_last_secret_decrypted = None;
-        let mut child_node_key = leaf.pk.clone();
+        let mut child_node_key = NodeKey::from(leaf.pk);
         let mut parent_idx: TreeNodeIndex = treemath::parent(child_idx).into();
         while !self.is_root(child_idx) {
             // Find the next non-blank, non-conflict parent
@@ -342,7 +342,8 @@ impl BeeKem {
             let Some(leaf) = self.leaf(leaf_idx) else {
                 panic!("Leaf for present ID should not be None");
             };
-            let new_node_key = leaf.pk.merge(&new_path.leaf_pk, &new_path.removed_keys);
+            let new_node_key =
+                NodeKey::from(leaf.pk).merge(&new_path.leaf_pk, &new_path.removed_keys);
             self.insert_leaf_at(leaf_idx, new_path.leaf_id, new_node_key);
             self.blank_path(treemath::parent(leaf_idx.into()));
             return;
@@ -353,7 +354,7 @@ impl BeeKem {
         self.insert_leaf_at(
             leaf_idx,
             new_path.leaf_id,
-            old_leaf.pk.merge(&new_leaf_pk, &new_path.removed_keys),
+            NodeKey::from(old_leaf.pk).merge(&new_leaf_pk, &new_path.removed_keys),
         );
 
         let removed_keys_set: Set<ShareKey> = Set::from_iter(new_path.removed_keys.iter().copied());
@@ -478,7 +479,7 @@ impl BeeKem {
                 .as_ref()
                 .ok_or(CgkaError::ShareKeyNotFound)?
                 .pk
-                .clone(),
+                .into(),
             TreeNodeIndex::Inner(i_idx) => self
                 .inner_node(i_idx)
                 .as_ref()
@@ -526,7 +527,7 @@ impl BeeKem {
     fn insert_leaf_at(&mut self, idx: LeafNodeIndex, id: MemberId, pk: NodeKey) {
         let leaf = LeafNode {
             id,
-            pk: NodeKey::ShareKey(pk.lowest()),
+            pk: pk.lowest(),
         };
         self.leaves[idx.usize()] = Some(leaf);
     }
@@ -619,7 +620,7 @@ impl BeeKem {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
 pub struct LeafNode {
     pub id: MemberId,
-    pub pk: NodeKey,
+    pub pk: ShareKey,
 }
 
 #[cfg(any(test, feature = "test_utils"))]
