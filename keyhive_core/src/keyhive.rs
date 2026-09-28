@@ -2137,6 +2137,10 @@ impl<
                     CgkaUnauthorized::Denied,
                 )?;
                 ensure(rev.issuer == op_issuer, CgkaUnauthorized::Denied)?;
+                ensure(
+                    rev.payload.revoke.payload.can.is_reader(),
+                    CgkaUnauthorized::Denied,
+                )?;
                 let access = access_to_this_doc_ever(rev.subject_id()).await;
                 ensure(
                     access.is_some_and(|a| rev.payload.revoke.payload.can.min(a).is_reader()),
@@ -2400,6 +2404,25 @@ impl<
                             } else {
                                 panic!("revoked delegation to be available");
                             },
+                            after_content: rev.payload.after_content.clone(),
+                        },
+                        rev.issuer,
+                        rev.signature,
+                    )));
+                } else if rev.payload.revoke.payload.delegate.id() == group_id {
+                    // The revoked delegation references the promoted agent, so it
+                    // was rewritten above and the revocation must reference the
+                    // rewritten one.
+                    let revoke = self
+                        .delegations
+                        .lock()
+                        .await
+                        .get(&Digest::hash(&rev.payload.revoke))
+                        .unwrap_or_else(|| rev.payload.revoke.dupe());
+                    locked_revocations.insert(Arc::new(Signed::new(
+                        Revocation {
+                            revoke,
+                            proof: rev.payload.proof.dupe(),
                             after_content: rev.payload.after_content.clone(),
                         },
                         rev.issuer,

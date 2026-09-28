@@ -756,6 +756,64 @@ async fn an_add_through_an_individual_is_applied_once_the_individual_is_promoted
 }
 
 #[tokio::test]
+async fn a_remove_through_an_individual_is_applied_once_the_individual_is_promoted_to_a_group(
+) -> TestResult {
+    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let group = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let carol = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let dave = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let group_id = learn(&alice, &group).await;
+    let carol_id = learn(&alice, &carol).await;
+    let dave_id = learn(&alice, &dave).await;
+    learn(&dave, &group).await;
+    learn(&dave, &carol).await;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    alice.add_member(dave_id, doc_id, Access::Read, &[]).await?;
+    dave.ingest_event_table(alice.events_for_agent(dave_id).await)
+        .await?;
+    let group_to_carol = group
+        .try_sign(StaticDelegation::<[u8; 32]> {
+            can: Access::Read,
+            proof: None,
+            delegate: carol_id.into(),
+            after_revocations: vec![],
+            after_content: Default::default(),
+        })
+        .await?;
+    alice.receive_delegation(&group_to_carol).await?;
+    alice
+        .add_member(group_id, doc_id, Access::Read, &[])
+        .await?;
+    alice.revoke_member(group_id, true, doc_id).await?;
+    let remove_of_carol = op_where(&alice, doc_id, |op| {
+        matches!(op, CgkaOperation::Remove { id, .. }
+            if *id == MemberId(carol.id().verifying_key()))
+    })
+    .await;
+
+    // Dave receives the revocation of Alice's delegation to `group` while
+    // `group` is still an individual to him.
+    let group_key = group.id().verifying_key();
+    let without_group_to_carol = alice
+        .events_for_agent(dave_id)
+        .await
+        .into_iter()
+        .filter(|(_, event)| match event {
+            keyhive_core::event::Event::CgkaOperation(_) => false,
+            keyhive_core::event::Event::Delegated(dlg) => dlg.issuer != group_key,
+            _ => true,
+        })
+        .collect();
+    dave.ingest_event_table(without_group_to_carol).await?;
+    dave.receive_delegation(&group_to_carol).await?;
+    dave.ingest_event_table(alice.events_for_agent(dave_id).await)
+        .await?;
+
+    assert!(contains_op(&dave, doc_id, &remove_of_carol).await);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
@@ -771,6 +829,38 @@ async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
 
     assert!(is_denied(&result), "{result:?}");
     assert!(!result.unwrap_err().is_missing_dependency());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_remove_citing_a_revocation_of_access_below_read_is_denied() -> TestResult {
+    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let bob = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let bob_id = learn(&alice, &bob).await;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    alice.add_member(bob_id, doc_id, Access::Relay, &[]).await?;
+    let revoked = alice
+        .revoke_member(Identifier::from(bob_id), true, doc_id)
+        .await?;
+
+    let op = CgkaOperation::Remove {
+        id: MemberId(bob.id().verifying_key()),
+        leaf_idx: 1,
+        removed_keys: vec![],
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId(doc_id.verifying_key()),
+        authorization: CgkaAuthorization::Revocation(
+            revoked
+                .revocations()
+                .first()
+                .expect("a revocation")
+                .digest()
+                .into(),
+        ),
+    };
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+
+    assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
 
