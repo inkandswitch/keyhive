@@ -285,6 +285,8 @@ impl CgkaOperationGraph {
         let mut seen = heads.clone();
         let mut frontier = Vec::from_iter(heads.iter().copied());
         let mut ordered = Vec::with_capacity(heads.len());
+        // Traverse back from heads, recording each operation's depth and the depth
+        // of its deepest child.
         while let Some(op_hash) = frontier.pop() {
             let depth = self.depth(&op_hash)?;
             ordered.push((depth, op_hash));
@@ -306,7 +308,8 @@ impl CgkaOperationGraph {
         // The shallowest depth at which the next boundary batch could occur. This is the
         // depth of the deepest child of every operation in a shallower layer.
         let mut earliest_next_boundary = 0;
-        // A layer consists of any ops of the same depth, which would always be concurrent with each other.
+        // A layer consists of any operations of the same depth, which would always be
+        // concurrent with each other.
         for layer in ordered.chunk_by(|a, b| a.0 == b.0) {
             let depth = layer[0].0;
             // A chain of operations that starts shallower than a putative boundary operation
@@ -330,7 +333,7 @@ impl CgkaOperationGraph {
                 );
                 let deepest = match deepest_child.get(op_hash) {
                     Some(depth) => *depth,
-                    // This must be a head (it has no children among the sorted operations)
+                    // This must be a head (it has no children among the sorted operations),
                     // which means every deeper operation is concurrent with it and can't be
                     // a boundary.
                     None => u64::MAX,
