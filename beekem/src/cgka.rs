@@ -440,7 +440,7 @@ impl Cgka {
     }
 
     pub fn ops(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
-        self.ops_graph.topsort_graph()
+        self.ops_graph.batches()
     }
 
     pub fn contains_predecessors(&self, preds: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
@@ -574,7 +574,7 @@ impl Cgka {
         }
         let mut heads = Set::new();
         heads.insert(*op_hash);
-        let ops = self.ops_graph.topsort_for_heads(&heads)?;
+        let ops = self.ops_graph.batches_for_heads(&heads)?;
         self.rebuild_pcs_key(ops)
     }
 
@@ -587,7 +587,7 @@ impl Cgka {
     /// Replay all ops in our graph in a deterministic order.
     #[instrument(skip_all)]
     fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
-        let ordered_ops = self.ops_graph.topsort_graph()?;
+        let ordered_ops = self.ops_graph.batches()?;
         let rebuilt_cgka = self.rebuild_cgka(ordered_ops)?;
         self.update_cgka_from(&rebuilt_cgka);
         self.pending_ops_for_structural_change = false;
