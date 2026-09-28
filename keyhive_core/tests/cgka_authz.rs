@@ -294,7 +294,7 @@ async fn a_remove_cannot_evict_the_wrong_subject() -> TestResult {
     let result = alice.receive_cgka_op(signed.clone()).await;
 
     // Pending because, from Alice's perspective, "Bob" could still be promoted to a group
-    // that contains Mallory.
+    // that contains Carol.
     assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op(&alice, doc_id, &signed).await);
     Ok(())
@@ -771,6 +771,24 @@ async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
 
     assert!(is_denied(&result), "{result:?}");
     assert!(!result.unwrap_err().is_missing_dependency());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_remove_citing_a_revocation_not_yet_received_is_pending() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+
+    let op = CgkaOperation::Remove {
+        id: MemberId(bob.id().verifying_key()),
+        leaf_idx: 1,
+        removed_keys: vec![],
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId(doc_id.verifying_key()),
+        authorization: CgkaAuthorization::Revocation([0u8; 32]),
+    };
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+
+    assert!(is_pending(&result), "{result:?}");
     Ok(())
 }
 

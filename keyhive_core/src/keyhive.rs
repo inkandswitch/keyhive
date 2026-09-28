@@ -1890,6 +1890,8 @@ impl<
         let subject_id = delegation.subject_id();
         let delegation = Arc::new(delegation);
         let mut found = false;
+        // Release these locks before branching: `promote_individual_to_group`
+        // locks `groups` itself.
         let existing_group = { self.groups.lock().await.get(&GroupId(subject_id)).cloned() };
         let existing_doc = { self.docs.lock().await.get(&DocumentId(subject_id)).cloned() };
         if let Some(group) = existing_group {
@@ -2092,6 +2094,9 @@ impl<
                     dlg.payload.proof.is_none() && dlg.subject_id() == Identifier::from(doc_id);
                 if is_founding {
                     // The issuer's own founding delegation may not have arrived yet.
+                    // Every delegation to the issuer is checked, since
+                    // `get_capability` returns only one, which may be a later
+                    // admin delegation rather than the founding one.
                     let issuer_founded_with_admin = {
                         let locked = doc.lock().await;
                         locked
