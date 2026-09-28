@@ -87,7 +87,7 @@ async fn doc_with_alice_and_bob() -> TestResult<(Kh, Kh, DocumentId)> {
 }
 
 /// A legitimate `PathChange` from a document of `who`'s, for retargeting elsewhere.
-async fn stolen_path(who: &Kh) -> Box<PathChange> {
+async fn intercepted_path(who: &Kh) -> Box<PathChange> {
     let doc_id = who
         .generate_doc(vec![], nonempty![[7u8; 32]])
         .await
@@ -135,30 +135,40 @@ async fn op_where(
         .expect("the operation was produced")
 }
 
-fn denied(result: &Result<(), ReceiveCgkaOpError>) -> bool {
-    matches!(
-        result,
-        Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(_)
-            | ReceiveCgkaOpError::PendingCgkaAuthorization(_))
-    )
+fn is_denied(result: &Result<(), ReceiveCgkaOpError>) -> bool {
+    matches!(result, Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(_)))
+}
+
+fn is_pending(result: &Result<(), ReceiveCgkaOpError>) -> bool {
+    matches!(result, Err(ReceiveCgkaOpError::PendingCgkaAuthorization(_)))
 }
 
 #[tokio::test]
 async fn a_non_member_cannot_add_themselves() -> TestResult {
-    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
 
+    // Mallory cites a real delegation, but Alice issued it, not Mallory.
+    let bob_delegation = alice
+        .get_document(doc_id)
+        .await
+        .unwrap()
+        .lock()
+        .await
+        .get_capability(&Identifier::from(bob.id()))
+        .map(|d| CgkaAuthorization::Delegation(d.digest().into()))
+        .expect("bob has a delegation");
     let op = CgkaOperation::Add {
         added_id: MemberId(mallory.id().verifying_key()),
         pk: own_prekey(&mallory, doc_id).await,
         leaf_index: 0,
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
-        authorization: CgkaAuthorization::Delegation([0u8; 32]),
+        authorization: bob_delegation,
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_denied(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
     Ok(())
 }
@@ -168,17 +178,30 @@ async fn a_non_member_cannot_remove_a_member() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
 
+    // Mallory cites a real revocation, but Alice issued it, not Mallory.
+    let revoked = alice
+        .revoke_member(Identifier::from(bob.id()), true, doc_id)
+        .await?;
+    let bob_revocation = CgkaAuthorization::Revocation(
+        revoked
+            .revocations()
+            .first()
+            .expect("a revocation")
+            .digest()
+            .into(),
+    );
     let op = CgkaOperation::Remove {
         id: MemberId(bob.id().verifying_key()),
         leaf_idx: 1,
         removed_keys: vec![],
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
-        authorization: CgkaAuthorization::Revocation([0u8; 32]),
+        authorization: bob_revocation,
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_denied(&result), "{result:?}");
+    assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
     Ok(())
 }
 
@@ -187,7 +210,7 @@ async fn a_non_member_cannot_update_another_members_leaf() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
 
-    let mut path = stolen_path(&mallory).await;
+    let mut path = intercepted_path(&mallory).await;
     path.leaf_id = MemberId(bob.id().verifying_key());
     let op = CgkaOperation::Update {
         id: MemberId(bob.id().verifying_key()),
@@ -197,7 +220,7 @@ async fn a_non_member_cannot_update_another_members_leaf() -> TestResult {
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
 
@@ -224,10 +247,13 @@ async fn an_add_cannot_target_the_wrong_subject() -> TestResult {
         doc_id: TreeId(doc_id.verifying_key()),
         authorization: bob_delegation,
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let signed = alice.try_sign(op).await?;
+    let result = alice.receive_cgka_op(signed.clone()).await;
 
-    assert!(denied(&result), "{result:?}");
-    assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
+    // Pending because, from Alice's perspective, "Bob" could still be promoted to a group
+    // that contains Mallory.
+    assert!(is_pending(&result), "{result:?}");
+    assert!(!contains_op(&alice, doc_id, &signed).await);
     Ok(())
 }
 
@@ -264,9 +290,13 @@ async fn a_remove_cannot_evict_the_wrong_subject() -> TestResult {
         doc_id: TreeId(doc_id.verifying_key()),
         authorization: bob_revocation,
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let signed = alice.try_sign(op).await?;
+    let result = alice.receive_cgka_op(signed.clone()).await;
 
-    assert!(denied(&result), "{result:?}");
+    // Pending because, from Alice's perspective, "Bob" could still be promoted to a group
+    // that contains Mallory.
+    assert!(is_pending(&result), "{result:?}");
+    assert!(!contains_op(&alice, doc_id, &signed).await);
     Ok(())
 }
 
@@ -293,7 +323,7 @@ async fn leak_to(from: &Kh, to: &Kh) {
 }
 
 #[tokio::test]
-async fn an_add_cannot_cite_a_delegation_over_another_resource() -> TestResult {
+async fn an_add_citing_a_delegation_over_another_resource_is_pending() -> TestResult {
     let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
 
@@ -310,13 +340,13 @@ async fn an_add_cannot_cite_a_delegation_over_another_resource() -> TestResult {
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
     Ok(())
 }
 
 #[tokio::test]
-async fn a_remove_cannot_cite_a_revocation_over_another_resource() -> TestResult {
+async fn a_remove_citing_a_revocation_over_another_resource_is_pending() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
 
@@ -343,7 +373,7 @@ async fn a_remove_cannot_cite_a_revocation_over_another_resource() -> TestResult
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
     Ok(())
 }
@@ -352,7 +382,7 @@ async fn a_remove_cannot_cite_a_revocation_over_another_resource() -> TestResult
 async fn the_creator_cannot_update_another_members_leaf() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
-    let mut path = stolen_path(&alice).await;
+    let mut path = intercepted_path(&alice).await;
     path.leaf_id = MemberId(bob.id().verifying_key());
     let op = CgkaOperation::Update {
         id: MemberId(bob.id().verifying_key()),
@@ -362,7 +392,7 @@ async fn the_creator_cannot_update_another_members_leaf() -> TestResult {
     };
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
 
@@ -387,13 +417,13 @@ async fn an_add_cannot_cite_a_delegation_below_read() -> TestResult {
     };
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_denied(&result), "{result:?}");
     assert!(!tree_members(&alice, doc_id).await.contains(&carol.id()));
     Ok(())
 }
 
 #[tokio::test]
-async fn an_add_cannot_grant_more_than_its_subject_reaches_here() -> TestResult {
+async fn an_add_granting_more_than_its_subject_reaches_here_is_pending() -> TestResult {
     let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
     let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
     let mallory_id = learn(&alice, &mallory).await;
@@ -419,7 +449,7 @@ async fn an_add_cannot_grant_more_than_its_subject_reaches_here() -> TestResult 
     };
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_pending(&result), "{result:?}");
     assert!(!tree_members(&alice, doc_id).await.contains(&mallory.id()));
     Ok(())
 }
@@ -450,7 +480,7 @@ async fn a_founding_delegation_cannot_seat_an_outsider() -> TestResult {
     };
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_denied(&result), "{result:?}");
     let seated = doc
         .lock()
         .await
@@ -497,7 +527,7 @@ async fn an_add_cannot_cite_a_delegation_issued_by_public() -> TestResult {
         .receive_cgka_op(Public.signer().try_sign_sync(op)?)
         .await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_denied(&result), "{result:?}");
     let seated = doc
         .lock()
         .await
@@ -526,7 +556,7 @@ async fn the_creators_own_add_is_accepted_again_when_it_is_redelivered() -> Test
         .receive_cgka_op(creators_own_add(&alice, doc_id).await)
         .await;
 
-    assert!(!denied(&result), "{result:?}");
+    assert!(result.is_ok(), "{result:?}");
     Ok(())
 }
 
@@ -542,7 +572,7 @@ async fn a_creator_delegated_as_admin_twice_can_still_process_their_founding_add
         .receive_cgka_op(creators_own_add(&alice, doc_id).await)
         .await;
 
-    assert!(!denied(&result), "{result:?}");
+    assert!(result.is_ok(), "{result:?}");
     Ok(())
 }
 
@@ -558,7 +588,7 @@ async fn a_member_who_did_not_found_the_document_cannot_enact_a_founding_delegat
     let reissued = creators_own_add(&alice, doc_id).await.payload().clone();
     let result = alice.receive_cgka_op(bob.try_sign(reissued).await?).await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, bob.id().verifying_key()).await);
     Ok(())
 }
@@ -607,7 +637,7 @@ async fn a_remove_cannot_cite_a_revocation_issued_by_public() -> TestResult {
         .receive_cgka_op(Public.signer().try_sign_sync(op)?)
         .await;
 
-    assert!(denied(&result), "{result:?}");
+    assert!(is_denied(&result), "{result:?}");
     assert!(tree_members(&alice, doc_id).await.contains(&bob_id));
     Ok(())
 }
@@ -654,7 +684,7 @@ async fn an_add_through_a_group_is_still_applied_to_cgka_graph_after_member_revo
 
     let result = carol.receive_cgka_op(add_of_bob.clone()).await;
 
-    assert!(!denied(&result), "{result:?}");
+    assert!(result.is_ok(), "{result:?}");
     assert!(contains_op(&carol, doc_id, &add_of_bob).await);
     Ok(())
 }
@@ -672,9 +702,7 @@ async fn an_add_through_an_individual_is_applied_once_the_individual_is_promoted
     learn(&dave, &group).await;
     learn(&dave, &carol).await;
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    alice
-        .add_member(dave_id, doc_id, Access::Read, &[])
-        .await?;
+    alice.add_member(dave_id, doc_id, Access::Read, &[]).await?;
     dave.ingest_event_table(alice.events_for_agent(dave_id).await)
         .await?;
 
@@ -716,10 +744,7 @@ async fn an_add_through_an_individual_is_applied_once_the_individual_is_promoted
     dave.ingest_event_table(without_group_to_carol).await?;
 
     let result = dave.receive_cgka_op(add_of_carol.clone()).await;
-    assert!(
-        matches!(result, Err(ReceiveCgkaOpError::PendingCgkaAuthorization(_))),
-        "{result:?}"
-    );
+    assert!(is_pending(&result), "{result:?}");
 
     // Dave learns about the group and can now accept the pending CGKA add.
     dave.receive_delegation(&group_to_carol).await?;
@@ -727,5 +752,70 @@ async fn an_add_through_an_individual_is_applied_once_the_individual_is_promoted
 
     assert!(result.is_ok(), "{result:?}");
     assert!(contains_op(&dave, doc_id, &add_of_carol).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+
+    let mut path = intercepted_path(&alice).await;
+    path.leaf_id = MemberId(bob.id().verifying_key());
+    let op = CgkaOperation::Update {
+        id: MemberId(bob.id().verifying_key()),
+        new_path: path,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId(doc_id.verifying_key()),
+    };
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+
+    assert!(is_denied(&result), "{result:?}");
+    assert!(!result.unwrap_err().is_missing_dependency());
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_add_citing_a_delegation_not_yet_received_is_pending() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
+
+    let op = CgkaOperation::Add {
+        added_id: MemberId(mallory.id().verifying_key()),
+        pk: own_prekey(&mallory, doc_id).await,
+        leaf_index: 0,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId(doc_id.verifying_key()),
+        authorization: CgkaAuthorization::Delegation([0u8; 32]),
+    };
+    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+
+    assert!(is_pending(&result), "{result:?}");
+    assert!(result.unwrap_err().is_missing_dependency());
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_add_through_a_delegation_to_ourselves_for_someone_else_is_denied() -> TestResult {
+    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
+    learn(&alice, &mallory).await;
+
+    let mut op = creators_own_add(&alice, doc_id).await.payload().clone();
+    if let CgkaOperation::Add {
+        added_id,
+        pk,
+        predecessors,
+        ..
+    } = &mut op
+    {
+        *added_id = MemberId(mallory.id().verifying_key());
+        *pk = own_prekey(&mallory, doc_id).await;
+        *predecessors = cgka_heads(&alice, doc_id).await;
+    }
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+
+    assert!(is_denied(&result), "{result:?}");
+    assert!(!result.unwrap_err().is_missing_dependency());
     Ok(())
 }

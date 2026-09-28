@@ -1890,26 +1890,29 @@ impl<
         let subject_id = delegation.subject_id();
         let delegation = Arc::new(delegation);
         let mut found = false;
-        {
-            if let Some(group) = self.groups.lock().await.get(&GroupId(subject_id)) {
-                found = true;
-                group
-                    .lock()
-                    .await
-                    .receive_delegation(delegation.clone())
-                    .await?;
-            } else if let Some(doc) = self.docs.lock().await.get(&DocumentId(subject_id)) {
-                found = true;
-                doc.lock()
-                    .await
-                    .receive_delegation(delegation.clone())
-                    .await?;
-            } else if let Some(indie) = self
-                .individuals
+        let existing_group = { self.groups.lock().await.get(&GroupId(subject_id)).cloned() };
+        let existing_doc = { self.docs.lock().await.get(&DocumentId(subject_id)).cloned() };
+        if let Some(group) = existing_group {
+            found = true;
+            group
                 .lock()
                 .await
-                .remove(&IndividualId(subject_id))
-            {
+                .receive_delegation(delegation.clone())
+                .await?;
+        } else if let Some(doc) = existing_doc {
+            found = true;
+            doc.lock()
+                .await
+                .receive_delegation(delegation.clone())
+                .await?;
+        } else {
+            let individual = {
+                self.individuals
+                    .lock()
+                    .await
+                    .remove(&IndividualId(subject_id))
+            };
+            if let Some(indie) = individual {
                 found = true;
                 self.promote_individual_to_group(indie, delegation.clone())
                     .await;
@@ -2076,7 +2079,10 @@ impl<
                 let dlg = { self.delegations.lock().await.get(&Digest::from(*dlg_hash)) }
                     .ok_or(CgkaUnauthorized::Pending)?;
                 // Public can't add members.
-                ensure(Identifier(dlg.issuer) != Public.id(), CgkaUnauthorized::Denied)?;
+                ensure(
+                    Identifier(dlg.issuer) != Public.id(),
+                    CgkaUnauthorized::Denied,
+                )?;
                 // Only readers or above can add members.
                 ensure(dlg.payload.can.is_reader(), CgkaUnauthorized::Denied)?;
                 // A founding delegation is signed by the document's own
@@ -2121,7 +2127,10 @@ impl<
                 let rev = { self.revocations.lock().await.get(&Digest::from(*rev_hash)) }
                     .ok_or(CgkaUnauthorized::Pending)?;
                 // Public can't remove members.
-                ensure(Identifier(rev.issuer) != Public.id(), CgkaUnauthorized::Denied)?;
+                ensure(
+                    Identifier(rev.issuer) != Public.id(),
+                    CgkaUnauthorized::Denied,
+                )?;
                 ensure(rev.issuer == op_issuer, CgkaUnauthorized::Denied)?;
                 let access = access_to_this_doc_ever(rev.subject_id()).await;
                 ensure(
