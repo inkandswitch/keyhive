@@ -517,6 +517,22 @@ async fn the_creators_own_add_is_accepted_again_when_it_is_redelivered() -> Test
 }
 
 #[tokio::test]
+async fn a_creator_delegated_as_admin_twice_can_still_process_their_founding_add() -> TestResult {
+    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    alice
+        .add_member(alice.id(), doc_id, Access::Admin, &[])
+        .await?;
+
+    let result = alice
+        .receive_cgka_op(creators_own_add(&alice, doc_id).await)
+        .await;
+
+    assert!(!refused(&result), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_member_who_did_not_found_the_document_cannot_enact_a_founding_delegation() -> TestResult
 {
     let alice = keyhive_core::test_utils::make_simple_keyhive().await?;

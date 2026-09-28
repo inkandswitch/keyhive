@@ -2084,11 +2084,14 @@ impl<
                             let issuer_founded_with_admin = {
                                 let locked = doc.lock().await;
                                 locked
-                                    .get_capability(&Identifier::from(op_issuer))
-                                    .is_some_and(|cap| {
-                                        cap.payload.proof.is_none()
-                                            && cap.subject_id() == Identifier::from(doc_id)
-                                            && cap.payload.can >= Access::Admin
+                                    .members()
+                                    .get(&Identifier::from(op_issuer))
+                                    .is_some_and(|delegations| {
+                                        delegations.iter().any(|cap| {
+                                            cap.payload.proof.is_none()
+                                                && cap.subject_id() == Identifier::from(doc_id)
+                                                && cap.payload.can >= Access::Admin
+                                        })
                                     })
                             };
                             if !issuer_founded_with_admin {
