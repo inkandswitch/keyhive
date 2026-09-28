@@ -532,21 +532,26 @@ mod causal_graph_tests {
     }
 
     #[tokio::test]
-    async fn an_edge_past_an_operation_keeps_it_out_of_a_single_operation_batch() {
-        // a
-        // |\
-        // b |
-        // | |
-        // c |
-        // |/
-        // d
-        let ops: &[(&str, &[&str])] =
-            &[("a", &[]), ("b", &["a"]), ("c", &["b"]), ("d", &["a", "c"])];
+    async fn a_shorter_concurrent_branch_shares_a_batch_with_the_longer_one() {
+        //   a
+        //  / \
+        // b   |
+        // |   e
+        // c   |
+        //  \ /
+        //   d
+        let ops: &[(&str, &[&str])] = &[
+            ("a", &[]),
+            ("b", &["a"]),
+            ("e", &["a"]),
+            ("c", &["b"]),
+            ("d", &["c", "e"]),
+        ];
         assert_eq!(
             batches_of(ops).await,
             vec![
                 BTreeSet::from(["a"]),
-                BTreeSet::from(["b", "c"]),
+                BTreeSet::from(["b", "e", "c"]),
                 BTreeSet::from(["d"])
             ]
         );
