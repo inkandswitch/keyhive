@@ -159,6 +159,9 @@ impl Merge for CgkaOperationGraph {
         self.cgka_ops_predecessors
             .extend(fork.cgka_ops_predecessors);
         self.cgka_op_heads.extend(fork.cgka_op_heads);
+        let predecessors = &self.cgka_ops_predecessors;
+        self.cgka_op_heads
+            .retain(|head| !predecessors.values().any(|preds| preds.contains(head)));
     }
 }
 
@@ -401,9 +404,10 @@ mod causal_graph_tests {
             Some(&Set::from_iter([Digest::hash(&root)])),
             "the merged operation lost its predecessors"
         );
-        assert!(
-            trunk.cgka_op_heads.contains(&on_fork_hash),
-            "the merged operation is not a head"
+        assert_eq!(
+            trunk.cgka_op_heads,
+            Set::from_iter([on_fork_hash]),
+            "the merged operation should be the only head"
         );
     }
 
