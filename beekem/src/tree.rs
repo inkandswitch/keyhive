@@ -919,10 +919,10 @@ mod tests {
         // written by leaf 0.
         let mut forged = genuine;
         forged.path[0].0 = 2;
-        let mut refused = tree;
-        refused.apply_path(&forged);
+        let mut denied = tree;
+        denied.apply_path(&forged);
         assert!(
-            refused.inner_node(InnerNodeIndex::new(2)).is_none(),
+            denied.inner_node(InnerNodeIndex::new(2)).is_none(),
             "a secret store was merged into another member's node"
         );
     }

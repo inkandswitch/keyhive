@@ -1,7 +1,7 @@
 use crate::{
     cgka::Cgka,
     error::CgkaError,
-    test_utils::{member, Group},
+    test_utils::{member, Group, ADD_AUTH, REMOVE_AUTH},
 };
 use core::hash::{Hash, Hasher};
 use future_form::Local;
@@ -17,7 +17,7 @@ async fn a_group_can_be_emptied_and_refilled() {
     let signer = group.members[0].signer.clone();
     let cgka = &mut group.replicas[0];
 
-    cgka.remove::<Local, _>(owner, &signer)
+    cgka.remove::<Local, _>(owner, REMOVE_AUTH, &signer)
         .await
         .expect("removing the last member is allowed");
     assert_eq!(
@@ -38,7 +38,7 @@ async fn a_group_can_be_emptied_and_refilled() {
     );
 
     let rejoin_pk = ShareSecretKey::generate(&mut rng).share_key();
-    cgka.add::<Local, _>(owner, rejoin_pk, &signer)
+    cgka.add::<Local, _>(owner, rejoin_pk, ADD_AUTH, &signer)
         .await
         .expect("the owner can rejoin an empty group");
     let rotate = ShareSecretKey::generate(&mut rng);
