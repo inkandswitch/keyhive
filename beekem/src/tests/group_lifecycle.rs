@@ -1,7 +1,10 @@
 use crate::{
     cgka::Cgka,
     error::CgkaError,
-    test_utils::{member, Group, ADD_AUTH, REMOVE_AUTH},
+    id::TreeId,
+    keys::ShareKeyMap,
+    test_utils::{member, Group, Member, ADD_AUTH, REMOVE_AUTH},
+    transact::{Fork, Merge},
 };
 use core::hash::{Hash, Hasher};
 use future_form::Local;
@@ -67,6 +70,41 @@ async fn emptying_a_group_converges_across_replicas() {
         "a replica that received the removal of the last member still has members"
     );
     group.check("after removing every member");
+}
+
+fn cgka_with_no_operations(owner: &Member) -> Cgka {
+    Cgka::new(TreeId(owner.id.0), owner.id, ShareKeyMap::new())
+}
+
+#[test]
+fn a_cgka_with_no_operations_has_no_batches() {
+    let owner = member(&mut StdRng::seed_from_u64(0x11fe_0005));
+    assert!(
+        matches!(
+            cgka_with_no_operations(&owner).ops(),
+            Err(CgkaError::NotInitialized)
+        ),
+        "a CGKA with no operations should report that it is not initialized"
+    );
+}
+
+#[tokio::test]
+async fn a_cgka_merges_forks_before_and_after_its_first_operation() {
+    let owner = member(&mut StdRng::seed_from_u64(0x11fe_0004));
+    let mut cgka = cgka_with_no_operations(&owner);
+    let fork = cgka.fork();
+    cgka.merge(fork);
+
+    let mut fork = cgka.fork();
+    fork.add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &owner.signer)
+        .await
+        .expect("the owner can add itself to an empty group");
+    cgka.merge(fork);
+    assert_eq!(
+        cgka.group_size(),
+        1,
+        "merging a fork did not include the member it added"
+    );
 }
 
 fn hash_of(cgka: &Cgka) -> u64 {

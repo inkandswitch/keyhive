@@ -1084,16 +1084,16 @@ impl<
         let mut ops = Vec::new();
         let reachable = self.doc_handles_reachable_by(who.into()).await;
         for (doc_id, (doc, _)) in reachable {
-            let epochs = match doc.lock().await.cgka_ops() {
-                Ok(epochs) => epochs,
+            let batches = match doc.lock().await.cgka_ops() {
+                Ok(batches) => batches,
                 Err(CgkaError::NotInitialized) => continue,
                 Err(e) => {
                     tracing::error!(?doc_id, ?e, "skipping doc: cgka_ops failed");
                     continue;
                 }
             };
-            for epoch in &epochs {
-                ops.extend(epoch.iter().cloned());
+            for batch in &batches {
+                ops.extend(batch.iter().cloned());
             }
         }
         ops
@@ -1109,10 +1109,10 @@ impl<
             return Ok(None);
         };
         let mut ops = Vec::new();
-        let epochs = { doc.lock().await.cgka_ops()? };
+        let batches = { doc.lock().await.cgka_ops()? };
         drop(locked_docs);
-        for epoch in &epochs {
-            ops.extend(epoch.iter().cloned());
+        for batch in &batches {
+            ops.extend(batch.iter().cloned());
         }
         Ok(Some(ops))
     }
@@ -1515,8 +1515,8 @@ impl<
                 let locked = doc.lock().await;
                 let doc_id = locked.doc_id();
 
-                let epochs = match locked.cgka_ops() {
-                    Ok(epochs) => epochs,
+                let batches = match locked.cgka_ops() {
+                    Ok(batches) => batches,
                     Err(CgkaError::NotInitialized) => continue,
                     Err(e) => {
                         tracing::error!(?doc_id, ?e, "skipping doc: cgka_ops failed");
@@ -1524,7 +1524,10 @@ impl<
                     }
                 };
 
-                let doc_ops: Vec<_> = epochs.iter().flat_map(|e| e.iter().cloned()).collect();
+                let doc_ops: Vec<_> = batches
+                    .iter()
+                    .flat_map(|batch| batch.iter().cloned())
+                    .collect();
 
                 if doc_ops.is_empty() {
                     continue;
@@ -2308,8 +2311,8 @@ impl<
             let locked_doc = doc.lock().await;
             let Ok(cgka) = locked_doc.cgka() else { return };
             let mut leaf_keys: Vec<ShareKey> = cgka.owner_leaf_key().into_iter().collect();
-            if let Ok(epochs) = locked_doc.cgka_ops() {
-                for op in epochs.iter().flat_map(|epoch| epoch.iter()) {
+            if let Ok(batches) = locked_doc.cgka_ops() {
+                for op in batches.iter().flat_map(|batch| batch.iter()) {
                     if let CgkaOperation::Update { id, new_path, .. } = &op.payload {
                         if IndividualId::from(*id) == me {
                             leaf_keys.extend(new_path.leaf_pk.keys());

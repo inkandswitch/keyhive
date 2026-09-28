@@ -16,7 +16,7 @@ use crate::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, NodeKey, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaEpoch, CgkaOperation, CgkaOperationGraph},
+    operation::{CgkaAuthorization, CgkaBatch, CgkaOperation, CgkaOperationGraph},
     pcs_key::{ApplicationSecret, PcsKey},
     transact::{Fork, Merge},
     tree::BeeKem,
@@ -249,7 +249,7 @@ impl Cgka {
         };
 
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-        self.ops_graph.add_local_op(&signed_op);
+        self.ops_graph.add_local_op(&signed_op)?;
         Ok(Some(signed_op))
     }
 
@@ -297,7 +297,7 @@ impl Cgka {
             authorization,
         };
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-        self.ops_graph.add_local_op(&signed_op);
+        self.ops_graph.add_local_op(&signed_op)?;
         Ok(Some(signed_op))
     }
 
@@ -351,7 +351,7 @@ impl Cgka {
             };
 
             let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-            self.ops_graph.add_local_op(&signed_op);
+            self.ops_graph.add_local_op(&signed_op)?;
             self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
             let new_key_pair = if is_public {
                 None
@@ -426,7 +426,7 @@ impl Cgka {
                 )
             {
                 self.pending_ops_for_structural_change = true;
-                self.ops_graph.add_op(&op, &predecessors);
+                self.ops_graph.add_op(&op, &predecessors)?;
             } else {
                 self.apply_operation(op)?;
             }
@@ -439,7 +439,7 @@ impl Cgka {
         Ok(true)
     }
 
-    pub fn ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
+    pub fn ops(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
         self.ops_graph.topsort_graph()
     }
 
@@ -470,35 +470,34 @@ impl Cgka {
                 self.tree.apply_path(new_path);
             }
         }
-        self.ops_graph.add_op(&op, &op.payload.predecessors());
+        self.ops_graph.add_op(&op, &op.payload.predecessors())?;
         Ok(())
     }
 
-    /// Apply operations grouped into "epochs", where each epoch contains an ordered
-    /// set of concurrent operations.
+    /// Apply operations grouped into [`CgkaBatch`]s in order.
     #[instrument(skip_all)]
-    fn apply_epochs(&mut self, epochs: &NonEmpty<CgkaEpoch>) -> Result<(), CgkaError> {
-        for epoch in epochs {
-            if epoch.len() == 1 {
-                self.apply_operation(epoch[0].clone())?;
+    fn apply_batches(&mut self, batches: &NonEmpty<CgkaBatch>) -> Result<(), CgkaError> {
+        for batch in batches {
+            if batch.len() == 1 {
+                self.apply_operation(batch[0].clone())?;
             } else {
-                // If all operations in this epoch are updates, we can apply them
-                // directly and move on to the next epoch.
-                if epoch
+                // If all operations in this batch are updates, we can apply them
+                // directly and move on to the next batch.
+                if batch
                     .iter()
                     .all(|op| matches!(op.payload, CgkaOperation::Update { .. }))
                 {
-                    for op in epoch.iter() {
+                    for op in batch.iter() {
                         self.apply_operation(op.clone())?;
                     }
                     continue;
                 }
 
-                // An epoch with at least one membership change requires blanking
+                // A batch with at least one membership change requires blanking
                 // removed paths and sorting added leaves after all ops are applied.
                 let mut added_ids = Set::new();
                 let mut removed_ids = Set::new();
-                for op in epoch.iter() {
+                for op in batch.iter() {
                     match op.payload {
                         CgkaOperation::Add { added_id, .. } => {
                             added_ids.insert(added_id);
@@ -595,30 +594,30 @@ impl Cgka {
         Ok(())
     }
 
-    /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaEpoch`]s.
+    /// Build a new [`Cgka`] for the provided non-empty list of [`CgkaBatch`]s.
     #[instrument(skip_all)]
-    fn rebuild_cgka(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<Cgka, CgkaError> {
+    fn rebuild_cgka(&mut self, batches: NonEmpty<CgkaBatch>) -> Result<Cgka, CgkaError> {
         let mut rebuilt_cgka = Cgka::new(self.doc_id, self.owner_id, self.owner_sks.clone());
-        rebuilt_cgka.apply_epochs(&epochs)?;
+        rebuilt_cgka.apply_batches(&batches)?;
         if rebuilt_cgka.has_pcs_key() {
             let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
-            rebuilt_cgka.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
+            rebuilt_cgka.insert_pcs_key(&pcs_key, Digest::hash(&batches.last()[0]));
         }
         Ok(rebuilt_cgka)
     }
 
     /// Derive a [`PcsKey`] by rebuilding a [`Cgka`] from the provided non-empty
-    /// list of [`CgkaEpoch`]s.
+    /// list of [`CgkaBatch`]s.
     #[instrument(skip_all)]
-    fn rebuild_pcs_key(&mut self, epochs: NonEmpty<CgkaEpoch>) -> Result<PcsKey, CgkaError> {
+    fn rebuild_pcs_key(&mut self, batches: NonEmpty<CgkaBatch>) -> Result<PcsKey, CgkaError> {
         debug_assert!(matches!(
-            epochs.last()[0].payload,
+            batches.last()[0].payload,
             CgkaOperation::Update { .. }
         ));
         let mut rebuilt_cgka = Cgka::new(self.doc_id, self.owner_id, self.owner_sks.clone());
-        rebuilt_cgka.apply_epochs(&epochs)?;
+        rebuilt_cgka.apply_batches(&batches)?;
         let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
-        self.insert_pcs_key(&pcs_key, Digest::hash(&epochs.last()[0]));
+        self.insert_pcs_key(&pcs_key, Digest::hash(&batches.last()[0]));
         Ok(pcs_key)
     }
 
@@ -660,8 +659,10 @@ impl Merge for Cgka {
         self.ops_graph.merge(fork.ops_graph);
         self.pcs_keys.merge(fork.pcs_keys);
         self.pcs_key_ops.extend(fork.pcs_key_ops.iter());
-        self.replay_ops_graph()
-            .expect("two valid graphs should always merge causal consistency");
+        if !self.ops_graph.cgka_op_heads.is_empty() {
+            self.replay_ops_graph()
+                .expect("two valid graphs should always merge causal consistency");
+        }
     }
 }
 

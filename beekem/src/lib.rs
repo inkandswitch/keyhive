@@ -28,7 +28,6 @@ pub mod keys;
 pub mod operation;
 pub mod pcs_key;
 pub mod secret_store;
-pub mod topsort;
 pub mod transact;
 pub mod tree;
 pub mod treemath;

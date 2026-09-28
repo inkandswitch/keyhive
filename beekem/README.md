@@ -150,7 +150,7 @@ When applying a path change from another member that was created concurrently:
 
 ### Merging Concurrent Membership Changes
 
-Concurrent adds and removes require extra care. When a batch of concurrent operations includes at least one add or remove:
+Concurrent adds and removes require extra care. When a batch of more than one operation includes at least one add or remove:
 
 1. Apply all operations in the batch (updates, adds, removes).
 2. Then, as a cleanup step:
@@ -159,16 +159,28 @@ Concurrent adds and removes require extra care. When a batch of concurrent opera
 
 This sorting step is what ensures all peers converge to the same tree structure despite concurrent adds targeting the same leaf slot.
 
-## Causal Ordering and Epochs
+## Causal Ordering and Batches
 
 Operations form a causal graph (a DAG). Each operation records its causal predecessors (the set of operation hashes it was aware of when created).
 
-When the graph has unresolved concurrency (multiple heads), the system topologically sorts all operations and groups them into **epochs**. An epoch is a set of operations that are mutually concurrent. Epochs are then applied in causal order:
+When the graph has unresolved concurrency (multiple heads), the system sorts all operations and groups them into **batches**. Each operation's **depth** is the length of the longest chain of predecessors before it, recorded when the operation is added to the graph. Operations are ordered by depth (and by hash when depth is equal).
 
-* If an epoch contains only updates, apply them one by one (each becomes a merge of concurrent paths).
-* If an epoch contains any adds or removes, apply all operations and then run the membership change cleanup (re-blank, re-sort).
+A batch is formed in two cases:
 
-When concurrency is too complex to incrementally merge (e.g., after receiving a concurrent membership change), the entire tree is **replayed from scratch**: start from the initial state, topologically sort all known operations, and re-apply them in epoch order. This guarantees convergence regardless of the order in which operations were received.
+   1. Boundary (singleton) batch: a single operation `x` is the only operation at its depth,
+      every shallower operation is its ancestor, and none of those ancestors has
+      a descendant deeper than `x` through a chain that excludes `x`.
+   2. Concurrency batch: all operations between boundary batches (or before
+      the first or after the last).
+
+A batch contains every operation concurrent with any operation in it (though two operations in one batch may be causally ordered).
+
+Batches are applied in order:
+
+* If a batch has one operation or contains only updates, apply its operations one by one (concurrent updates merge their paths).
+* Otherwise, apply all the operations in the batch and then run membership change cleanup (re-blank, re-sort).
+
+When concurrency is too complex to incrementally merge (e.g., after receiving a concurrent membership change), the entire tree is **replayed from scratch**: start from the initial state, topologically sort all known operations, and re-apply them in batch order. This guarantees convergence regardless of the order in which operations were received.
 
 ## The Secret Store (Inner Node Data)
 
