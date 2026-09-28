@@ -48,6 +48,16 @@ async fn contains_op_from(
     ops.iter().any(|op| op.issuer == issuer)
 }
 
+/// Whether `observer`'s tree contains `op`.
+async fn contains_op(observer: &Kh, doc: DocumentId, op: &Signed<CgkaOperation>) -> bool {
+    let ops = observer
+        .cgka_ops_for_doc(&doc)
+        .await
+        .unwrap()
+        .unwrap_or_default();
+    ops.iter().any(|known| known.as_ref() == op)
+}
+
 /// One of `kh`'s own prekeys it would use to join `doc`.
 async fn own_prekey(kh: &Kh, doc: DocumentId) -> ShareKey {
     let indie = kh.get_individual(kh.id()).await.unwrap();
@@ -595,5 +605,52 @@ async fn a_remove_cannot_cite_a_revocation_issued_by_public() -> TestResult {
 
     assert!(refused(&result), "{result:?}");
     assert!(tree_members(&alice, doc_id).await.contains(&bob_id));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_add_through_a_group_is_still_applied_to_cgka_graph_after_member_revoked_from_group() -> TestResult
+{
+    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let bob = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let carol = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let bob_id = learn(&alice, &bob).await;
+    let carol_id = learn(&alice, &carol).await;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    alice
+        .add_member(carol_id, doc_id, Access::Read, &[])
+        .await?;
+    carol
+        .ingest_event_table(alice.events_for_agent(carol_id).await)
+        .await?;
+
+    let group_id = alice.generate_group(vec![]).await?;
+    alice
+        .add_member(bob_id, group_id, Access::Read, &[])
+        .await?;
+    alice
+        .add_member(group_id, doc_id, Access::Read, &[])
+        .await?;
+    let add_of_bob = op_where(&alice, doc_id, |op| {
+        matches!(op, CgkaOperation::Add { added_id, .. }
+            if *added_id == MemberId(bob.id().verifying_key()))
+    })
+    .await;
+    alice.revoke_member(bob_id, true, group_id).await?;
+
+    // Carol receives the revocation before she sees the add it reverses.
+    let membership_only = alice
+        .events_for_agent(carol_id)
+        .await
+        .into_iter()
+        .filter(|(_, event)| !matches!(event, keyhive_core::event::Event::CgkaOperation(_)))
+        .collect();
+    carol.ingest_event_table(membership_only).await?;
+    assert!(!contains_op(&carol, doc_id, &add_of_bob).await);
+
+    let result = carol.receive_cgka_op(add_of_bob.clone()).await;
+
+    assert!(!refused(&result), "{result:?}");
+    assert!(contains_op(&carol, doc_id, &add_of_bob).await);
     Ok(())
 }
