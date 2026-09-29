@@ -32,7 +32,7 @@ use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaEpoch, CgkaOperation},
+    operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
 };
 use derivative::Derivative;
 use derive_where::derive_where;
@@ -494,7 +494,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         Ok(())
     }
 
-    pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
+    pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
         self.cgka()?.ops()
     }
 
