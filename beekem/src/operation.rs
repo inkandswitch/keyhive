@@ -5,7 +5,6 @@ use crate::{
     content_addressed_map::CaMap,
     error::CgkaError,
     id::{MemberId, TreeId},
-    topsort::TopologicalSort,
     transact::{Fork, Merge},
     tree::PathChange,
 };
@@ -34,17 +33,18 @@ pub enum CgkaAuthorization {
     Revocation([u8; 32]),
 }
 
-/// An ordered [`NonEmpty`] of concurrent [`CgkaOperation`]s.
+/// An ordered [`NonEmpty`] of [`CgkaOperation`]s that a replay applies
+/// together.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct CgkaEpoch(NonEmpty<Arc<Signed<CgkaOperation>>>);
+pub struct CgkaBatch(NonEmpty<Arc<Signed<CgkaOperation>>>);
 
-impl From<NonEmpty<Arc<Signed<CgkaOperation>>>> for CgkaEpoch {
+impl From<NonEmpty<Arc<Signed<CgkaOperation>>>> for CgkaBatch {
     fn from(item: NonEmpty<Arc<Signed<CgkaOperation>>>) -> Self {
-        CgkaEpoch(item)
+        CgkaBatch(item)
     }
 }
 
-impl Deref for CgkaEpoch {
+impl Deref for CgkaBatch {
     type Target = NonEmpty<Arc<Signed<CgkaOperation>>>;
 
     fn deref(&self) -> &NonEmpty<Arc<Signed<CgkaOperation>>> {
@@ -52,7 +52,7 @@ impl Deref for CgkaEpoch {
     }
 }
 
-impl IntoIterator for CgkaEpoch {
+impl IntoIterator for CgkaBatch {
     type Item = Arc<Signed<CgkaOperation>>;
     type IntoIter = <NonEmpty<Arc<Signed<CgkaOperation>>> as IntoIterator>::IntoIter;
 
@@ -124,6 +124,10 @@ pub struct CgkaOperationGraph {
         Map<Digest<Signed<CgkaOperation>>, Set<Digest<Signed<CgkaOperation>>>>,
 
     pub cgka_op_heads: Set<Digest<Signed<CgkaOperation>>>,
+
+    /// The length of the longest chain of predecessors before each operation.
+    /// An operation with no predecessors has depth 0.
+    depths: Map<Digest<Signed<CgkaOperation>>, u64>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -162,6 +166,7 @@ impl Merge for CgkaOperationGraph {
         let predecessors = &self.cgka_ops_predecessors;
         self.cgka_op_heads
             .retain(|head| !predecessors.values().any(|preds| preds.contains(head)));
+        self.depths.extend(fork.depths);
     }
 }
 
@@ -171,6 +176,7 @@ impl CgkaOperationGraph {
             cgka_ops: CaMap::new(),
             cgka_ops_predecessors: Map::new(),
             cgka_op_heads: Set::new(),
+            depths: Map::new(),
         }
     }
 
@@ -187,41 +193,33 @@ impl CgkaOperationGraph {
         self.cgka_op_heads.len() == 1
     }
 
-    /// Add an operation that was created locally to the graph.
-    pub fn add_local_op(&mut self, op: &Signed<CgkaOperation>) {
-        self.add_op_and_update_heads(op, None);
-    }
-
     /// Add an operation to the graph.
-    pub fn add_op(
-        &mut self,
-        op: &Signed<CgkaOperation>,
-        heads: &Set<Digest<Signed<CgkaOperation>>>,
-    ) {
-        self.add_op_and_update_heads(op, Some(heads));
-    }
-
-    fn add_op_and_update_heads(
-        &mut self,
-        op: &Signed<CgkaOperation>,
-        external_heads: Option<&Set<Digest<Signed<CgkaOperation>>>>,
-    ) {
+    ///
+    /// Does nothing if the operation is already in the graph. Returns
+    /// [`CgkaError::OutOfOrderOperation`] and leaves the graph unchanged if one
+    /// of its predecessors is not in the graph.
+    pub fn add_op(&mut self, op: &Signed<CgkaOperation>) -> Result<(), CgkaError> {
         let op_hash = Digest::hash(op);
-        let mut op_predecessors = Set::new();
+        if self.cgka_ops.contains_key(&op_hash) {
+            return Ok(());
+        }
+        let op_predecessors = op.payload.predecessors();
+        let mut depth = 0;
+        for pred in &op_predecessors {
+            let pred_depth = self
+                .depths
+                .get(pred)
+                .ok_or(CgkaError::OutOfOrderOperation)?;
+            depth = depth.max(pred_depth + 1);
+        }
         self.cgka_ops.insert(op.clone().into());
-        if let Some(heads) = external_heads {
-            for h in heads {
-                op_predecessors.insert(*h);
-                self.cgka_op_heads.remove(h);
-            }
-        } else {
-            for h in self.cgka_op_heads.iter() {
-                op_predecessors.insert(*h);
-            }
-            self.cgka_op_heads.clear();
-        };
+        for pred in &op_predecessors {
+            self.cgka_op_heads.remove(pred);
+        }
         self.cgka_op_heads.insert(op_hash);
         self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
+        self.depths.insert(op_hash, depth);
+        Ok(())
     }
 
     pub fn heads_contained_in(&self, heads: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
@@ -235,115 +233,107 @@ impl CgkaOperationGraph {
         self.cgka_ops_predecessors.get(op_hash)
     }
 
-    /// Topsort all operations in the graph.
-    pub fn topsort_graph(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
-        self.topsort_for_heads(&self.cgka_op_heads)
+    /// Sort all operations in the graph into batches.
+    pub fn batches(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
+        self.batches_for_heads(&self.cgka_op_heads)
     }
 
-    /// Topsort all ancestor operations for the provided heads.
-    pub fn topsort_for_heads(
+    /// Sort `heads` and all their ancestors into batches.
+    ///
+    /// Operations are ordered by depth (and by digest if depth is equal). This
+    /// is a causal order since an operation is always deeper than each of its
+    /// predecessors.
+    ///
+    /// A batch is formed in two cases:
+    /// 1. Boundary (singleton) batch: a single operation `x` is the only operation at
+    ///    its depth, every shallower operation is its ancestor, and none of those
+    ///    ancestors has a descendant deeper than `x` through a chain that excludes `x`.
+    /// 2. Concurrency batch: all operations between consecutive boundary batches, before
+    ///    the first, or after the last (or all operations, if there is no boundary batch).
+    ///
+    /// A batch contains every operation concurrent with any operation in it (though
+    /// two operations in one batch may be causally ordered).
+    ///
+    /// Returns [`CgkaError::OperationNotFound`] if one of `heads` or their
+    /// ancestors is not in the graph. Returns [`CgkaError::NotInitialized`]
+    /// if `heads` is empty.
+    pub fn batches_for_heads(
         &self,
         heads: &Set<Digest<Signed<CgkaOperation>>>,
-    ) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
-        debug_assert!(heads.iter().all(|head| self.cgka_ops.contains_key(head)));
-        let mut op_hashes = Vec::new();
-        let mut dependencies = TopologicalSort::<Digest<Signed<CgkaOperation>>>::new();
-        let mut successors: Map<Digest<Signed<CgkaOperation>>, Set<Digest<Signed<CgkaOperation>>>> =
-            Map::new();
-        let mut frontier = alloc::collections::VecDeque::new();
-        let mut seen = Set::new();
-        for head in heads {
-            // A head with no predecessors has no dependency edges. It must
-            // be added on its own or the sort would leave it out.
-            dependencies.insert(*head);
-            frontier.push_back(*head);
-            seen.insert(*head);
-            successors.insert(*head, Set::new());
-        }
-        while let Some(op_hash) = frontier.pop_front() {
+    ) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
+        let mut deepest_child: Map<Digest<Signed<CgkaOperation>>, u64> = Map::new();
+        let mut seen = heads.clone();
+        let mut frontier = Vec::from_iter(heads.iter().copied());
+        let mut ordered = Vec::with_capacity(heads.len());
+        // Traverse back from heads, recording each operation's depth and the depth
+        // of its deepest child.
+        while let Some(op_hash) = frontier.pop() {
+            let depth = self.depth(&op_hash)?;
+            ordered.push((depth, op_hash));
             let preds = self
                 .predecessors_for(&op_hash)
                 .ok_or(CgkaError::OperationNotFound)?;
-            for update_pred in preds {
-                dependencies.add_dependency(*update_pred, op_hash);
-                successors.entry(*update_pred).or_default().insert(op_hash);
-                if seen.contains(update_pred) {
-                    continue;
+            for pred in preds {
+                let deepest = deepest_child.entry(*pred).or_insert(depth);
+                *deepest = (*deepest).max(depth);
+                if seen.insert(*pred) {
+                    frontier.push(*pred);
                 }
-                seen.insert(*update_pred);
-                frontier.push_back(*update_pred);
             }
         }
+        ordered.sort_unstable();
 
-        let mut epoch_heads = Set::new();
-        let mut next_epoch: Vec<Arc<Signed<CgkaOperation>>> = Vec::new();
-        while !dependencies.is_empty() {
-            let mut next_set = dependencies.pop_all();
-            next_set.sort();
-            for hash in &next_set {
-                epoch_heads.insert(*hash);
-                if successors.get(hash).expect("hash to be present").is_empty() {
-                    successors
-                        .get_mut(hash)
-                        .expect("hash to be present")
-                        .insert(*hash);
-                }
+        let mut batches: Vec<CgkaBatch> = Vec::new();
+        let mut batch = Vec::new();
+        // The shallowest depth at which the next boundary batch could occur. This is the
+        // greatest depth of any child of an operation in a shallower layer.
+        let mut earliest_next_boundary = 0;
+        // A layer is all the operations at one depth. They are concurrent with each
+        // other since an operation is deeper than each of its ancestors.
+        for layer in ordered.chunk_by(|a, b| a.0 == b.0) {
+            let depth = layer[0].0;
+            // A chain of operations that starts no deeper than a putative boundary operation
+            // `x`, doesn't include `x`, and can't be extended further either
+            //   1. ends at a shallower depth than `x` (its last operation is a head, which we
+            //      treat as having a child of depth `u64::MAX`),
+            //   2. includes an operation at the same depth as `x`, or
+            //   3. contains an operation whose child skips past `x`.
+            // In any of these cases, `x` is not a boundary operation. In case 2,
+            // `layer.len() > 1`. In cases 1 and 3, `earliest_next_boundary > depth`.
+            let is_boundary = layer.len() == 1 && earliest_next_boundary <= depth;
+            if is_boundary {
+                batches.extend(NonEmpty::from_vec(mem::take(&mut batch)).map(Into::into));
             }
-            for hash in &next_set {
-                for h in epoch_heads.iter().cloned().collect::<Vec<_>>() {
-                    if *hash == h {
-                        continue;
-                    }
-                    successors.get_mut(&h).expect("head to exist").remove(hash);
-                }
-            }
-            epoch_heads = epoch_heads
-                .iter()
-                .filter(|h| !successors.get_mut(h).expect("head to exist").is_empty())
-                .copied()
-                .collect::<Set<_>>();
-            let should_end_epoch = epoch_heads.len() <= 1;
-            if should_end_epoch {
-                let mut next = Vec::new();
-                mem::swap(&mut next_epoch, &mut next);
-                if !next.is_empty() {
-                    op_hashes.push(
-                        NonEmpty::from_vec(next)
-                            .expect("there to be at least one hash")
-                            .into(),
-                    );
-                }
-            }
-            for hash in next_set {
-                next_epoch.push(
+            for (_, op_hash) in layer {
+                batch.push(
                     self.cgka_ops
-                        .get(&hash)
+                        .get(op_hash)
                         .ok_or(CgkaError::OperationNotFound)?
                         .clone(),
                 );
+                let deepest = match deepest_child.get(op_hash) {
+                    Some(depth) => *depth,
+                    // This must be a head (it has no children among the sorted operations),
+                    // which means every deeper operation is concurrent with it and can't be
+                    // a boundary.
+                    None => u64::MAX,
+                };
+                earliest_next_boundary = earliest_next_boundary.max(deepest);
             }
-            if should_end_epoch {
-                let mut next = Vec::new();
-                mem::swap(&mut next_epoch, &mut next);
-                if !next.is_empty() {
-                    op_hashes.push(
-                        NonEmpty::from_vec(next)
-                            .expect("there to be at least one hash")
-                            .into(),
-                    );
-                }
+            if is_boundary {
+                batches.extend(NonEmpty::from_vec(mem::take(&mut batch)).map(Into::into));
             }
         }
+        batches.extend(NonEmpty::from_vec(batch).map(Into::into));
 
-        if !next_epoch.is_empty() {
-            op_hashes.push(
-                NonEmpty::from_vec(next_epoch.clone())
-                    .expect("there to be at least one hash")
-                    .into(),
-            );
-        }
+        NonEmpty::from_vec(batches).ok_or(CgkaError::NotInitialized)
+    }
 
-        Ok(NonEmpty::from_vec(op_hashes).expect("to have at least one op hash"))
+    fn depth(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> Result<u64, CgkaError> {
+        self.depths
+            .get(op_hash)
+            .copied()
+            .ok_or(CgkaError::OperationNotFound)
     }
 }
 
