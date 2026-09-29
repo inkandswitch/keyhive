@@ -261,7 +261,6 @@ impl CgkaOperationGraph {
         &self,
         heads: &Set<Digest<Signed<CgkaOperation>>>,
     ) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
-        debug_assert!(heads.iter().all(|head| self.cgka_ops.contains_key(head)));
         let mut deepest_child: Map<Digest<Signed<CgkaOperation>>, u64> = Map::new();
         let mut seen = heads.clone();
         let mut frontier = Vec::from_iter(heads.iter().copied());
