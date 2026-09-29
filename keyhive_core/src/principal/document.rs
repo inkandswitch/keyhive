@@ -805,6 +805,11 @@ pub enum AddMemberError {
 
     #[error(transparent)]
     CgkaError(#[from] CgkaError),
+
+    #[error(
+        "{0} is the document being shared; it cannot also be one of the other relevant documents"
+    )]
+    ResourceIncludedInRelevantDocs(DocumentId),
 }
 
 #[derive(Debug, Error)]
