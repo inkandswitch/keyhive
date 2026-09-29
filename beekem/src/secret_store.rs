@@ -50,6 +50,11 @@ impl SecretStore {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn versions(&self) -> &NonEmpty<SecretStoreVersion> {
+        &self.versions
+    }
+
     pub fn has_conflict(&self) -> bool {
         self.versions.len() > 1
     }
