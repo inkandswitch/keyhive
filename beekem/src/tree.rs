@@ -730,7 +730,7 @@ mod tests {
         let y_idx = base.id_to_leaf_idx[&y].u32();
         let (joiner, joiner_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
 
-        // Whether a member added and removed in one epoch is in the tree when the
+        // Whether a member added and removed in one batch is in the tree when the
         // resolution runs depends on which change arrived first.
         let mut still_present = base.clone();
         still_present.push_leaf(joiner, joiner_pk.into());
@@ -743,7 +743,7 @@ mod tests {
         resolve(&mut already_gone, &[joiner], &[(joiner, 3)]);
         assert_eq!(
             still_present, already_gone,
-            "a member added and removed in one epoch resolved differently \
+            "a member added and removed in one batch resolved differently \
              depending on whether it was still in the tree"
         );
 
