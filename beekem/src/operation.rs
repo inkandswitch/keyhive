@@ -326,22 +326,24 @@ impl CgkaOperationGraph {
 #[cfg(test)]
 mod causal_graph_tests {
     use super::*;
+    use alloc::{collections::BTreeMap, vec};
     use keyhive_crypto::{
         share_key::ShareSecretKey,
         signer::{async_signer, memory::MemorySigner},
         verifiable::Verifiable,
     };
 
-    async fn add_op(
+    async fn signed_add(
         signer: &MemorySigner,
         doc_id: TreeId,
         leaf_index: u32,
+        predecessors: &[&Signed<CgkaOperation>],
     ) -> Signed<CgkaOperation> {
         let op = CgkaOperation::Add {
             added_id: MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key()),
             pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
             leaf_index,
-            predecessors: Vec::new(),
+            predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
             doc_id,
             authorization: CgkaAuthorization::Delegation([0; 32]),
         };
@@ -361,13 +363,15 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(signer.verifying_key());
         let mut trunk = CgkaOperationGraph::new();
-        let root = add_op(&signer, doc_id, 0).await;
-        trunk.add_local_op(&root);
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        trunk.add_op(&root).expect("a root has no predecessors");
 
         let mut forked = trunk.fork();
-        let on_fork = add_op(&signer, doc_id, 1).await;
+        let on_fork = signed_add(&signer, doc_id, 1, &[&root]).await;
         let on_fork_hash = Digest::hash(&on_fork);
-        forked.add_op(&on_fork, &Set::from_iter([Digest::hash(&root)]));
+        forked
+            .add_op(&on_fork)
+            .expect("the predecessor is in the graph");
 
         trunk.merge(forked);
 
@@ -377,7 +381,7 @@ mod causal_graph_tests {
         );
         assert_eq!(
             trunk.predecessors_for(&on_fork_hash),
-            Some(&Set::from_iter([Digest::hash(&root)])),
+            Some(&[Digest::hash(&root)][..]),
             "the merged operation lost its predecessors"
         );
         assert_eq!(
@@ -385,37 +389,21 @@ mod causal_graph_tests {
             Set::from_iter([on_fork_hash]),
             "the merged operation should be the only head"
         );
+        trunk
+            .add_op(&signed_add(&signer, doc_id, 2, &[&on_fork]).await)
+            .expect("the merged operation's depth is in the graph");
     }
 
     #[tokio::test]
-    async fn topsort_keeps_a_root_that_nothing_depends_on_yet() {
-        // Two concurrent roots. One already has a successor. The other is still
-        // a head on its own with no dependency edges.
-        let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
-        let mut graph = CgkaOperationGraph::new();
-        let root = add_op(&signer, doc_id, 0).await;
-        graph.add_local_op(&root);
-        let after_root = add_op(&signer, doc_id, 1).await;
-        graph.add_op(&after_root, &Set::from_iter([Digest::hash(&root)]));
-        let lone_root = add_op(&signer, doc_id, 0).await;
-        graph.add_op(&lone_root, &Set::new());
-
-        let sorted: Set<_> = graph
-            .topsort_graph()
-            .expect("the graph sorts")
-            .iter()
-            .flat_map(|epoch| epoch.iter().map(|op| Digest::hash(&**op)))
-            .collect();
-
+    async fn a_root_nothing_depends_on_shares_the_first_batch() {
+        // root  lone_root
+        //  |
+        // after_root
+        let ops: &[(&str, &[&str])] =
+            &[("root", &[]), ("after_root", &["root"]), ("lone_root", &[])];
         assert_eq!(
-            sorted,
-            Set::from_iter([
-                Digest::hash(&root),
-                Digest::hash(&after_root),
-                Digest::hash(&lone_root)
-            ]),
-            "every operation in the graph should be in its topsort"
+            batches_of(ops).await,
+            vec![BTreeSet::from(["root", "after_root", "lone_root"])]
         );
     }
 
@@ -424,21 +412,167 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(signer.verifying_key());
         let mut one = CgkaOperationGraph::new();
-        let root = add_op(&signer, doc_id, 0).await;
-        one.add_local_op(&root);
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        one.add_op(&root).expect("a root has no predecessors");
         let mut two = one.fork();
 
         assert_eq!(hash_of(&one), hash_of(&two), "equal graphs should agree");
 
-        two.add_op(
-            &add_op(&signer, doc_id, 1).await,
-            &Set::from_iter([Digest::hash(&root)]),
-        );
+        two.add_op(&signed_add(&signer, doc_id, 1, &[&root]).await)
+            .expect("the predecessor is in the graph");
 
         assert_ne!(
             hash_of(&one),
             hash_of(&two),
             "a graph with an extra operation hashed the same as one without it"
         );
+    }
+
+    /// Builds a graph from `(name, predecessors)` pairs listed in causal
+    /// order and returns its batches as sets of names.
+    async fn batches_of(ops: &[(&'static str, &[&str])]) -> Vec<BTreeSet<&'static str>> {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let mut signed = BTreeMap::new();
+        for (leaf_index, (name, preds)) in (0..).zip(ops) {
+            let preds: Vec<_> = preds.iter().map(|pred| &signed[pred]).collect();
+            let op = signed_add(&signer, doc_id, leaf_index, &preds).await;
+            graph.add_op(&op).expect("predecessors are listed first");
+            signed.insert(*name, op);
+        }
+        let names: BTreeMap<_, _> = signed
+            .into_iter()
+            .map(|(name, op)| (Digest::hash(&op), name))
+            .collect();
+        graph
+            .batches()
+            .expect("the graph sorts")
+            .iter()
+            .map(|batch| batch.iter().map(|op| names[&Digest::hash(&**op)]).collect())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn each_operation_in_a_chain_is_its_own_batch() {
+        // a
+        // |
+        // b
+        // |
+        // c
+        assert_eq!(
+            batches_of(&[("a", &[]), ("b", &["a"]), ("c", &["b"])]).await,
+            vec![
+                BTreeSet::from(["a"]),
+                BTreeSet::from(["b"]),
+                BTreeSet::from(["c"])
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_branches_share_a_batch_until_they_rejoin() {
+        //   a
+        //  / \
+        // b   c
+        //  \ /
+        //   d
+        let ops: &[(&str, &[&str])] =
+            &[("a", &[]), ("b", &["a"]), ("c", &["a"]), ("d", &["b", "c"])];
+        assert_eq!(
+            batches_of(ops).await,
+            vec![
+                BTreeSet::from(["a"]),
+                BTreeSet::from(["b", "c"]),
+                BTreeSet::from(["d"])
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shorter_concurrent_branch_shares_a_batch_with_the_longer_one() {
+        //   a
+        //  / \
+        // b   |
+        // |   e
+        // c   |
+        //  \ /
+        //   d
+        let ops: &[(&str, &[&str])] = &[
+            ("a", &[]),
+            ("b", &["a"]),
+            ("e", &["a"]),
+            ("c", &["b"]),
+            ("d", &["c", "e"]),
+        ];
+        assert_eq!(
+            batches_of(ops).await,
+            vec![
+                BTreeSet::from(["a"]),
+                BTreeSet::from(["b", "e", "c"]),
+                BTreeSet::from(["d"])
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unmerged_branch_keeps_later_operations_in_its_batch() {
+        //       root
+        //      /    \
+        //   update  remove
+        //     |
+        // later_update
+        let ops: &[(&str, &[&str])] = &[
+            ("root", &[]),
+            ("update", &["root"]),
+            ("remove", &["root"]),
+            ("later_update", &["update"]),
+        ];
+        assert_eq!(
+            batches_of(ops).await,
+            vec![
+                BTreeSet::from(["root"]),
+                BTreeSet::from(["update", "remove", "later_update"])
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn adding_an_op_again_leaves_the_graph_unchanged() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let child = signed_add(&signer, doc_id, 1, &[&root]).await;
+        let grandchild = signed_add(&signer, doc_id, 2, &[&child]).await;
+        for op in [&root, &child, &grandchild] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+        let before = graph.clone();
+
+        graph
+            .add_op(&child)
+            .expect("re-adding an operation succeeds");
+
+        assert_eq!(graph, before, "re-adding an operation changed the graph");
+    }
+
+    #[tokio::test]
+    async fn adding_an_op_before_its_predecessor_leaves_the_graph_unchanged() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        graph.add_op(&root).expect("a root has no predecessors");
+        let unknown = signed_add(&signer, doc_id, 1, &[]).await;
+        let before = graph.clone();
+
+        let result = graph.add_op(&signed_add(&signer, doc_id, 2, &[&root, &unknown]).await);
+
+        assert!(
+            matches!(result, Err(CgkaError::OutOfOrderOperation)),
+            "an operation with a predecessor missing from the graph was accepted"
+        );
+        assert_eq!(graph, before, "a rejected operation changed the graph");
     }
 }
