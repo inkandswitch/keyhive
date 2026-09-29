@@ -267,8 +267,8 @@ impl CgkaOperationGraph {
     /// 1. Boundary (singleton) batch: a single operation `x` is the only operation at
     ///    its depth, every shallower operation is its ancestor, and none of those
     ///    ancestors has a descendant deeper than `x` through a chain that excludes `x`.
-    /// 2. Concurrency batch: all operations between boundary batches (or before
-    ///    the first or after the last).
+    /// 2. Concurrency batch: all operations between consecutive boundary batches, before
+    ///    the first, or after the last (or all operations, if there is no boundary batch).
     ///
     /// A batch contains every operation concurrent with any operation in it (though
     /// two operations in one batch may be causally ordered).
@@ -306,14 +306,14 @@ impl CgkaOperationGraph {
         let mut batches: Vec<CgkaBatch> = Vec::new();
         let mut batch = Vec::new();
         // The shallowest depth at which the next boundary batch could occur. This is the
-        // depth of the deepest child of every operation in a shallower layer.
+        // greatest depth of any child of an operation in a shallower layer.
         let mut earliest_next_boundary = 0;
-        // A layer consists of any operations of the same depth, which would always be
-        // concurrent with each other.
+        // A layer is all the operations at one depth. They are concurrent with each
+        // other since an operation is deeper than each of its ancestors.
         for layer in ordered.chunk_by(|a, b| a.0 == b.0) {
             let depth = layer[0].0;
-            // A chain of operations that starts shallower than a putative boundary operation
-            // `x` and doesn't include `x` either
+            // A chain of operations that starts no deeper than a putative boundary operation
+            // `x`, doesn't include `x`, and can't be extended further either
             //   1. ends at a shallower depth than `x` (its last operation is a head, which we
             //      treat as having a child of depth `u64::MAX`),
             //   2. includes an operation at the same depth as `x`, or

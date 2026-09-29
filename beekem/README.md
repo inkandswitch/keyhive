@@ -170,8 +170,8 @@ A batch is formed in two cases:
    1. Boundary (singleton) batch: a single operation `x` is the only operation at its depth,
       every shallower operation is its ancestor, and none of those ancestors has
       a descendant deeper than `x` through a chain that excludes `x`.
-   2. Concurrency batch: all operations between boundary batches (or before
-      the first or after the last).
+   2. Concurrency batch: all operations between consecutive boundary batches, before
+      the first, or after the last (or all operations, if there is no boundary batch).
 
 A batch contains every operation concurrent with any operation in it (though two operations in one batch may be causally ordered).
 
@@ -180,7 +180,7 @@ Batches are applied in order:
 * If a batch has one operation or contains only updates, apply its operations one by one (concurrent updates merge their paths).
 * Otherwise, apply all the operations in the batch and then run membership change cleanup (re-blank, re-sort).
 
-When concurrency is too complex to incrementally merge (e.g., after receiving a concurrent membership change), the entire tree is **replayed from scratch**: start from the initial state, topologically sort all known operations, and re-apply them in batch order. This guarantees convergence regardless of the order in which operations were received.
+When concurrency is too complex to incrementally merge (e.g., after receiving a concurrent membership change), the entire tree is **replayed from scratch**: start from the initial state, sort all known operations into batches, and re-apply them in order. This guarantees convergence regardless of the order in which operations were received.
 
 ## The Secret Store (Inner Node Data)
 
