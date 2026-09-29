@@ -78,6 +78,12 @@ pub enum CgkaError {
     #[cfg_attr(feature = "thiserror", error("Unknown PCS key"))]
     UnknownPcsKey,
 
+    #[cfg_attr(
+        feature = "thiserror",
+        error("Operation belongs to a different document")
+    )]
+    WrongDocument,
+
     #[cfg_attr(feature = "thiserror", error(transparent))]
     SigningError(#[cfg_attr(feature = "thiserror", from)] SigningError),
 }
@@ -114,6 +120,7 @@ impl core::fmt::Display for CgkaError {
                 write!(f, "Expected CgkaOperation::Add for invite")
             }
             Self::UnknownPcsKey => write!(f, "Unknown PCS key"),
+            Self::WrongDocument => write!(f, "Operation belongs to a different document"),
             Self::SigningError(e) => write!(f, "{e}"),
         }
     }

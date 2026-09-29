@@ -405,11 +405,16 @@ impl Cgka {
     /// we add it to our ops graph but don't apply it yet. If there are no outstanding
     /// membership changes and we receive a concurrent update, we can apply it
     /// immediately.
+    ///
+    /// Returns [`CgkaError::WrongDocument`] if `op` is for a different document.
     #[instrument(skip_all)]
     pub fn merge_concurrent_operation(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
     ) -> Result<bool, CgkaError> {
+        if *op.payload.doc_id() != self.doc_id {
+            return Err(CgkaError::WrongDocument);
+        }
         if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(false);
         }
