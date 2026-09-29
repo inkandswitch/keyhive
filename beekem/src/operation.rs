@@ -8,11 +8,7 @@ use crate::{
     transact::{Fork, Merge},
     tree::PathChange,
 };
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-    vec::Vec,
-};
+use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 use core::{
     hash::{Hash, Hasher},
     mem,
@@ -91,14 +87,14 @@ pub enum CgkaOperation {
 impl CgkaOperation {
     /// The zero or more immediate causal predecessors of this operation.
     pub fn predecessors(&self) -> Set<Digest<Signed<CgkaOperation>>> {
+        Set::from_iter(self.predecessor_list().iter().copied())
+    }
+
+    fn predecessor_list(&self) -> &[Digest<Signed<CgkaOperation>>] {
         match self {
-            CgkaOperation::Add { predecessors, .. } => Set::from_iter(predecessors.iter().cloned()),
-            CgkaOperation::Remove { predecessors, .. } => {
-                Set::from_iter(predecessors.iter().cloned())
-            }
-            CgkaOperation::Update { predecessors, .. } => {
-                Set::from_iter(predecessors.iter().cloned())
-            }
+            CgkaOperation::Add { predecessors, .. }
+            | CgkaOperation::Remove { predecessors, .. }
+            | CgkaOperation::Update { predecessors, .. } => predecessors,
         }
     }
 
@@ -120,9 +116,6 @@ impl CgkaOperation {
 pub struct CgkaOperationGraph {
     pub cgka_ops: CaMap<Signed<CgkaOperation>>,
 
-    pub cgka_ops_predecessors:
-        Map<Digest<Signed<CgkaOperation>>, Set<Digest<Signed<CgkaOperation>>>>,
-
     pub cgka_op_heads: Set<Digest<Signed<CgkaOperation>>>,
 
     /// The length of the longest chain of predecessors before each operation.
@@ -133,13 +126,6 @@ pub struct CgkaOperationGraph {
 impl Hash for CgkaOperationGraph {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.cgka_ops.hash(state);
-
-        // Hash predecessors deterministically
-        self.cgka_ops_predecessors
-            .iter()
-            .map(|(k, v)| (k, v.iter().collect::<BTreeSet<_>>()))
-            .collect::<BTreeMap<_, _>>()
-            .hash(state);
 
         // Hash heads deterministically
         self.cgka_op_heads
@@ -160,12 +146,12 @@ impl Fork for CgkaOperationGraph {
 impl Merge for CgkaOperationGraph {
     fn merge(&mut self, fork: Self::Forked) {
         self.cgka_ops.merge(fork.cgka_ops);
-        self.cgka_ops_predecessors
-            .extend(fork.cgka_ops_predecessors);
         self.cgka_op_heads.extend(fork.cgka_op_heads);
-        let predecessors = &self.cgka_ops_predecessors;
-        self.cgka_op_heads
-            .retain(|head| !predecessors.values().any(|preds| preds.contains(head)));
+        let ops = &self.cgka_ops;
+        self.cgka_op_heads.retain(|head| {
+            !ops.values()
+                .any(|op| op.payload.predecessor_list().contains(head))
+        });
         self.depths.extend(fork.depths);
     }
 }
@@ -174,7 +160,6 @@ impl CgkaOperationGraph {
     pub fn new() -> Self {
         Self {
             cgka_ops: CaMap::new(),
-            cgka_ops_predecessors: Map::new(),
             cgka_op_heads: Set::new(),
             depths: Map::new(),
         }
@@ -203,9 +188,9 @@ impl CgkaOperationGraph {
         if self.cgka_ops.contains_key(&op_hash) {
             return Ok(());
         }
-        let op_predecessors = op.payload.predecessors();
+        let op_predecessors = op.payload.predecessor_list();
         let mut depth = 0;
-        for pred in &op_predecessors {
+        for pred in op_predecessors {
             let pred_depth = self
                 .depths
                 .get(pred)
@@ -213,11 +198,10 @@ impl CgkaOperationGraph {
             depth = depth.max(pred_depth + 1);
         }
         self.cgka_ops.insert(op.clone().into());
-        for pred in &op_predecessors {
+        for pred in op_predecessors {
             self.cgka_op_heads.remove(pred);
         }
         self.cgka_op_heads.insert(op_hash);
-        self.cgka_ops_predecessors.insert(op_hash, op_predecessors);
         self.depths.insert(op_hash, depth);
         Ok(())
     }
@@ -229,8 +213,10 @@ impl CgkaOperationGraph {
     pub fn predecessors_for(
         &self,
         op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Option<&Set<Digest<Signed<CgkaOperation>>>> {
-        self.cgka_ops_predecessors.get(op_hash)
+    ) -> Option<&[Digest<Signed<CgkaOperation>>]> {
+        self.cgka_ops
+            .get(op_hash)
+            .map(|op| op.payload.predecessor_list())
     }
 
     /// Sort all operations in the graph into batches.
