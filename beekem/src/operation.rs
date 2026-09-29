@@ -193,36 +193,17 @@ impl CgkaOperationGraph {
         self.cgka_op_heads.len() == 1
     }
 
-    /// Add an operation that was created locally to the graph.
-    ///
-    /// Its predecessors are the current heads.
-    pub fn add_local_op(&mut self, op: &Signed<CgkaOperation>) -> Result<(), CgkaError> {
-        self.add_op_and_update_heads(op, None)
-    }
-
     /// Add an operation to the graph.
     ///
     /// Does nothing if the operation is already in the graph. Returns
     /// [`CgkaError::OutOfOrderOperation`] and leaves the graph unchanged if one
-    /// of `heads` is not in the graph.
-    pub fn add_op(
-        &mut self,
-        op: &Signed<CgkaOperation>,
-        heads: &Set<Digest<Signed<CgkaOperation>>>,
-    ) -> Result<(), CgkaError> {
-        self.add_op_and_update_heads(op, Some(heads))
-    }
-
-    fn add_op_and_update_heads(
-        &mut self,
-        op: &Signed<CgkaOperation>,
-        external_heads: Option<&Set<Digest<Signed<CgkaOperation>>>>,
-    ) -> Result<(), CgkaError> {
+    /// of its predecessors is not in the graph.
+    pub fn add_op(&mut self, op: &Signed<CgkaOperation>) -> Result<(), CgkaError> {
         let op_hash = Digest::hash(op);
         if self.cgka_ops.contains_key(&op_hash) {
             return Ok(());
         }
-        let op_predecessors = external_heads.unwrap_or(&self.cgka_op_heads).clone();
+        let op_predecessors = op.payload.predecessors();
         let mut depth = 0;
         for pred in &op_predecessors {
             let pred_depth = self
@@ -367,16 +348,17 @@ mod causal_graph_tests {
         verifiable::Verifiable,
     };
 
-    async fn add_op(
+    async fn signed_add(
         signer: &MemorySigner,
         doc_id: TreeId,
         leaf_index: u32,
+        predecessors: &[&Signed<CgkaOperation>],
     ) -> Signed<CgkaOperation> {
         let op = CgkaOperation::Add {
             added_id: MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key()),
             pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
             leaf_index,
-            predecessors: Vec::new(),
+            predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
             doc_id,
             authorization: CgkaAuthorization::Delegation([0; 32]),
         };
@@ -396,16 +378,14 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(signer.verifying_key());
         let mut trunk = CgkaOperationGraph::new();
-        let root = add_op(&signer, doc_id, 0).await;
-        trunk
-            .add_local_op(&root)
-            .expect("a root has no predecessors");
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        trunk.add_op(&root).expect("a root has no predecessors");
 
         let mut forked = trunk.fork();
-        let on_fork = add_op(&signer, doc_id, 1).await;
+        let on_fork = signed_add(&signer, doc_id, 1, &[&root]).await;
         let on_fork_hash = Digest::hash(&on_fork);
         forked
-            .add_op(&on_fork, &Set::from_iter([Digest::hash(&root)]))
+            .add_op(&on_fork)
             .expect("the predecessor is in the graph");
 
         trunk.merge(forked);
@@ -425,10 +405,7 @@ mod causal_graph_tests {
             "the merged operation should be the only head"
         );
         trunk
-            .add_op(
-                &add_op(&signer, doc_id, 2).await,
-                &Set::from_iter([on_fork_hash]),
-            )
+            .add_op(&signed_add(&signer, doc_id, 2, &[&on_fork]).await)
             .expect("the merged operation's depth is in the graph");
     }
 
@@ -450,17 +427,14 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(signer.verifying_key());
         let mut one = CgkaOperationGraph::new();
-        let root = add_op(&signer, doc_id, 0).await;
-        one.add_local_op(&root).expect("a root has no predecessors");
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        one.add_op(&root).expect("a root has no predecessors");
         let mut two = one.fork();
 
         assert_eq!(hash_of(&one), hash_of(&two), "equal graphs should agree");
 
-        two.add_op(
-            &add_op(&signer, doc_id, 1).await,
-            &Set::from_iter([Digest::hash(&root)]),
-        )
-        .expect("the predecessor is in the graph");
+        two.add_op(&signed_add(&signer, doc_id, 1, &[&root]).await)
+            .expect("the predecessor is in the graph");
 
         assert_ne!(
             hash_of(&one),
@@ -475,17 +449,16 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(signer.verifying_key());
         let mut graph = CgkaOperationGraph::new();
-        let mut hashes = BTreeMap::new();
+        let mut signed = BTreeMap::new();
         for (leaf_index, (name, preds)) in (0..).zip(ops) {
-            let op = add_op(&signer, doc_id, leaf_index).await;
-            graph
-                .add_op(&op, &preds.iter().map(|pred| hashes[pred]).collect())
-                .expect("predecessors are listed first");
-            hashes.insert(*name, Digest::hash(&op));
+            let preds: Vec<_> = preds.iter().map(|pred| &signed[pred]).collect();
+            let op = signed_add(&signer, doc_id, leaf_index, &preds).await;
+            graph.add_op(&op).expect("predecessors are listed first");
+            signed.insert(*name, op);
         }
-        let names: BTreeMap<_, _> = hashes
+        let names: BTreeMap<_, _> = signed
             .into_iter()
-            .map(|(name, hash)| (hash, name))
+            .map(|(name, op)| (Digest::hash(&op), name))
             .collect();
         graph
             .batches()
@@ -584,18 +557,16 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(signer.verifying_key());
         let mut graph = CgkaOperationGraph::new();
-        let root = add_op(&signer, doc_id, 0).await;
-        graph
-            .add_local_op(&root)
-            .expect("a root has no predecessors");
-        let child = add_op(&signer, doc_id, 1).await;
-        graph
-            .add_local_op(&child)
-            .expect("the root is in the graph");
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let child = signed_add(&signer, doc_id, 1, &[&root]).await;
+        let grandchild = signed_add(&signer, doc_id, 2, &[&child]).await;
+        for op in [&root, &child, &grandchild] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
         let before = graph.clone();
 
         graph
-            .add_op(&child, &Set::new())
+            .add_op(&child)
             .expect("re-adding an operation succeeds");
 
         assert_eq!(graph, before, "re-adding an operation changed the graph");
@@ -606,17 +577,12 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(signer.verifying_key());
         let mut graph = CgkaOperationGraph::new();
-        let root = add_op(&signer, doc_id, 0).await;
-        graph
-            .add_local_op(&root)
-            .expect("a root has no predecessors");
-        let unknown = add_op(&signer, doc_id, 1).await;
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        graph.add_op(&root).expect("a root has no predecessors");
+        let unknown = signed_add(&signer, doc_id, 1, &[]).await;
         let before = graph.clone();
 
-        let result = graph.add_op(
-            &add_op(&signer, doc_id, 2).await,
-            &Set::from_iter([Digest::hash(&root), Digest::hash(&unknown)]),
-        );
+        let result = graph.add_op(&signed_add(&signer, doc_id, 2, &[&root, &unknown]).await);
 
         assert!(
             matches!(result, Err(CgkaError::OutOfOrderOperation)),

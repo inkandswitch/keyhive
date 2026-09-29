@@ -249,7 +249,7 @@ impl Cgka {
         };
 
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-        self.ops_graph.add_local_op(&signed_op)?;
+        self.ops_graph.add_op(&signed_op)?;
         Ok(Some(signed_op))
     }
 
@@ -297,7 +297,7 @@ impl Cgka {
             authorization,
         };
         let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-        self.ops_graph.add_local_op(&signed_op)?;
+        self.ops_graph.add_op(&signed_op)?;
         Ok(Some(signed_op))
     }
 
@@ -351,7 +351,7 @@ impl Cgka {
             };
 
             let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-            self.ops_graph.add_local_op(&signed_op)?;
+            self.ops_graph.add_op(&signed_op)?;
             self.insert_pcs_key(&pcs_key, Digest::hash(&signed_op));
             let new_key_pair = if is_public {
                 None
@@ -426,7 +426,7 @@ impl Cgka {
                 )
             {
                 self.pending_ops_for_structural_change = true;
-                self.ops_graph.add_op(&op, &predecessors)?;
+                self.ops_graph.add_op(&op)?;
             } else {
                 self.apply_operation(op)?;
             }
@@ -470,7 +470,7 @@ impl Cgka {
                 self.tree.apply_path(new_path);
             }
         }
-        self.ops_graph.add_op(&op, &op.payload.predecessors())?;
+        self.ops_graph.add_op(&op)?;
         Ok(())
     }
 
