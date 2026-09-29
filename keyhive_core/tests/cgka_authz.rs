@@ -1,5 +1,6 @@
 use beekem::{
     id::{MemberId, TreeId},
+    keys::{ConflictKeys, NodeKey},
     operation::{CgkaAuthorization, CgkaOperation},
     tree::PathChange,
 };
@@ -829,6 +830,44 @@ async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
 
     assert!(is_denied(&result), "{result:?}");
     assert!(!result.unwrap_err().is_missing_dependency());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_rotation_whose_id_differs_from_its_path_leaf_is_denied() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+
+    let op = CgkaOperation::Update {
+        id: MemberId(alice.id().verifying_key()),
+        new_path: intercepted_path(&bob).await,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId(doc_id.verifying_key()),
+    };
+    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+
+    assert!(is_denied(&result), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_member_cannot_rotate_their_leaf_to_the_public_key() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+
+    let mut path = intercepted_path(&bob).await;
+    path.leaf_pk = NodeKey::ConflictKeys(ConflictKeys {
+        first: Public.share_key(),
+        second: path.leaf_pk.lowest(),
+        more: vec![],
+    });
+    let op = CgkaOperation::Update {
+        id: MemberId(bob.id().verifying_key()),
+        new_path: path,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId(doc_id.verifying_key()),
+    };
+    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+
+    assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
 

@@ -79,12 +79,10 @@ async fn an_operation_for_another_document_is_refused() {
     let mut rng = StdRng::seed_from_u64(0x11fe_0004);
     let owner = member(&mut rng);
     let tree_for = |rng: &mut StdRng| {
-        let mut sks = ShareKeyMap::new();
-        sks.insert(owner.pk, owner.sk);
         Cgka::new(
             TreeId(MemorySigner::generate(rng).verifying_key()),
             owner.id,
-            sks,
+            ShareKeyMap::new(),
         )
     };
     let mut here = tree_for(&mut rng);
