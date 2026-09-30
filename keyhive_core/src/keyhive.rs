@@ -2152,18 +2152,23 @@ impl<
                 )
                 .await
             }
-            CgkaOperation::Update { new_path, .. } => {
-                // A public key rotation should still keep the Public identity's
-                // well-known key at the leaf.
+            CgkaOperation::Update { id, new_path, .. } => {
+                ensure(*id == new_path.leaf_id, CgkaUnauthorized::Denied)?;
                 if new_path.leaf_id == MemberId::public() {
-                    return ensure(
+                    // Anyone can rotate Public's leaf, but it must reinstate the well-known key.
+                    ensure(
                         new_path.leaf_pk == NodeKey::ShareKey(Public.share_key()),
                         CgkaUnauthorized::Denied,
-                    );
+                    )
+                } else {
+                    // An update must be signed by the owner of the leaf it rotates.
+                    ensure(new_path.leaf_id.0 == op_issuer, CgkaUnauthorized::Denied)?;
+                    // An update can't make a non-public leaf public.
+                    ensure(
+                        !new_path.leaf_pk.contains_key(&Public.share_key()),
+                        CgkaUnauthorized::Denied,
+                    )
                 }
-                // A path rotation must be signed by the owner of the leaf it
-                // rotates.
-                ensure(new_path.leaf_id.0 == op_issuer, CgkaUnauthorized::Denied)
             }
         }
     }

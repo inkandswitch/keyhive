@@ -1,11 +1,16 @@
 use crate::{
     cgka::Cgka,
     error::CgkaError,
+    id::TreeId,
+    keys::ShareKeyMap,
     test_utils::{member, Group, ADD_AUTH, REMOVE_AUTH},
 };
+use alloc::sync::Arc;
 use core::hash::{Hash, Hasher};
 use future_form::Local;
-use keyhive_crypto::share_key::ShareSecretKey;
+use keyhive_crypto::{
+    share_key::ShareSecretKey, signer::memory::MemorySigner, verifiable::Verifiable,
+};
 use rand::{rngs::StdRng, SeedableRng};
 use std::hash::DefaultHasher;
 
@@ -67,6 +72,34 @@ async fn emptying_a_group_converges_across_replicas() {
         "a replica that received the removal of the last member still has members"
     );
     group.check("after removing every member");
+}
+
+#[tokio::test]
+async fn an_operation_for_another_document_is_refused() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_0004);
+    let owner = member(&mut rng);
+    let tree_for = |rng: &mut StdRng| {
+        Cgka::new(
+            TreeId(MemorySigner::generate(rng).verifying_key()),
+            owner.id,
+            ShareKeyMap::new(),
+        )
+    };
+    let mut here = tree_for(&mut rng);
+    let mut elsewhere = tree_for(&mut rng);
+    let founding_add = elsewhere
+        .add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &owner.signer)
+        .await
+        .expect("creating the add succeeds")
+        .expect("the owner is new to the tree");
+
+    let result = here.merge_concurrent_operation(Arc::new(founding_add));
+
+    assert!(
+        matches!(result, Err(CgkaError::WrongDocument)),
+        "{result:?}"
+    );
+    assert_eq!(here.group_size(), 0, "the refused add was applied anyway");
 }
 
 fn hash_of(cgka: &Cgka) -> u64 {
