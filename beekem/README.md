@@ -163,7 +163,7 @@ This sorting step is what ensures all peers converge to the same tree structure 
 
 Operations form a causal graph (a DAG). Each operation records its causal predecessors (the set of operation hashes it was aware of when created).
 
-When the graph has unresolved concurrency (multiple heads), the system sorts all operations and groups them into **batches**. Each operation's **depth** is the length of the longest chain of predecessors before it, recorded when the operation is added to the graph. Operations are ordered by depth (and by hash when depth is equal).
+When a replay is required, the system sorts all operations and groups them into **batches**. Each operation's **depth** is the length of the longest chain of predecessors before it, recorded when the operation is added to the graph. Operations are ordered by depth (and by hash when depth is equal).
 
 A batch is formed in two cases:
 
@@ -180,7 +180,7 @@ Batches are applied in order:
 * If a batch has one operation or contains only updates, apply its operations one by one (concurrent updates merge their paths).
 * Otherwise, apply all the operations in the batch and then run membership change cleanup (re-blank, re-sort).
 
-When concurrency is too complex to incrementally merge (e.g., after receiving a concurrent membership change), the entire tree is **replayed from scratch**: start from the initial state, sort all known operations into batches, and re-apply them in order. This guarantees convergence regardless of the order in which operations were received.
+Concurrent updates are merged into the tree as they arrive. A concurrent add or remove is recorded but not applied. So is a concurrent update that a replay would put in the same batch as an add or remove. Once anything has been recorded this way, every later concurrent operation is recorded too, and the tree is **replayed from scratch** before the next local operation, before applying an operation whose predecessors include every head, and when listing members. Merging two replicas' states always replays. Replay starts from the initial state, sorts all known operations into batches, and re-applies them in order. This guarantees convergence regardless of the order in which operations were received.
 
 ## The Secret Store (Inner Node Data)
 

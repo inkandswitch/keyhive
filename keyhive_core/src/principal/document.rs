@@ -434,15 +434,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         owner_id: IndividualId,
     ) -> Result<bool, CgkaError> {
         if self.cgka.is_none() {
-            let CgkaOperation::Add {
-                ref predecessors, ..
-            } = op.payload
-            else {
-                return Err(CgkaError::UnexpectedInitialOperation);
-            };
-            if !predecessors.is_empty() {
-                return Err(CgkaError::OutOfOrderOperation);
-            }
             let mut cgka = Cgka::new(self.doc_id(), owner_id, ShareKeyMap::new());
             let merged = cgka.merge_concurrent_operation(op)?;
             self.cgka = Some(cgka);

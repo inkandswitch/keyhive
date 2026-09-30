@@ -57,9 +57,9 @@ pub struct Cgka {
     pub(crate) tree: BeeKem,
     /// Graph of all operations seen (but not necessarily applied) so far.
     ops_graph: CgkaOperationGraph,
-    /// Whether there are ops in the graph that have not been applied to the
-    /// tree due to a structural change.
-    pending_ops_for_structural_change: bool,
+    /// Whether operations were recorded in the graph but not applied to the
+    /// tree.
+    pending_replay: bool,
     // TODO: Enable policies to evict older entries.
     pcs_keys: CaMap<PcsKey>,
 
@@ -74,7 +74,7 @@ impl Hash for Cgka {
         self.owner_sks.hash(state);
         self.tree.hash(state);
         self.ops_graph.hash(state);
-        self.pending_ops_for_structural_change.hash(state);
+        self.pending_replay.hash(state);
         self.pcs_keys.keys().collect::<BTreeSet<_>>().hash(state);
         self.pcs_key_ops
             .keys()
@@ -92,7 +92,7 @@ impl Cgka {
             owner_sks,
             tree: BeeKem::new(doc_id),
             ops_graph: CgkaOperationGraph::new(),
-            pending_ops_for_structural_change: false,
+            pending_replay: false,
             pcs_keys: CaMap::new(),
             pcs_key_ops: Map::new(),
         }
@@ -229,9 +229,7 @@ impl Cgka {
         authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
+        self.replay_if_pending()?;
         // Check after replay since a concurrent add of the same member might
         // have been pending.
         if self.tree.contains_id(&id) {
@@ -278,9 +276,7 @@ impl Cgka {
         authorization: CgkaAuthorization,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
+        self.replay_if_pending()?;
         // Check after replay since a concurrent add of the same member might
         // have been pending.
         if !self.tree.contains_id(&id) {
@@ -315,9 +311,7 @@ impl Cgka {
         signer: &S,
         csprng: &mut R,
     ) -> Result<(PcsKey, Signed<CgkaOperation>, Option<LeafKeyPair>), CgkaError> {
-        if self.should_replay() {
-            self.replay_ops_graph()?;
-        }
+        self.replay_if_pending()?;
         if self.group_size() == 0 {
             return Err(CgkaError::NoMembers);
         }
@@ -380,10 +374,10 @@ impl Cgka {
         self.tree.member_count()
     }
 
-    /// Rebuild the tree from the operation graph if a concurrent membership
-    /// change is still outstanding.
-    fn resolve_structural_changes(&mut self) -> Result<(), CgkaError> {
-        if self.pending_ops_for_structural_change {
+    /// Replay the operation graph to rebuild the tree if operations were
+    /// recorded but not applied.
+    fn replay_if_pending(&mut self) -> Result<(), CgkaError> {
+        if self.pending_replay {
             self.replay_ops_graph()?;
         }
         Ok(())
@@ -395,16 +389,17 @@ impl Cgka {
     /// answer reflects every operation received rather than only those already
     /// applied.
     pub fn member_ids(&mut self) -> Result<impl Iterator<Item = MemberId> + '_, CgkaError> {
-        self.resolve_structural_changes()?;
+        self.replay_if_pending()?;
         Ok(self.tree.member_ids())
     }
 
     /// Merges concurrent [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.
     ///
-    /// If we receive a concurrent membership change (i.e., add or remove), then
-    /// we add it to our ops graph but don't apply it yet. If there are no outstanding
-    /// membership changes and we receive a concurrent update, we can apply it
-    /// immediately.
+    /// If we receive a concurrent add or remove, or a concurrent update that a
+    /// replay would place in the same batch as one, we add it to our ops graph
+    /// but don't apply it yet. Once anything is recorded this way, every later
+    /// concurrent operation is recorded too until the next replay. Any other
+    /// concurrent update is merged into the tree immediately.
     ///
     /// Returns [`CgkaError::WrongDocument`] if `op` is for a different document.
     #[instrument(skip_all)]
@@ -418,27 +413,20 @@ impl Cgka {
         if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(false);
         }
+        self.ops_graph.check_can_add(&op.payload)?;
         let predecessors = op.payload.predecessors();
-        if !self.ops_graph.contains_predecessors(&predecessors) {
-            return Err(CgkaError::OutOfOrderOperation);
-        }
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
-            if self.pending_ops_for_structural_change
-                || matches!(
-                    op.payload,
-                    CgkaOperation::Add { .. } | CgkaOperation::Remove { .. }
-                )
-            {
-                self.pending_ops_for_structural_change = true;
+            self.pending_replay = self.pending_replay
+                || op.payload.is_membership_change()
+                || self.ops_graph.batch_has_membership_change(&predecessors)?;
+            if self.pending_replay {
                 self.ops_graph.add_op(&op)?;
             } else {
                 self.apply_operation(op)?;
             }
         } else {
-            if self.should_replay() {
-                self.replay_ops_graph()?;
-            }
+            self.replay_if_pending()?;
             self.apply_operation(op)?;
         }
         Ok(true)
@@ -583,19 +571,13 @@ impl Cgka {
         self.rebuild_pcs_key(ops)
     }
 
-    /// Whether we have unresolved concurrency that requires a replay to resolve.
-    fn should_replay(&self) -> bool {
-        !self.ops_graph.cgka_op_heads.is_empty()
-            && (self.pending_ops_for_structural_change || !self.ops_graph.has_single_head())
-    }
-
     /// Replay all ops in our graph in a deterministic order.
     #[instrument(skip_all)]
     fn replay_ops_graph(&mut self) -> Result<(), CgkaError> {
         let ordered_ops = self.ops_graph.batches()?;
         let rebuilt_cgka = self.rebuild_cgka(ordered_ops)?;
         self.update_cgka_from(&rebuilt_cgka);
-        self.pending_ops_for_structural_change = false;
+        self.pending_replay = false;
         Ok(())
     }
 
@@ -604,7 +586,7 @@ impl Cgka {
     fn rebuild_cgka(&mut self, batches: NonEmpty<CgkaBatch>) -> Result<Cgka, CgkaError> {
         let mut rebuilt_cgka = Cgka::new(self.doc_id, self.owner_id, self.owner_sks.clone());
         rebuilt_cgka.apply_batches(&batches)?;
-        if rebuilt_cgka.has_pcs_key() {
+        if rebuilt_cgka.tree.contains_id(&self.owner_id) && rebuilt_cgka.has_pcs_key() {
             let pcs_key = rebuilt_cgka.pcs_key_from_tree_root()?;
             rebuilt_cgka.insert_pcs_key(&pcs_key, Digest::hash(&batches.last()[0]));
         }
@@ -646,7 +628,7 @@ impl Cgka {
                 .map(|(hash, key)| (*hash, key.clone())),
         );
         self.pcs_key_ops.extend(other.pcs_key_ops.iter());
-        self.pending_ops_for_structural_change = other.pending_ops_for_structural_change;
+        self.pending_replay = other.pending_replay;
     }
 }
 
