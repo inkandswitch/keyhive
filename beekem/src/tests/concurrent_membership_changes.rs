@@ -548,6 +548,70 @@ fn removed_members_learn_nothing_from_a_rotation_that_excludes_them() {
     });
 }
 
+#[tokio::test]
+async fn a_removal_beats_a_concurrent_add_of_the_same_member() {
+    let mut rng = StdRng::seed_from_u64(0x5a3e_0001);
+    let mut group = Group::new(3, &mut rng).await;
+    let d = member(&mut rng);
+    group.names.insert(d.id, "d".to_string());
+
+    let add_by_a = group.add(0, d.id, d.pk).await;
+    group.deliver(&add_by_a, &[2]);
+    let remove_by_c = group.remove(2, d.id).await;
+    group.deliver(&remove_by_c, &[0]);
+    // Rotating first puts b's add deeper than the concurrent removal, so replaying in
+    // causal order applies it after the removal.
+    let rotations_by_b = [
+        group.rotate(1, &mut rng).await,
+        group.rotate(1, &mut rng).await,
+    ];
+    let add_by_b = group.add(1, d.id, d.pk).await;
+    assert!(
+        group.replicas[1].tree.contains_id(&d.id),
+        "b's add did not place d in b's tree"
+    );
+
+    group.deliver(&add_by_a, &[1]);
+    group.deliver(&remove_by_c, &[1]);
+    for op in rotations_by_b.iter().chain([&add_by_b]) {
+        group.deliver(op, &[0, 2]);
+    }
+    let next = group.rotate(0, &mut rng).await;
+    group.broadcast(&next);
+
+    let context = "after an add concurrent with a removal of the same member";
+    group.check(context);
+    group.assert_members(context, &["a", "b", "c"]);
+    group.assert_key_agreement(context);
+
+    let paths: Vec<&PathChange> = rotations_by_b
+        .iter()
+        .chain([&next])
+        .map(|op| new_path(op))
+        .collect();
+    let leaf_key = |pk, sk| {
+        let mut keys = ShareKeyMap::new();
+        keys.insert(pk, sk);
+        keys
+    };
+    let learned_by_d = learn_from(leaf_key(d.pk, d.sk), &paths);
+    let c = &group.members[2];
+    let learned_by_c = learn_from(leaf_key(c.pk, c.sk), &paths);
+    let next_keys: Vec<ShareKey> = new_path(&next)
+        .path
+        .iter()
+        .flat_map(|(_, node)| node.versions().iter().map(|v| v.pk))
+        .collect();
+    assert!(
+        next_keys.iter().any(|pk| learned_by_c.contains_key(pk)),
+        "{context}: c could not decrypt the next rotation"
+    );
+    assert!(
+        !next_keys.iter().any(|pk| learned_by_d.contains_key(pk)),
+        "{context}: d learned a secret from the next rotation"
+    );
+}
+
 // 5 members means the tree has 5 leaves with members and 3 that are blank.
 const MEMBERS: usize = 5;
 
