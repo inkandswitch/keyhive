@@ -15,6 +15,9 @@ pub enum CgkaError {
     #[cfg_attr(feature = "thiserror", error("Decryption failed: {0}"))]
     Decryption(alloc::string::String),
 
+    #[cfg_attr(feature = "thiserror", error("Depth not found"))]
+    DepthNotFound,
+
     #[cfg_attr(feature = "thiserror", error("Deriving nonce failed: {0}"))]
     DeriveNonce(alloc::string::String),
 
@@ -66,12 +69,6 @@ pub enum CgkaError {
     #[cfg_attr(feature = "thiserror", error("Unexpected key conflict"))]
     UnexpectedKeyConflict,
 
-    #[cfg_attr(
-        feature = "thiserror",
-        error("Expected CgkaOperation::Add for initial operation")
-    )]
-    UnexpectedInitialOperation,
-
     #[cfg_attr(feature = "thiserror", error("Expected CgkaOperation::Add for invite"))]
     UnexpectedInviteOperation,
 
@@ -95,6 +92,7 @@ impl core::fmt::Display for CgkaError {
             Self::Conversion => write!(f, "Conversion error"),
             Self::CurrentEncrypterNotFound => write!(f, "Current encrypter not found"),
             Self::Decryption(msg) => write!(f, "Decryption failed: {msg}"),
+            Self::DepthNotFound => write!(f, "Depth not found"),
             Self::DeriveNonce(msg) => write!(f, "Deriving nonce failed: {msg}"),
             Self::Encryption(e) => write!(f, "Encryption failed: {e}"),
             Self::EncryptedSecretNotFound => write!(f, "Encrypted secret not found"),
@@ -113,9 +111,6 @@ impl core::fmt::Display for CgkaError {
             Self::SecretKeyNotFound => write!(f, "SecretKey not found"),
             Self::Serialize(msg) => write!(f, "Serialization failed: {msg}"),
             Self::UnexpectedKeyConflict => write!(f, "Unexpected key conflict"),
-            Self::UnexpectedInitialOperation => {
-                write!(f, "Expected CgkaOperation::Add for initial operation")
-            }
             Self::UnexpectedInviteOperation => {
                 write!(f, "Expected CgkaOperation::Add for invite")
             }
@@ -140,7 +135,6 @@ impl CgkaError {
             self,
             Self::NotInitialized
                 | Self::IdentifierNotFound
-                | Self::UnexpectedInitialOperation
                 | Self::UnexpectedInviteOperation
                 | Self::OutOfOrderOperation
         )

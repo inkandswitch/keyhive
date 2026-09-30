@@ -8,7 +8,11 @@ use crate::{
     transact::{Fork, Merge},
     tree::PathChange,
 };
-use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
+use alloc::{
+    collections::{BTreeSet, BinaryHeap},
+    sync::Arc,
+    vec::Vec,
+};
 use core::{
     hash::{Hash, Hasher},
     mem,
@@ -98,6 +102,11 @@ impl CgkaOperation {
         }
     }
 
+    /// Whether this is an add or a remove.
+    pub(crate) fn is_membership_change(&self) -> bool {
+        matches!(self, Self::Add { .. } | Self::Remove { .. })
+    }
+
     /// Document/tree id.
     pub fn doc_id(&self) -> &TreeId {
         match self {
@@ -178,24 +187,36 @@ impl CgkaOperationGraph {
         self.cgka_op_heads.len() == 1
     }
 
+    /// Check that `op` can be added to the graph.
+    ///
+    /// Returns [`CgkaError::InvalidOperation`] if `op` has no
+    /// predecessors and is not an add, and [`CgkaError::OutOfOrderOperation`] if
+    /// one of its predecessors is not in the graph.
+    pub(crate) fn check_can_add(&self, op: &CgkaOperation) -> Result<(), CgkaError> {
+        let predecessors = op.predecessors();
+        if predecessors.is_empty() && !matches!(op, CgkaOperation::Add { .. }) {
+            return Err(CgkaError::InvalidOperation);
+        }
+        if !self.contains_predecessors(&predecessors) {
+            return Err(CgkaError::OutOfOrderOperation);
+        }
+        Ok(())
+    }
+
     /// Add an operation to the graph.
     ///
-    /// Does nothing if the operation is already in the graph. Returns
-    /// [`CgkaError::OutOfOrderOperation`] and leaves the graph unchanged if one
-    /// of its predecessors is not in the graph.
+    /// Does nothing if the operation is already in the graph. Returns an
+    /// error if it cannot be added or a predecessor has no recorded depth.
     pub fn add_op(&mut self, op: &Signed<CgkaOperation>) -> Result<(), CgkaError> {
         let op_hash = Digest::hash(op);
         if self.cgka_ops.contains_key(&op_hash) {
             return Ok(());
         }
+        self.check_can_add(&op.payload)?;
         let op_predecessors = op.payload.predecessor_list();
         let mut depth = 0;
         for pred in op_predecessors {
-            let pred_depth = self
-                .depths
-                .get(pred)
-                .ok_or(CgkaError::OutOfOrderOperation)?;
-            depth = depth.max(pred_depth + 1);
+            depth = depth.max(self.depth(pred)? + 1);
         }
         self.cgka_ops.insert(op.clone().into());
         for pred in op_predecessors {
@@ -204,6 +225,52 @@ impl CgkaOperationGraph {
         self.cgka_op_heads.insert(op_hash);
         self.depths.insert(op_hash, depth);
         Ok(())
+    }
+
+    /// Whether a replay would put an operation with `predecessors` in the same
+    /// batch as an add or remove. `predecessors` must all be in the graph.
+    ///
+    /// Returns [`CgkaError::OperationNotFound`] if an operation it reaches is not
+    /// in the graph, and [`CgkaError::DepthNotFound`] if one has no recorded depth.
+    pub(crate) fn batch_has_membership_change(
+        &self,
+        predecessors: &Set<Digest<Signed<CgkaOperation>>>,
+    ) -> Result<bool, CgkaError> {
+        if predecessors.is_empty() {
+            // A root must itself be an add.
+            return Ok(true);
+        }
+        if self.heads_contained_in(predecessors) {
+            // Every operation in the graph is a head or an ancestor of one. A
+            // successor of every head is deeper than all of them and would be
+            // in its own batch.
+            return Ok(false);
+        }
+        let mut seen = Set::new();
+        let mut frontier = BinaryHeap::new();
+        for hash in predecessors.iter().chain(&self.cgka_op_heads) {
+            if seen.insert(*hash) {
+                frontier.push((self.depth(hash)?, *hash));
+            }
+        }
+        while let Some((_, hash)) = frontier.pop() {
+            if frontier.is_empty() {
+                break;
+            }
+            let op = self
+                .cgka_ops
+                .get(&hash)
+                .ok_or(CgkaError::OperationNotFound)?;
+            if op.payload.is_membership_change() {
+                return Ok(true);
+            }
+            for pred in op.payload.predecessor_list() {
+                if seen.insert(*pred) {
+                    frontier.push((self.depth(pred)?, *pred));
+                }
+            }
+        }
+        Ok(false)
     }
 
     pub fn heads_contained_in(&self, heads: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
@@ -316,10 +383,11 @@ impl CgkaOperationGraph {
     }
 
     fn depth(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> Result<u64, CgkaError> {
-        self.depths
-            .get(op_hash)
-            .copied()
-            .ok_or(CgkaError::OperationNotFound)
+        match self.depths.get(op_hash) {
+            Some(depth) => Ok(*depth),
+            None if self.cgka_ops.contains_key(op_hash) => Err(CgkaError::DepthNotFound),
+            None => Err(CgkaError::OperationNotFound),
+        }
     }
 }
 
