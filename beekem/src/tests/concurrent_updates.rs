@@ -20,3 +20,16 @@ async fn replicas_converge_over_concurrent_updates_in_either_order() {
 
     group.check("after concurrent updates delivered in opposite orders");
 }
+
+#[tokio::test]
+async fn a_concurrent_update_is_merged_on_arrival() {
+    let mut rng = StdRng::seed_from_u64(0x0cd0_1235);
+    let mut group = Group::new(2, &mut rng).await;
+    group.settle(0, &mut rng).await;
+
+    group.rotate(0, &mut rng).await;
+    let by_b = group.rotate(1, &mut rng).await;
+    group.deliver(&by_b, &[0]);
+
+    group.assert_trees_match_replay("after a concurrent update arrived");
+}

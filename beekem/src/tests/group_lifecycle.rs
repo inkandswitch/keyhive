@@ -103,6 +103,19 @@ async fn an_operation_for_another_document_is_refused() {
     assert_eq!(here.group_size(), 0, "the refused add was applied anyway");
 }
 
+#[tokio::test]
+async fn a_removed_member_can_merge_a_fork_after_a_rotation() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_0006);
+    let mut group = Group::new(2, &mut rng).await;
+    let removed = group.id(1);
+    let remove = group.remove(0, removed).await;
+    group.broadcast(&remove);
+    let rotate = group.rotate(0, &mut rng).await;
+    group.broadcast(&rotate);
+
+    group.assert_trees_match_replay("after the owner was removed and the group rotated");
+}
+
 fn cgka_with_no_operations(owner: &Member) -> Cgka {
     Cgka::new(TreeId(owner.id.0), owner.id, ShareKeyMap::new())
 }
