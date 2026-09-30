@@ -641,6 +641,154 @@ mod causal_graph_tests {
             matches!(result, Err(CgkaError::OutOfOrderOperation)),
             "an operation with a predecessor missing from the graph was accepted"
         );
+        assert!(
+            result.is_err_and(|e| e.is_missing_dependency()),
+            "an operation whose predecessor may still arrive would not be retried"
+        );
+        assert_eq!(graph, before, "a rejected operation changed the graph");
+    }
+
+    async fn signed_update(
+        signer: &MemorySigner,
+        doc_id: TreeId,
+        predecessors: &[&Signed<CgkaOperation>],
+    ) -> Signed<CgkaOperation> {
+        let new_path =
+            arbitrary::Arbitrary::arbitrary(&mut arbitrary::Unstructured::new(&[0; 4096]))
+                .expect("4096 bytes are enough for a path");
+        let op = CgkaOperation::Update {
+            id: MemberId(signer.verifying_key()),
+            new_path,
+            predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
+            doc_id,
+        };
+        async_signer::try_sign_async::<future_form::Local, _, _>(signer, op)
+            .await
+            .expect("signing succeeds")
+    }
+
+    #[tokio::test]
+    async fn an_operation_with_no_predecessors_shares_a_batch_with_the_first_add() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        graph
+            .add_op(&signed_add(&signer, doc_id, 0, &[]).await)
+            .expect("a root has no predecessors");
+
+        assert!(
+            graph
+                .batch_has_membership_change(&Set::new())
+                .expect("a valid graph"),
+            "a second root was not put in the batch of the first add"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_root_puts_later_operations_in_its_batch() {
+        // first_add
+        //    |       second_add
+        //  update
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let first_add = signed_add(&signer, doc_id, 0, &[]).await;
+        let update = signed_update(&signer, doc_id, &[&first_add]).await;
+        let second_add = signed_add(&signer, doc_id, 1, &[]).await;
+        for op in [&first_add, &update, &second_add] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+
+        assert!(
+            graph
+                .batch_has_membership_change(&Set::from_iter([Digest::hash(&update)]))
+                .expect("a valid graph"),
+            "an operation after the update was not put in a batch with the second root"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_depth_is_an_error() {
+        //       root
+        //      /    \
+        // update  other_update
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let update = signed_update(&signer, doc_id, &[&root]).await;
+        let other_signer = MemorySigner::generate(&mut rand::thread_rng());
+        let other_update = signed_update(&other_signer, doc_id, &[&root]).await;
+        for op in [&root, &update, &other_update] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+
+        graph.depths.clear();
+        assert!(
+            matches!(
+                graph.batch_has_membership_change(&Set::from_iter([Digest::hash(&update)])),
+                Err(CgkaError::DepthNotFound)
+            ),
+            "a graph missing a depth was not reported"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_head_missing_from_the_graph_is_an_error() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let graph = CgkaOperationGraph::new();
+        let unknown = signed_add(&signer, doc_id, 0, &[]).await;
+
+        assert!(
+            matches!(
+                graph.batches_for_heads(&Set::from_iter([Digest::hash(&unknown)])),
+                Err(CgkaError::OperationNotFound)
+            ),
+            "a head missing from the graph was not reported as missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_operation_after_every_head_starts_a_new_batch() {
+        // first_root  second_root
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let first_root = signed_add(&signer, doc_id, 0, &[]).await;
+        let second_root = signed_add(&signer, doc_id, 1, &[]).await;
+        for op in [&first_root, &second_root] {
+            graph.add_op(op).expect("a root has no predecessors");
+        }
+
+        assert!(
+            !graph
+                .batch_has_membership_change(&graph.cgka_op_heads)
+                .expect("a valid graph"),
+            "an operation after every head was put in a batch with an add"
+        );
+    }
+
+    #[tokio::test]
+    async fn adding_a_root_that_is_not_an_add_leaves_the_graph_unchanged() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        graph
+            .add_op(&signed_add(&signer, doc_id, 0, &[]).await)
+            .expect("a root add is accepted");
+        let before = graph.clone();
+
+        let result = graph.add_op(&signed_update(&signer, doc_id, &[]).await);
+
+        assert!(
+            matches!(result, Err(CgkaError::InvalidOperation)),
+            "a root that is not an add was accepted"
+        );
+        assert!(
+            result.is_err_and(|e| !e.is_missing_dependency()),
+            "a root that is not an add would be retried"
+        );
         assert_eq!(graph, before, "a rejected operation changed the graph");
     }
 }

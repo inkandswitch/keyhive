@@ -5,6 +5,7 @@ use crate::{
     keys::ShareKeyMap,
     operation::{CgkaAuthorization, CgkaOperation},
     pcs_key::PcsKey,
+    transact::{Fork, Merge},
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -274,6 +275,20 @@ impl Group {
                 };
                 panic!("{context}: replicas diverged. {detail}");
             }
+        }
+    }
+
+    /// Every replica has the tree a full replay of its graph builds.
+    pub fn assert_trees_match_replay(&self, context: &str) {
+        for (i, replica) in self.replicas.iter().enumerate() {
+            let mut replayed = replica.clone();
+            // Merging always replays the merged graph.
+            let fork = replayed.fork();
+            replayed.merge(fork);
+            assert!(
+                replayed.tree == replica.tree,
+                "{context}: replica {i}'s tree differs from a replay of its graph"
+            );
         }
     }
 
