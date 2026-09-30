@@ -17,7 +17,7 @@ future_form = { workspace = true }
 keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", default-features = false }
 nonempty = { workspace = true }
 rand = { version = "0.8.5", default-features = false }
-serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive", "rc"] }
 tracing = { version = "0.1.40", default-features = false, features = ["attributes"] }
 
 # std-only dependencies
@@ -39,10 +39,10 @@ std = [
     "dupe",
     "ed25519-dalek/std",
     "keyhive_crypto/std",
+    "nonempty/std",
     "rand/std",
     "rand/std_rng",
     "serde/std",
-    "serde/rc",
     "thiserror",
     "tracing/std",
 ]

@@ -249,11 +249,13 @@
           '';
 
           # Checks that the `std` feature gate is at least self-consistent.
-          # This runs on the HOST target, so it does NOT prove no_std: with
-          # default features off, `keyhive_crypto` still pulls `futures` and
-          # `getrandom` with `std`, and fails on e.g. thumbv7em-none-eabi.
-          # `beekem --no-default-features` does not build at all yet (needs a
-          # no_std serializer). Both are tracked as known issues.
+          # This runs on the HOST target, so it does NOT prove no_std: a
+          # dependency that uses `std` still compiles here, and only a target
+          # without `std` (e.g., thumbv7em-none-eabi) rejects it.
+          # `beekem --no-default-features` does not build yet. Hashing and
+          # signing in `keyhive_crypto` go through `bincode`, which needs
+          # `std`, so they are compiled out and `beekem` cannot do without
+          # them. Add `-p beekem` here once `bincode` is replaced.
           ci-no-std = mkCheck "ci-no-std" ''
             cargo check -p keyhive_crypto --no-default-features
           '';
