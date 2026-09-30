@@ -1,15 +1,20 @@
 //! Tests concurrent membership changes.
 
 use crate::{
+    encrypted::EncryptedSecret,
     id::MemberId,
     keys::{NodeKey, ShareKeyMap},
     operation::CgkaOperation,
     test_utils::{member, name_for, Group, Member, ADD_AUTH, REMOVE_AUTH},
+    tree::PathChange,
 };
 use alloc::{collections::BTreeSet, format, string::ToString, sync::Arc, vec::Vec};
 use bolero::{gen, TypeGenerator, ValueGenerator};
 use future_form::Local;
-use keyhive_crypto::{share_key::ShareSecretKey, signed::Signed};
+use keyhive_crypto::{
+    share_key::{ShareKey, ShareSecretKey},
+    signed::Signed,
+};
 use rand::{rngs::StdRng, SeedableRng};
 
 #[tokio::test]
@@ -324,13 +329,20 @@ const MIN_OPS: usize = 3;
 const MAX_OPS: usize = 12;
 const JOINERS: usize = 3;
 
-/// Members take turns creating operations, delivering what is outstanding only
-/// where a step asks for it. After a settling rotation, the replicas must have
-/// the same tree and every remaining member must derive the same root key.
-///
-/// Member 0 is never a removal target, so a run always ends with a member who
-/// can create the settling rotation and derive the key the others need to agree with.
-async fn run(scenario: &Scenario) {
+struct ScenarioOutcome {
+    group: Group,
+    member_count: usize,
+    /// Expected membership.
+    expected: BTreeSet<MemberId>,
+    /// Ordered list of rotations created during the scenario, represented as
+    /// (author_idx, operation, members_at_rotation).
+    rotations: Vec<(usize, Arc<Signed<CgkaOperation>>, BTreeSet<MemberId>)>,
+}
+
+/// Members take turns creating operations, delivering what is outstanding
+/// to all members when a step asks for it. Member 0, which is never a removal
+/// target, creates a final rotation at the end so we can check for convergence.
+async fn run(scenario: &Scenario) -> ScenarioOutcome {
     let mut rng = StdRng::seed_from_u64(scenario.seed);
 
     let member_count = 2 + scenario.extra_members as usize % 4;
@@ -345,9 +357,8 @@ async fn run(scenario: &Scenario) {
 
     let everyone: Vec<usize> = (0..member_count).collect();
     let mut undelivered = Vec::new();
+    let mut rotations = Vec::new();
 
-    // Expected membership. Updated at each generated membership change and then
-    // checked against tree membership at the end.
     let mut expected: BTreeSet<MemberId> = (0..member_count).map(|i| group.id(i)).collect();
     for (position, step) in scenario.ops.iter().enumerate() {
         let author = position % member_count;
@@ -364,7 +375,14 @@ async fn run(scenario: &Scenario) {
                 expected.remove(&target);
                 group.try_remove(author, target).await
             }
-            CgkaOp::Update => group.try_rotate(author, &mut rng).await,
+            CgkaOp::Update => {
+                let rotation = group.try_rotate(author, &mut rng).await;
+                if let Some(op) = &rotation {
+                    let tree = group.replicas[author].tree.member_ids().collect();
+                    rotations.push((author, op.clone(), tree));
+                }
+                rotation
+            }
         };
         undelivered.extend(op);
         if step.deliver_after {
@@ -373,24 +391,22 @@ async fn run(scenario: &Scenario) {
     }
     deliver_all(&mut group, &mut undelivered, &everyone);
 
-    // Delivery only queues an operation. A replica replays its graph when a
-    // later structural change forces it so the trees are compared after the
-    // settling rotation.
-    group.settle(0, &mut rng).await;
+    // Ensures any pending concurrent operations are merged.
+    let final_rotation = group.rotate(0, &mut rng).await;
+    group.broadcast(&final_rotation);
+    let tree = group.replicas[0].tree.member_ids().collect();
+    rotations.push((0, final_rotation, tree));
 
-    let context = "after a rotation re-established a root key";
-    group.check(context);
-    group.assert_key_agreement(context);
-    // Validate that the replicas are agreeing on the correct membership.
-    let got: BTreeSet<MemberId> = group.replicas[0].tree.member_ids().collect();
-    assert_eq!(
-        got, expected,
-        "{context}: converged on the wrong membership"
-    );
+    ScenarioOutcome {
+        group,
+        member_count,
+        expected,
+        rotations,
+    }
 }
 
-#[test]
-fn replicas_converge_over_random_concurrent_operations() {
+/// Run `property` over generated scenarios.
+fn check_scenarios(property: fn(ScenarioOutcome)) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("building a runtime succeeds");
@@ -408,7 +424,128 @@ fn replicas_converge_over_random_concurrent_operations() {
                     ops,
                 }),
         )
-        .for_each(|scenario| runtime.block_on(run(scenario)));
+        .for_each(|scenario| property(runtime.block_on(run(scenario))));
+}
+
+#[test]
+fn replicas_converge_over_random_concurrent_operations() {
+    check_scenarios(|mut outcome| {
+        let context = "after a rotation re-established a root key";
+        outcome.group.check(context);
+        outcome.group.assert_key_agreement(context);
+        let got: BTreeSet<MemberId> = outcome.group.replicas[0].tree.member_ids().collect();
+        assert_eq!(
+            got, outcome.expected,
+            "{context}: converged on the wrong membership"
+        );
+    });
+}
+
+/// Decrypt `encrypted` with a key from `known`.
+fn try_decrypt(
+    known: &ShareKeyMap,
+    encrypter_pk: ShareKey,
+    encrypted: &EncryptedSecret<ShareSecretKey>,
+) -> Option<ShareSecretKey> {
+    let bytes = match known.get(&encrypter_pk) {
+        Some(encrypter_sk) => encrypted.try_encrypter_decrypt(encrypter_sk).ok()?,
+        None => known.try_decrypt_encryption(encrypter_pk, encrypted).ok()?,
+    };
+    Some(ShareSecretKey::force_from_bytes(bytes.try_into().ok()?))
+}
+
+/// Extend `known` with every node secret it can be used to decrypt from `paths`.
+/// Repeat until nothing else is learned.
+fn learn_from(mut known: ShareKeyMap, paths: &[&PathChange]) -> ShareKeyMap {
+    loop {
+        let before = known.len();
+        for path in paths {
+            for (_, node) in &path.path {
+                for version in node.versions() {
+                    if known.contains_key(&version.pk) {
+                        continue;
+                    }
+                    let secret = version
+                        .sk
+                        .values()
+                        .find_map(|encrypted| try_decrypt(&known, version.encrypter_pk, encrypted));
+                    if let Some(sk) = secret {
+                        known.insert(version.pk, sk);
+                    }
+                }
+            }
+        }
+        if known.len() == before {
+            return known;
+        }
+    }
+}
+
+fn new_path(op: &Signed<CgkaOperation>) -> &PathChange {
+    match op.payload() {
+        CgkaOperation::Update { new_path, .. } => new_path,
+        _ => panic!("a rotation is an update"),
+    }
+}
+
+#[test]
+fn removed_members_learn_nothing_from_a_rotation_that_excludes_them() {
+    check_scenarios(|outcome| {
+        let group = &outcome.group;
+        let final_tree: BTreeSet<MemberId> = group.replicas[0].tree.member_ids().collect();
+        let removed: Vec<usize> = (0..outcome.member_count)
+            .filter(|&i| !final_tree.contains(&group.id(i)))
+            .collect();
+        let paths: Vec<&PathChange> = outcome
+            .rotations
+            .iter()
+            .map(|(_, op, _)| new_path(op))
+            .collect();
+
+        for (author, op, tree) in &outcome.rotations {
+            if removed.contains(author) {
+                continue;
+            }
+            let excluded: Vec<usize> = removed
+                .iter()
+                .copied()
+                .filter(|&i| !tree.contains(&group.id(i)))
+                .collect();
+            if excluded.is_empty() {
+                continue;
+            }
+            let mut pooled = ShareKeyMap::new();
+            for &i in &excluded {
+                pooled.extend(&group.replicas[i].owner_sks);
+            }
+            let learned = learn_from(pooled, &paths);
+            let recipient =
+                (0..outcome.member_count).find(|&j| j != *author && tree.contains(&group.id(j)));
+            if let Some(j) = recipient {
+                let theirs = learn_from(group.replicas[j].owner_sks.clone(), &paths);
+                assert!(
+                    new_path(op).path.iter().any(|(_, node)| node
+                        .versions()
+                        .iter()
+                        .any(|v| theirs.contains_key(&v.pk))),
+                    "{} could not decrypt a rotation by {} that included them",
+                    name_for(j),
+                    name_for(*author),
+                );
+            }
+            for (idx, node) in &new_path(op).path {
+                for version in node.versions() {
+                    assert!(
+                        !learned.contains_key(&version.pk),
+                        "removed members {:?} learned the secret at inner node {idx} of a \
+                         rotation by {} from a tree they did not belong to",
+                        excluded.iter().map(|&i| name_for(i)).collect::<Vec<_>>(),
+                        name_for(*author),
+                    );
+                }
+            }
+        }
+    });
 }
 
 // 5 members means the tree has 5 leaves with members and 3 that are blank.
