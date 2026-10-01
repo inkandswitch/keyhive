@@ -1242,6 +1242,7 @@ impl<
         AllMembershipOps { ops, index }
     }
 
+    /// Every prekey op `who` needs, grouped by the identifier they belong to.
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
@@ -1336,7 +1337,7 @@ impl<
         }
 
         map.into_iter()
-            .map(|(id, keys)| (id, KeyOp::topsort(&keys)))
+            .map(|(id, keys)| (id, keys.into_values().collect()))
             .collect()
     }
 
@@ -1346,7 +1347,7 @@ impl<
     /// that happen when calling `reachable_prekey_ops_for_agent` once per agent.
     ///
     /// Returns an [`AllReachablePrekeyOps`] containing:
-    /// - `ops`: topsorted key ops per identifier, computed once and shared
+    /// - `ops`: key ops per identifier, computed once and shared
     /// - `index`: for each agent, the identifier keys into `ops` that agent
     ///   needs, including members it can no longer reach
     #[instrument(skip_all)]
@@ -1408,8 +1409,7 @@ impl<
             doc_data.push((doc_id, doc, transitive, revoked));
         }
 
-        // Phase 2: Collect all key_ops (call key_ops() once per unique agent),
-        // then topsort once per identifier.
+        // Phase 2: Collect all key_ops (call key_ops() once per unique agent).
         let mut key_ops_cache: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
         key_ops_cache.insert(active_id, active_prekeys);
 
@@ -1454,8 +1454,8 @@ impl<
         }
 
         let ops: HashMap<Identifier, Vec<Arc<KeyOp>>> = key_ops_cache
-            .iter()
-            .map(|(id, ca_map)| (*id, KeyOp::topsort(ca_map)))
+            .into_iter()
+            .map(|(id, ca_map)| (id, ca_map.into_values().collect()))
             .collect();
 
         // Phase 3: Build per-agent index (just sets of identifiers, no data cloning)
@@ -4065,7 +4065,10 @@ mod tests {
         assert!(alice.register_individual(carol_indie.clone()).await);
         let carol_id = carol_indie.lock().await.id();
 
-        let dan_id = register_peer(&alice, &dan).await;
+        // Dan is known only by a contact card.
+        let dan_id = alice
+            .receive_contact_card(&dan.generate_contact_card().await?)
+            .await?;
 
         let eve_add_op = eve.expand_prekeys().await?;
         let eve_rot1 = eve.rotate_prekey(eve_add_op.payload.share_key).await?;
