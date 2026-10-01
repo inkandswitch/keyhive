@@ -308,6 +308,15 @@
           '';
         };
 
+        # chromedriver launches whatever Chrome it finds at the standard install
+        # paths, such as a runner image's /opt/google/chrome, whose version drifts
+        # from the chromedriver pinned here. Refer to the matching Chromium instead.
+        chromium-webdriver-json = pkgs.writeText "webdriver.json" (builtins.toJSON (
+          pkgs.lib.recursiveUpdate
+            (builtins.fromJSON (builtins.readFile ./keyhive_wasm/webdriver.json))
+            { "goog:chromeOptions".binary = "${pkgs.chromium}/bin/chromium"; }
+        ));
+
         # Same suites in real browsers (chromedriver + geckodriver), one engine
         # at a time: the runner picks whichever driver variable is set.
         ci-browser = pkgs.writeShellApplication {
@@ -316,6 +325,7 @@
           text = ''
             set -x
             env -u GECKODRIVER CHROMEDRIVER="$(command -v chromedriver)" \
+              ${pkgs.lib.optionalString pkgs.stdenv.isLinux "WASM_BINDGEN_TEST_WEBDRIVER_JSON=${chromium-webdriver-json}"} \
               cargo test -p keyhive_wasm --features browser_test --target wasm32-unknown-unknown
             env -u CHROMEDRIVER GECKODRIVER="$(command -v geckodriver)" \
               cargo test -p keyhive_wasm --features browser_test --target wasm32-unknown-unknown
