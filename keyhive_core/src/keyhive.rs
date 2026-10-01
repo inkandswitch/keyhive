@@ -458,7 +458,7 @@ impl<
     /// Delegate `to_add` `can` access to `resource`.
     ///
     /// Returns an error if we have never heard of `to_add`, `resource`, or one of
-    /// `other_relevant_docs`.
+    /// `other_relevant_docs`, or if `resource` is included in `other_relevant_docs`.
     #[allow(clippy::type_complexity)]
     pub async fn add_member(
         &self,
@@ -467,8 +467,15 @@ impl<
         can: Access,
         other_relevant_docs: &[DocumentId], // TODO make this automatic
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddMemberError> {
+        let resource = resource.into();
+        if let MemberedId::DocumentId(doc_id) = resource {
+            if other_relevant_docs.contains(&doc_id) {
+                return Err(AddMemberError::ResourceIncludedInRelevantDocs(doc_id));
+            }
+        }
+
         let to_add = self.agent_by_id(to_add.into()).await?;
-        let resource = self.membered_by_id(resource.into()).await?;
+        let resource = self.membered_by_id(resource).await?;
 
         let other_relevant_docs = {
             let docs = self.docs.lock().await;
