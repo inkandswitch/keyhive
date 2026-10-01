@@ -254,6 +254,8 @@ impl CgkaOperationGraph {
             }
         }
         while let Some((_, hash)) = frontier.pop() {
+            // If there's only one operation left, it must be from the
+            // preceding boundary batch and not the batch we're exploring.
             if frontier.is_empty() {
                 break;
             }
