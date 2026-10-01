@@ -21,6 +21,13 @@ async fn introduce(observer: &Kh, who: &Kh) -> TestResult<IndividualId> {
     Ok(id)
 }
 
+/// Introduce `who` to `observer` by contact card, which contains a lone rotation
+/// rather than the op that added the rotated key.
+async fn introduce_by_contact_card(observer: &Kh, who: &Kh) -> TestResult<IndividualId> {
+    let card = who.generate_contact_card().await?;
+    Ok(observer.receive_contact_card(&card).await?)
+}
+
 /// Deliver everything `from` holds that `to` is entitled to. Returns the number
 /// of events `to` could not apply.
 async fn sync_to(from: &Kh, to: &Kh) -> usize {
@@ -235,6 +242,33 @@ async fn a_replica_takes_in_a_delegate_dropped_inside_a_member_group() -> TestRe
         dave.get_individual(erin_id).await.is_some(),
         "dave knows who erin is, or he could not have applied the delegation \
          referencing her"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_replica_takes_in_a_delegation_to_a_member_known_by_contact_card() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let relay = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let relay_id = introduce(&alice, &relay).await?;
+    let bob_id = introduce_by_contact_card(&alice, &bob).await?;
+
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    alice
+        .add_member(relay_id, doc_id, Access::Relay, &[])
+        .await?;
+    alice.add_member(bob_id, doc_id, Access::Edit, &[]).await?;
+
+    assert_eq!(
+        sync_to(&alice, &relay).await,
+        0,
+        "the relay took everything"
+    );
+    assert_eq!(
+        relay.access_for_doc(bob_id, doc_id).await,
+        Some(Access::Edit),
+        "the relay knows bob is a member"
     );
     Ok(())
 }
