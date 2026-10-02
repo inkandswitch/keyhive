@@ -37,6 +37,40 @@ use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use tracing::{info, instrument};
 
+/// A private leaf key generated locally while creating an application secret.
+///
+/// This must be persisted separately from the public [`CgkaOperation`] emitted
+/// by the same update. Replaying that operation reconstructs the public tree,
+/// but cannot reconstruct this private key.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalCgkaSecret {
+    tree_id: TreeId,
+    share_key: ShareKey,
+    share_secret_key: ShareSecretKey,
+}
+
+impl LocalCgkaSecret {
+    pub fn from_secret(tree_id: TreeId, share_secret_key: ShareSecretKey) -> Self {
+        Self {
+            tree_id,
+            share_key: share_secret_key.share_key(),
+            share_secret_key,
+        }
+    }
+
+    pub fn tree_id(&self) -> TreeId {
+        self.tree_id
+    }
+
+    pub fn share_key(&self) -> ShareKey {
+        self.share_key
+    }
+
+    pub fn share_secret_key(&self) -> ShareSecretKey {
+        self.share_secret_key
+    }
+}
+
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
 /// from the group.
@@ -147,21 +181,27 @@ impl Cgka {
         (
             ApplicationSecret<T>,
             Option<Signed<CgkaOperation>>,
-            Option<LeafKeyPair>,
+            Option<LocalCgkaSecret>,
         ),
         CgkaError,
     > {
         let mut op = None;
-        let mut new_key_pair = None;
+        let mut local_secret = None;
         let current_pcs_key = if !self.has_pcs_key() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
-            let (pcs_key, update_op, sampled_key_pair) = self
+            let (pcs_key, update_op, new_key_pair) = self
                 .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
-            new_key_pair = sampled_key_pair;
             self.insert_pcs_key(&pcs_key, Digest::hash(&update_op));
             op = Some(update_op);
+            // `update` reports the sampled pair only when it rotated this hive's own
+            // leaf; rotating `Public`'s leaf leaves nothing local to persist.
+            local_secret = new_key_pair.map(|(share_key, share_secret_key)| LocalCgkaSecret {
+                tree_id: self.doc_id,
+                share_key,
+                share_secret_key,
+            });
             pcs_key
         } else {
             let pcs_key = self.pcs_key_from_tree_root()?;
@@ -187,7 +227,7 @@ impl Cgka {
                     .expect("PcsKey hash should be present because we derived it above"),
             ),
             op,
-            new_key_pair,
+            local_secret,
         ))
     }
 
@@ -448,6 +488,9 @@ impl Cgka {
         self.ops_graph.topsort_graph()
     }
 
+    pub fn contains_op_hash(&self, hash: &Digest<Signed<CgkaOperation>>) -> bool {
+        self.ops_graph.contains_op_hash(hash)
+    }
     pub fn contains_predecessors(&self, preds: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
         self.ops_graph.contains_predecessors(preds)
     }
@@ -682,5 +725,46 @@ impl Cgka {
         update_op_hash: &Digest<Signed<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         self.pcs_key_from_hashes(pcs_key_hash, update_op_hash)
+    }
+}
+
+/// Regression coverage for concurrent-update conflict resolution.
+///
+/// Two members produce [`CgkaOperation::Update`]s from the same tree epoch and
+/// cross-merge them, leaving the contested nodes on their shared path as
+/// conflicted siblings. A subsequent rotation walks the resolution path over
+/// those nodes and must resolve them TreeKEM-style (blank/merge) instead of
+/// panicking.
+#[cfg(test)]
+mod concurrent_update_conflict_tests {
+    use crate::test_utils::Group;
+    use rand::{rngs::StdRng, SeedableRng};
+
+    #[tokio::test]
+    async fn rotation_after_concurrent_updates_resolves_conflicted_siblings() {
+        let mut rng = StdRng::seed_from_u64(0xBEEF);
+        // Four members give the concurrent rotations deep, partially
+        // overlapping paths through the tree.
+        let mut group = Group::new(4, &mut rng).await;
+
+        // A and B rotate concurrently from the same epoch without seeing each
+        // other's update.
+        let by_a = group.rotate(0, &mut rng).await;
+        let by_b = group.rotate(1, &mut rng).await;
+
+        // Cross-merge: each side applies the other's concurrent update, which
+        // leaves conflicted sibling nodes on overlapping paths.
+        group.deliver(&by_a, &[1]);
+        group.deliver(&by_b, &[0]);
+
+        // Deliver the concurrent epoch to the other members before the
+        // covering rotation, so every replica receives its causal predecessors.
+        group.deliver(&by_a, &[2, 3]);
+        group.deliver(&by_b, &[2, 3]);
+
+        let resolving = group.rotate(0, &mut rng).await;
+        group.broadcast(&resolving);
+        group.check("after a covering rotation resolves concurrent updates");
+        group.assert_key_agreement("all members derive the resolved epoch key");
     }
 }

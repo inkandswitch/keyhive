@@ -116,14 +116,23 @@ impl Individual {
     }
 
     #[instrument(skip(self), fields(indie_id = %self.id))]
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> Result<&ShareKey, MissingPrekeys> {
         let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
         bytes.extend_from_slice(&doc_id.to_bytes());
 
         let prekeys_len = self.prekeys.len();
+        if prekeys_len == 0 {
+            // An individual whose Add/rotate prekey ops have not been ingested yet has nothing
+            // to pick from. That is a recoverable race — the ops arrive by sync — so it is an
+            // error the caller can retry, not a panic that takes the whole process down.
+            return Err(MissingPrekeys::NoPublishedPrekey(Box::new(self.id)));
+        }
         let idx = pseudorandom_in_range(bytes.as_slice(), prekeys_len);
 
-        self.prekeys.iter().nth(idx).expect("index to be in range")
+        self.prekeys
+            .iter()
+            .nth(idx)
+            .ok_or(MissingPrekeys::NoPublishedPrekey(Box::new(self.id)))
     }
 
     pub fn prekey_ops(&self) -> &CaMap<KeyOp> {
@@ -196,6 +205,16 @@ pub enum ReceivePrekeyOpError {
     VerificationError(#[from] VerificationError),
 }
 
+/// Errors from selecting a published prekey.
+#[derive(Debug, Error)]
+pub enum MissingPrekeys {
+    /// The individual has published no prekey to select from. The id is boxed because
+    /// [`IndividualId`] carries a decompressed curve point, which would otherwise inflate
+    /// every error enum this variant is embedded in (clippy's `result_large_err`).
+    #[error("individual {0} has published no prekey to select from")]
+    NoPublishedPrekey(Box<IndividualId>),
+}
+
 fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
     let bound = u64::from_be_bytes(bytes)
         .checked_shl(offset_bits as u32)
@@ -241,7 +260,7 @@ fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::principal::individual::op::add_key::AddKeyOp;
+    use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
     use keyhive_crypto::signer::memory::MemorySigner;
 
     #[test]
@@ -335,5 +354,270 @@ mod tests {
 
         assert_eq!(index1, 0);
         assert_eq!(index1, index2);
+    }
+
+    /// Regression: a stale rotation cycle (rotate A→B then B→A) must never
+    /// empty the published prekey set. `pick_prekey` reports [`MissingPrekeys`]
+    /// on an empty set, and the documented invariant is that an individual
+    /// always keeps at least one published prekey.
+    #[test]
+    fn rotation_cycle_keeps_prekeys_nonempty() {
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+        let sk = MemorySigner::generate(&mut csprng);
+
+        // Publish a single prekey.
+        let k1 = AddKeyOp::generate(&mut csprng);
+        let add_op = sk.try_sign_sync(k1.clone()).unwrap();
+        let mut individual = Individual::new(Arc::new(add_op).into());
+        assert_eq!(individual.prekeys.len(), 1);
+
+        // Rotate k1 -> k2.
+        let k2 = ShareKey::generate(&mut csprng);
+        let rot1 = sk
+            .try_sign_sync(RotateKeyOp {
+                old: k1.share_key,
+                new: k2,
+            })
+            .unwrap();
+        individual
+            .receive_prekey_op(KeyOp::Rotate(Arc::new(rot1)))
+            .unwrap();
+        assert_eq!(individual.prekeys.len(), 1);
+
+        // Rotate k2 -> k1: the rotation cycle. The published set must stay
+        // non-empty and pick_prekey must not panic.
+        let rot2 = sk
+            .try_sign_sync(RotateKeyOp {
+                old: k2,
+                new: k1.share_key,
+            })
+            .unwrap();
+        individual
+            .receive_prekey_op(KeyOp::Rotate(Arc::new(rot2)))
+            .unwrap();
+        assert!(
+            !individual.prekeys.is_empty(),
+            "rotation cycle must not empty the published prekey set"
+        );
+        assert!(
+            individual
+                .pick_prekey(DocumentId::generate(&mut csprng))
+                .is_ok(),
+            "a non-empty published prekey set still selects a prekey"
+        );
+    }
+
+    /// Regression: a prekey state whose ops contain no `Add` must still serialize.
+    ///
+    /// `Keyhive::contact_card` rotates a prekey as it generates the card, and
+    /// `Individual::from(card)` builds the receiving individual from that op alone, so an
+    /// individual's ops can hold a rotation and nothing else. `reachable_prekey_ops_for_all_agents`
+    /// advertises individuals by running their ops through `KeyOp::topsort`, so a rotation-only map
+    /// that topsorts to nothing means no peer can ever obtain that individual's prekeys.
+    #[test]
+    fn rotate_only_prekey_state_topsorts_to_its_rotation() {
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+        let sk = MemorySigner::generate(&mut csprng);
+
+        let k1 = AddKeyOp::generate(&mut csprng);
+        let k2 = ShareKey::generate(&mut csprng);
+        let rot = sk
+            .try_sign_sync(RotateKeyOp {
+                old: k1.share_key,
+                new: k2,
+            })
+            .unwrap();
+
+        // Exactly what `Individual::from(&contact_card)` does with a rotated card.
+        let individual = Individual::new(KeyOp::Rotate(Arc::new(rot)));
+        assert_eq!(individual.prekey_ops().len(), 1, "the state holds the rotation",);
+        assert!(
+            !individual.prekeys.is_empty(),
+            "the published key set is non-empty, so local selection works"
+        );
+        assert_eq!(
+            KeyOp::topsort(individual.prekey_ops()).len(),
+            1,
+            "a rotation-only prekey state must serialize to its rotation; an empty topsort \
+             means no peer can ever obtain this individual's prekeys"
+        );
+    }
+
+    /// Regression: a rotation cycle reached from a seeded head must terminate, and must not emit
+    /// one prekey twice.
+    ///
+    /// `KeyOp::topsort` walks `rotate_key_ops` by following each op's produced key, so a cycle
+    /// (`k0→k1` then `k1→k0`) makes the walk revisit ops it has already followed. Without the
+    /// `emitted.insert(head.new_key())` dedup, each rotation re-enqueues the other and
+    /// `while let Some(head) = heads.pop()` never drains.
+    ///
+    /// A failure here HANGS rather than failing an assertion: the signal is nextest's per-test
+    /// timeout, not a panic. Do not read a timeout on this test as load flakiness.
+    ///
+    /// The dedup keys on the op's *produced key* rather than on the op, so the rotation that
+    /// closes a cycle is dropped from the output: `k0` was already emitted by the add. The
+    /// assertion records that, so the drop is visible rather than read as a missing op.
+    #[test]
+    fn chained_prekey_rotation_cycle_terminates_and_emits_no_op_twice() {
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+        let sk = MemorySigner::generate(&mut csprng);
+
+        let k0 = AddKeyOp::generate(&mut csprng);
+        let k1 = ShareKey::generate(&mut csprng);
+
+        let add = sk.try_sign_sync(k0.clone()).unwrap();
+        let rot_out = sk
+            .try_sign_sync(RotateKeyOp {
+                old: k0.share_key,
+                new: k1,
+            })
+            .unwrap();
+        let rot_back = sk
+            .try_sign_sync(RotateKeyOp {
+                old: k1,
+                new: k0.share_key,
+            })
+            .unwrap();
+
+        let ops = CaMap::from_iter_direct([
+            Arc::new(KeyOp::Add(Arc::new(add))),
+            Arc::new(KeyOp::Rotate(Arc::new(rot_out))),
+            Arc::new(KeyOp::Rotate(Arc::new(rot_back))),
+        ]);
+
+        let topsorted = KeyOp::topsort(&ops);
+
+        assert_eq!(
+            topsorted.len(),
+            2,
+            "the walk terminates: the add and the rotation it feeds are emitted, and the \
+             rotation closing the cycle is dropped because its produced key was already emitted"
+        );
+        let emitted: HashSet<ShareKey> = topsorted.iter().map(|op| *op.new_key()).collect();
+        assert_eq!(
+            emitted,
+            HashSet::from([k0.share_key, k1]),
+            "the add's key and the rotation's key are both emitted"
+        );
+        assert_eq!(emitted.len(), topsorted.len(), "no prekey is emitted twice");
+    }
+
+    /// Regression: a chained rotation must not be seeded as well as walked.
+    ///
+    /// The seeding loop treats a rotation as a head only when no op in the map produces the key it
+    /// consumed. A rotation-only state is routine — the add that created the consumed key may have
+    /// been pruned, and `Individual::from(card)` builds an individual from a rotation alone — so
+    /// a rotation-only *chain* is a shape that must serialize, and its order must follow the keys.
+    ///
+    /// Without the `produced` check both rotations are seeded and the LIFO `heads.pop()` can emit
+    /// the chain in reverse, so a peer would replay a rotation before the key it consumed. The
+    /// length stays 2 in that variant only because the emitted dedup drops the second visit, which
+    /// is why the order is asserted here rather than the length alone.
+    #[test]
+    fn topsort_does_not_seed_a_rotation_whose_consumed_key_is_produced() {
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+        let sk = MemorySigner::generate(&mut csprng);
+
+        let k0 = ShareKey::generate(&mut csprng);
+        let k1 = ShareKey::generate(&mut csprng);
+        let k2 = ShareKey::generate(&mut csprng);
+
+        let rot1 = sk.try_sign_sync(RotateKeyOp { old: k0, new: k1 }).unwrap();
+        let rot2 = sk.try_sign_sync(RotateKeyOp { old: k1, new: k2 }).unwrap();
+
+        // `k0` is absent from the map (its add was pruned), so only `rot1` is a head.
+        let ops = CaMap::from_iter_direct([
+            Arc::new(KeyOp::Rotate(Arc::new(rot1))),
+            Arc::new(KeyOp::Rotate(Arc::new(rot2))),
+        ]);
+
+        let topsorted = KeyOp::topsort(&ops);
+
+        assert_eq!(topsorted.len(), 2, "both rotations of the chain serialize");
+        assert_eq!(
+            *topsorted[0].new_key(),
+            k1,
+            "the rotation whose consumed key is produced by no op is emitted first"
+        );
+        assert_eq!(
+            *topsorted[1].new_key(),
+            k2,
+            "the rotation consuming the first one's key follows it"
+        );
+    }
+
+    /// Regression: a rotation-only state whose rotations form a cycle still serializes.
+    ///
+    /// With no `Add` in the map, every consumed key can be produced by another rotation — `k1 → k2`
+    /// together with `k2 → k1` — so the "consumed key is produced by no op" seeding rule finds no
+    /// head at all and `topsort` returns zero ops for a state that holds two. That is the same
+    /// outcome the rotation-only case above exists to prevent (no peer can obtain this individual's
+    /// prekeys, so the next grant naming it fails selection), and it is reachable once the `Add`
+    /// that created the consumed key has been pruned.
+    ///
+    /// A cycle has no causal entry point, so any of its rotations may start the walk. This asserts
+    /// the emitted key *set* is complete and holds each op once, not the order the walk chose.
+    #[test]
+    fn rotation_only_cycle_topsorts_to_every_rotation() {
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+        let sk = MemorySigner::generate(&mut csprng);
+
+        let k1 = ShareKey::generate(&mut csprng);
+        let k2 = ShareKey::generate(&mut csprng);
+
+        let rot_forward = sk.try_sign_sync(RotateKeyOp { old: k1, new: k2 }).unwrap();
+        let rot_back = sk.try_sign_sync(RotateKeyOp { old: k2, new: k1 }).unwrap();
+
+        // No `Add`: `k1` is produced only by the rotation that consumes `k2`, and vice versa.
+        let ops = CaMap::from_iter_direct([
+            Arc::new(KeyOp::Rotate(Arc::new(rot_forward))),
+            Arc::new(KeyOp::Rotate(Arc::new(rot_back))),
+        ]);
+
+        let topsorted = KeyOp::topsort(&ops);
+
+        assert_eq!(
+            topsorted.len(),
+            2,
+            "both rotations of the cycle serialize; an empty topsort means no peer can obtain \
+             this individual's prekeys"
+        );
+        let emitted: HashSet<ShareKey> = topsorted.iter().map(|op| *op.new_key()).collect();
+        assert_eq!(
+            emitted,
+            HashSet::from([k1, k2]),
+            "every key in the cycle is advertised"
+        );
+        assert_eq!(emitted.len(), topsorted.len(), "no prekey is emitted twice");
+    }
+
+    /// Regression: an individual whose prekey ops have not been ingested yet carries an empty
+    /// published set (a state a deserialized archive can represent). Selecting a prekey must
+    /// report that as a typed error — the caller retries once the ops land — instead of
+    /// panicking with "index to be in range".
+    #[test]
+    fn empty_prekey_set_reports_missing_prekeys() {
+        test_utils::init_logging();
+        let mut csprng = rand::thread_rng();
+        let sk = MemorySigner::generate(&mut csprng);
+        let add_op = AddKeyOp::generate(&mut csprng);
+        let mut individual = Individual::new(Arc::new(sk.try_sign_sync(add_op).unwrap()).into());
+        assert_eq!(individual.prekeys.len(), 1);
+
+        individual.prekeys.clear();
+        individual.prekey_state = PrekeyState::empty_for_tests();
+
+        let error = individual
+            .pick_prekey(DocumentId::generate(&mut csprng))
+            .expect_err("an empty published prekey set has nothing to pick");
+        assert!(
+            matches!(&error, MissingPrekeys::NoPublishedPrekey(id) if **id == individual.id()),
+            "the error names the individual that published no prekey: {error:?}"
+        );
     }
 }

@@ -3,6 +3,7 @@
 use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener};
 use crate::principal::{
     group::{delegation::Delegation, revocation::Revocation},
+    identifier::Identifier,
     individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
 use beekem::operation::CgkaOperation;
@@ -23,11 +24,19 @@ pub struct NoListener;
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm> PrekeyListener<F> for NoListener {
-    fn on_prekeys_expanded<'a>(&'a self, _e: &'a Arc<Signed<AddKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        _e: &'a Arc<Signed<AddKeyOp>>,
+        _secret: Option<&'a crate::principal::active::LocalPrekeySecret>,
+    ) -> F::Future<'a, ()> {
         F::ready(())
     }
 
-    fn on_prekey_rotated<'a>(&'a self, _e: &'a Arc<Signed<RotateKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        _e: &'a Arc<Signed<RotateKeyOp>>,
+        _secret: Option<&'a crate::principal::active::LocalPrekeySecret>,
+    ) -> F::Future<'a, ()> {
         F::ready(())
     }
 }
@@ -36,6 +45,7 @@ impl<F: FutureForm> PrekeyListener<F> for NoListener {
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> MembershipListener<F, S, T> for NoListener {
     fn on_delegation<'a>(
         &'a self,
+        _target: Identifier,
         _data: &'a Arc<Signed<Delegation<F, S, T, NoListener>>>,
     ) -> F::Future<'a, ()> {
         F::ready(())
@@ -43,6 +53,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> MembershipListener<F, S, T
 
     fn on_revocation<'a>(
         &'a self,
+        _target: Identifier,
         _data: &'a Arc<Signed<Revocation<F, S, T, NoListener>>>,
     ) -> F::Future<'a, ()> {
         F::ready(())
