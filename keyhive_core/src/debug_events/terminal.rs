@@ -112,6 +112,8 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                     id,
                     sharekey,
                     leaf_index,
+                    inviter_sharekey,
+                    invited_updates,
                     predecessors,
                 } => {
                     let preds = predecessors
@@ -120,10 +122,23 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                         .collect::<Vec<String>>()
                         .join(", ");
                     format!(
-                        "ID: {}\nSharekey: {}\nLeaf Index: {}\nPredecessors: {}",
+                        "ID: {}\nSharekey: {}\nLeaf Index: {}\nInviter Sharekey: {}\nInvited \
+                         Updates: {}\nPredecessors: {}",
                         id.short_hex(),
                         sharekey.short_hex(),
                         leaf_index,
+                        inviter_sharekey
+                            .as_ref()
+                            .map_or_else(|| "none".to_string(), |k| k.short_hex()),
+                        if invited_updates.is_empty() {
+                            "none".to_string()
+                        } else {
+                            invited_updates
+                                .iter()
+                                .map(|h| h.short_hex())
+                                .collect::<Vec<String>>()
+                                .join(", ")
+                        },
                         preds
                     )
                 }

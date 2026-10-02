@@ -3,12 +3,14 @@
 use crate::{
     collections::{Map, Set},
     content_addressed_map::CaMap,
+    encrypted::EncryptedSecret,
     error::CgkaError,
     id::{MemberId, TreeId},
     transact::{Fork, Merge},
     tree::PathChange,
 };
 use alloc::{
+    boxed::Box,
     collections::{BTreeSet, BinaryHeap},
     sync::Arc,
     vec::Vec,
@@ -18,7 +20,11 @@ use core::{
     mem,
     ops::Deref,
 };
-use keyhive_crypto::{digest::Digest, share_key::ShareKey, signed::Signed};
+use keyhive_crypto::{
+    digest::Digest,
+    share_key::{ShareKey, ShareSecretKey},
+    signed::Signed,
+};
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +67,34 @@ impl IntoIterator for CgkaBatch {
     }
 }
 
+/// A root secret wrapped by an [`Invitation`].
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct InvitationSecret {
+    /// The update operation that produced the secret in
+    /// [`InvitationSecret::encrypted_root_secret`].
+    pub update_op_hash: Digest<Signed<CgkaOperation>>,
+
+    /// The root secret, encrypted to the `pk` of the [`CgkaOperation::Add`]
+    /// wrapping this invitation.
+    pub encrypted_root_secret: EncryptedSecret<ShareSecretKey>,
+}
+
+/// When a member is added, it can't derive a root secret from the tree until the next
+/// update. An invitation provides it the root secrets the inviter could reach at the
+/// point it was added.
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct Invitation {
+    /// The inviter's share key corresponding to the secret key it used to encrypt
+    /// each secret via Diffie-Hellman.
+    pub inviter_pk: ShareKey,
+
+    /// The root secrets of this add's nearest update ancestors that the inviter
+    /// could derive when it built this invitation.
+    pub head_secrets: Vec<InvitationSecret>,
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum CgkaOperation {
@@ -68,6 +102,11 @@ pub enum CgkaOperation {
         added_id: MemberId,
         pk: ShareKey,
         leaf_index: u32,
+        /// Root secrets from before this add, encrypted to `pk`, so the new member
+        /// can read content written before it could derive anything from the tree.
+        /// `None` when the adder had no root secrets to wrap, or no key pair of
+        /// its own to wrap them with.
+        invitation: Option<Box<Invitation>>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
         authorization: CgkaAuthorization,
@@ -82,7 +121,7 @@ pub enum CgkaOperation {
     },
     Update {
         id: MemberId,
-        new_path: alloc::boxed::Box<PathChange>,
+        new_path: Box<PathChange>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
@@ -141,6 +180,8 @@ impl Hash for CgkaOperationGraph {
             .iter()
             .collect::<BTreeSet<_>>()
             .hash(state);
+
+        // `depths` is derived from the operations hashed above.
     }
 }
 
@@ -273,6 +314,84 @@ impl CgkaOperationGraph {
             }
         }
         Ok(false)
+    }
+
+    /// The nearest [`CgkaOperation::Update`] operations at or before the provided
+    /// heads, skipping operations of other kinds.
+    pub(crate) fn nearest_update_ancestors(
+        &self,
+        heads: &Set<Digest<Signed<CgkaOperation>>>,
+    ) -> Set<Digest<Signed<CgkaOperation>>> {
+        let mut updates = Set::new();
+        let mut seen = Set::new();
+        let mut frontier = Vec::from_iter(heads.iter().copied());
+        while let Some(op_hash) = frontier.pop() {
+            if !seen.insert(op_hash) {
+                continue;
+            }
+            let Some(op) = self.cgka_ops.get(&op_hash) else {
+                continue;
+            };
+            if matches!(op.payload, CgkaOperation::Update { .. }) {
+                updates.insert(op_hash);
+                continue;
+            }
+            if let Some(predecessors) = self.predecessors_for(&op_hash) {
+                frontier.extend(predecessors.iter().copied());
+            }
+        }
+        updates
+    }
+
+    /// Which of `targets` have a [`CgkaOperation::Add`] of `member` or of Public
+    /// in their causal past, counting the target itself.
+    pub(crate) fn targets_with_add_for(
+        &self,
+        member: MemberId,
+        targets: &[Digest<Signed<CgkaOperation>>],
+    ) -> Set<Digest<Signed<CgkaOperation>>> {
+        let mut without_add = Set::new();
+        targets
+            .iter()
+            .filter(|target| self.past_adds(member, **target, &mut without_add))
+            .copied()
+            .collect()
+    }
+
+    /// Whether `start`'s past adds `member` or Public.
+    ///
+    /// `without_add` is a cache of operations determined not to have such an
+    /// add in their past.
+    fn past_adds(
+        &self,
+        member: MemberId,
+        start: Digest<Signed<CgkaOperation>>,
+        without_add: &mut Set<Digest<Signed<CgkaOperation>>>,
+    ) -> bool {
+        let mut seen = Set::new();
+        let mut frontier = Vec::new();
+        frontier.push(start);
+        while let Some(op_hash) = frontier.pop() {
+            if without_add.contains(&op_hash) {
+                continue;
+            }
+            if !seen.insert(op_hash) {
+                continue;
+            }
+            let Some(op) = self.cgka_ops.get(&op_hash) else {
+                continue;
+            };
+            if matches!(
+                op.payload,
+                CgkaOperation::Add { added_id, .. }
+                    if added_id == member || added_id.is_public()
+            ) {
+                return true;
+            }
+            frontier.extend(op.payload.predecessor_list().iter().copied());
+        }
+        without_add.extend(seen);
+        false
     }
 
     pub fn heads_contained_in(&self, heads: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
@@ -413,6 +532,7 @@ mod causal_graph_tests {
             added_id: MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key()),
             pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
             leaf_index,
+            invitation: None,
             predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
             doc_id,
             authorization: CgkaAuthorization::Delegation([0; 32]),
