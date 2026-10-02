@@ -90,9 +90,28 @@ pub struct Invitation {
     /// each secret via Diffie-Hellman.
     pub inviter_pk: ShareKey,
 
-    /// The root secrets of this add's nearest update ancestors that the inviter
-    /// could derive when it built this invitation.
+    /// The root secrets the inviter could derive when it built this invitation,
+    /// for this add's nearest update ancestors and for every update the inviter
+    /// had not seen another update wrap.
     pub head_secrets: Vec<InvitationSecret>,
+}
+
+/// An earlier update's root secret, wrapped by a later update.
+///
+/// A member added after an update cannot derive that update's root secret from the
+/// tree, so each update encrypts earlier root secrets under a key derived from its
+/// own. A member who can derive a later update's secret can then work back to the
+/// earlier ones.
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct PredecessorSecret {
+    /// The update operation that produced the secret in
+    /// [`PredecessorSecret::encrypted_root_secret`].
+    pub update_op_hash: Digest<Signed<CgkaOperation>>,
+
+    /// The root secret, encrypted under a key derived from the root secret of the
+    /// update that contains this entry.
+    pub encrypted_root_secret: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
@@ -122,6 +141,11 @@ pub enum CgkaOperation {
     Update {
         id: MemberId,
         new_path: Box<PathChange>,
+        /// The root secrets this update's author could reach for its nearest
+        /// update ancestors and for any update it had not seen another update
+        /// wrap, each encrypted under a key derived from this update's root
+        /// secret.
+        predecessor_secrets: Vec<PredecessorSecret>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
@@ -169,6 +193,10 @@ pub struct CgkaOperationGraph {
     /// The length of the longest chain of predecessors before each operation.
     /// An operation with no predecessors has depth 0.
     depths: Map<Digest<Signed<CgkaOperation>>, u64>,
+
+    /// Updates that a later update was in a position to add to the chain,
+    /// because that later update has them as its nearest update ancestors.
+    pub(crate) chainable_updates: Set<Digest<Signed<CgkaOperation>>>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -181,7 +209,8 @@ impl Hash for CgkaOperationGraph {
             .collect::<BTreeSet<_>>()
             .hash(state);
 
-        // `depths` is derived from the operations hashed above.
+        // `depths` and `chainable_updates` are both derived from the operations
+        // hashed above.
     }
 }
 
@@ -203,6 +232,7 @@ impl Merge for CgkaOperationGraph {
                 .any(|op| op.payload.predecessor_list().contains(head))
         });
         self.depths.extend(fork.depths);
+        self.chainable_updates.extend(fork.chainable_updates);
     }
 }
 
@@ -212,6 +242,7 @@ impl CgkaOperationGraph {
             cgka_ops: CaMap::new(),
             cgka_op_heads: Set::new(),
             depths: Map::new(),
+            chainable_updates: Set::new(),
         }
     }
 
@@ -265,6 +296,10 @@ impl CgkaOperationGraph {
         }
         self.cgka_op_heads.insert(op_hash);
         self.depths.insert(op_hash, depth);
+        if matches!(op.payload, CgkaOperation::Update { .. }) {
+            self.chainable_updates
+                .extend(self.nearest_update_ancestors(&op.payload.predecessors()));
+        }
         Ok(())
     }
 
@@ -832,6 +867,7 @@ mod causal_graph_tests {
         let op = CgkaOperation::Update {
             id: MemberId(signer.verifying_key()),
             new_path,
+            predecessor_secrets: Vec::new(),
             predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
             doc_id,
         };

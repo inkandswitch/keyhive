@@ -166,7 +166,7 @@ async fn an_invitation_wraps_every_concurrent_update_head() {
         group.deliver(&op, &[0]);
     }
 
-    // A conflicted root means `record_tree_root_secret` recorded nothing for
+    // A conflicted root means `record_secret_from_tree` recorded nothing for
     // three of them, so an invitation built only from what is recorded would
     // reach one head out of four.
     let recorded = heads

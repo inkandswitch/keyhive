@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 const STATIC_CONTEXT: &str = "/keyhive/beekem/app_secret/";
+const PREDECESSOR_SECRETS_CONTEXT: &str = "/keyhive/beekem/predecessor_secrets/";
 
 /// A [`SymmetricKey`] plus metadata needed for causal encryption.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -73,6 +74,19 @@ impl PcsKey {
     /// Lift a `ShareSecretKey` into a `PcsKey`.
     pub fn new(share_secret_key: ShareSecretKey) -> Self {
         Self(share_secret_key)
+    }
+
+    /// A root secret decrypted from an invitation or a predecessor secret.
+    /// Returns `None` unless `plaintext` is 32 bytes.
+    pub(crate) fn from_plaintext(plaintext: Vec<u8>) -> Option<Self> {
+        let bytes = <[u8; 32]>::try_from(plaintext).ok()?;
+        Some(Self::new(ShareSecretKey::force_from_bytes(bytes)))
+    }
+
+    /// Derive the key for encrypting the root secrets of an update's predecessors.
+    pub(crate) fn derive_predecessor_secrets_key(&self) -> SymmetricKey {
+        let bytes = blake3::derive_key(PREDECESSOR_SECRETS_CONTEXT, self.0.as_slice());
+        SymmetricKey::derive_from_bytes(&bytes)
     }
 
     /// Derive an [`ApplicationSecret`] from this PCS key.

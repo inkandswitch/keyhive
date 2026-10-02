@@ -84,6 +84,7 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     let op = CgkaOperation::Update {
         id,
         new_path,
+        predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&bob, design_doc).await,
         doc_id: TreeId(design_doc.verifying_key()),
     };
