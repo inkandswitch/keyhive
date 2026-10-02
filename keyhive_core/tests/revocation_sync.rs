@@ -40,7 +40,7 @@ async fn doc_with_a_member_group(ctx: &mut TestContext) -> Result<MemberGroup> {
 }
 
 #[tokio::test]
-async fn the_bulk_traversal_offers_a_revoked_members_keys_to_those_who_need_them() -> Result<()> {
+async fn a_revoked_members_keys_reach_everyone_sent_its_revocation() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let MemberGroup {
         alice,
@@ -54,14 +54,14 @@ async fn the_bulk_traversal_offers_a_revoked_members_keys_to_those_who_need_them
 
     let all = alice.all_agent_events().await;
 
-    // The document reaches both of them, dave directly and erin through the
-    // group, so this is the document loop's entry in the index. A recipient
-    // without bob's keys rejects the delegations concerning him.
+    // Both are sent engineering's revocation of bob: erin as a member of the group,
+    // dave through the document's delegation to it. A recipient without bob's keys
+    // rejects the delegations concerning him.
     for who in [&dave, &erin] {
         let sources = all
             .prekey_index
             .get(&who.id().into())
-            .expect("the traversal indexed this agent");
+            .expect("this agent is indexed");
         assert!(
             sources.contains(&bob.id().into()),
             "{} is not given the revoked member's keys",
@@ -86,12 +86,11 @@ async fn a_group_in_no_document_still_provides_keys_from_its_revoked_members() -
 
     let all = alice.all_agent_events().await;
 
-    // No document holds engineering, so the group loop is the only one that can
-    // put bob in erin's index.
+    // No document contains engineering, so only the group's own ops refer to bob.
     let sources = all
         .prekey_index
         .get(&erin.id().into())
-        .expect("the traversal indexed erin");
+        .expect("erin is indexed");
     assert!(
         sources.contains(&bob.id().into()),
         "erin is not given the revoked member's keys"
@@ -100,7 +99,7 @@ async fn a_group_in_no_document_still_provides_keys_from_its_revoked_members() -
 }
 
 #[tokio::test]
-async fn the_bulk_traversal_reaches_a_revocation_nested_inside_a_revoked_group() -> Result<()> {
+async fn a_revocation_inside_a_revoked_group_sends_the_revoked_members_keys() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let dave = ctx.individual("dave").await?;
@@ -120,15 +119,37 @@ async fn the_bulk_traversal_reaches_a_revocation_nested_inside_a_revoked_group()
 
     let all = alice.all_agent_events().await;
 
-    // Frank is two groups down from the document and behind a revocation at each
-    // step, so reaching him requires traversing into a revoked group.
+    // Only research's revocation of frank refers to him. Dave is sent it through the
+    // document's revocation of engineering, which leads to engineering's delegation
+    // to research.
     let sources = all
         .prekey_index
         .get(&dave.id().into())
-        .expect("the traversal indexed dave");
+        .expect("dave is indexed");
     assert!(
         sources.contains(&frank.id().into()),
         "dave is not given the keys of a member revoked inside the revoked group"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_removed_member_and_its_remover_agree_on_what_it_is_sent() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    alice.add_member(bob.id(), engineering, Admin, &[]).await?;
+    ctx.sync_all_unsent().await?;
+
+    alice.revoke_member(bob.id(), true, engineering).await?;
+    ctx.sync_all_unsent().await?;
+
+    let bobs_view = bob.event_digests_for_agent(bob.id()).await;
+    assert_eq!(alice.event_digests_for_agent(bob.id()).await, bobs_view);
+    assert_eq!(
+        alice.all_agent_events().await.digests_for(bob.id().into()),
+        bobs_view
     );
     Ok(())
 }

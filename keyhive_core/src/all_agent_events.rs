@@ -41,7 +41,7 @@ pub struct AllAgentEvents<
     /// For each agent, the membership sources it reaches.
     pub membership_index: HashMap<Identifier, HashSet<Identifier>>,
 
-    /// For each agent, the prekey sources it reaches.
+    /// For each agent, the identifiers whose prekey events it is sent.
     pub prekey_index: HashMap<Identifier, HashSet<Identifier>>,
 
     /// For each agent, the key agreement sources it reaches.

@@ -53,7 +53,6 @@ use crate::{
         fork::ForkAsync,
         merge::{Merge, MergeAsync},
     },
-    util::content_addressed_map::CaMap,
 };
 use beekem::{
     encrypted::EncryptedContent,
@@ -79,7 +78,7 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
     mem,
@@ -95,9 +94,6 @@ use std::collections::BTreeSet;
 // Only `try_causal_decrypt_from` uses this.
 #[cfg(any(test, feature = "test_utils"))]
 use crate::store::ciphertext::CausalDecryptionError;
-
-mod member_traversals;
-use member_traversals::{MemberAgents, MemberTraversals};
 
 /// The main object for a user agent & top-level owned stores.
 #[derive(Clone)]
@@ -1042,21 +1038,23 @@ impl<
         who: impl Into<Identifier>,
     ) -> HashMap<Digest<Event<F, S, T, L>>, Event<F, S, T, L>> {
         let who = who.into();
-        let mut ops: HashMap<_, _> = self
-            .membership_ops_for_agent(who)
-            .await
+        let membership_ops = self.membership_ops_for_agent(who).await;
+        let cgka_ops = self.cgka_ops_reachable_by_agent(who).await;
+        let prekey_ops = self
+            .prekey_ops_referenced_by(who, &membership_ops, &cgka_ops)
+            .await;
+
+        let mut ops: HashMap<_, _> = membership_ops
             .into_iter()
             .map(|(op_digest, op)| (op_digest.coerce(), op.into()))
             .collect();
 
-        for key_ops in self.reachable_prekey_ops_for_agent(who).await.values() {
-            for key_op in key_ops.iter() {
-                let op = Event::<F, S, T, L>::from(key_op.as_ref().dupe());
-                ops.insert(Digest::hash(&op), op);
-            }
+        for key_op in prekey_ops.values().flatten() {
+            let op = Event::<F, S, T, L>::from(key_op.as_ref().dupe());
+            ops.insert(Digest::hash(&op), op);
         }
 
-        for cgka_op in self.cgka_ops_reachable_by_agent(who).await {
+        for cgka_op in cgka_ops {
             let op = Event::<F, S, T, L>::from(cgka_op);
             ops.insert(Digest::hash(&op), op);
         }
@@ -1242,258 +1240,141 @@ impl<
         AllMembershipOps { ops, index }
     }
 
-    /// Every prekey op `who` needs, grouped by the identifier they belong to.
+    /// Every prekey op `who` needs, grouped by the agent they belong to.
+    ///
+    /// These are the prekey ops of `who` and of every agent referenced by the
+    /// membership and CGKA ops `who` is sent.
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
         who: impl Into<Identifier>,
     ) -> HashMap<Identifier, Vec<Arc<KeyOp>>> {
         let who = who.into();
-        fn add_many_keys(
-            map: &mut HashMap<Identifier, CaMap<KeyOp>>,
-            agent_id: Identifier,
-            key_ops: CaMap<KeyOp>,
-        ) {
-            map.entry(agent_id).or_default().extend(key_ops.0);
-        }
-
-        let mut map = HashMap::new();
-
-        let (active_id, prekeys) = {
-            let locked = self.active.lock().await;
-            let prekeys = locked.individual.lock().await.prekey_ops().clone();
-            (locked.id().into(), prekeys)
-        };
-        add_many_keys(&mut map, active_id, prekeys);
-
-        // Add the agent's own keys.
-        if let Some(agent) = self.get_agent(who).await {
-            add_many_keys(&mut map, who, agent.key_ops().await);
-        }
-
-        let mut traversals = MemberTraversals::new();
-
-        let groups = {
-            self.groups
-                .lock()
-                .await
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        for group in groups {
-            let (group_id, transitive) = {
-                let locked = group.lock().await;
-                (locked.group_id(), locked.transitive_members().await)
-            };
-            if transitive.contains_key(&who) {
-                add_many_keys(
-                    &mut map,
-                    group_id.into(),
-                    Agent::Group(group_id, group.dupe()).key_ops().await,
-                );
-
-                let revoked = traversals
-                    .no_longer_reachable(&Membered::Group(group_id, group.dupe()), &transitive)
-                    .await;
-                for (agent_id, agent) in transitive
-                    .iter()
-                    .map(|(id, (agent, _))| (id, agent))
-                    .chain(revoked.iter())
-                {
-                    if !map.contains_key(agent_id) {
-                        add_many_keys(&mut map, *agent_id, agent.key_ops().await);
-                    }
-                }
-            }
-        }
-
-        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
-        for doc in docs {
-            let (doc_id, transitive) = {
-                let locked = doc.lock().await;
-                (locked.doc_id(), locked.transitive_members().await)
-            };
-            if transitive.contains_key(&who) {
-                add_many_keys(
-                    &mut map,
-                    doc_id.into(),
-                    Agent::Document(doc_id, doc.dupe()).key_ops().await,
-                );
-
-                let revoked = traversals
-                    .no_longer_reachable(&Membered::Document(doc_id, doc.dupe()), &transitive)
-                    .await;
-                for (agent_id, agent) in transitive
-                    .iter()
-                    .map(|(id, (agent, _))| (id, agent))
-                    .chain(revoked.iter())
-                {
-                    if !map.contains_key(agent_id) {
-                        add_many_keys(&mut map, *agent_id, agent.key_ops().await);
-                    }
-                }
-            }
-        }
-
-        map.into_iter()
-            .map(|(id, keys)| (id, keys.into_values().collect()))
-            .collect()
+        let membership = self.membership_ops_for_agent(who).await;
+        let cgka = self.cgka_ops_reachable_by_agent(who).await;
+        self.prekey_ops_referenced_by(who, &membership, &cgka).await
     }
 
-    /// Compute reachable prekey ops for all agents in a single pass.
-    ///
-    /// This avoids the redundant `transitive_members()` and `key_ops()` calls
-    /// that happen when calling `reachable_prekey_ops_for_agent` once per agent.
-    ///
-    /// Returns an [`AllReachablePrekeyOps`] containing:
-    /// - `ops`: key ops per identifier, computed once and shared
-    /// - `index`: for each agent, the identifier keys into `ops` that agent
-    ///   needs, including members it can no longer reach
+    /// The prekey ops of `who` and of every agent referenced by `membership` or
+    /// `cgka`.
+    async fn prekey_ops_referenced_by(
+        &self,
+        who: Identifier,
+        membership: &MembershipOpMap<F, S, T, L>,
+        cgka: &[Arc<Signed<CgkaOperation>>],
+    ) -> HashMap<Identifier, Vec<Arc<KeyOp>>> {
+        let mut referenced = HashSet::from([who]);
+        for op in membership.values() {
+            insert_agents_referenced_by_membership_op(op, &mut referenced);
+        }
+        for op in cgka {
+            insert_agents_referenced_by_cgka_op(op, &mut referenced);
+        }
+
+        let mut out = HashMap::with_capacity(referenced.len());
+        for id in referenced {
+            if let Some(ops) = self.prekey_ops_of(id).await {
+                out.insert(id, ops);
+            }
+        }
+        out
+    }
+
+    /// The prekey ops of the agent `id`, or `None` if it is unknown or has none.
+    async fn prekey_ops_of(&self, id: Identifier) -> Option<Vec<Arc<KeyOp>>> {
+        let ops = self.get_agent(id).await?.key_ops().await;
+        (!ops.is_empty()).then(|| ops.into_values().collect())
+    }
+
+    /// The reachable prekey ops for all agents.
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_all_agents(&self) -> AllReachablePrekeyOps {
-        // Phase 1: Precompute shared data
-        let (active_id, active_prekeys) = {
-            let locked = self.active.lock().await;
-            let prekeys = locked.individual.lock().await.prekey_ops().clone();
-            (locked.id().into(), prekeys)
-        };
+        let membership_ops = self.membership_ops_for_all_agents().await;
+        let cgka_ops = self.cgka_ops_for_all_agents().await;
+        self.prekey_ops_for_all_agents_from(&membership_ops, &cgka_ops)
+            .await
+    }
 
-        let groups = {
-            self.groups
-                .lock()
-                .await
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
-
-        type TransitiveMembers<F, S, T, L> = HashMap<Identifier, (Agent<F, S, T, L>, Access)>;
-
-        let mut traversals = MemberTraversals::new();
-
-        #[allow(clippy::type_complexity)]
-        let mut group_data: Vec<(
-            GroupId,
-            Arc<Mutex<Group<F, S, T, L>>>,
-            TransitiveMembers<F, S, T, L>,
-            MemberAgents<F, S, T, L>,
-        )> = Vec::with_capacity(groups.len());
-        for group in groups {
-            let (group_id, transitive) = {
-                let locked = group.lock().await;
-                (locked.group_id(), locked.transitive_members().await)
-            };
-            let revoked = traversals
-                .no_longer_reachable(&Membered::Group(group_id, group.dupe()), &transitive)
-                .await;
-            group_data.push((group_id, group, transitive, revoked));
-        }
-
-        #[allow(clippy::type_complexity)]
-        let mut doc_data: Vec<(
-            DocumentId,
-            Arc<Mutex<Document<F, S, T, L>>>,
-            TransitiveMembers<F, S, T, L>,
-            MemberAgents<F, S, T, L>,
-        )> = Vec::with_capacity(docs.len());
-        for doc in docs {
-            let (doc_id, transitive) = {
-                let locked = doc.lock().await;
-                (locked.doc_id(), locked.transitive_members().await)
-            };
-            let revoked = traversals
-                .no_longer_reachable(&Membered::Document(doc_id, doc.dupe()), &transitive)
-                .await;
-            doc_data.push((doc_id, doc, transitive, revoked));
-        }
-
-        // Phase 2: Collect all key_ops (call key_ops() once per unique agent).
-        let mut key_ops_cache: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
-        key_ops_cache.insert(active_id, active_prekeys);
-
-        for (group_id, group, transitive, revoked) in &group_data {
-            let g_id: Identifier = (*group_id).into();
-            if let Entry::Vacant(e) = key_ops_cache.entry(g_id) {
-                e.insert(Agent::Group(*group_id, group.dupe()).key_ops().await);
+    /// The reachable prekey ops for agents referenced by `membership_ops` and `cgka_ops`.
+    #[instrument(skip_all)]
+    pub async fn prekey_ops_for_all_agents_from(
+        &self,
+        membership_ops: &AllMembershipOps<F, S, T, L>,
+        cgka_ops: &AllCgkaOps,
+    ) -> AllReachablePrekeyOps {
+        let mut referenced_by: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
+        for (source, ops) in &membership_ops.ops {
+            let referenced = referenced_by.entry(*source).or_default();
+            for op in ops.values() {
+                insert_agents_referenced_by_membership_op(op, referenced);
             }
-            for (agent_id, agent) in transitive
-                .iter()
-                .map(|(id, (agent, _))| (id, agent))
-                .chain(revoked.iter())
-            {
-                if let Entry::Vacant(e) = key_ops_cache.entry(*agent_id) {
-                    e.insert(agent.key_ops().await);
-                }
+        }
+        for (source, ops) in &cgka_ops.ops {
+            let referenced = referenced_by.entry(*source).or_default();
+            for op in ops {
+                insert_agents_referenced_by_cgka_op(op, referenced);
             }
         }
 
-        for (doc_id, doc, transitive, revoked) in &doc_data {
-            let d_id: Identifier = (*doc_id).into();
-            if let Entry::Vacant(e) = key_ops_cache.entry(d_id) {
-                e.insert(Agent::Document(*doc_id, doc.dupe()).key_ops().await);
-            }
-            for (agent_id, agent) in transitive
-                .iter()
-                .map(|(id, (agent, _))| (id, agent))
-                .chain(revoked.iter())
-            {
-                if let Entry::Vacant(e) = key_ops_cache.entry(*agent_id) {
-                    e.insert(agent.key_ops().await);
-                }
-            }
+        let mut agent_sources: HashMap<Identifier, Vec<Identifier>> = HashMap::new();
+        for (agent, sources) in membership_ops.index.iter().chain(cgka_ops.index.iter()) {
+            agent_sources
+                .entry(*agent)
+                .or_default()
+                .extend(sources.iter().copied());
         }
-
-        // Include all registered individuals (even those not in any group/doc)
-        for (id, indie) in self.individuals.lock().await.iter() {
-            let agent_id: Identifier = (*id).into();
-            if let Entry::Vacant(e) = key_ops_cache.entry(agent_id) {
-                e.insert(indie.lock().await.prekey_ops().clone());
-            }
-        }
-
-        let ops: HashMap<Identifier, Vec<Arc<KeyOp>>> = key_ops_cache
-            .into_iter()
-            .map(|(id, ca_map)| (id, ca_map.into_values().collect()))
-            .collect();
-
-        // Phase 3: Build per-agent index (just sets of identifiers, no data cloning)
-        let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
-
-        // Active agent gets its own entry
-        index.entry(active_id).or_default().insert(active_id);
-
-        // Every registered individual gets at least their own ops + active's ops
+        agent_sources
+            .entry(self.active.lock().await.id().into())
+            .or_default();
         for id in self.individuals.lock().await.keys() {
-            let agent_id: Identifier = (*id).into();
-            let entry = index.entry(agent_id).or_default();
-            entry.insert(active_id);
-            entry.insert(agent_id);
+            agent_sources.entry((*id).into()).or_default();
         }
 
-        for (group_id, _, transitive, revoked) in &group_data {
-            let g_id: Identifier = (*group_id).into();
-            for agent_id in transitive.keys() {
-                let entry = index.entry(*agent_id).or_default();
-                entry.insert(active_id);
-                entry.insert(*agent_id);
-                entry.insert(g_id);
-                entry.extend(transitive.keys());
-                entry.extend(revoked.keys());
+        // Look each agent up once, and keep only the ones with prekey ops.
+        let mut ops: HashMap<Identifier, Vec<Arc<KeyOp>>> = HashMap::new();
+        let candidates: HashSet<Identifier> = referenced_by
+            .values()
+            .flatten()
+            .chain(agent_sources.keys())
+            .copied()
+            .collect();
+        for id in candidates {
+            if let Some(key_ops) = self.prekey_ops_of(id).await {
+                ops.insert(id, key_ops);
             }
         }
+        for referenced in referenced_by.values_mut() {
+            referenced.retain(|id| ops.contains_key(id));
+        }
 
-        for (doc_id, _, transitive, revoked) in &doc_data {
-            let d_id: Identifier = (*doc_id).into();
-            for agent_id in transitive.keys() {
-                let entry = index.entry(*agent_id).or_default();
-                entry.insert(active_id);
-                entry.insert(*agent_id);
-                entry.insert(d_id);
-                entry.extend(transitive.keys());
-                entry.extend(revoked.keys());
+        let mut unions: HashMap<Vec<Identifier>, HashSet<Identifier>> = HashMap::new();
+        let mut index: HashMap<Identifier, HashSet<Identifier>> =
+            HashMap::with_capacity(agent_sources.len());
+        for (agent, mut sources) in agent_sources {
+            let reaches_own = sources.contains(&agent);
+            sources.retain(|source| *source != agent);
+            sources.sort_unstable();
+            sources.dedup();
+            let mut ids = unions
+                .entry(sources)
+                .or_insert_with_key(|sources| {
+                    sources
+                        .iter()
+                        .filter_map(|source| referenced_by.get(source))
+                        .flatten()
+                        .copied()
+                        .collect()
+                })
+                .clone();
+            if reaches_own {
+                if let Some(own) = referenced_by.get(&agent) {
+                    ids.extend(own.iter().copied());
+                }
             }
+            if ops.contains_key(&agent) {
+                ids.insert(agent);
+            }
+            index.insert(agent, ids);
         }
 
         AllReachablePrekeyOps { ops, index }
@@ -1545,26 +1426,24 @@ impl<
     }
 
     /// Every event `agent` is sent, under the digests they are sent by.
-    ///
-    /// This includes prekey operations for members revoked out of groups it belongs to,
-    /// which it needs to verify those revocations.
     pub async fn event_digests_for_agent(
         &self,
         agent: impl Into<Identifier>,
     ) -> HashSet<EventDigest<F, S, T, L>> {
         let who = agent.into();
-        let mut digests = HashSet::new();
+        let membership = self.membership_ops_for_agent(who).await;
+        let cgka = self.cgka_ops_reachable_by_agent(who).await;
+        let prekeys = self.prekey_ops_referenced_by(who, &membership, &cgka).await;
 
-        for (digest, _) in self.membership_ops_for_agent(who).await {
+        let mut digests = HashSet::new();
+        for digest in membership.keys() {
             digests.insert(digest.coerce());
         }
-        for key_ops in self.reachable_prekey_ops_for_agent(who).await.values() {
-            for key_op in key_ops.iter() {
-                let event: Event<F, S, T, L> = Event::from(key_op.as_ref().clone());
-                digests.insert(Digest::hash(&event));
-            }
+        for key_op in prekeys.values().flatten() {
+            let event: Event<F, S, T, L> = Event::from(key_op.as_ref().clone());
+            digests.insert(Digest::hash(&event));
         }
-        for cgka_op in self.cgka_ops_reachable_by_agent(who).await {
+        for cgka_op in cgka {
             let event: Event<F, S, T, L> = Event::from(cgka_op);
             digests.insert(Digest::hash(&event));
         }
@@ -1575,8 +1454,10 @@ impl<
     /// Every event each agent is sent, gathered once and deduplicated.
     pub async fn all_agent_events(&self) -> AllAgentEvents<F, S, T, L> {
         let all_membership = self.membership_ops_for_all_agents().await;
-        let all_prekey = self.reachable_prekey_ops_for_all_agents().await;
         let all_cgka = self.cgka_ops_for_all_agents().await;
+        let all_prekey = self
+            .prekey_ops_for_all_agents_from(&all_membership, &all_cgka)
+            .await;
 
         let mut events = HashMap::new();
 
@@ -3431,6 +3312,40 @@ fn ensure<E>(condition: bool, err: E) -> Result<(), E> {
     }
 }
 
+/// Add the agents `op` refers to: its issuer and the delegate of the delegation it
+/// makes or revokes.
+fn insert_agents_referenced_by_membership_op<
+    F: FutureForm,
+    S: AsyncSigner<F>,
+    T: ContentRef,
+    L: MembershipListener<F, S, T>,
+>(
+    op: &MembershipOperation<F, S, T, L>,
+    referenced: &mut HashSet<Identifier>,
+) {
+    match op {
+        MembershipOperation::Delegation(dlg) => {
+            referenced.insert(Identifier(dlg.issuer));
+            referenced.insert(dlg.payload.delegate.id());
+        }
+        MembershipOperation::Revocation(rev) => {
+            referenced.insert(Identifier(rev.issuer));
+            referenced.insert(rev.payload.revoke.payload.delegate.id());
+        }
+    }
+}
+
+/// Add the individuals `op` refers to: its issuer and, for Adds, the added member.
+fn insert_agents_referenced_by_cgka_op(
+    op: &Signed<CgkaOperation>,
+    referenced: &mut HashSet<Identifier>,
+) {
+    referenced.insert(Identifier(op.issuer));
+    if let CgkaOperation::Add { added_id, .. } = &op.payload {
+        referenced.insert(Identifier(added_id.0));
+    }
+}
+
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
     From<MissingIndividualError> for TryFromArchiveError<F, S, T, L>
 {
@@ -3752,6 +3667,7 @@ mod tests {
         let left_to_mid_ops = left.events_for_agent(Public.id()).await;
         assert_eq!(left_to_mid_ops.len(), 13);
 
+        let left_to_mid: HashSet<_> = left_to_mid_ops.keys().copied().collect();
         middle.ingest_event_table(left_to_mid_ops).await.unwrap();
 
         // Left unchanged
@@ -3784,8 +3700,13 @@ mod tests {
             2
         );
 
+        // Middle passes on exactly what it was sent. Its own prekey ops are not
+        // added, because no event Public is sent refers to Middle.
         let mid_to_right_ops = middle.events_for_agent(Public.id()).await;
-        assert_eq!(mid_to_right_ops.len(), 20);
+        assert_eq!(
+            mid_to_right_ops.keys().copied().collect::<HashSet<_>>(),
+            left_to_mid
+        );
 
         right.ingest_event_table(mid_to_right_ops).await.unwrap();
 
@@ -3811,7 +3732,7 @@ mod tests {
         assert!(right.docs.lock().await.contains_key(&left_doc));
         assert!(!right.groups.lock().await.contains_key(&left_group_id)); // none of them
 
-        assert_eq!(right.individuals.lock().await.len(), 4);
+        assert_eq!(right.individuals.lock().await.len(), 3); // NOTE: not Middle
         assert_eq!(right.groups.lock().await.len(), 0);
         assert_eq!(right.docs.lock().await.len(), 1);
 
@@ -4114,99 +4035,52 @@ mod tests {
             .add_member(eve_id, group_id, Access::Edit, &[])
             .await?;
         alice.add_member(group_id, doc2, Access::Read, &[]).await?;
-        // Without a revocation somewhere, neither traversal reaches the code that
-        // provides a revoked member's keys, and the two agree vacuously.
+        // A document as a member of another document is an agent whose own ops it
+        // does not reach.
+        alice.add_member(doc1_id, doc2, Access::Relay, &[]).await?;
+        // The revocation stores ops under carol's own identifier, which both paths
+        // have to account for.
         alice.revoke_member(carol_id, false, group_id).await?;
 
-        // Get the all-agents result
         let all_results = alice.reachable_prekey_ops_for_all_agents().await;
 
-        // Verify no phantom agents: every agent in the index should match
-        // a per-agent call. Count checked after all per-agent comparisons below.
-
-        // Check the active agent
-        let active_agent: Agent<_, _, _> = alice.active().lock().await.clone().into();
-        let active_id: Identifier = active_agent.id();
-        let active_all_ops = all_results.ops_for_agent(&active_id);
-        assert!(
-            active_all_ops.is_some(),
-            "active agent should be in all_results"
-        );
-        let active_per_agent_ops = alice.reachable_prekey_ops_for_agent(active_id).await;
-        let active_indexed_ids = &all_results.index[&active_id];
-        let mut active_all_keys: Vec<_> = active_indexed_ids.iter().collect();
-        active_all_keys.sort();
-        let mut active_per_agent_keys: Vec<_> = active_per_agent_ops.keys().collect();
-        active_per_agent_keys.sort();
-        assert_eq!(
-            active_all_keys, active_per_agent_keys,
-            "key sets should match for active agent"
-        );
-
-        // For each agent in the index, compare with per-agent result
-        let mut expected_checked: HashSet<Identifier> = HashSet::new();
-        expected_checked.insert(active_id);
-        let agents: Vec<IndividualId> = vec![bob_id, carol_id, dan_id, eve_id, frank_id];
-        for id in &agents {
-            let agent_id: Identifier = (*id).into();
-            expected_checked.insert(agent_id);
-
-            let all_ops = all_results.ops_for_agent(&agent_id);
-            assert!(all_ops.is_some(), "agent {:?} should be in all_results", id);
-
-            let per_agent_ops = alice.reachable_prekey_ops_for_agent(*id).await;
-
-            // Same identifier keys in index vs per-agent
-            let indexed_ids = &all_results.index[&agent_id];
-            let mut all_keys: Vec<_> = indexed_ids.iter().collect();
-            all_keys.sort();
-            let mut per_agent_keys: Vec<_> = per_agent_ops.keys().collect();
-            per_agent_keys.sort();
-            assert_eq!(
-                all_keys, per_agent_keys,
-                "key sets should match for agent {:?}",
-                id
-            );
-
-            // Same flattened ops (compare by content digest)
-            let mut all_digests: Vec<_> = all_ops
-                .unwrap()
-                .map(|op| Digest::hash(op.as_ref()))
-                .collect();
-            all_digests.sort();
-            let mut per_agent_digests: Vec<_> = per_agent_ops
-                .values()
-                .flat_map(|ops| ops.iter())
-                .map(|op| Digest::hash(op.as_ref()))
-                .collect();
-            per_agent_digests.sort();
-            assert_eq!(
-                all_digests, per_agent_digests,
-                "ops should match for agent {:?}",
-                id
-            );
+        let active_id: Identifier = alice.active().lock().await.id().into();
+        for id in [
+            active_id,
+            bob_id.into(),
+            carol_id.into(),
+            dan_id.into(),
+            eve_id.into(),
+            frank_id.into(),
+        ] {
+            assert!(all_results.index.contains_key(&id), "{id:?} is not indexed");
         }
 
-        // Verify no phantom agents: every agent in the index should
-        // produce results matching reachable_prekey_ops_for_agent.
-        // (Some agents like group/doc owners may be implicitly registered.)
+        // Every agent in the index, groups and documents included, matches the
+        // per-agent result.
         for agent_id in all_results.agents() {
-            if expected_checked.contains(agent_id) {
-                continue; // already verified above
-            }
-            if alice.get_individual((*agent_id).into()).await.is_some() {
-                let per_agent_ops = alice.reachable_prekey_ops_for_agent(*agent_id).await;
-                let indexed_ids = &all_results.index[agent_id];
-                let mut all_keys: Vec<_> = indexed_ids.iter().collect();
-                all_keys.sort();
-                let mut per_agent_keys: Vec<_> = per_agent_ops.keys().collect();
-                per_agent_keys.sort();
-                assert_eq!(
-                    all_keys, per_agent_keys,
-                    "key sets should match for implicitly registered agent {:?}",
-                    agent_id
-                );
-            }
+            let per_agent = alice.reachable_prekey_ops_for_agent(*agent_id).await;
+            let indexed: BTreeSet<_> = all_results.index[agent_id].iter().collect();
+            assert_eq!(
+                indexed,
+                per_agent.keys().collect::<BTreeSet<_>>(),
+                "key sets differ for {agent_id:?}"
+            );
+            // Sorted lists rather than sets, so an op sent twice by one path is caught.
+            let mut bulk: Vec<_> = all_results
+                .ops_for_agent(agent_id)
+                .into_iter()
+                .flatten()
+                .map(|op| Digest::hash(op.as_ref()))
+                .collect();
+            bulk.sort();
+            let mut single: Vec<_> = per_agent
+                .values()
+                .flatten()
+                .map(|op| Digest::hash(op.as_ref()))
+                .collect();
+            single.sort();
+            assert_eq!(bulk, single, "ops differ for {agent_id:?}");
         }
 
         Ok(())

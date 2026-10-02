@@ -517,3 +517,29 @@ async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn a_member_is_sent_the_prekeys_of_a_tree_member_no_delegation_it_is_sent_refers_to(
+) -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let dave = ctx.individual("dave").await?;
+    let spec = ctx.doc(&alice, "spec").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), spec, Read, &[]).await?;
+    alice.add_member(spec, design_doc, Read, &[]).await?;
+    alice.add_member(dave.id(), design_doc, Read, &[]).await?;
+    assert!(
+        cgka_members(&alice, design_doc).await.contains(&bob.id()),
+        "bob has a leaf in design_doc's key tree through spec"
+    );
+
+    let sent = alice.reachable_prekey_ops_for_agent(dave.id()).await;
+
+    assert!(sent.contains_key(&bob.id().into()));
+    assert!(
+        alice.all_agent_events().await.prekey_index[&dave.id().into()].contains(&bob.id().into())
+    );
+    Ok(())
+}

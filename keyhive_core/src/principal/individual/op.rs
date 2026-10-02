@@ -81,9 +81,8 @@ pub struct AllReachablePrekeyOps {
     /// Key ops per identifier (agent, group, or doc), computed once.
     pub ops: HashMap<Identifier, Vec<Arc<KeyOp>>>,
 
-    /// For each agent: the set of identifiers whose ops in `ops` are reachable, plus
-    /// members it can no longer reach whose keys still help verify the history it is
-    /// sent.
+    /// For each agent, the identifiers in `ops` whose prekey ops it is sent: its own
+    /// plus every agent referenced by the membership and CGKA ops it is sent.
     pub index: HashMap<Identifier, HashSet<Identifier>>,
 }
 
