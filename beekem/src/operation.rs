@@ -1002,6 +1002,23 @@ mod causal_graph_tests {
     }
 
     #[tokio::test]
+    async fn an_update_is_chainable_once_a_later_update_could_add_it() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let u1 = signed_update(&signer, doc_id, &[&root]).await;
+        let u2 = signed_update(&signer, doc_id, &[&u1]).await;
+        for op in [&root, &u1, &u2] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+
+        // Only u1 has a later update to add it. u2 has none yet, and the root is
+        // not an update.
+        assert_eq!(graph.chainable_updates, Set::from_iter([Digest::hash(&u1)]));
+    }
+
+    #[tokio::test]
     async fn only_the_first_update_back_from_a_head_is_returned() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(signer.verifying_key());

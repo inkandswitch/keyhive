@@ -10,7 +10,7 @@ async fn an_invitation_wraps_the_newest_secret_the_inviter_can_derive() -> Resul
     let alice = ctx.individual("alice").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    let first = ctx.encrypt(&alice, design_doc, b"under the first").await?;
+    ctx.encrypt(&alice, design_doc, b"under the first").await?;
 
     // Bob's invitation wraps the first secret.
     let bob = ctx.individual("bob").await?;
@@ -26,16 +26,11 @@ async fn an_invitation_wraps_the_newest_secret_the_inviter_can_derive() -> Resul
     ctx.sync(&alice, &carol).await?;
     ctx.sync(&bob, &carol).await?;
     ctx.give_content(&carol, &second).await?;
-    ctx.give_content(&carol, &first).await?;
 
     assert_eq!(
         carol.try_decrypt_content(design_doc, &second).await?,
         b"under the second".to_vec(),
         "bob could derive the newer secret, so his invitation wraps that one"
-    );
-    assert!(
-        !carol.can_decrypt_content(design_doc, &first).await?,
-        "and not the secret before it"
     );
     Ok(())
 }

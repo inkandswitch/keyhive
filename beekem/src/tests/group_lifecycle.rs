@@ -3,6 +3,7 @@ use crate::{
     error::CgkaError,
     id::TreeId,
     keys::ShareKeyMap,
+    pcs_key::PcsKey,
     test_utils::{member, Group, Member, ADD_AUTH, REMOVE_AUTH},
     transact::{Fork, Merge},
 };
@@ -215,5 +216,40 @@ async fn applying_an_update_records_the_root_secret_it_produced() {
         group.replicas[1].root_secret_for(&op_hash),
         Some(produced),
         "receiving the update should have recorded the secret it produced"
+    );
+}
+
+#[tokio::test]
+async fn a_recorded_secret_is_returned_only_for_its_own_hash() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_0009);
+    let mut group = Group::new(1, &mut rng).await;
+    let first = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+    let second = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+    let cgka = &mut group.replicas[0];
+    let current = cgka
+        .root_secret_for(&second)
+        .expect("the author records the secret its own update produced");
+
+    assert_eq!(
+        cgka.secret(&Digest::hash(&current), &first).ok(),
+        Some(current),
+        "the secret recorded for the update was returned despite its hash differing from the one requested"
+    );
+}
+
+#[tokio::test]
+async fn a_request_for_a_secret_nothing_produced_is_refused() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_000a);
+    let mut group = Group::new(1, &mut rng).await;
+    let first = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+    group.rotate(0, &mut rng).await;
+    let unknown = PcsKey::new(ShareSecretKey::generate(&mut rng));
+
+    assert!(
+        matches!(
+            group.replicas[0].secret(&Digest::hash(&unknown), &first),
+            Err(CgkaError::UnknownPcsKey)
+        ),
+        "rebuilding the update gives a secret with a different hash, which should not be returned"
     );
 }
