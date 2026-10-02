@@ -221,3 +221,15 @@ impl<'a> arbitrary::Arbitrary<'a> for TreeId {
         Ok(Self(sk.verifying_key()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_public_id_is_public() {
+        assert!(MemberId::public().is_public());
+        let other = ed25519_dalek::SigningKey::from([1u8; 32]);
+        assert!(!MemberId(other.verifying_key()).is_public());
+    }
+}
