@@ -66,8 +66,10 @@ pub enum DebugEventDetails {
 pub enum CgkaOperationDetails {
     Add {
         id: Hash,
-        sharekey: Hash,
+        share_key: Hash,
         leaf_index: u32,
+        inviter_share_key: Option<Hash>,
+        invited_updates: Vec<Hash>,
         predecessors: Vec<Hash>,
     },
     Remove {
@@ -181,13 +183,24 @@ impl DebugEventRow {
                         added_id,
                         pk,
                         leaf_index,
+                        invitation,
                         predecessors,
                         ..
                     } => {
                         let op_details = CgkaOperationDetails::Add {
                             id: Hash::new(added_id.as_bytes(), nicknames),
-                            sharekey: Hash::new(pk.as_bytes(), nicknames),
+                            share_key: Hash::new(pk.as_bytes(), nicknames),
                             leaf_index: *leaf_index,
+                            inviter_share_key: invitation
+                                .as_ref()
+                                .map(|i| Hash::new(i.inviter_pk.as_bytes(), nicknames)),
+                            invited_updates: invitation
+                                .iter()
+                                .flat_map(|i| &i.head_secrets)
+                                .map(|invited| {
+                                    Hash::new(invited.update_op_hash.as_slice(), nicknames)
+                                })
+                                .collect(),
                             predecessors: predecessors
                                 .iter()
                                 .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
