@@ -110,9 +110,9 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
             let op_details_str = match op_details {
                 CgkaOperationDetails::Add {
                     id,
-                    sharekey,
+                    share_key,
                     leaf_index,
-                    inviter_sharekey,
+                    inviter_share_key,
                     invited_updates,
                     predecessors,
                 } => {
@@ -122,12 +122,12 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                         .collect::<Vec<String>>()
                         .join(", ");
                     format!(
-                        "ID: {}\nSharekey: {}\nLeaf Index: {}\nInviter Sharekey: {}\nInvited \
+                        "ID: {}\nShareKey: {}\nLeaf Index: {}\nInviter ShareKey: {}\nInvited \
                          Updates: {}\nPredecessors: {}",
                         id.short_hex(),
-                        sharekey.short_hex(),
+                        share_key.short_hex(),
                         leaf_index,
-                        inviter_sharekey
+                        inviter_share_key
                             .as_ref()
                             .map_or_else(|| "none".to_string(), |k| k.short_hex()),
                         if invited_updates.is_empty() {
@@ -257,5 +257,57 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_details;
+    use crate::debug_events::{CgkaOperationDetails, DebugEventDetails, Hash};
+
+    /// A hash that formats as `name`, so an assertion can state the whole line.
+    fn named(name: &str) -> Hash {
+        Hash::Nickname {
+            original: name.as_bytes().to_vec(),
+            nickname: name.to_string(),
+        }
+    }
+
+    fn add_event(inviter_share_key: Option<Hash>, invited_updates: Vec<Hash>) -> DebugEventDetails {
+        DebugEventDetails::CgkaOperation {
+            op_type: "Add".to_string(),
+            doc_id: named("doc"),
+            op_details: CgkaOperationDetails::Add {
+                id: named("added"),
+                share_key: named("share_key"),
+                leaf_index: 3,
+                inviter_share_key,
+                invited_updates,
+                predecessors: vec![named("pred")],
+            },
+        }
+    }
+
+    #[test]
+    fn an_adds_invitation_appears_in_its_details() {
+        let details = format_details(
+            &add_event(
+                Some(named("inviter")),
+                vec![named("first"), named("second")],
+            ),
+            false,
+        );
+        assert!(details.contains("Inviter ShareKey: inviter"), "{details}");
+        assert!(
+            details.contains("Invited Updates: first, second"),
+            "{details}"
+        );
+    }
+
+    #[test]
+    fn an_add_with_no_invitation_reports_none() {
+        let details = format_details(&add_event(None, vec![]), false);
+        assert!(details.contains("Inviter ShareKey: none"), "{details}");
+        assert!(details.contains("Invited Updates: none"), "{details}");
     }
 }

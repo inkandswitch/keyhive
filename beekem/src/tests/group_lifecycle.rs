@@ -6,11 +6,11 @@ use crate::{
     test_utils::{member, Group, Member, ADD_AUTH, REMOVE_AUTH},
     transact::{Fork, Merge},
 };
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use core::hash::{Hash, Hasher};
 use future_form::Local;
 use keyhive_crypto::{
-    share_key::ShareSecretKey, signer::memory::MemorySigner, verifiable::Verifiable,
+    digest::Digest, share_key::ShareSecretKey, signer::memory::MemorySigner, verifiable::Verifiable,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::hash::DefaultHasher;
@@ -170,5 +170,50 @@ async fn adding_a_member_changes_the_hash() {
         hash_of(&group.replicas[0]),
         before,
         "a replica hashes the same before and after a membership change"
+    );
+}
+
+#[tokio::test]
+async fn a_write_rotates_only_when_there_is_no_current_key() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_0007);
+    let mut group = Group::new(2, &mut rng).await;
+    let signer = group.members[0].signer.clone();
+
+    group.rotate(0, &mut rng).await;
+    let (_, op, _) = group.replicas[0]
+        .new_app_secret_for::<Local, _, u32, _>(&1, b"content", &Vec::new(), &signer, &mut rng)
+        .await
+        .expect("a member can write");
+    assert!(op.is_none(), "a write should reuse the current key");
+
+    let carol = member(&mut rng);
+    group.add(0, carol.id, carol.pk).await;
+    let (_, op, _) = group.replicas[0]
+        .new_app_secret_for::<Local, _, u32, _>(&2, b"content", &Vec::new(), &signer, &mut rng)
+        .await
+        .expect("a member can write");
+    assert!(
+        op.is_some(),
+        "an add blanks the root, so the next write should rotate"
+    );
+}
+
+#[tokio::test]
+async fn applying_an_update_records_the_root_secret_it_produced() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_0008);
+    let mut group = Group::new(2, &mut rng).await;
+
+    let op = group.rotate(0, &mut rng).await;
+    let op_hash = Digest::hash(op.as_ref());
+    let produced = group.replicas[0]
+        .root_secret_for(&op_hash)
+        .expect("the author records the secret its own update produced");
+
+    group.deliver(&op, &[1]);
+
+    assert_eq!(
+        group.replicas[1].root_secret_for(&op_hash),
+        Some(produced),
+        "receiving the update should have recorded the secret it produced"
     );
 }

@@ -522,14 +522,28 @@ mod causal_graph_tests {
         verifiable::Verifiable,
     };
 
+    fn member_id() -> MemberId {
+        MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key())
+    }
+
     async fn signed_add(
         signer: &MemorySigner,
         doc_id: TreeId,
         leaf_index: u32,
         predecessors: &[&Signed<CgkaOperation>],
     ) -> Signed<CgkaOperation> {
+        signed_add_of(signer, doc_id, member_id(), leaf_index, predecessors).await
+    }
+
+    async fn signed_add_of(
+        signer: &MemorySigner,
+        doc_id: TreeId,
+        added_id: MemberId,
+        leaf_index: u32,
+        predecessors: &[&Signed<CgkaOperation>],
+    ) -> Signed<CgkaOperation> {
         let op = CgkaOperation::Add {
-            added_id: MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key()),
+            added_id,
             pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
             leaf_index,
             invitation: None,
@@ -621,6 +635,15 @@ mod causal_graph_tests {
     /// Builds a graph from `(name, predecessors)` pairs listed in causal
     /// order and returns its batches as sets of names.
     async fn batches_of(ops: &[(&'static str, &[&str])]) -> Vec<BTreeSet<&'static str>> {
+        batches_up_to(ops, None).await
+    }
+
+    /// As [`batches_of`], but sorting only `head` and its ancestors when
+    /// `head` is given.
+    async fn batches_up_to(
+        ops: &[(&'static str, &[&str])],
+        head: Option<&str>,
+    ) -> Vec<BTreeSet<&'static str>> {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(signer.verifying_key());
         let mut graph = CgkaOperationGraph::new();
@@ -631,12 +654,16 @@ mod causal_graph_tests {
             graph.add_op(&op).expect("predecessors are listed first");
             signed.insert(*name, op);
         }
+        let heads = match head {
+            Some(head) => Set::from_iter([Digest::hash(&signed[head])]),
+            None => graph.cgka_op_heads.clone(),
+        };
         let names: BTreeMap<_, _> = signed
             .into_iter()
             .map(|(name, op)| (Digest::hash(&op), name))
             .collect();
         graph
-            .batches()
+            .batches_for_heads(&heads)
             .expect("the graph sorts")
             .iter()
             .map(|batch| batch.iter().map(|op| names[&Digest::hash(&**op)]).collect())
@@ -723,6 +750,30 @@ mod causal_graph_tests {
             vec![
                 BTreeSet::from(["root"]),
                 BTreeSet::from(["update", "remove", "later_update"])
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_single_head_is_alone_in_the_last_batch_of_its_past() {
+        //     a
+        //    / \
+        //   b   c
+        //  / \ /
+        // s  target
+        let ops: &[(&str, &[&str])] = &[
+            ("a", &[]),
+            ("b", &["a"]),
+            ("c", &["a"]),
+            ("target", &["b", "c"]),
+            ("s", &["b"]),
+        ];
+        assert_eq!(
+            batches_up_to(ops, Some("target")).await,
+            vec![
+                BTreeSet::from(["a"]),
+                BTreeSet::from(["b", "c"]),
+                BTreeSet::from(["target"])
             ]
         );
     }
@@ -912,5 +963,129 @@ mod causal_graph_tests {
             "a root that is not an add would be retried"
         );
         assert_eq!(graph, before, "a rejected operation changed the graph");
+    }
+
+    #[tokio::test]
+    async fn only_the_first_update_back_from_a_head_is_returned() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let earlier = signed_update(&signer, doc_id, &[&root]).await;
+        let later = signed_update(&signer, doc_id, &[&earlier]).await;
+        let add = signed_add(&signer, doc_id, 1, &[&later]).await;
+        let later_add = signed_add(&signer, doc_id, 2, &[&add]).await;
+        for op in [&root, &earlier, &later, &add, &later_add] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+
+        assert_eq!(
+            graph.nearest_update_ancestors(&Set::from_iter([Digest::hash(&later_add)])),
+            Set::from_iter([Digest::hash(&later)]),
+            "the traversal should skip the adds and stop at the first update"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_head_that_is_an_update_is_its_own_nearest_update() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let update = signed_update(&signer, doc_id, &[&root]).await;
+        for op in [&root, &update] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+
+        let update_hash = Set::from_iter([Digest::hash(&update)]);
+        assert_eq!(graph.nearest_update_ancestors(&update_hash), update_hash);
+    }
+
+    #[tokio::test]
+    async fn a_head_with_no_update_in_its_past_has_no_nearest_update() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let add = signed_add(&signer, doc_id, 1, &[&root]).await;
+        for op in [&root, &add] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+
+        assert_eq!(
+            graph.nearest_update_ancestors(&Set::from_iter([Digest::hash(&add)])),
+            Set::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_members_secret_is_rebuildable_only_from_its_add_onwards() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let founder = member_id();
+        let joiner = member_id();
+        let root = signed_add_of(&signer, doc_id, founder, 0, &[]).await;
+        let before = signed_update(&signer, doc_id, &[&root]).await;
+        let join = signed_add_of(&signer, doc_id, joiner, 1, &[&before]).await;
+        let after = signed_update(&signer, doc_id, &[&join]).await;
+        for op in [&root, &before, &join, &after] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+
+        let all = [&root, &before, &join, &after].map(Digest::hash);
+        assert_eq!(
+            graph.targets_with_add_for(joiner, &all),
+            Set::from_iter([Digest::hash(&join), Digest::hash(&after)]),
+            "the operations before the joiner was added have no leaf for it to start from"
+        );
+        assert_eq!(
+            graph.targets_with_add_for(founder, &all),
+            Set::from_iter(all),
+            "the founder's add precedes every operation"
+        );
+    }
+
+    #[tokio::test]
+    async fn adding_public_makes_later_operations_rebuildable_by_anyone() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let public = signed_add_of(&signer, doc_id, MemberId::public(), 1, &[&root]).await;
+        let after = signed_update(&signer, doc_id, &[&public]).await;
+        for op in [&root, &public, &after] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+
+        assert_eq!(
+            graph.targets_with_add_for(member_id(), &[&root, &public, &after].map(Digest::hash)),
+            Set::from_iter([Digest::hash(&public), Digest::hash(&after)]),
+            "a rebuild falls back to Public's leaf, so adding Public covers what follows"
+        );
+    }
+
+    #[tokio::test]
+    async fn each_head_contributes_its_own_nearest_update() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        graph.add_op(&root).expect("a root add has no predecessors");
+
+        // Two concurrent branches, each an update followed by an add.
+        let mut expected = Set::new();
+        let mut heads = Set::new();
+        for leaf_index in 1..=2u32 {
+            let update = signed_update(&signer, doc_id, &[&root]).await;
+            let add = signed_add(&signer, doc_id, leaf_index, &[&update]).await;
+            for op in [&update, &add] {
+                graph.add_op(op).expect("predecessors are added first");
+            }
+            expected.insert(Digest::hash(&update));
+            heads.insert(Digest::hash(&add));
+        }
+
+        assert_eq!(graph.nearest_update_ancestors(&heads), expected);
     }
 }
