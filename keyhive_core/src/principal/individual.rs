@@ -92,7 +92,14 @@ impl Individual {
     }
 
     pub fn contact_card(&self) -> ContactCard {
-        let op = self.prekey_state.ops().0.iter().next().unwrap().1;
+        let op = self
+            .prekey_state
+            .ops()
+            .0
+            .iter()
+            .min_by_key(|(digest, _)| *digest)
+            .expect("prekey state is nonempty")
+            .1;
         ContactCard::from(Arc::unwrap_or_clone(op.clone()))
     }
 
