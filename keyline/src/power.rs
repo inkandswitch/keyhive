@@ -123,9 +123,9 @@ impl Decode for Power {
     }
 }
 
-/// The byte is not an power level.
+/// The byte is not a power level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("{0} is not an power level")]
+#[error("{0} is not a power level")]
 pub struct InvalidPower(u8);
 
 #[cfg(test)]

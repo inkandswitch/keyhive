@@ -1,4 +1,4 @@
-//! Delegations: signed edges granting an power level over a subject.
+//! Delegations: signed edges granting a power level over a subject.
 
 use crate::{id::Id, power::Power, revocation::RevocationId};
 use alloc::vec::Vec;
@@ -12,7 +12,7 @@ use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 ///
 /// Reads: _`issuer` asserts that `audience` may exercise `power` over `subject`_. The edge
 /// rides `issuer`'s own standing over `subject`: `audience` receives
-/// `min(can, issuer's effective level over subject)`, and the edge is live only while
+/// `min(power, issuer's effective level over subject)`, and the edge is live only while
 /// `issuer` reaches `subject`.
 ///
 /// Anyone may issue a delegation over any subject. Admin is not required to
@@ -101,10 +101,10 @@ impl Verifiable for Delegation {
 const BASE_LEN: usize = Id::LEN * 3 + 1 + 1;
 
 /// Encoded length with `cites`.
-const SEEN_LEN: usize = BASE_LEN + 32;
+const CITES_LEN: usize = BASE_LEN + 32;
 
-const SEEN_ABSENT: u8 = 0;
-const SEEN_PRESENT: u8 = 1;
+const CITES_ABSENT: u8 = 0;
+const CITES_PRESENT: u8 = 1;
 
 impl Encode for Delegation {
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -113,9 +113,9 @@ impl Encode for Delegation {
         self.subject.encode_into(out);
         self.power.encode_into(out);
         match &self.cites {
-            None => out.push(SEEN_ABSENT),
+            None => out.push(CITES_ABSENT),
             Some(cites) => {
-                out.push(SEEN_PRESENT);
+                out.push(CITES_PRESENT);
                 out.extend_from_slice(cites.as_slice());
             }
         }
@@ -135,17 +135,17 @@ impl Decode for Delegation {
         let power = Power::try_from(rest[0]).map_err(|_| DecodeError::InvalidTag(rest[0]))?;
 
         let cites = match rest[1] {
-            SEEN_ABSENT => {
+            CITES_ABSENT => {
                 if bytes.len() != BASE_LEN {
                     return Err(DecodeError::TrailingBytes);
                 }
                 None
             }
-            SEEN_PRESENT => {
-                if bytes.len() < SEEN_LEN {
+            CITES_PRESENT => {
+                if bytes.len() < CITES_LEN {
                     return Err(DecodeError::UnexpectedEnd);
                 }
-                if bytes.len() > SEEN_LEN {
+                if bytes.len() > CITES_LEN {
                     return Err(DecodeError::TrailingBytes);
                 }
                 let Ok(raw) = <[u8; 32]>::try_from(&rest[2..]) else {
@@ -200,7 +200,7 @@ mod tests {
     fn encoded_lengths() {
         let d = Delegation::new(id(1), id(2), id(3), Power::Read);
         assert_eq!(d.encode().len(), BASE_LEN);
-        assert_eq!(d.reissue(Digest::from([0u8; 32])).encode().len(), SEEN_LEN);
+        assert_eq!(d.reissue(Digest::from([0u8; 32])).encode().len(), CITES_LEN);
     }
 
     #[test]

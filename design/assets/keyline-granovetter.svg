@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" width="720" height="380" role="img" aria-labelledby="title desc">
+  <title id="title">A delegation as a Granovetter introduction</title>
+  <desc id="desc">Alice holds authority over Carol. She sends Bob a delegation that carries a copy of that authority, capped at a power level. Afterwards Bob holds his own authority over Carol, at the minimum of Alice's level and the power.</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .name { font-size: 18px; font-weight: 600; text-anchor: middle; dominant-baseline: central; }
+    .role { font-size: 13px; fill: #59636e; text-anchor: middle; font-style: italic; }
+    .label { font-size: 13px; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+    .ref-text { fill: #0969da; }
+    .node { fill: #ffffff; stroke: #1f2328; stroke-width: 2; }
+    .msg { stroke: #59636e; stroke-width: 2; fill: none; }
+    .ref-line { stroke: #0969da; stroke-width: 2.5; fill: none; }
+    .new { stroke-dasharray: 7 5; }
+    .parcel { fill: #ffffff; stroke: #59636e; stroke-width: 1.5; }
+    .head-msg { fill: #59636e; }
+    .head-ref { fill: #0969da; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #e6edf3; }
+      .role { fill: #9198a1; }
+      .ref-text { fill: #4493f8; }
+      .node, .parcel { fill: #0d1117; }
+      .node { stroke: #e6edf3; }
+      .msg, .parcel { stroke: #9198a1; }
+      .ref-line { stroke: #4493f8; }
+      .head-msg { fill: #9198a1; }
+      .head-ref { fill: #4493f8; }
+    }
+  </style>
+  <defs>
+    <marker id="head-msg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path class="head-msg" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+    <marker id="head-ref" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="head-ref" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <!-- Alice's existing authority over Carol -->
+  <line class="ref-line" x1="160" y1="202" x2="456" y2="288" marker-end="url(#head-ref)"/>
+  <text class="label ref-text" x="300" y="282" text-anchor="middle">Alice's authority over Carol</text>
+
+  <!-- The delegation: a message from Alice to Bob -->
+  <line class="msg" x1="160" y1="178" x2="456" y2="92" marker-end="url(#head-msg)"/>
+  <text class="label" x="200" y="140" text-anchor="middle">delegation</text>
+
+  <!-- What the message carries: a copy of Alice's arrow to Carol, capped -->
+  <rect class="parcel" x="256" y="108" width="140" height="72" rx="7"/>
+  <text class="role" x="326" y="126">a copy of Alice's</text>
+  <line class="ref-line" x1="270" y1="145" x2="316" y2="145" marker-end="url(#head-ref)"/>
+  <text class="label ref-text" x="324" y="149.5">Carol</text>
+  <text class="code" x="270" y="169">capped at power</text>
+
+  <!-- The result: Bob's own authority over Carol -->
+  <line class="ref-line new" x1="500" y1="124" x2="500" y2="254" marker-end="url(#head-ref)"/>
+  <text class="label ref-text" x="516" y="182">Bob's new authority over Carol:</text>
+  <text class="code ref-text" x="516" y="202">min(Alice's level, power)</text>
+
+  <!-- Nodes -->
+  <circle class="node" cx="120" cy="190" r="42"/>
+  <text class="name" x="120" y="190">Alice</text>
+  <text class="role" x="120" y="252">issuer</text>
+
+  <circle class="node" cx="500" cy="80" r="42"/>
+  <text class="name" x="500" y="80">Bob</text>
+  <text class="role" x="500" y="26">audience</text>
+
+  <circle class="node" cx="500" cy="300" r="42"/>
+  <text class="name" x="500" y="300">Carol</text>
+  <text class="role" x="500" y="362">subject</text>
+</svg>

@@ -70,7 +70,7 @@ Durable ejection from a role is achieved by abandoning the role node (see [The E
 3. Re-add the surviving members — _the roster is the entire sweep_.
 4. For hygiene, explicitly revoke the ejected member's certificates — permanent, so the removal survives any future re-add of the old key.
 
-Because delegations carry no anchor field, nothing except the roster is attached to the rotated node. Members' grants ride their memberships: the moment a survivor is re-rostered, everything they issued re-grounds through `Members′` automatically. Same certificates, same hashes, zero re-signing. Deny-state migrates the same way. Deep certificates keep their hashes, so explicit revocations keep biting, and surviving admins' revocations extend to `Members′` on their own (records grow with re-rostering). The ejected admin's record froze at a node that no longer routes anything.
+Because delegations carry no anchor field, nothing except the roster is attached to the rotated node. Members' grants ride their memberships: the moment a survivor is re-rostered, everything they issued re-grounds through `Members′` automatically. Same certificates, same hashes, zero re-signing. Deny-state migrates the same way. Deep certificates keep their hashes, so explicit revocations keep biting, and surviving admins' revocations extend to `Members′` on their own (their admin reach grows with re-rostering). The ejected admin's reach froze at a node that no longer routes anything.
 
 $$\text{rotation cost} = O(\text{roster})$$
 
@@ -123,16 +123,16 @@ With no anchor field, the schema enforces the shape: humans hold _memberships in
 
 ```
         ┌─────┐
-        │ Doc │◄──────── supply (subject: Doc) ────────┐
-        └─────┘                                    │
-                    ┌────────┐   supply    ┌──────────────┐
-                    │ Owners │───────────► │  Moderators  │
-                    └────────┘  (subject:Doc)  └──────────────┘
-                        ▲                     ▲     ▲     ▲
-             membership │          membership │     │     │ membership
-            (power:Admin) │         (power:Admin) │     │     │ (power:Edit)
-                        │                     │     │     │
-                      Dan                  Alice   Bob   Carol
+        │ Doc │◄───────────── supply (subject: Doc) ────────┐
+        └─────┘                                             │
+                    ┌────────┐        supply        ┌───────┴──────┐
+                    │ Owners │─────────────────────►│  Moderators  │
+                    └────────┘    (subject: Doc)    └──────────────┘
+                        ▲                              ▲    ▲    ▲
+            membership  │                 membership   │    │    │   membership
+        (power: Admin)  │             (power: Admin)   │    │    │   (power: Edit)
+                        │                              │    │    │
+                       Dan                           Alice Bob Carol
 ```
 
 What the shape buys:
@@ -142,7 +142,11 @@ What the shape buys:
 - _One membership, N documents._ A role's portfolio covers many subjects; future supplies propagate by late binding without touching a single membership certificate.
 - _Offboarding is one revocation._ Cutting a membership severs the whole portfolio; orphaned per-resource grants cannot occur, because per-resource grants on humans do not exist.
 
-Two costs: invitation is an admin act (a membership is a constitutional edge; an Edit member cannot invite — the escape valve is a singleton caretaker to re-share from), and a role's portfolio is a blast radius: membership is all-or-nothing across it, so portfolio boundaries are access-control decisions, not org-chart decorations.
+There are two costs.
+
+The first is that an invitation rides its inviter. Anyone may invite, at or below their own level: Carol, an Edit member, can issue `{issuer: Carol, audience: Eve, subject: Moderators, power: Edit}`, and Eve gets Edit. But Eve's membership is live only while Carol's standing is live, so removing Carol removes Eve in the same cascade. A membership that has to outlive its inviter must come from someone with independent standing. In practice that is an admin of the role, or a singleton [caretaker][caretakers] to re-share from. Only Admin-level memberships add to anyone's admin reach, so an Edit member's invitations add no grief surface.
+
+The second is that a role's portfolio is a blast radius. Membership is all-or-nothing across the portfolio, so portfolio boundaries are access-control decisions, not org-chart decorations.
 
 
 <!-- Links -->

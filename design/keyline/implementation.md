@@ -66,21 +66,9 @@ pub struct Delegation {
 
 A delegation is the Granovetter operator from object capabilities: Alice, who has a reference to Carol, introduces Bob to Carol by handing him that reference. In the classic diagram the arrows are references; here they are authority over a subject.
 
-```
-                     ┌───────┐
-                     │ Alice │  issuer
-                     └───┬───┘
-            has authority │  \
-              over Carol  │   \  introduces: { issuer: Alice, audience: Bob, subject: Carol, can }
-                          │    \
-                          ▼     ▼
-                     ┌───────┐  ┌─────┐
-                subject  │ Carol │◄╴╴│ Bob │  audience
-                     └───────┘  └─────┘
-                            Bob now has min(Alice's level, can) over Carol
-```
+![Alice holds authority over Carol and sends Bob a delegation carrying a copy of it, capped at power. Afterwards Bob holds his own authority over Carol at min(Alice's level, power).](../assets/keyline-granovetter.svg)
 
-The solid arrow is Alice's existing authority over the subject; the dashed one is what the certificate creates. Everything about the rules follows from reading it this way: Alice can only introduce Bob to what she herself reaches (attenuation), the introduction is a fact about Alice's standing and dies with it (issuer-recursive liveness), and Alice can always take it back (retraction). Ocap's Granovetter diagram is a message; Keyline's is a signed, content-addressed record of the same act, evaluated against the whole set instead of delivered once.
+Read it as Miller draws it. Alice holds an arrow to Carol (bottom). She sends Bob a message (top), and the message carries a copy of that same arrow, capped at `power`. Afterwards Bob holds his own arrow to Carol (dashed). The three blue arrows are one reference: Alice's, the copy in transit, and Bob's. Alice is the only one who acts: Bob receives and Carol is not consulted. As a certificate, the act is `{issuer: Alice, audience: Bob, subject: Carol, power}`. Everything about the rules follows from reading it this way: Alice can only introduce Bob to what she herself reaches (attenuation), the introduction is a fact about Alice's standing and dies with it (issuer-recursive liveness), and Alice can always take it back (retraction). Ocap's Granovetter diagram is a message; Keyline's is a signed, content-addressed record of the same act, evaluated against the whole set instead of delivered once.
 
 Anyone MAY issue a delegation over any subject. The issuer's effective level over `subject` clamps the result; no Admin requirement exists on the grant side. This resolves the model document's open question on delegation below Admin: the attenuation rule is the whole rule.
 
@@ -420,7 +408,7 @@ keyline/
       conformance/scenarios.rs  named cases, generic over K: Keyline
 ```
 
-- `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`. The claim is source-level: the crate compiles without `std` and never links it, but a `wasm32-unknown-unknown` or bare-metal build fails today in `getrandom`, reached through `keyhive_crypto → chacha20poly1305`. `keyline` uses two items from `keyhive_crypto` — `Digest<T>` and `Verifiable` — and neither needs any of that. The fix is to move those two down (to `keyhive_codec`, or a crate beneath it: the layering argument that put `Encode`/`Decode` at the bottom applies to `Digest` identically) or to gate `keyhive_crypto`'s AEAD and key-exchange modules behind a default-on feature. Deferred to the `keyhive_core` integration, when `keyhive_crypto` is being touched anyway; `ci-no-std` checks the host target in the meantime.
+- `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`. `keyline`, `keyhive_codec` and `keyhive_crypto` build for `wasm32-unknown-unknown` with `--no-default-features`, and `ci-no-std` checks this on that target. Earlier the build failed in `getrandom`, reached through `keyhive_crypto → chacha20poly1305`; that edge went away when the workspace turned off `chacha20poly1305`'s default features. Bare-metal targets without atomic compare-and-swap (e.g. `thumbv6m-none-eabi`) still fail, in `tracing-core`. `keyline` uses only two items from `keyhive_crypto`, `Digest<T>` and `Verifiable`. Moving them down to `keyhive_codec`, or to a crate beneath it, is still the cleaner layering, because the argument that put `Encode`/`Decode` at the bottom applies to `Digest` in the same way. It is no longer needed for Wasm.
 - Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`, `Verifiable`), `ed25519-dalek` (`VerifyingKey`, `Signature`), `blake3` (`set_digest`), `tracing`, and `thiserror` 2 (`no_std`-capable; pinned locally until the workspace moves off 1). Optional: `serde`, `arbitrary`.
 - `std` feature (default on): `HashMap`/`HashSet` via `beekem::collections`-style aliases, plus the `std` features of `tracing` and `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
 - `test_utils` feature: the conformance suite, the unverified `Verified` constructor, and `bolero`/`arbitrary`. Implies `arbitrary`, which implies `std` (`derive(Arbitrary)` expands to a `thread_local!`).

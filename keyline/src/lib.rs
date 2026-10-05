@@ -30,12 +30,9 @@
 //! `HashMap`/`HashSet` and enables the `std` features of `tracing` and `thiserror`;
 //! both crates are used in every configuration.
 //!
-//! FIXME: This crate's own code is `no_std`, but a `wasm32-unknown-unknown` or
-//! bare-metal build does not link yet: `keyhive_crypto`, which supplies
-//! [`keyhive_crypto::digest::Digest`] and [`keyhive_crypto::verifiable::Verifiable`],
-//! also pulls `chacha20poly1305` and so `getrandom`, which needs its `js`
-//! feature on Wasm. Splitting those two items out of `keyhive_crypto` is
-//! deferred to the `keyhive_core` integration.
+//! Builds for `wasm32-unknown-unknown` with `--no-default-features`, which
+//! `ci-no-std` checks. Bare-metal targets without atomic compare-and-swap
+//! (e.g. `thumbv6m-none-eabi`) do not build, because `tracing-core` needs it.
 
 #![no_std]
 #![forbid(unsafe_code)]
