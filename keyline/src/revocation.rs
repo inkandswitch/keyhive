@@ -117,11 +117,20 @@ impl<C> Verifiable for Revocation<C> {
 // than opaque.
 const BASE_LEN: usize = Id::LEN + 32 + 4;
 
+/// `bytes[at..at + len]`, or `UnexpectedEnd`.
+///
+/// Checked because `len` comes off the wire: on a 32-bit target (Wasm) a
+/// declared length near `u32::MAX` overflows `at + len`.
+fn slice_at(bytes: &[u8], at: usize, len: usize) -> Result<&[u8], DecodeError> {
+    at.checked_add(len)
+        .and_then(|end| bytes.get(at..end))
+        .ok_or(DecodeError::UnexpectedEnd)
+}
+
 fn u32_at(bytes: &[u8], at: usize) -> Result<usize, DecodeError> {
-    let raw: [u8; 4] = bytes
-        .get(at..at + 4)
-        .and_then(|s| s.try_into().ok())
-        .ok_or(DecodeError::UnexpectedEnd)?;
+    let raw: [u8; 4] = slice_at(bytes, at, 4)?
+        .try_into()
+        .map_err(|_| DecodeError::UnexpectedEnd)?;
     Ok(u32::from_be_bytes(raw) as usize)
 }
 
@@ -155,11 +164,7 @@ impl<C: Decode> Decode for Revocation<C> {
         let mut at = BASE_LEN;
         let mut previous: Option<Id> = None;
         for _ in 0..count {
-            let subject = Id::decode(
-                bytes
-                    .get(at..at + Id::LEN)
-                    .ok_or(DecodeError::UnexpectedEnd)?,
-            )?;
+            let subject = Id::decode(slice_at(bytes, at, Id::LEN)?)?;
             if previous.is_some_and(|p| p >= subject) {
                 return Err(DecodeError::InvalidField(
                     "retains: unsorted or repeated subject",
@@ -170,8 +175,7 @@ impl<C: Decode> Decode for Revocation<C> {
 
             let len = u32_at(bytes, at)?;
             at += 4;
-            let value = bytes.get(at..at + len).ok_or(DecodeError::UnexpectedEnd)?;
-            retains.insert(subject, C::decode(value)?);
+            retains.insert(subject, C::decode(slice_at(bytes, at, len)?)?);
             at += len;
         }
         if at != bytes.len() {
@@ -205,26 +209,26 @@ mod tests {
 
     /// A watermark type with a variable-length encoding, so the `retains` codec is
     /// exercised on values of differing size rather than a fixed stand-in.
-    type Keep = Vec<u8>;
+    type Retained = Vec<u8>;
 
-    fn sample() -> Revocation<Keep> {
+    fn sample() -> Revocation<Retained> {
         Revocation::new(id(1), Digest::from([3u8; 32]))
     }
 
     #[test]
-    fn encoded_length_without_keep() {
+    fn encoded_length_without_retains() {
         assert_eq!(sample().encode().len(), BASE_LEN);
     }
 
     #[test]
-    fn keep_round_trips() {
+    fn retains_round_trip() {
         let r = sample().retaining(BTreeMap::from([
             (id(2), alloc::vec![1, 2, 3]),
             (id(3), Vec::new()),
         ]));
         let encoded = r.encode();
         assert_eq!(
-            Revocation::<Keep>::decode(encoded.as_bytes()),
+            Revocation::<Retained>::decode(encoded.as_bytes()),
             Ok(r.clone())
         );
         // 2 entries: (id + len + 3) + (id + len + 0)
@@ -240,20 +244,20 @@ mod tests {
     fn rejects_wrong_lengths() {
         let bytes = sample().encode().into_bytes();
         assert_eq!(
-            Revocation::<Keep>::decode(&bytes[..bytes.len() - 1]),
+            Revocation::<Retained>::decode(&bytes[..bytes.len() - 1]),
             Err(DecodeError::UnexpectedEnd)
         );
         let mut longer = bytes.clone();
         longer.push(0);
         assert_eq!(
-            Revocation::<Keep>::decode(&longer),
+            Revocation::<Retained>::decode(&longer),
             Err(DecodeError::TrailingBytes)
         );
     }
 
     /// The three ways a `retains` map could have two encodings, each rejected.
     #[test]
-    fn rejects_non_canonical_keep() {
+    fn rejects_non_canonical_retains() {
         let r = sample().retaining(BTreeMap::from([
             (id(2), alloc::vec![7]),
             (id(3), alloc::vec![8]),
@@ -266,7 +270,7 @@ mod tests {
         swapped.extend_from_slice(&good[BASE_LEN + entry..BASE_LEN + 2 * entry]);
         swapped.extend_from_slice(&good[BASE_LEN..BASE_LEN + entry]);
         assert_eq!(
-            Revocation::<Keep>::decode(&swapped),
+            Revocation::<Retained>::decode(&swapped),
             Err(DecodeError::InvalidField(
                 "retains: unsorted or repeated subject"
             ))
@@ -277,7 +281,7 @@ mod tests {
         repeated.extend_from_slice(&good[BASE_LEN..BASE_LEN + entry]);
         repeated.extend_from_slice(&good[BASE_LEN..BASE_LEN + entry]);
         assert_eq!(
-            Revocation::<Keep>::decode(&repeated),
+            Revocation::<Retained>::decode(&repeated),
             Err(DecodeError::InvalidField(
                 "retains: unsorted or repeated subject"
             ))
@@ -287,8 +291,26 @@ mod tests {
         let mut miscounted = good.clone();
         miscounted[BASE_LEN - 1] = 1;
         assert_eq!(
-            Revocation::<Keep>::decode(&miscounted),
+            Revocation::<Retained>::decode(&miscounted),
             Err(DecodeError::TrailingBytes)
+        );
+    }
+
+    /// A declared entry length past the end of input is truncation, not a panic.
+    #[test]
+    fn rejects_oversized_entry_length() {
+        let r = sample().retaining(BTreeMap::from([(id(2), alloc::vec![7])]));
+        let mut bytes = r.encode().into_bytes();
+        let len_at = BASE_LEN + Id::LEN;
+        bytes[len_at..len_at + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            Revocation::<Retained>::decode(&bytes),
+            Err(DecodeError::UnexpectedEnd)
+        );
+        assert_eq!(
+            slice_at(&bytes, usize::MAX, 1),
+            Err(DecodeError::UnexpectedEnd),
+            "the end offset overflows"
         );
     }
 
@@ -296,7 +318,7 @@ mod tests {
     #[cfg(feature = "arbitrary")]
     fn codec_laws() {
         bolero::check!()
-            .with_arbitrary::<Revocation<Keep>>()
+            .with_arbitrary::<Revocation<Retained>>()
             .for_each(|r| {
                 let encoded = r.encode();
                 let decoded = Revocation::decode(encoded.as_bytes()).expect("round trip");
@@ -308,7 +330,7 @@ mod tests {
     #[test]
     fn decode_is_canonical() {
         bolero::check!().with_type::<Vec<u8>>().for_each(|bytes| {
-            if let Ok(r) = Revocation::<Keep>::decode(bytes) {
+            if let Ok(r) = Revocation::<Retained>::decode(bytes) {
                 assert_eq!(r.encode().as_bytes(), bytes.as_slice());
             }
         });

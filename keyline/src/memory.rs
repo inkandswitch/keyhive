@@ -697,6 +697,11 @@ mod tests {
     }
 
     #[test]
+    fn gift_cert_attack_follows_liveness() {
+        scenarios::gift_cert_attack_follows_liveness::<MemoryKeyline>();
+    }
+
+    #[test]
     fn signed_certificates_agree_with_fixtures() {
         scenarios::signed_certificates_agree_with_fixtures::<MemoryKeyline>();
     }

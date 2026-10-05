@@ -20,6 +20,8 @@ Three things share a name. In prose: _Keyline_ is the design, `keyline` is the c
 | the certificate set and its digest | content references, `after_content`, causality |
 | how to evaluate the set            | how to sign or verify (it receives witnesses) |
 
+A revocation can carry content-layer data (`retains`, below), but only as an opaque, canonically encoded payload that evaluation never reads. Carrying it is not knowing it.
+
 The crate sits beside `beekem`: both are engines over untyped keys, both are wrapped by `keyhive_core`, and neither is exposed to users. `keyhive_core` keeps its `Individual` / `Group` / `Document` handles and its public API. When a handle needs a membership or reachability answer, it converts IDs at the boundary and asks `keyline`, the same way `keyhive_core::cgka::Cgka` wraps `beekem::Cgka`. The typed handles are the [Ghosts of Departed Proofs][gdp] witnesses; `keyline` is the untyped thing they are proofs about.
 
 ## Types
@@ -48,9 +50,11 @@ pub struct Delegation {
     pub audience:  Id,
     pub subject:  Id,
     pub power:  Power,
-    pub cites: Option<Digest<Revocation>>,
+    pub cites: Option<Digest<RevocationId>>,
 }
 ```
+
+`RevocationId` is an uninhabited marker. `Revocation` is generic over its watermark type (below), and naming it as `Digest<Revocation<C>>` would make `Delegation` generic over a type it never uses.
 
 | Field  | Meaning                                                                                                            |
 |--------|--------------------------------------------------------------------------------------------------------------------|
@@ -93,21 +97,43 @@ A random nonce would remove the need for an issuer to know which certificate it 
 ### `Revocation`
 
 ```rust
-pub struct Revocation {
-    pub issuer:    Id,
-    pub revoke: Digest<Delegation>,
+pub struct Revocation<C> {
+    pub issuer:  Id,
+    pub revokes: Digest<Delegation>,
+    pub retains: BTreeMap<Id, C>,
 }
 ```
 
+| Field     | Meaning                                                                                       |
+|-----------|-----------------------------------------------------------------------------------------------|
+| `issuer`  | Signer. Its admin reach scopes the effect.                                                    |
+| `revokes` | The delegation being withdrawn, by payload digest.                                            |
+| `retains` | Per-subject retention watermarks for the content layer. Evaluation ignores it. Empty by default. |
+
 The type of `revokes` makes revoking a revocation unwritable. There is no `subject`: effect is scoped by the issuer's admin reach, not by the issuer's choice. A jurisdiction field was considered and rejected because every rotation would moot every standing denial, forcing the deny list to be re-signed; see [alternatives](alternatives.md#a-subject-jurisdiction-field-on-revocation).
+
+#### `retains`
+
+Revoking a key raises a second question that the authority graph cannot answer: what happens to the content that key already wrote? This is the [whiteout](README.md#open-questions) question. `retains` is where the revoker records an answer. The answer is a watermark per subject, for example "keep this writer's ops up to these heads in this document". The layer that materializes content reads it. Evaluation does not, in the same way that it ignores `cites`. Two laws pin this (see [Conformance Suite](#conformance-suite)).
+
+`C` is the watermark type, chosen by the consumer. Its only bound is `Encode + Decode`. The field is typed rather than opaque bytes for canonicality. If two encodings of one watermark were possible, they would give two certificates for one revocation, and that hole would sit at the certificate digest. A typed `C` makes `C::decode` reject a non-canonical value.
+
+The map is incomplete by construction:
+
+- A role gains subjects by late binding, so a subject supplied after the revocation was signed can never appear in it.
+- Because of partial visibility, the revoker may not have seen every subject that already exists.
+
+The policy for a subject that the map does not name therefore belongs to the content layer. An empty map is the extreme case of that same incompleteness. It is not a separate instruction such as "retain nothing".
+
+`retains` is covered by the digest. Two revocations of one delegation with different watermarks are two certificates. Both stand, and they deny the same delegation. How to combine their watermarks is also a content-layer question.
 
 ### `Certificate`
 
 ```rust
-pub enum Certificate { Delegation(Delegation), Revocation(Revocation) }
+pub enum Certificate<C> { Delegation(Delegation), Revocation(Revocation<C>) }
 ```
 
-The unit of insertion and of the set.
+The unit of insertion and of the set. `C` is the `retains` watermark type. It is fixed for each set as `Keyline::Content`.
 
 ### `Encoded<T>`
 
@@ -162,19 +188,22 @@ These two types live in `keyline` (`TODO(keyhive_types)`). `keyhive_crypto`'s se
 
 ```rust
 pub trait Keyline {
-    fn insert(&mut self, cert: Verified<Certificate>) -> bool;
-    fn contains(&self, cert: &Digest<Certificate>) -> bool;
+    type Content: Encode + Decode;
+
+    fn insert(&mut self, cert: Verified<Certificate<Self::Content>>) -> bool;
+    fn contains(&self, cert: &Digest<Certificate<Self::Content>>) -> bool;
 
     fn effective_power(&self, subject: Id, audience: Id) -> Option<Power>;
     fn members(&self, subject: Id) -> BTreeMap<Id, Power>;
     fn is_live(&self, cert: &Digest<Delegation>) -> bool;
-    fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<Revocation>>;
-    fn digest(&self) -> Digest<BTreeSet<Certificate>>;
+    fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>>;
+    fn digest(&self) -> Digest<BTreeSet<Certificate<Self::Content>>>;
 }
 ```
 
-| Method               | Meaning                                                                                                        |
+| Item                 | Meaning                                                                                                        |
 |----------------------|----------------------------------------------------------------------------------------------------------------|
+| `Content`            | The `retains` watermark type. Evaluation never reads it. A backend that does not care picks `()` (`MemoryKeyline`'s default). |
 | `insert`             | Add a certificate. `true` if newly added, as `BTreeSet::insert`. Idempotent. A dedupe signal, not a change signal. |
 | `contains`           | Whether the digest is in the set. Ingest checks this before paying for signature verification.                 |
 | `effective_power`   | `audience`'s effective level over `subject`: max over live routes of min along each. `None` if unreachable.             |
@@ -337,10 +366,20 @@ The second is a security requirement, not tidiness. Certificates travel as `Enco
 ```
 Certificate: kind:u8 ‖ payload
 Delegation:  issuer ‖ audience ‖ subject ‖ power:u8 ‖ cites_tag:u8 ‖ cites?    power is one of L R E A
-Revocation:  issuer ‖ revokes
+Revocation:  issuer ‖ revokes ‖ count:u32 ‖ entry*
+  entry:     subject ‖ len:u32 ‖ C
 ```
 
-where `cites_tag` is `0` with no following bytes when `cites` is absent and `1` followed by 32 bytes when present, and `power` is one of the four ASCII tags. Fixed-width layouts are canonical by construction, so `decode` only has to check length and tag membership. `0x00` is not a valid `power`, so a zeroed buffer fails to decode.
+In `Delegation`, `cites_tag` is `0` with no following bytes when `cites` is absent, and `1` followed by 32 bytes when present. `power` is one of the four ASCII tags. Fixed-width layouts are canonical by construction, so `decode` only has to check length and tag membership. `0x00` is not a valid `power`, so a zeroed buffer fails to decode.
+
+`retains` is the only variable-length field, so it is the only place where canonicality is not free. `decode` enforces it with four rules:
+
+1. Entries ascend by subject with no repeats, so a map has one ordering.
+2. Counts and lengths are fixed-width big-endian `u32`, so a number has one encoding.
+3. The input must be consumed exactly, so there is no slack to hide bytes in.
+4. `C::decode` rejects a non-canonical value.
+
+Offsets are computed with checked arithmetic, because a declared length near `u32::MAX` overflows `usize` on 32-bit targets. An empty `retains` costs four bytes.
 
 This layout is a placeholder for the bespoke codec. When that lands, these `Encode` / `Decode` impls are replaced (possibly by derive macros in `keyhive_codec`), every hash changes, and the pending API break absorbs it. `Encoded<T>`, `Signed<T>`, `Verified<T>`, and the `Keyline` trait do not change. The placeholder exists so that the crate is `no_std` from the start (no `bincode`) and so that the evaluator and its tests have stable hashes to build against.
 
@@ -397,7 +436,7 @@ Instrumentation: `insert` logs each certificate at `debug` (kind, endpoints, whe
 
 Every backend runs the same tests against `impl Keyline`. The suite is exported behind `test_utils` as plain functions generic over `K: Keyline + Default`; a backend writes one `#[test]` per scenario and law that calls the function with its type. `MemoryKeyline`'s test module is the reference list.
 
-_Generator._ `test_utils::conformance::gen::CertSet` draws from a pool of eight deterministic identities: a root edge per subject (one to three), up to ten free-form delegations over any node in the pool (so some land on roles and some are ungrounded), up to four revocations naming delegations already present, up to two re-issues past a revocation, and, about half the time, the clamping shape (a role supplied into a subject, an admin of it, a member of it with an independent grant over the subject, that member's grant to a third party, and the admin's revocation of it). Random 32-byte keys would give nothing but ungrounded edges.
+_Generator._ `test_utils::conformance::gen::CertSet` draws from a pool of eight deterministic identities: a root edge per subject (one to three), up to ten free-form delegations over any node in the pool (so some land on roles and some are ungrounded), up to four revocations naming delegations already present (each carrying zero to two `retains` watermarks over pool subjects), up to two re-issues past a revocation, and, about half the time, the clamping shape (a role supplied into a subject, an admin of it, a member of it with an independent grant over the subject, that member's grant to a third party, and the admin's revocation of it). Random 32-byte keys would give nothing but ungrounded edges.
 
 _Laws_ (`bolero`, over generated sets):
 
@@ -406,11 +445,14 @@ _Laws_ (`bolero`, over generated sets):
 - Idempotence: re-inserting every certificate returns `false` and changes nothing.
 - Revocations only deny: for each revocation in a set, the set without it has levels `≥` everywhere and a live set `⊇`.
 - Digest identifies the set: permutation-invariant; dropping any non-duplicated certificate changes it.
-- Query consistency: `effective_power(s, s) = Some(Admin)` for every `s`; `members(s)` is `effective_power(s, ·)` minus `s`; `contains` holds for everything inserted; `revocations_naming(h)` is exactly the revocations in the set with `revoke = h`.
+- Query consistency: `effective_power(s, s) = Some(Admin)` for every `s`; `members(s)` is `effective_power(s, ·)` minus `s`; `contains` holds for everything inserted; `revocations_naming(h)` is exactly the revocations in the set with `revokes = h`.
+- Watermarks are inert. Both laws below are re-run with `C = Vec<u8>`, because the `()` default encodes as nothing and so cannot tell "evaluation ignores `retains`" apart from "there was nothing to ignore":
+  - Oracle agreement with revocations. The naive oracle keeps only `(issuer, revokes)`, so agreement shows that the evaluator does not read the watermark either.
+  - Digest identifies the set. Two revocations that differ only in `retains` are two certificates.
 
 With revocations, `matches_naive_oracle_with_revocations` checks the same pairs and `is_live` against `laws::naive::evaluate`, a Jacobi-iteration transcription of the whole program (reach, coverage, LFP live set with renunciation, GFP caps) that shares no code with any backend. The generator plants the shapes that distinguish wrong readings (clamping vs gating; party-signed revocations) often enough that dropping renunciation, composing reach incorrectly, or gating instead of clamping fails within the default budget.
 
-_Scenarios._ Named cases derived from the [edge-cases] findings and the model document: rotation escapes a frozen admin reach while the cuts made in office stand; concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; an apex admin of an Admin-rooted document can deny the root edge, while an Edit-rooted document's root edge is undeniable; retraction and renunciation are total; a non-admin's cut is confined to their own node; `cites` re-issue heals, reviving everything downstream under its original hash. Plus the composition and reach cases from [Evaluation](#evaluation): membership carries whatever the role reaches, including documents added later; a senior role's admin cuts inside a junior role without an explicit grant; supplying a role into a document gives power over the supply edge and none over the roster; a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example). `MemoryKeyline` runs each as its own `#[test]`.
+_Scenarios._ Named cases derived from the [edge-cases] findings and the model document: rotation escapes a frozen admin reach while the cuts made in office stand; concurrent mutual revocation leaves both standing; ex-admin cuts cover only the frozen admin reach; an apex admin of an Admin-rooted document can deny the root edge, while an Edit-rooted document's root edge is undeniable; retraction and renunciation are total; a non-admin's cut is confined to their own node; `cites` re-issue heals, reviving everything downstream under its original hash. Plus the composition and reach cases from [Evaluation](#evaluation): membership carries whatever the role reaches, including documents added later; a senior role's admin cuts inside a junior role without an explicit grant; supplying a role into a document gives power over the supply edge and none over the roster; a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example). From the [evaluation notes](evaluation-notes.md#gift-cert-scenario), the gift-cert attack: an unconsented gift into an attacker's ladder, which booting the attacker cuts out of the document, which a same-key re-add revives and a fresh key does not, and which the victim's renunciation severs. `MemoryKeyline` runs each scenario as its own `#[test]`.
 
 _Negative._ A revocation naming an unknown hash is new and changes no answer. A duplicate returns `false` from `insert` and `revocations_naming` reports what named it.
 
@@ -435,7 +477,8 @@ Not implemented here; recorded so the crate's shape is checked against its one c
 
 ## Deferred
 
-- Whiteout and the `Relay`/BeeKEM rotation coupling: unchanged, content-layer and integration questions respectively.
+- Whiteout: `retains` gives the revoker a place to record an answer, but deciding what a watermark _means_ is still a content-layer question. That includes the type `keyhive_core` picks for `C`, the policy for subjects the map does not name, and how to combine concurrent revocations of one delegation.
+- The `Relay`/BeeKEM rotation coupling: unchanged, an integration question.
 - The bespoke codec.
 - Incremental evaluation and memoization beyond stratum 1: only once the conformance suite pins semantics.
 - A second backend and a `keyline` / `keyline_memory` crate split: only if a second backend appears.

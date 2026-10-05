@@ -11,10 +11,11 @@ use crate::{
     delegation::Delegation,
     keyline::Keyline,
     power::Power,
-    revocation::Revocation,
+    revocation::{Revocation, RevocationId},
     test_utils::{cert, id, signed},
 };
 use alloc::vec::Vec;
+use keyhive_crypto::digest::Digest;
 
 /// Doc -> Owners (root); Owners administers Members; Bob and Carol are
 /// Owners; Members has Edit over Doc; Alice is a Member, added by Carol.
@@ -398,6 +399,113 @@ pub fn unknown_revocation_is_inert<K: Keyline + Default>() {
     assert!(g.insert(cert(r(BOB, &phantom))));
     assert_eq!(g.members(id(DOC)), before);
     assert!(!g.is_live(&phantom.digest()));
+}
+
+/// First role of the gift-cert ladder; the ladder is `LADDER..LADDER + RUNGS`.
+const LADDER: u8 = 20;
+const RUNGS: u8 = 4;
+
+/// The gift-cert attack from `design/keyline/evaluation-notes.md` §7 and §9.
+/// Eve (the attacker) is a member with Edit over Doc. She builds a ladder of
+/// self-rooted roles, each rung a member of the one above. She supplies the top
+/// rung into Doc and gifts Alice (the victim) membership in the bottom rung.
+/// Alice never consents.
+///
+/// The suite checks answers, not cost, so this pins the semantic claims that
+/// the cost argument relies on:
+///
+/// - a gift raises the victim's level without her consent;
+/// - booting the attacker cuts the ladder out of Doc, while its internals stay
+///   self-grounded (what a demand-driven evaluator MUST NOT walk);
+/// - re-adding the same key revives the ladder and the gift with it;
+/// - a fresh key revives nothing;
+/// - renunciation is total, an identical re-gift collides with the renounced
+///   hash, and a varied one is a new certificate.
+///
+/// The cost phases (paid once, not walked after the boot) are obligations for
+/// demand-driven backends and are not observable through the trait.
+pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
+    let rung = |i: u8| LADDER + i;
+    let top = rung(0);
+    let bottom = rung(RUNGS - 1);
+    let eve_member = d(BOB, EVE, DOC, Power::Edit);
+    let supply = d(EVE, top, DOC, Power::Edit);
+    let gift = d(EVE, ALICE, bottom, Power::Admin);
+    let inner = d(EVE, rung(1), top, Power::Admin);
+
+    let booted = || -> (K, Digest<RevocationId>) {
+        let mut g: K = build([
+            d(DOC, OWNERS, DOC, Power::Admin).into(),
+            d(OWNERS, BOB, OWNERS, Power::Admin).into(),
+            d(BOB, ALICE, DOC, Power::Read).into(),
+            eve_member.into(),
+            supply.into(),
+        ]);
+        for i in 0..RUNGS {
+            g.insert(cert(d(rung(i), EVE, rung(i), Power::Admin)));
+            if i + 1 < RUNGS {
+                g.insert(cert(d(EVE, rung(i + 1), rung(i), Power::Admin)));
+            }
+        }
+
+        // Unaimed: the ladder reaches Doc, but Alice has only her own Read.
+        assert_eq!(power(&g, DOC, bottom), Some(Power::Edit));
+        assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
+
+        // The gift: one certificate, no acceptance step.
+        assert!(g.insert(cert(gift)));
+        assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
+
+        // Boot: the ladder's standing over Doc rides Eve's membership.
+        let boot: Revocation<K::Content> = r(BOB, &eve_member);
+        let boot_digest = boot.digest();
+        g.insert(cert(boot));
+        assert_eq!(power(&g, DOC, EVE), None);
+        assert!(!g.is_live(&supply.digest()));
+        assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
+        assert!((0..RUNGS).all(|i| !g.members(id(DOC)).contains_key(&id(rung(i)))));
+        // ...while the internals stay self-grounded.
+        assert!(g.is_live(&inner.digest()));
+        assert!(g.is_live(&gift.digest()));
+        assert_eq!(power(&g, top, ALICE), Some(Power::Admin));
+        (g, boot_digest)
+    };
+
+    // A fresh key revives nothing: the supply was signed by the old one.
+    let (mut g, _) = booted();
+    g.insert(cert(d(BOB, FRANK, DOC, Power::Edit)));
+    assert!(!g.is_live(&supply.digest()));
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
+
+    // Same-key re-add: the ladder and the gift come back as the same
+    // certificates. Nothing named them, so nothing stops them.
+    let (mut g, boot) = booted();
+    g.insert(cert(eve_member.reissue(boot)));
+    assert!(g.is_live(&supply.digest()));
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
+
+    // Renunciation is total, and leaves Alice's own route alone.
+    let renounce: Revocation<K::Content> = r(ALICE, &gift);
+    let renounce_digest = renounce.digest();
+    g.insert(cert(renounce));
+    assert!(!g.is_live(&gift.digest()));
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
+    assert_eq!(power(&g, DOC, bottom), Some(Power::Edit));
+
+    // An identical re-gift is the renounced certificate.
+    assert!(!g.insert(cert(gift)));
+    assert!(g
+        .revocations_naming(&gift.digest())
+        .into_iter()
+        .eq([renounce_digest]));
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
+
+    // A varied re-gift is a new hash and needs its own renunciation.
+    let regift = gift.reissue(renounce_digest);
+    assert!(g.insert(cert(regift)));
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
+    g.insert(cert(r(ALICE, &regift)));
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
 }
 
 /// The fixtures skip signing (`Verified::assume`). This is the one scenario

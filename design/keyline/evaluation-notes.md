@@ -669,7 +669,7 @@ phases and assertions:
                   fresh-key re-add does not revive it.
 ```
 
-Bottom-up evaluators pass phases 1, 3, 5 by construction; phases 2 and 4 are meaningful for any evaluator. Encoding this in `conformance/scenarios.rs` form would also pin the spec-level claims (renunciation totality, `cites`-collision fail-closed) that the cost argument leans on.
+Bottom-up evaluators pass phases 1, 3 and 5 by construction. Phases 2 and 4 are meaningful for any evaluator. `conformance::scenarios::gift_cert_attack_follows_liveness` encodes the parts of each phase that change answers: who reaches Doc, what stays live, and what `insert` and `revocations_naming` report. These are the spec-level claims that the cost argument relies on. The cost parts ("paid once", "does not walk the internals") are not visible through the `Keyline` trait. A demand-driven backend has to check them with its own instrumentation.
 
 ## 10. Status
 
@@ -678,7 +678,7 @@ Bottom-up evaluators pass phases 1, 3, 5 by construction; phases 2 and 4 are mea
 | Context dedup by exclusion set (§7, obligation 1) | Implemented: `MemoryKeyline::contexts` groups covered delegations by exclusion set; one search per group per round |
 | Early exit on inert disputes (§7, obligation 2)   | Implemented: covered edges whose issuer is unreachable in the shared pass are never searched                       |
 | Subject-first demand ordering (§7, obligation 3)  | Not applicable to bottom-up evaluators; binding for any demand-driven one                                          |
-| Gift-cert scenario (§9)                           | Not in the conformance suite; phases 2 and 4 apply to bottom-up evaluators                                         |
+| Gift-cert scenario (§9)                           | `scenarios::gift_cert_attack_follows_liveness` pins the semantic claims: the gift needs no consent, the boot cuts the ladder out of Doc while its internals stay self-grounded, a same-key re-add revives it and a fresh key does not, renunciation is total, and an identical re-gift collides. The cost assertions (phases 2 and 3) cannot be observed through the trait and remain obligations for demand-driven backends |
 | Compute-denial analysis in the model document     | §7 has no counterpart in `README.md`, whose griefing section prices authority-denial only                          |
 | Depth cap as a semantic lever                     | Analysed and not recommended; consensus-critical if ever adopted, since every replica must agree                   |
 | Differential testing of SQL backends              | `test_utils::conformance::gen::CertSet` can drive an SQL backend against `MemoryKeyline`                           |

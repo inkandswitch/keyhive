@@ -106,16 +106,16 @@ mod tests {
     use super::*;
 
     /// Variable-length, to exercise the `retains` codec through the wrapper.
-    type Keep = Vec<u8>;
+    type Retained = Vec<u8>;
 
     #[test]
     fn empty_and_bad_tag() {
         assert_eq!(
-            Certificate::<Keep>::decode(&[]),
+            Certificate::<Retained>::decode(&[]),
             Err(DecodeError::UnexpectedEnd)
         );
         assert_eq!(
-            Certificate::<Keep>::decode(&[7]),
+            Certificate::<Retained>::decode(&[7]),
             Err(DecodeError::InvalidTag(7))
         );
     }
@@ -124,7 +124,7 @@ mod tests {
     #[cfg(feature = "arbitrary")]
     fn codec_laws() {
         bolero::check!()
-            .with_arbitrary::<Certificate<Keep>>()
+            .with_arbitrary::<Certificate<Retained>>()
             .for_each(|c| {
                 let encoded = c.encode();
                 let decoded = Certificate::decode(encoded.as_bytes()).expect("round trip");
@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn decode_is_canonical() {
         bolero::check!().with_type::<Vec<u8>>().for_each(|bytes| {
-            if let Ok(c) = Certificate::<Keep>::decode(bytes) {
+            if let Ok(c) = Certificate::<Retained>::decode(bytes) {
                 assert_eq!(c.encode().as_bytes(), bytes.as_slice());
             }
         });

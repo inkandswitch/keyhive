@@ -144,11 +144,14 @@ Admin is the sole _governance_ level — what may act on the graph itself. Relay
 
 A revocation breaks a previously issued delegation, identified by hash:
 
-| Field     | Type                    | Notes                              |
-|-----------|-------------------------|------------------------------------|
-| Issuer    | Ed25519 verifying key   | The key that signs                 |
-| Revoke    | `Hash<Delegation>`      | The delegation being revoked       |
-| Signature | Ed25519 signature       | Over all of the above              |
+| Field     | Type                  | Notes                                             |
+|-----------|-----------------------|---------------------------------------------------|
+| Issuer    | Ed25519 verifying key | The key that signs                                |
+| Revoke    | `Hash<Delegation>`    | The delegation being revoked                      |
+| Retains   | subject ↦ watermark   | Content-layer retention; never read by evaluation |
+| Signature | Ed25519 signature     | Over all of the above                             |
+
+`Retains` answers a question that the authority graph cannot answer: what happens to the content that the revoked key already wrote ([whiteout](#open-questions)). It plays no part in anything below. It is in the certificate so that the answer is signed by the same act that cuts the edge.
 
 Revocations kill delegations on the routes the revoker controls, or that the revoker signed. Both certificate species are add-only; merging is set union.
 
@@ -545,7 +548,12 @@ _4. The zombie._ If the boot was for key compromise, re-adding "Alice" means a _
 
 ## Open Questions
 
-- _Whiteout._ Carol wrote content while validly authorized; after the cascade her authorization is gone. Whether her past writes remain materialized is a content-layer question (see causal encryption), but Keyline should expose enough to answer "was this issuer live at the time of this write?" — which, absent causal metadata, it cannot. If whiteout ever forces causal metadata into the system, the per-(issuer, capacity) stream design in [edge-cases](edge-cases.md) is the fallback shape.
+- _Whiteout._ Carol wrote content while she was validly authorized. After the cascade, her authorization is gone. Whether her past writes stay materialized is a content-layer question (see causal encryption). Keyline cannot answer "was this issuer live at the time of this write?", because it has no causal metadata. Instead, a revocation carries the revoker's answer: `retains` holds a watermark per subject, for example the content heads to keep, and evaluation never reads it ([implementation](implementation.md#retains)). This moves the question but does not close it. The open parts are:
+  - what a watermark means;
+  - what to do for subjects the map cannot name (a role's later subjects, and subjects the revoker never saw);
+  - how to combine concurrent revocations that carry different watermarks.
+
+  If whiteout ever forces causal metadata into the authority layer itself, the per-(issuer, capacity) stream design in [edge-cases](edge-cases.md) is the fallback shape.
 - _Relay and revocation._ Cutting a `Relay` edge stops future authorization but not decryption by parties holding key material. Effective removal requires the revocation to trigger key rotation (BeeKEM) at the layer above; the coupling point needs specifying.
 - _Delegation below Admin._ Resolved in [implementation.md](implementation.md#delegation): anyone may delegate, clamped by attenuation; Admin matters only for admin reach.
 - _Silent collision UX._ An issuer who re-mints a grant identical to one that was revoked — unaware, because the revocation never synced (device restore, partial visibility) — produces the same hash: the grant silently doesn't take. Fail-closed, but tooling must surface it ("matches a revoked certificate; re-issue with `cites`?").
