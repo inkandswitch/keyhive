@@ -22,13 +22,13 @@ use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 /// `design/keyline/alternatives.md`.
 ///
 /// The type of `revokes` makes revoking a revocation unwritable. Repair is by
-/// re-granting with [`Delegation::reissue`], never by un-denying.
+/// re-granting with [`Delegation::reissue`], never by un-revoking.
 ///
 /// # `retains`
 ///
-/// Revoking a key raises a second question the authority graph cannot answer:
+/// Removing a key raises a second question the authority graph cannot answer:
 /// what becomes of the content that key already wrote. `retains` carries the
-/// revoker's answer — a retention watermark, opaque to this crate. Evaluation
+/// issuer's answer — a retention watermark, opaque to this crate. Evaluation
 /// never reads it, exactly as it never reads [`Delegation::cites`]; the layer
 /// that materialises content does.
 ///
@@ -42,7 +42,7 @@ use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 ///
 /// The map is not exhaustive and cannot be. A role's portfolio grows by late
 /// binding, so a subject supplied after this revocation was signed can never
-/// appear here, and partial visibility means the revoker may not have seen
+/// appear here, and partial visibility means the issuer may not have seen
 /// every subject that already exists. What to do for an unnamed subject is
 /// therefore the content layer's policy, and naming none — an empty map — is
 /// only the extreme of that same incompleteness, not a distinct instruction.

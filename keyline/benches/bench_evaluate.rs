@@ -63,7 +63,7 @@ fn realistic(n: u8) -> MemoryKeyline {
         }
     }
     let mut g = build(certs);
-    // Two cuts: one by an Owner (covers), one by a member (inert).
+    // Two revocations: one by an Owner (covers), one by a member (inert).
     let victim = Delegation::new(
         id(FIRST_HUMAN),
         id(FIRST_HUMAN + 3),
@@ -90,12 +90,12 @@ fn club_ladder(k: u8) -> MemoryKeyline {
     build(certs)
 }
 
-/// An Owner is booted and then revokes `k` roster certificates; all share one
+/// An Owner is removed and then revokes `k` roster certificates; all share one
 /// exclusion set.
 fn revocation_spree(k: u8) -> MemoryKeyline {
     let mut g = realistic(k);
-    let booted = Delegation::new(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Power::Admin);
-    g.insert(cert(Revocation::new(id(FIRST_HUMAN), booted.digest())));
+    let removed = Delegation::new(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Power::Admin);
+    g.insert(cert(Revocation::new(id(FIRST_HUMAN), removed.digest())));
     for i in 0..k {
         let target = Delegation::new(
             id(FIRST_HUMAN),

@@ -92,7 +92,7 @@ pub fn late_binding_grants_new_documents_to_members<K: Keyline + Default>() {
     assert_eq!(power(&g, OTHER_DOC, ALICE), Some(Power::Read));
 }
 
-pub fn retraction_is_total<K: Keyline + Default>() {
+pub fn issuer_revocation_is_total<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
     g.insert(cert(r(CAROL, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
@@ -100,7 +100,7 @@ pub fn retraction_is_total<K: Keyline + Default>() {
     assert_eq!(power(&g, MEMBERS, ALICE), None);
 }
 
-pub fn renunciation_is_total<K: Keyline + Default>() {
+pub fn audience_revocation_is_total<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
     g.insert(cert(r(ALICE, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
@@ -109,7 +109,7 @@ pub fn renunciation_is_total<K: Keyline + Default>() {
 
 /// Bob never signed Alice's membership, but Owners is in Bob's admin
 /// reach and Members' only route to Carol grounds through Owners.
-pub fn admin_over_a_transited_node_cuts_deep<K: Keyline + Default>() {
+pub fn admin_reach_covers_a_transited_node<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
     g.insert(cert(r(BOB, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
@@ -119,8 +119,8 @@ pub fn admin_over_a_transited_node_cuts_deep<K: Keyline + Default>() {
 }
 
 /// Dan holds only Read, so Dan's admin reach is {Dan}. Alice's membership
-/// never transits Dan, so Dan's cut of it is inert; Dan's own hop is Dan's to cut.
-pub fn non_admin_cut_is_confined_to_own_node<K: Keyline + Default>() {
+/// never transits Dan, so Dan's revocation of it is inert; Dan's own hop is Dan's to revoke.
+pub fn non_admin_revocation_is_confined_to_own_node<K: Keyline + Default>() {
     let dan_grant = d(DAN, ALICE, DOC, Power::Read);
     let (mut g, _, alice_member) = standard::<K>();
     g.insert(cert(d(DOC, DAN, DOC, Power::Read)));
@@ -132,8 +132,8 @@ pub fn non_admin_cut_is_confined_to_own_node<K: Keyline + Default>() {
     assert!(!g.is_live(&dan_grant.digest()));
 }
 
-/// Bob boots Carol; Carol was Alice's sponsor, so Alice dies implicitly.
-/// Carol's admin reach still holds Owners, so she can cut Bob's re-sponsor.
+/// Bob removes Carol; Carol was Alice's sponsor, so Alice dies implicitly.
+/// Carol's admin reach still holds Owners, so she can revoke Bob's re-sponsor.
 pub fn ex_admin_reach_is_frozen<K: Keyline + Default>() {
     let (mut g, carol_owner, alice_member) = standard::<K>();
     g.insert(cert(r(BOB, &carol_owner)));
@@ -148,7 +148,7 @@ pub fn ex_admin_reach_is_frozen<K: Keyline + Default>() {
     assert!(!g.is_live(&alice_member.digest()));
 }
 
-pub fn mutual_revocation_leaves_both_cuts_standing<K: Keyline + Default>() {
+pub fn mutual_revocations_both_stand<K: Keyline + Default>() {
     let (mut g, carol_owner, _) = standard::<K>();
     let bob_owner = d(OWNERS, BOB, OWNERS, Power::Admin);
     g.insert(cert(r(BOB, &carol_owner)));
@@ -162,7 +162,7 @@ pub fn mutual_revocation_leaves_both_cuts_standing<K: Keyline + Default>() {
 /// `standard()` roots Doc at Admin, so Doc is in every Owners admin's reach
 /// and any of them can revoke the root edge. One certificate bricks the
 /// document; nothing below survives.
-pub fn apex_admin_can_deny_the_root_edge<K: Keyline + Default>() {
+pub fn apex_admin_can_revoke_the_root_edge<K: Keyline + Default>() {
     let (mut g, _, _) = standard::<K>();
     let root = d(DOC, OWNERS, DOC, Power::Admin);
     assert_eq!(power(&g, DOC, BOB), Some(Power::Admin));
@@ -175,9 +175,9 @@ pub fn apex_admin_can_deny_the_root_edge<K: Keyline + Default>() {
 }
 
 /// Root Doc at Edit instead and nobody ever holds Admin over Doc, so Doc is in
-/// nobody's reach: the root edge is undeniable, and Owners' admins keep every
+/// nobody's reach: the root edge is irrevocable, and Owners' admins keep every
 /// power they had over the roles below.
-pub fn edit_rooted_root_edge_is_undeniable<K: Keyline + Default>() {
+pub fn edit_rooted_root_edge_is_irrevocable<K: Keyline + Default>() {
     let root = d(DOC, OWNERS, DOC, Power::Edit);
     let alice_member = d(CAROL, ALICE, MEMBERS, Power::Admin);
     let mut g: K = build([
@@ -202,8 +202,8 @@ pub fn edit_rooted_root_edge_is_undeniable<K: Keyline + Default>() {
 
 /// Bob is an Owner and Owners is Admin over Members, but Bob holds no
 /// `subject: Members` grant of his own. Composed reach still puts Members in his
-/// reach, so he can cut inside it.
-pub fn senior_role_admin_cuts_inside_junior_role<K: Keyline + Default>() {
+/// reach, so his revocations cover delegations inside it.
+pub fn senior_role_admin_revokes_inside_junior_role<K: Keyline + Default>() {
     // Members is rooted at Dan, who then makes Owners an admin of Members via
     // an ordinary (non-root) edge. Bob's only path to Members is through Owners.
     let alice_member = d(DAN, ALICE, MEMBERS, Power::Admin);
@@ -225,7 +225,7 @@ pub fn senior_role_admin_cuts_inside_junior_role<K: Keyline + Default>() {
 }
 
 /// Dan supplies Members into Doc. That gives him power over his own plug —
-/// retract the supply and every Member loses Doc at once — and none over
+/// revoke the supply and every Member loses Doc at once — and none over
 /// Members' roster, which never routes through him. Even though Dan reaches
 /// Doc at Admin (through Mods), Members is not in his reach.
 pub fn supply_is_daisy_chained<K: Keyline + Default>() {
@@ -250,7 +250,7 @@ pub fn supply_is_daisy_chained<K: Keyline + Default>() {
     assert!(g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-    // Total, for the whole strip: Dan retracts his own supply edge.
+    // Total, for the whole strip: Dan revokes his own supply edge.
     g.insert(cert(r(DAN, &supply)));
     assert_eq!(power(&g, DOC, MEMBERS), None);
     assert_eq!(power(&g, DOC, ALICE), None);
@@ -308,26 +308,26 @@ pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
     assert!(!g.insert(cert(alice_member)));
     assert_eq!(g.digest(), before);
 
-    let rev: Revocation<K::Content> = r(CAROL, &alice_member);
-    let rev_digest = rev.digest();
-    g.insert(cert(rev));
+    let revocation: Revocation<K::Content> = r(CAROL, &alice_member);
+    let revocation_digest = revocation.digest();
+    g.insert(cert(revocation));
     assert!(!g.insert(cert(alice_member)));
     assert!(g
         .revocations_naming(&alice_member.digest())
         .into_iter()
-        .eq([rev_digest]));
+        .eq([revocation_digest]));
 }
 
-pub fn reissue_with_seen_heals<K: Keyline + Default>() {
+pub fn reissue_with_cites_heals<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
     // Alice sponsors Eve, so the heal has something downstream to revive.
     let eve_member = d(ALICE, EVE, MEMBERS, Power::Edit);
     g.insert(cert(eve_member));
     assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
 
-    let rev: Revocation<K::Content> = r(CAROL, &alice_member);
-    let healed = alice_member.reissue(rev.digest());
-    g.insert(cert(rev));
+    let revocation: Revocation<K::Content> = r(CAROL, &alice_member);
+    let healed = alice_member.reissue(revocation.digest());
+    g.insert(cert(revocation));
     assert_eq!(power(&g, DOC, ALICE), None);
     // Eve dies implicitly: nothing named her certificate.
     assert!(!g.is_live(&eve_member.digest()));
@@ -344,9 +344,9 @@ pub fn reissue_with_seen_heals<K: Keyline + Default>() {
 }
 
 /// Rotation is escape. Dan administers `Members`, so `Members` is in his admin
-/// reach forever and his cuts inside it stand. Minting a successor role,
+/// reach forever and his revocations inside it stand. Minting a successor role,
 /// supplying it and re-rostering into it puts the survivors somewhere his
-/// frozen reach does not name: his cuts there are inert.
+/// frozen reach does not name: his revocations there are inert.
 pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
     let supply = d(BOB, MEMBERS, DOC, Power::Edit);
     let alice_member = d(DAN, ALICE, MEMBERS, Power::Admin);
@@ -360,12 +360,12 @@ pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
     assert_eq!(power(&g, MEMBERS, DAN), Some(Power::Admin));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-    // Members is in Dan's reach, so his cut lands.
+    // Members is in Dan's reach, so his revocation covers Alice's membership.
     g.insert(cert(r(DAN, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), None);
 
-    // Rotate: mint the successor, supply it, re-roster Alice, retract the old
+    // Rotate: mint the successor, supply it, re-roster Alice, revoke the old
     // supply. `MODS` here is `Members'`.
     let alice_successor = d(BOB, ALICE, MODS, Power::Admin);
     let new_supply = d(BOB, MODS, DOC, Power::Edit);
@@ -387,7 +387,7 @@ pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
     assert!(g.is_live(&new_supply.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-    // Permanence: the cut he made while in office is still applied.
+    // Permanence: the revocation he signed while in office still applies.
     assert!(!g.is_live(&alice_member.digest()));
 }
 
@@ -414,15 +414,15 @@ const RUNGS: u8 = 4;
 /// The suite checks answers, not cost, so this pins the semantic claims that
 /// the cost argument relies on:
 ///
-/// - a gift raises the victim's level without her consent;
-/// - booting the attacker cuts the ladder out of Doc, while its internals stay
+/// - a gift raises the victim's effective power without her consent;
+/// - removing the attacker takes the ladder out of Doc, while its internals stay
 ///   self-grounded (what a demand-driven evaluator MUST NOT walk);
 /// - re-adding the same key revives the ladder and the gift with it;
 /// - a fresh key revives nothing;
-/// - renunciation is total, an identical re-gift collides with the renounced
-///   hash, and a varied one is a new certificate.
+/// - revocation by the audience is total, an identical re-gift collides with the
+///   revoked hash, and a varied one is a new certificate.
 ///
-/// The cost phases (paid once, not walked after the boot) are obligations for
+/// The cost phases (paid once, not walked after the removal) are obligations for
 /// demand-driven backends and are not observable through the trait.
 pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
     let rung = |i: u8| LADDER + i;
@@ -433,7 +433,7 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
     let gift = d(EVE, ALICE, bottom, Power::Admin);
     let inner = d(EVE, rung(1), top, Power::Admin);
 
-    let booted = || -> (K, Digest<RevocationId>) {
+    let after_removal = || -> (K, Digest<RevocationId>) {
         let mut g: K = build([
             d(DOC, OWNERS, DOC, Power::Admin).into(),
             d(OWNERS, BOB, OWNERS, Power::Admin).into(),
@@ -456,10 +456,10 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
         assert!(g.insert(cert(gift)));
         assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-        // Boot: the ladder's standing over Doc rides Eve's membership.
-        let boot: Revocation<K::Content> = r(BOB, &eve_member);
-        let boot_digest = boot.digest();
-        g.insert(cert(boot));
+        // Remove Eve: the ladder's standing over Doc rides her membership.
+        let removal: Revocation<K::Content> = r(BOB, &eve_member);
+        let removal_digest = removal.digest();
+        g.insert(cert(removal));
         assert_eq!(power(&g, DOC, EVE), None);
         assert!(!g.is_live(&supply.digest()));
         assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
@@ -468,40 +468,40 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
         assert!(g.is_live(&inner.digest()));
         assert!(g.is_live(&gift.digest()));
         assert_eq!(power(&g, top, ALICE), Some(Power::Admin));
-        (g, boot_digest)
+        (g, removal_digest)
     };
 
     // A fresh key revives nothing: the supply was signed by the old one.
-    let (mut g, _) = booted();
+    let (mut g, _) = after_removal();
     g.insert(cert(d(BOB, FRANK, DOC, Power::Edit)));
     assert!(!g.is_live(&supply.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
 
     // Same-key re-add: the ladder and the gift come back as the same
     // certificates. Nothing named them, so nothing stops them.
-    let (mut g, boot) = booted();
-    g.insert(cert(eve_member.reissue(boot)));
+    let (mut g, removal) = after_removal();
+    g.insert(cert(eve_member.reissue(removal)));
     assert!(g.is_live(&supply.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-    // Renunciation is total, and leaves Alice's own route alone.
-    let renounce: Revocation<K::Content> = r(ALICE, &gift);
-    let renounce_digest = renounce.digest();
-    g.insert(cert(renounce));
+    // Alice's revocation of the gift is total, and leaves her own route alone.
+    let alice_revocation: Revocation<K::Content> = r(ALICE, &gift);
+    let alice_revocation_digest = alice_revocation.digest();
+    g.insert(cert(alice_revocation));
     assert!(!g.is_live(&gift.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
     assert_eq!(power(&g, DOC, bottom), Some(Power::Edit));
 
-    // An identical re-gift is the renounced certificate.
+    // An identical re-gift is the revoked certificate.
     assert!(!g.insert(cert(gift)));
     assert!(g
         .revocations_naming(&gift.digest())
         .into_iter()
-        .eq([renounce_digest]));
+        .eq([alice_revocation_digest]));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
 
-    // A varied re-gift is a new hash and needs its own renunciation.
-    let regift = gift.reissue(renounce_digest);
+    // A varied re-gift is a new hash and needs its own revocation.
+    let regift = gift.reissue(alice_revocation_digest);
     assert!(g.insert(cert(regift)));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
     g.insert(cert(r(ALICE, &regift)));

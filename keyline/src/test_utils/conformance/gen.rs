@@ -162,15 +162,15 @@ impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C
                 .copied()
                 .collect();
             let target = dels[u.choose_index(dels.len())?];
-            // A third of revocations are by a party to the target (retraction or
-            // renunciation), which random revokers rarely produce.
-            let revoker = match u.int_in_range(0..=2)? {
+            // A third of revocations are by a party to the target (its issuer or
+            // its audience), which random issuers rarely produce.
+            let issuer = match u.int_in_range(0..=2)? {
                 0 => target.issuer,
                 1 => target.audience,
                 _ => pick_id(u)?,
             };
             certs.push(
-                Revocation::new(revoker, target.digest())
+                Revocation::new(issuer, target.digest())
                     .retaining(retains(u)?)
                     .into(),
             );
@@ -178,24 +178,24 @@ impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C
 
         // Re-issues past a revocation, so heals and `cites` collisions happen.
         for _ in 0..u.int_in_range(0..=2)? {
-            let revs: Vec<Revocation<C>> = certs
+            let revocations: Vec<Revocation<C>> = certs
                 .iter()
                 .filter_map(Certificate::as_revocation)
                 .cloned()
                 .collect();
-            if revs.is_empty() {
+            if revocations.is_empty() {
                 break;
             }
-            let rev = revs[u.choose_index(revs.len())?].clone();
+            let revocation = revocations[u.choose_index(revocations.len())?].clone();
             let Some(target) = certs
                 .iter()
                 .filter_map(Certificate::as_delegation)
-                .find(|d| d.digest() == rev.revokes)
+                .find(|d| d.digest() == revocation.revokes)
                 .copied()
             else {
                 continue;
             };
-            certs.push(target.reissue(rev.digest()).into());
+            certs.push(target.reissue(revocation.digest()).into());
         }
 
         Ok(CertSet { certs })

@@ -68,7 +68,7 @@ pub struct MemoryKeyline<C = ()> {
     revocations: Map<Digest<RevocationId>, Revocation<C>>,
 
     /// Target delegation -> the revocations naming it.
-    denials: Map<Digest<Delegation>, Set<Digest<RevocationId>>>,
+    revocations_of: Map<Digest<Delegation>, Set<Digest<RevocationId>>>,
 }
 
 impl<C: Encode + Decode> MemoryKeyline<C> {
@@ -162,11 +162,11 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
             }
         }
 
-        self.denials
+        self.revocations_of
             .iter()
-            .map(|(h, revs)| {
+            .map(|(h, ids)| {
                 let mut nodes = Set::new();
-                for k in revs
+                for k in ids
                     .iter()
                     .filter_map(|r| self.revocations.get(r))
                     .map(|r| r.issuer)
@@ -213,7 +213,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     .filter(|(h, d)| {
                         !(ctx.exclude.contains(&d.issuer)
                             || ctx.exclude.contains(&d.subject)
-                            || self.renounced(h, d.audience))
+                            || self.revoked_by_audience(h, d.audience))
                             && reached(&base, d.subject, d.issuer)
                     })
                     .collect();
@@ -245,14 +245,14 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
         }
     }
 
-    /// Whether the recipient of `h` has signed a revocation of it. The recipient is
+    /// Whether the audience of `h` has signed a revocation of it. The audience is
     /// not on the route to the issuer, so this is the one place a revocation's
     /// effect is decided by the signer's identity rather than their admin reach.
-    fn renounced(&self, h: &Digest<Delegation>, audience: Id) -> bool {
-        self.denials.get(h).is_some_and(|revs| {
-            revs.iter()
-                .filter_map(|r| self.revocations.get(r))
-                .any(|r| r.issuer == audience)
+    fn revoked_by_audience(&self, h: &Digest<Delegation>, audience: Id) -> bool {
+        self.revocations_of.get(h).is_some_and(|ids| {
+            ids.iter()
+                .filter_map(|id| self.revocations.get(id))
+                .any(|revocation| revocation.issuer == audience)
         })
     }
 
@@ -429,7 +429,7 @@ impl<C> Default for MemoryKeyline<C> {
             delegations: Map::new(),
             edges: Map::new(),
             revocations: Map::new(),
-            denials: Map::new(),
+            revocations_of: Map::new(),
         }
     }
 }
@@ -466,7 +466,7 @@ impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
                     target_known = self.delegations.contains_key(&r.revokes),
                     "revocation inserted"
                 );
-                self.denials.entry(r.revokes).or_default().insert(k);
+                self.revocations_of.entry(r.revokes).or_default().insert(k);
                 self.revocations.insert(k, r);
             }
         }
@@ -479,9 +479,9 @@ impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
     }
 
     fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>> {
-        self.denials
+        self.revocations_of
             .get(cert)
-            .map(|revs| revs.iter().copied().collect())
+            .map(|ids| ids.iter().copied().collect())
             .unwrap_or_default()
     }
 
@@ -617,23 +617,23 @@ mod tests {
     }
 
     #[test]
-    fn retraction_is_total() {
-        scenarios::retraction_is_total::<MemoryKeyline>();
+    fn issuer_revocation_is_total() {
+        scenarios::issuer_revocation_is_total::<MemoryKeyline>();
     }
 
     #[test]
-    fn renunciation_is_total() {
-        scenarios::renunciation_is_total::<MemoryKeyline>();
+    fn audience_revocation_is_total() {
+        scenarios::audience_revocation_is_total::<MemoryKeyline>();
     }
 
     #[test]
-    fn admin_over_a_transited_node_cuts_deep() {
-        scenarios::admin_over_a_transited_node_cuts_deep::<MemoryKeyline>();
+    fn admin_reach_covers_a_transited_node() {
+        scenarios::admin_reach_covers_a_transited_node::<MemoryKeyline>();
     }
 
     #[test]
-    fn non_admin_cut_is_confined_to_own_node() {
-        scenarios::non_admin_cut_is_confined_to_own_node::<MemoryKeyline>();
+    fn non_admin_revocation_is_confined_to_own_node() {
+        scenarios::non_admin_revocation_is_confined_to_own_node::<MemoryKeyline>();
     }
 
     #[test]
@@ -642,23 +642,23 @@ mod tests {
     }
 
     #[test]
-    fn mutual_revocation_leaves_both_cuts_standing() {
-        scenarios::mutual_revocation_leaves_both_cuts_standing::<MemoryKeyline>();
+    fn mutual_revocations_both_stand() {
+        scenarios::mutual_revocations_both_stand::<MemoryKeyline>();
     }
 
     #[test]
-    fn apex_admin_can_deny_the_root_edge() {
-        scenarios::apex_admin_can_deny_the_root_edge::<MemoryKeyline>();
+    fn apex_admin_can_revoke_the_root_edge() {
+        scenarios::apex_admin_can_revoke_the_root_edge::<MemoryKeyline>();
     }
 
     #[test]
-    fn edit_rooted_root_edge_is_undeniable() {
-        scenarios::edit_rooted_root_edge_is_undeniable::<MemoryKeyline>();
+    fn edit_rooted_root_edge_is_irrevocable() {
+        scenarios::edit_rooted_root_edge_is_irrevocable::<MemoryKeyline>();
     }
 
     #[test]
-    fn senior_role_admin_cuts_inside_junior_role() {
-        scenarios::senior_role_admin_cuts_inside_junior_role::<MemoryKeyline>();
+    fn senior_role_admin_revokes_inside_junior_role() {
+        scenarios::senior_role_admin_revokes_inside_junior_role::<MemoryKeyline>();
     }
 
     #[test]
@@ -682,8 +682,8 @@ mod tests {
     }
 
     #[test]
-    fn reissue_with_seen_heals() {
-        scenarios::reissue_with_seen_heals::<MemoryKeyline>();
+    fn reissue_with_cites_heals() {
+        scenarios::reissue_with_cites_heals::<MemoryKeyline>();
     }
 
     #[test]

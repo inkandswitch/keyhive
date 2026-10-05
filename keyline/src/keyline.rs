@@ -57,7 +57,7 @@ pub trait Keyline {
     /// them why and that a re-issue with `cites` is needed.
     fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>>;
 
-    /// `audience`'s effective level over `subject`: the maximum over live routes of the
+    /// `audience`'s effective power over `subject`: the maximum over live routes of the
     /// minimum along each. `None` if no live route exists.
     ///
     /// Every subject stands at `Admin` over itself by axiom, so
@@ -65,7 +65,7 @@ pub trait Keyline {
     fn effective_power(&self, subject: Id, audience: Id) -> Option<Power>;
 
     /// Every `Id` other than `subject` itself with a live route to `subject`, with its
-    /// effective level. The materialized view.
+    /// effective power. The materialized view.
     fn members(&self, subject: Id) -> BTreeMap<Id, Power>;
 
     /// Whether the named delegation participates in any live derivation.

@@ -64,7 +64,7 @@ pub mod naive {
         dels: BTreeMap<Digest<Delegation>, Delegation>,
         // Issuer and target only: `retains` has no bearing on authority, so the
         // oracle cannot read it even by accident.
-        revs: Vec<(Id, Digest<Delegation>)>,
+        revocations: Vec<(Id, Digest<Delegation>)>,
     }
 
     fn raise(m: &mut Levels, key: (Id, Id), l: Power) -> bool {
@@ -125,7 +125,7 @@ pub mod naive {
     fn facts<C>(set: &CertSet<C>) -> Facts {
         let mut nodes: BTreeSet<Id> = ids().collect();
         let mut dels = BTreeMap::new();
-        let mut revs = Vec::new();
+        let mut revocations = Vec::new();
         for c in &set.certs {
             match c {
                 Certificate::Delegation(d) => {
@@ -134,11 +134,15 @@ pub mod naive {
                 }
                 Certificate::Revocation(r) => {
                     nodes.insert(r.issuer);
-                    revs.push((r.issuer, r.revokes));
+                    revocations.push((r.issuer, r.revokes));
                 }
             }
         }
-        Facts { nodes, dels, revs }
+        Facts {
+            nodes,
+            dels,
+            revocations,
+        }
     }
 
     /// Stratum 1 alone: `reaches` over the pool, blind to revocations.
@@ -163,14 +167,14 @@ pub mod naive {
             s
         };
         let mut covered: BTreeMap<Digest<Delegation>, BTreeSet<Id>> = BTreeMap::new();
-        for (issuer, revokes) in &f.revs {
+        for (issuer, revokes) in &f.revocations {
             covered
                 .entry(*revokes)
                 .or_default()
                 .extend(admin_reach(*issuer));
         }
-        let renounced = |h: &Digest<Delegation>, audience: Id| {
-            f.revs
+        let revoked_by_audience = |h: &Digest<Delegation>, audience: Id| {
+            f.revocations
                 .iter()
                 .any(|(issuer, revokes)| revokes == h && *issuer == audience)
         };
@@ -180,7 +184,7 @@ pub mod naive {
             let added: Vec<Digest<Delegation>> = f
                 .dels
                 .iter()
-                .filter(|(h, d)| !live.contains(*h) && !renounced(h, d.audience))
+                .filter(|(h, d)| !live.contains(*h) && !revoked_by_audience(h, d.audience))
                 .filter(|(h, d)| {
                     let exclude = covered.get(*h).cloned().unwrap_or_default();
                     level(&f, &exclude, &|x| live.contains(x), &|_, d| d.power)
@@ -258,8 +262,8 @@ where
 }
 
 /// With revocations, every query agrees with the normative program: admin
-/// reach, coverage, the live set as a least fixed point with renunciation,
-/// and clamped levels.
+/// reach, coverage, the live set as a least fixed point with revocation by the
+/// audience, and clamped powers.
 pub fn matches_naive_oracle_with_revocations<K: Keyline + Default>()
 where
     K::Content: TestContent,

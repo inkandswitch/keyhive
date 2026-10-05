@@ -12,7 +12,7 @@ use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 ///
 /// Reads: _`issuer` asserts that `audience` may exercise `power` over `subject`_. The edge
 /// rides `issuer`'s own standing over `subject`: `audience` receives
-/// `min(power, issuer's effective level over subject)`, and the edge is live only while
+/// `min(power, issuer's effective power over subject)`, and the edge is live only while
 /// `issuer` reaches `subject`.
 ///
 /// Anyone may issue a delegation over any subject. Admin is not required to
@@ -43,7 +43,7 @@ pub struct Delegation {
     /// Signer. The edge rides this key's standing over `subject`.
     pub issuer: Id,
 
-    /// Recipient.
+    /// The key the delegation is issued to.
     pub audience: Id,
 
     /// Scope: which subject's routes this edge may participate in. A role key
