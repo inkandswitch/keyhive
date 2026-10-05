@@ -31,7 +31,10 @@ async fn a_group_can_be_emptied_and_refilled() {
         0,
         "removing the last member left members"
     );
-    assert!(!cgka.has_pcs_key(), "an empty group reported a PCS key");
+    assert!(
+        !cgka.has_tree_root_secret(),
+        "an empty group reported a PCS key"
+    );
 
     let sk = ShareSecretKey::generate(&mut rng);
     assert!(
@@ -52,7 +55,7 @@ async fn a_group_can_be_emptied_and_refilled() {
         .await
         .expect("a member of a refilled group can encrypt a path");
     assert!(
-        cgka.has_pcs_key(),
+        cgka.has_tree_root_secret(),
         "a refilled group did not recover a PCS key"
     );
 }
@@ -206,13 +209,14 @@ async fn applying_an_update_records_the_root_secret_it_produced() {
     let op = group.rotate(0, &mut rng).await;
     let op_hash = Digest::hash(op.as_ref());
     let produced = group.replicas[0]
-        .root_secret_for(&op_hash)
+        .root_secrets
+        .get(&op_hash)
         .expect("the author records the secret its own update produced");
 
     group.deliver(&op, &[1]);
 
     assert_eq!(
-        group.replicas[1].root_secret_for(&op_hash),
+        group.replicas[1].root_secrets.get(&op_hash),
         Some(produced),
         "receiving the update should have recorded the secret it produced"
     );

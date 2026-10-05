@@ -65,7 +65,7 @@ async fn every_replica_has_a_pcs_key_after_rotation_resolves_concurrent_adds() {
     group.assert_key_agreement(context);
     for i in 0..group.replicas.len() {
         assert!(
-            group.replicas[i].has_pcs_key(),
+            group.replicas[i].has_tree_root_secret(),
             "{context}, replica {} reports no PCS key",
             name_for(i)
         );
