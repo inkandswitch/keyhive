@@ -212,22 +212,29 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
 
         if let Some(proof) = &revocation.payload.proof {
-            if revocation.payload.revoke != *proof
-                && !revocation.payload.revoke.payload.is_descendant_of(proof)
-            {
-                // The revoked delegation is not a descendant of the proof.
-                // Check if the revoker has transitive access through the
-                // proof's delegate (a group/doc intermediary).
-                let revoker_id = Identifier::from(revocation.issuer);
-                if !is_transitive_member_of(
+            let revoker = revocation.issuer;
+            let revoke = &revocation.payload.revoke;
+
+            // A revocation is authorized in one of two ways.
+            //
+            // By seniority: the revoker issued the proof or is its delegate, and
+            // the revoked delegation is the proof or descends from it.
+            let revoker_owns_proof =
+                proof.issuer == revoker || proof.payload.delegate.verifying_key() == revoker;
+            let under_proof = *revoke == *proof || revoke.payload.is_descendant_of(proof);
+
+            // By membership: the revoker is a transitive member of the proof's
+            // delegate, with at least the access being revoked.
+            let entitled = (revoker_owns_proof && under_proof)
+                || is_transitive_member_of(
                     &proof.payload.delegate,
-                    revoker_id,
-                    revocation.payload.revoke.payload.can,
+                    Identifier::from(revoker),
+                    revoke.payload.can,
                 )
-                .await
-                {
-                    return Err(AddError::InvalidProofChain);
-                }
+                .await;
+
+            if !entitled {
+                return Err(AddError::InvalidProofChain);
             }
 
             let lineage = proof.payload.proof_lineage();
