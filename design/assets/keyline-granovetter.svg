@@ -1,71 +1,81 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" width="720" height="380" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 500" width="820" height="500" role="img" aria-labelledby="title desc">
   <title id="title">A delegation as a Granovetter introduction</title>
-  <desc id="desc">Alice holds authority over Carol. She sends Bob a delegation that carries a copy of that authority, capped at a power level. Afterwards Bob holds his own authority over Carol, at the minimum of Alice's level and the power.</desc>
+  <desc id="desc">Alice holds authority over Carol and knows Bob's key. She sends a delegation along her connection to Bob, carrying a copy of her authority over Carol capped at a power level. Afterwards Bob holds his own authority over Carol, at the minimum of Alice's level and the power. Unlike an object-capability reference, Alice's connection to Bob is only a name: it carries no authority and Bob does not consent.</desc>
   <style>
     text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
     .name { font-size: 18px; font-weight: 600; text-anchor: middle; dominant-baseline: central; }
     .role { font-size: 13px; fill: #59636e; text-anchor: middle; font-style: italic; }
+    .muted { fill: #59636e; font-style: italic; }
     .label { font-size: 13px; }
     .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
     .ref-text { fill: #0969da; }
     .node { fill: #ffffff; stroke: #1f2328; stroke-width: 2; }
-    .msg { stroke: #59636e; stroke-width: 2; fill: none; }
+    .name-line { stroke: #8c959f; stroke-width: 1.25; fill: none; }
     .ref-line { stroke: #0969da; stroke-width: 2.5; fill: none; }
     .new { stroke-dasharray: 7 5; }
-    .parcel { fill: #ffffff; stroke: #59636e; stroke-width: 1.5; }
-    .head-msg { fill: #59636e; }
+    .parcel { fill: #ffffff; stroke: #8c959f; stroke-width: 1.5; }
+    .head-name { fill: #8c959f; }
     .head-ref { fill: #0969da; }
     @media (prefers-color-scheme: dark) {
       text { fill: #e6edf3; }
-      .role { fill: #9198a1; }
+      .role, .muted { fill: #9198a1; }
       .ref-text { fill: #4493f8; }
       .node, .parcel { fill: #0d1117; }
       .node { stroke: #e6edf3; }
-      .msg, .parcel { stroke: #9198a1; }
+      .name-line, .parcel { stroke: #6e7681; }
       .ref-line { stroke: #4493f8; }
-      .head-msg { fill: #9198a1; }
+      .head-name { fill: #6e7681; }
       .head-ref { fill: #4493f8; }
     }
   </style>
   <defs>
-    <marker id="head-msg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
-      <path class="head-msg" d="M0,0 L10,5 L0,10 z"/>
+    <marker id="head-name" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="head-name" d="M0,1 L9,5 L0,9 z"/>
     </marker>
     <marker id="head-ref" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path class="head-ref" d="M0,0 L10,5 L0,10 z"/>
     </marker>
   </defs>
 
-  <!-- Alice's existing authority over Carol -->
-  <line class="ref-line" x1="160" y1="202" x2="456" y2="288" marker-end="url(#head-ref)"/>
-  <text class="label ref-text" x="300" y="282" text-anchor="middle">Alice's authority over Carol</text>
+  <!-- Before: Alice's authority over Carol -->
+  <line class="ref-line" x1="150" y1="242" x2="548" y2="358" marker-end="url(#head-ref)"/>
+  <text class="label ref-text" x="330" y="313" text-anchor="middle" transform="rotate(16.26 330 313)">Alice's authority over Carol</text>
 
-  <!-- The delegation: a message from Alice to Bob -->
-  <line class="msg" x1="160" y1="178" x2="456" y2="92" marker-end="url(#head-msg)"/>
-  <text class="label" x="200" y="140" text-anchor="middle">delegation</text>
+  <!-- Before: Alice's connection to Bob. In ocap a reference; in Keyline only his key -->
+  <line class="name-line" x1="150" y1="218" x2="548" y2="102" marker-end="url(#head-name)"/>
+  <text class="label muted" x="214" y="186" text-anchor="middle" transform="rotate(-16.26 214 186)">knows Bob's key</text>
 
-  <!-- What the message carries: a copy of Alice's arrow to Carol, capped -->
-  <rect class="parcel" x="256" y="108" width="140" height="72" rx="7"/>
-  <text class="role" x="326" y="126">a copy of Alice's</text>
-  <line class="ref-line" x1="270" y1="145" x2="316" y2="145" marker-end="url(#head-ref)"/>
-  <text class="label ref-text" x="324" y="149.5">Carol</text>
-  <text class="code" x="270" y="169">capped at power</text>
+  <!-- The introduction: a delegation sent along that connection, carrying a copy of Alice's arrow to Carol -->
+  <text class="label" x="349" y="119" text-anchor="middle">delegation</text>
+  <rect class="parcel" x="279" y="127" width="140" height="70" rx="7"/>
+  <text class="label muted" x="349" y="145" text-anchor="middle">a copy of Alice's</text>
+  <line class="ref-line" x1="293" y1="163" x2="337" y2="163" marker-end="url(#head-ref)"/>
+  <text class="label ref-text" x="345" y="167.5">Carol</text>
+  <text class="code" x="293" y="186">capped at power</text>
 
-  <!-- The result: Bob's own authority over Carol -->
-  <line class="ref-line new" x1="500" y1="124" x2="500" y2="254" marker-end="url(#head-ref)"/>
-  <text class="label ref-text" x="516" y="182">Bob's new authority over Carol:</text>
-  <text class="code ref-text" x="516" y="202">min(Alice's level, power)</text>
+  <!-- After: Bob's own authority over Carol -->
+  <line class="ref-line new" x1="590" y1="134" x2="590" y2="324" marker-end="url(#head-ref)"/>
+  <text class="label ref-text" x="606" y="222">Bob's new authority over Carol:</text>
+  <text class="code ref-text" x="606" y="242">min(Alice's level, power)</text>
 
   <!-- Nodes -->
-  <circle class="node" cx="120" cy="190" r="42"/>
-  <text class="name" x="120" y="190">Alice</text>
-  <text class="role" x="120" y="252">issuer</text>
+  <circle class="node" cx="110" cy="230" r="42"/>
+  <text class="name" x="110" y="230">Alice</text>
+  <text class="role" x="110" y="292">issuer</text>
 
-  <circle class="node" cx="500" cy="80" r="42"/>
-  <text class="name" x="500" y="80">Bob</text>
-  <text class="role" x="500" y="26">audience</text>
+  <circle class="node" cx="590" cy="90" r="42"/>
+  <text class="name" x="590" y="90">Bob</text>
+  <text class="role" x="590" y="36">audience</text>
 
-  <circle class="node" cx="500" cy="300" r="42"/>
-  <text class="name" x="500" y="300">Carol</text>
-  <text class="role" x="500" y="362">subject</text>
+  <circle class="node" cx="590" cy="370" r="42"/>
+  <text class="name" x="590" y="370">Carol</text>
+  <text class="role" x="590" y="432">subject</text>
+
+  <!-- Legend -->
+  <line class="ref-line" x1="40" y1="472" x2="80" y2="472"/>
+  <text class="label" x="90" y="476.5">authority</text>
+  <line class="ref-line new" x1="190" y1="472" x2="230" y2="472"/>
+  <text class="label" x="240" y="476.5">authority the delegation creates</text>
+  <line class="name-line" x1="470" y1="472" x2="510" y2="472"/>
+  <text class="label" x="520" y="476.5">a name only: no authority, no consent</text>
 </svg>
