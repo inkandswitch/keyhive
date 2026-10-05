@@ -27,6 +27,7 @@ pub mod id;
 pub mod keys;
 pub mod operation;
 pub mod pcs_key;
+pub(crate) mod root_secrets;
 pub mod secret_store;
 pub mod transact;
 pub mod tree;

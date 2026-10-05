@@ -90,7 +90,7 @@ impl Cgka {
     }
 
     pub fn try_pcs_key_hash(&mut self) -> Result<Digest<PcsKey>, CgkaError> {
-        let pcs_key = self.0.pcs_key_from_tree_root()?;
+        let pcs_key = self.0.decrypt_tree_root_secret()?;
         Ok(Digest::hash(&pcs_key))
     }
 
@@ -220,21 +220,6 @@ impl Fork for Cgka {
 impl Merge for Cgka {
     fn merge(&mut self, fork: Self::Forked) {
         beekem::transact::Merge::merge(&mut self.0, fork.0);
-    }
-}
-
-#[cfg(feature = "test_utils")]
-impl Cgka {
-    pub fn secret_from_root(&mut self) -> Result<PcsKey, CgkaError> {
-        self.0.secret_from_root()
-    }
-
-    pub fn secret(
-        &mut self,
-        pcs_key_hash: &Digest<PcsKey>,
-        update_op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Result<PcsKey, CgkaError> {
-        self.0.secret(pcs_key_hash, update_op_hash)
     }
 }
 
