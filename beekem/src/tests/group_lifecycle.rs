@@ -1,7 +1,7 @@
 use crate::{
     cgka::Cgka,
     error::CgkaError,
-    id::TreeId,
+    id::{MemberId, TreeId},
     keys::ShareKeyMap,
     test_utils::{member, Group, Member, ADD_AUTH, REMOVE_AUTH},
     transact::{Fork, Merge},
@@ -33,7 +33,7 @@ async fn a_group_can_be_emptied_and_refilled() {
     );
     assert!(
         !cgka.has_tree_root_secret(),
-        "an empty group reported a PCS key"
+        "an empty group reported a tree root secret"
     );
 
     let sk = ShareSecretKey::generate(&mut rng);
@@ -56,7 +56,7 @@ async fn a_group_can_be_emptied_and_refilled() {
         .expect("a member of a refilled group can encrypt a path");
     assert!(
         cgka.has_tree_root_secret(),
-        "a refilled group did not recover a PCS key"
+        "a refilled group did not recover a tree root secret"
     );
 }
 
@@ -219,5 +219,101 @@ async fn applying_an_update_records_the_root_secret_it_produced() {
         group.replicas[1].root_secrets.get(&op_hash),
         Some(produced),
         "receiving the update should have recorded the secret it produced"
+    );
+}
+
+#[tokio::test]
+async fn a_secret_is_refused_for_an_update_that_did_not_produce_it() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_0009);
+    let mut group = Group::new(1, &mut rng).await;
+    let first = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+    let second = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+    let cgka = &mut group.replicas[0];
+    let current = cgka
+        .root_secrets
+        .get(&second)
+        .expect("the author records the secret its own update produced");
+
+    assert!(
+        matches!(
+            cgka.root_secret_from_hashes(&Digest::hash(&current), &first),
+            Err(CgkaError::UnknownPcsKey)
+        ),
+        "the current secret was returned for an earlier update that did not produce it"
+    );
+}
+
+#[tokio::test]
+async fn merging_a_fork_keeps_the_root_secrets_it_recorded() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_000b);
+    let mut group = Group::new(1, &mut rng).await;
+    let mut trunk = group.replicas[0].fork();
+    let op_hash = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+    group.rotate(0, &mut rng).await;
+    let secret = group.replicas[0]
+        .root_secrets
+        .get(&op_hash)
+        .expect("the author records the secret its own update produced");
+
+    trunk.merge(group.replicas[0].fork());
+
+    // The replay after a merge derives only the latest update's secret, so an
+    // earlier one survives only by being copied from the fork.
+    assert_eq!(
+        trunk.root_secrets.get(&op_hash),
+        Some(secret),
+        "the secret recorded on the fork was lost in the merge"
+    );
+}
+
+#[tokio::test]
+async fn a_merge_records_the_root_secret_for_a_reader_outside_the_tree_through_public() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_000e);
+    let mut group = Group::new(1, &mut rng).await;
+    let public = member(&mut rng);
+    group.add(0, MemberId::public(), public.pk).await;
+    let mut reader_sks = ShareKeyMap::new();
+    reader_sks.insert(public.pk, public.sk);
+    let mut reader_view = group.replicas[0]
+        .with_new_owner(member(&mut rng).id, reader_sks)
+        .unwrap();
+    let op_hash = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+    let secret = group.replicas[0]
+        .root_secrets
+        .get(&op_hash)
+        .expect("the author records the secret its own update produced");
+    let mut fork = group.replicas[0].fork();
+    fork.root_secrets.clear();
+
+    reader_view.merge(fork);
+
+    assert_eq!(
+        reader_view.root_secrets.get(&op_hash),
+        Some(secret),
+        "the replay after a merge should record the secret through Public's leaf"
+    );
+}
+
+#[tokio::test]
+async fn an_earlier_secret_that_was_not_recorded_is_rebuilt() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_000c);
+    let mut group = Group::new(1, &mut rng).await;
+    let first = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+    group.rotate(0, &mut rng).await;
+    let cgka = &mut group.replicas[0];
+    let earlier = cgka
+        .root_secrets
+        .get(&first)
+        .expect("the author records the secret its own update produced");
+    // A secret applied while the root was conflicted is not recorded. The tree
+    // has moved on to a later update, so that secret can only be derived via a
+    // rebuild.
+    cgka.root_secrets.remove(&first);
+
+    assert_eq!(
+        cgka.root_secret_from_hashes(&Digest::hash(&earlier), &first)
+            .ok(),
+        Some(earlier),
+        "the earlier update's secret should be rebuilt, not derived from the current tree"
     );
 }
