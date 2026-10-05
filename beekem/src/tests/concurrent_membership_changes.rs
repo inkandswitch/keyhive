@@ -48,7 +48,7 @@ async fn duplicate_adds_fill_one_leaf() {
 }
 
 #[tokio::test]
-async fn every_replica_has_a_pcs_key_after_rotation_resolves_concurrent_adds() {
+async fn every_replica_has_a_tree_root_secret_after_rotation_resolves_concurrent_adds() {
     let mut rng = StdRng::seed_from_u64(0xa11d_5eed);
     let mut group = Group::new(3, &mut rng).await;
     let d = member(&mut rng);
@@ -65,8 +65,8 @@ async fn every_replica_has_a_pcs_key_after_rotation_resolves_concurrent_adds() {
     group.assert_key_agreement(context);
     for i in 0..group.replicas.len() {
         assert!(
-            group.replicas[i].has_pcs_key(),
-            "{context}, replica {} reports no PCS key",
+            group.replicas[i].has_tree_root_secret(),
+            "{context}, replica {} reports no tree root secret",
             name_for(i)
         );
     }
