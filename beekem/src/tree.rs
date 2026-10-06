@@ -31,6 +31,29 @@ pub struct PathChange {
     pub removed_keys: Vec<ShareKey>,
 }
 
+impl PathChange {
+    /// Attempt to decrypt the root secret using only the information in this path
+    /// (without the complete tree state corresponding to this update) and the secrets
+    /// in `sks`.
+    ///
+    /// Starting from the root, work backwards down the path until we find an
+    /// intersecting node for which we have its child's sibling secret. If one
+    /// is found, then decrypt back up the path toward the root. If not, or a node
+    /// above it has more than one version, then return `None`.
+    pub(crate) fn decrypt_root_secret(&self, sks: &ShareKeyMap) -> Option<ShareSecretKey> {
+        let (intersection_idx, mut secret) = self
+            .path
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, (_, node))| node.decrypt_with_sibling_secret(sks).map(|sk| (i, sk)))?;
+        for (_, node) in &self.path[intersection_idx + 1..] {
+            secret = node.decrypt_with_child_secret(&secret)?;
+        }
+        Some(secret)
+    }
+}
+
 /// BeeKEM is our variant of the [TreeKEM] protocol (used in [MLS]) and inspired by
 /// [Matthew Weidner's Causal TreeKEM][Causal TreeKEM]. The distinctive
 /// feature of BeeKEM is that when merging concurrent updates, we keep all concurrent

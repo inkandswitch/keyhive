@@ -196,7 +196,7 @@ impl DebugEventRow {
                                 .map(|i| Hash::new(i.inviter_pk.as_bytes(), nicknames)),
                             invited_updates: invitation
                                 .iter()
-                                .flat_map(|i| &i.head_secrets)
+                                .flat_map(|i| &i.ancestor_secrets)
                                 .map(|invited| {
                                     Hash::new(invited.update_op_hash.as_slice(), nicknames)
                                 })

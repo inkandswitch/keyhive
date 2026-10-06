@@ -62,8 +62,7 @@ async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
 }
 
 /// A later member reads earlier content by traversing back from a write made after they
-/// joined. Alice rotates before adding bob, so his invitation does not wrap the earlier key
-/// and the traversal is his only route to it.
+/// joined.
 #[tokio::test]
 async fn traversing_from_a_write_reports_its_ancestors() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -74,7 +73,6 @@ async fn traversing_from_a_write_reports_its_ancestors() -> Result<()> {
     let history = ctx
         .encrypt_in_envelope(&alice, design_doc, &[], b"written before bob")
         .await?;
-    alice.force_pcs_update(design_doc).await?;
 
     alice.add_member(bob.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
@@ -87,10 +85,6 @@ async fn traversing_from_a_write_reports_its_ancestors() -> Result<()> {
     assert!(
         bob.can_decrypt_content(design_doc, &entry_point).await?,
         "he can open the write that came after"
-    );
-    assert!(
-        !bob.can_decrypt_content(design_doc, &history).await?,
-        "but not the write before he joined, whose key his invitation does not wrap"
     );
 
     ctx.give_content(&bob, &history).await?;
@@ -132,8 +126,6 @@ async fn a_reader_can_reference_an_ancestor_they_decrypted_rather_than_wrote() -
         "bob can open the genesis write"
     );
 
-    // Rotating before the add keeps the genesis key out of carol's invitation.
-    alice.force_pcs_update(design_doc).await?;
     alice.add_member(carol.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
 
@@ -145,10 +137,6 @@ async fn a_reader_can_reference_an_ancestor_they_decrypted_rather_than_wrote() -
 
     ctx.give_content(&carol, &genesis).await?;
     ctx.give_content(&carol, &head).await?;
-    assert!(
-        !carol.can_decrypt_content(design_doc, &genesis).await?,
-        "carol joined after the genesis write and cannot open it directly"
-    );
     let traversed = carol.try_causal_decrypt_content(design_doc, &head).await?;
     assert_eq!(
         traversed.recovered(),

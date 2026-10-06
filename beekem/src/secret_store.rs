@@ -4,7 +4,7 @@ use crate::{
     collections::Set,
     encrypted::EncryptedSecret,
     error::CgkaError,
-    keys::{ConflictKeys, NodeKey, ShareKeyMap},
+    keys::{share_secret_key_from_decrypted_secret, ConflictKeys, NodeKey, ShareKeyMap},
     treemath::TreeNodeIndex,
 };
 use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
@@ -91,6 +91,45 @@ impl SecretStore {
             .decrypt_secret(child_node_key, child_sks, seen_idxs)
     }
 
+    /// Decrypt this node's secret with the secret of its child's sibling, found
+    /// in `sks`. If the sibling was blank or in conflict, the key is from its
+    /// resolution.
+    ///
+    /// Returns `None` if the node has more than one version or none of its
+    /// encryptions is to a key in `sks`.
+    pub(crate) fn decrypt_with_sibling_secret(&self, sks: &ShareKeyMap) -> Option<ShareSecretKey> {
+        if self.has_conflict() {
+            return None;
+        }
+        let version = &self.versions.head;
+        version.sk.values().find_map(|encrypted| {
+            let plaintext = sks
+                .try_decrypt_encryption(version.encrypter_pk, encrypted)
+                .ok()?;
+            share_secret_key_from_decrypted_secret(plaintext)
+        })
+    }
+
+    /// Decrypt this node's secret with `child_sk`, the secret of the child below
+    /// it that encrypted it.
+    ///
+    /// Returns `None` if the node has more than one version or `child_sk` is not
+    /// that child's secret.
+    pub(crate) fn decrypt_with_child_secret(
+        &self,
+        child_sk: &ShareSecretKey,
+    ) -> Option<ShareSecretKey> {
+        if self.has_conflict() {
+            return None;
+        }
+        self.versions
+            .head
+            .sk
+            .values()
+            .find_map(|encrypted| encrypted.try_encrypter_decrypt(child_sk).ok())
+            .and_then(share_secret_key_from_decrypted_secret)
+    }
+
     /// Drop the versions corresponding to `removed_keys` and then merge `other`.
     pub fn merge(&mut self, other: &SecretStore, removed_keys: &Set<ShareKey>) {
         let mut versions = other.versions.clone();
@@ -164,7 +203,6 @@ impl SecretStoreVersion {
             child_sks.try_decrypt_encryption(self.encrypter_pk, encrypted)?
         };
 
-        let arr: [u8; 32] = decrypted.try_into().map_err(|_| CgkaError::Conversion)?;
-        Ok(ShareSecretKey::force_from_bytes(arr))
+        share_secret_key_from_decrypted_secret(decrypted).ok_or(CgkaError::Conversion)
     }
 }
