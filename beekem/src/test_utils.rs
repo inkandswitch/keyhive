@@ -5,6 +5,7 @@ use crate::{
     keys::ShareKeyMap,
     operation::{CgkaAuthorization, CgkaOperation},
     pcs_key::PcsKey,
+    root_secrets::VerifiedRootSecret,
     transact::{Fork, Merge},
 };
 use alloc::{
@@ -247,9 +248,11 @@ impl Group {
             .join(" ")
     }
 
-    /// Every replica's tree satisfies its own invariants and they all agree.
+    /// Every replica's tree satisfies its own invariants and they all agree. And
+    /// each replica's chain bookkeeping matches its graph.
     pub fn check(&self, context: &str) {
         for (i, replica) in self.replicas.iter().enumerate() {
+            assert_chain_bookkeeping(replica, &format!("{context}: replica {i}"));
             let violations = replica.tree.invariant_violations();
             assert!(
                 violations.is_empty(),
@@ -380,4 +383,50 @@ impl Group {
 /// A one-letter name for member `i`. Panics for `i` above 7.
 pub fn name_for(i: usize) -> String {
     ["a", "b", "c", "d", "e", "f", "g", "h"][i].to_string()
+}
+
+/// Assert that `cgka`'s chainable and unchained updates match what its graph
+/// and recorded secrets imply: an update is chainable if a later update has it
+/// as a nearest update ancestor and unchained unless a recorded update's entry
+/// contains its verified root secret.
+pub(crate) fn assert_chain_bookkeeping(cgka: &Cgka, context: &str) {
+    let graph = &cgka.ops_graph;
+    let updates: BTreeSet<_> = graph
+        .cgka_ops
+        .iter()
+        .filter(|(_, op)| matches!(op.payload, CgkaOperation::Update { .. }))
+        .map(|(op_hash, _)| *op_hash)
+        .collect();
+    let chainable: BTreeSet<_> = updates
+        .iter()
+        .flat_map(|update| {
+            let predecessors = graph.cgka_ops.get(update).unwrap().payload.predecessors();
+            graph.nearest_update_ancestors(&predecessors)
+        })
+        .collect();
+    for update in &updates {
+        assert_eq!(
+            graph.is_chainable(update),
+            chainable.contains(update),
+            "{context}: the graph's latest updates are out of date"
+        );
+    }
+    // An update is chained once some recorded update's entry for it contains
+    // its verified root secret.
+    let chained: BTreeSet<_> = cgka
+        .root_secrets
+        .iter()
+        .flat_map(|(op_hash, secret)| cgka.decrypt_predecessor_secrets(&op_hash, &secret, |_| true))
+        .filter(|(update, secret)| VerifiedRootSecret::verify(graph, *update, *secret).is_some())
+        .map(|(update, _)| update)
+        .collect();
+    let unchained: BTreeSet<_> = chainable.difference(&chained).copied().collect();
+    assert_eq!(
+        cgka.unchained_updates
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        unchained,
+        "{context}: the unchained updates are out of date"
+    );
 }

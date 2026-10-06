@@ -217,6 +217,7 @@ async fn a_non_member_cannot_update_another_members_leaf() -> TestResult {
     let op = CgkaOperation::Update {
         id: MemberId(bob.id().verifying_key()),
         new_path: path,
+        predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };
@@ -391,6 +392,7 @@ async fn the_creator_cannot_update_another_members_leaf() -> TestResult {
     let op = CgkaOperation::Update {
         id: MemberId(bob.id().verifying_key()),
         new_path: path,
+        predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };
@@ -830,6 +832,7 @@ async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
     let op = CgkaOperation::Update {
         id: MemberId(bob.id().verifying_key()),
         new_path: path,
+        predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };
@@ -847,6 +850,7 @@ async fn a_rotation_whose_id_differs_from_its_path_leaf_is_denied() -> TestResul
     let op = CgkaOperation::Update {
         id: MemberId(alice.id().verifying_key()),
         new_path: intercepted_path(&bob).await,
+        predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };
@@ -869,6 +873,7 @@ async fn a_member_cannot_rotate_their_leaf_to_the_public_key() -> TestResult {
     let op = CgkaOperation::Update {
         id: MemberId(bob.id().verifying_key()),
         new_path: path,
+        predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };
