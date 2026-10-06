@@ -3,6 +3,7 @@ use crate::{
     operation::{CgkaOperation, CgkaOperationGraph},
     pcs_key::PcsKey,
 };
+use alloc::vec::Vec;
 use keyhive_crypto::{digest::Digest, signed::Signed};
 use serde::{Deserialize, Serialize};
 
@@ -57,9 +58,19 @@ impl RootSecrets {
         self.0.iter().map(|(op_hash, secret)| (*op_hash, *secret))
     }
 
-    /// Add every secret `other` has recorded.
-    pub(crate) fn merge_from(&mut self, other: &Self) {
-        self.0.extend(other.iter());
+    /// Add every secret `other` has recorded, returning the ones not recorded
+    /// here before.
+    pub(crate) fn merge_from(
+        &mut self,
+        other: &Self,
+    ) -> Vec<(Digest<Signed<CgkaOperation>>, PcsKey)> {
+        let mut added = Vec::new();
+        for (op_hash, secret) in other.iter() {
+            if self.0.insert(op_hash, secret) != Some(secret) {
+                added.push((op_hash, secret));
+            }
+        }
+        added
     }
 
     #[cfg(test)]

@@ -288,6 +288,7 @@ async fn the_public_leaf_keeps_its_well_known_key() -> Result<()> {
     let beekem::operation::CgkaOperation::Update {
         id,
         new_path,
+        predecessor_secrets,
         predecessors,
         doc_id,
     } = written
@@ -312,6 +313,7 @@ async fn the_public_leaf_keeps_its_well_known_key() -> Result<()> {
             peer.try_sign(beekem::operation::CgkaOperation::Update {
                 id,
                 new_path: swapped,
+                predecessor_secrets,
                 predecessors,
                 doc_id,
             })

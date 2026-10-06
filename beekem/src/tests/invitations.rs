@@ -111,7 +111,7 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
         authorization: ADD_AUTH,
         invitation: Some(Box::new(Invitation {
             inviter_pk,
-            head_secrets: vec![InvitationSecret {
+            ancestor_secrets: vec![InvitationSecret {
                 update_op_hash: op2_hash,
                 encrypted_root_secret: encrypt_secret(
                     doc_id.as_bytes(),
@@ -191,7 +191,7 @@ async fn an_invitation_wraps_every_concurrent_update_head() {
     let wrapped: Vec<_> = invitation
         .as_ref()
         .expect("the adder can reach at least one head secret")
-        .head_secrets
+        .ancestor_secrets
         .iter()
         .map(|secret| secret.update_op_hash)
         .collect();
