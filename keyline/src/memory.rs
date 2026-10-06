@@ -211,9 +211,8 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     .filter(|h| !live.contains(h))
                     .filter_map(|h| self.delegations.get(h).map(|d| (h, d)))
                     .filter(|(h, d)| {
-                        !(ctx.exclude.contains(&d.issuer)
-                            || ctx.exclude.contains(&d.subject)
-                            || self.revoked_by_audience(h, d.audience))
+                        !ctx.excludes_an_endpoint(d)
+                            && !self.revoked_by_audience(h, d.audience)
                             && reached(&base, d.subject, d.issuer)
                     })
                     .collect();
@@ -514,6 +513,19 @@ struct Context {
     edges: Vec<Digest<Delegation>>,
 }
 
+impl Context {
+    /// Whether `d`'s issuer or subject is excluded.
+    ///
+    /// A shortcut only: the context search excludes these nodes anyway (an
+    /// excluded subject reaches nothing, an excluded issuer is never reached),
+    /// so `d` could not be found live there. Skipping it saves a search root.
+    /// Because the answer cannot change, mutation testing skips this function
+    /// (`.cargo/mutants.toml`).
+    fn excludes_an_endpoint(&self, d: &Delegation) -> bool {
+        self.exclude.contains(&d.issuer) || self.exclude.contains(&d.subject)
+    }
+}
+
 /// Stratum 2 results.
 struct Evaluation {
     live: Set<Digest<Delegation>>,
@@ -624,6 +636,11 @@ mod tests {
     #[test]
     fn audience_revocation_is_total() {
         scenarios::audience_revocation_is_total::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn audience_revocation_without_admin_reach_is_total() {
+        scenarios::audience_revocation_without_admin_reach_is_total::<MemoryKeyline>();
     }
 
     #[test]
@@ -776,12 +793,19 @@ mod tests {
 
     #[test]
     fn inherent_accessors() {
-        let (g, _, _) = standard::<MemoryKeyline>();
+        assert!(MemoryKeyline::<()>::new().is_empty());
+
+        let (mut g, _, alice_member) = standard::<MemoryKeyline>();
         assert_eq!(g.len(), 6);
         assert!(!g.is_empty());
         let root = d(DOC, OWNERS, DOC, Power::Admin);
         assert_eq!(g.delegation(&root.digest()), Some(&root));
         assert!(g.get(&cert(root).digest()).is_some());
         assert!(g.revocation(&Digest::from([0u8; 32])).is_none());
+
+        let revocation: Revocation<()> =
+            Revocation::new(alice_member.issuer, alice_member.digest());
+        g.insert(cert(revocation.clone()));
+        assert_eq!(g.revocation(&revocation.digest()), Some(&revocation));
     }
 }

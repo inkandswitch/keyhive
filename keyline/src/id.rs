@@ -119,7 +119,41 @@ impl serde::Serialize for Id {
 #[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for Id {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let bytes: [u8; 32] = serde::Deserialize::deserialize(d)?;
+        d.deserialize_bytes(IdVisitor)
+    }
+}
+
+/// Reads what [`Id`]'s `Serialize` writes: a byte string. Self-describing
+/// formats that render bytes as a list (JSON) arrive as a sequence instead.
+/// Both paths check the length and that the bytes are a curve point.
+#[cfg(feature = "serde")]
+struct IdVisitor;
+
+#[cfg(feature = "serde")]
+impl<'de> serde::de::Visitor<'de> for IdVisitor {
+    type Value = Id;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the {} bytes of an Ed25519 verifying key", Id::LEN)
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Id, E> {
+        let bytes: [u8; Id::LEN] = v
+            .try_into()
+            .map_err(|_| E::invalid_length(v.len(), &self))?;
+        Id::from_bytes(bytes).map_err(E::custom)
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Id, A::Error> {
+        let mut bytes = [0u8; Id::LEN];
+        for (i, byte) in bytes.iter_mut().enumerate() {
+            *byte = seq
+                .next_element()?
+                .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
+        }
+        if seq.next_element::<u8>()?.is_some() {
+            return Err(serde::de::Error::invalid_length(Id::LEN + 1, &self));
+        }
         Id::from_bytes(bytes).map_err(serde::de::Error::custom)
     }
 }
@@ -146,6 +180,67 @@ mod tests {
             Id::decode(&[0x02; 32]),
             Err(DecodeError::InvalidField("id"))
         );
+    }
+
+    fn sample() -> Id {
+        Id::new(VerifyingKey::from(&ed25519_dalek::SigningKey::from(
+            [7u8; 32],
+        )))
+    }
+
+    #[test]
+    fn conversions_agree() {
+        let id = sample();
+        let key = id.verifying_key();
+        assert_eq!(&id.to_bytes(), id.as_bytes());
+        assert_eq!(id.to_bytes(), key.to_bytes());
+        assert_eq!(VerifyingKey::from(id), key);
+        assert_eq!(Id::from(key), id);
+        assert_eq!(Verifiable::verifying_key(&id), key);
+    }
+
+    #[test]
+    fn decode_rejects_wrong_lengths_distinctly() {
+        let bytes = sample().to_bytes();
+        assert_eq!(Id::decode(&bytes[..31]), Err(DecodeError::UnexpectedEnd));
+        assert_eq!(Id::decode(&[]), Err(DecodeError::UnexpectedEnd));
+        let mut longer = bytes.to_vec();
+        longer.push(0);
+        assert_eq!(Id::decode(&longer), Err(DecodeError::TrailingBytes));
+    }
+
+    /// Through a positional format with no type tags, where a disagreement
+    /// between `Serialize` and `Deserialize` misreads instead of erroring.
+    #[test]
+    #[cfg(feature = "serde")]
+    fn serde_round_trips_through_postcard() {
+        let id = sample();
+        let bytes = postcard::to_allocvec(&id).expect("serialize");
+        let (decoded, rest) = postcard::take_from_bytes::<Id>(&bytes).expect("deserialize");
+        assert_eq!(decoded, id);
+        assert!(rest.is_empty(), "every byte written is read back");
+    }
+
+    /// The sequence path, as a self-describing format like JSON delivers it.
+    #[test]
+    #[cfg(feature = "serde")]
+    fn serde_accepts_a_byte_sequence_of_exactly_the_right_length() {
+        use serde::{de::value::SeqDeserializer, Deserialize};
+        type Seq<I> = SeqDeserializer<I, serde::de::value::Error>;
+
+        let id = sample();
+        let exact = Seq::new(id.to_bytes().into_iter());
+        assert_eq!(Id::deserialize(exact), Ok(id));
+
+        let short = Seq::new(id.to_bytes()[..31].to_vec().into_iter());
+        assert!(Id::deserialize(short).is_err());
+
+        let mut extra = id.to_bytes().to_vec();
+        extra.push(0);
+        assert!(Id::deserialize(Seq::new(extra.into_iter())).is_err());
+
+        let not_a_point = Seq::new([0x02u8; 32].into_iter());
+        assert!(Id::deserialize(not_a_point).is_err());
     }
 
     #[test]

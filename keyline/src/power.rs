@@ -150,6 +150,21 @@ mod tests {
         assert_eq!(Power::ALL.map(Power::rank), [0, 1, 2, 3]);
     }
 
+    /// What each level may do, as a truth table over the whole ladder.
+    #[test]
+    fn capability_predicates() {
+        let table = Power::ALL.map(|p| (p.is_reader(), p.is_editor(), p.is_admin()));
+        assert_eq!(
+            table,
+            [
+                (false, false, false), // Relay
+                (true, false, false),  // Read
+                (true, true, false),   // Edit
+                (true, true, true),    // Admin
+            ]
+        );
+    }
+
     #[test]
     fn codec_round_trip_and_canonical() {
         for a in Power::ALL {

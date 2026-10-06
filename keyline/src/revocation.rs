@@ -205,7 +205,10 @@ impl<'a, C: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Revocation<C>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::id;
+    use crate::{
+        signed::Signed,
+        test_utils::{id, signing_key},
+    };
 
     /// A watermark type with a variable-length encoding, so the `retains` codec is
     /// exercised on values of differing size rather than a fixed stand-in.
@@ -213,6 +216,20 @@ mod tests {
 
     fn sample() -> Revocation<Retained> {
         Revocation::new(id(1), Digest::from([3u8; 32]))
+    }
+
+    /// A revocation names its own issuer, and only that issuer's key signs
+    /// and verifies it.
+    #[test]
+    fn signs_and_verifies_only_as_its_issuer() {
+        let r = sample();
+        assert_eq!(Verifiable::verifying_key(&r), id(1).verifying_key());
+        let verified = Signed::try_sign(&r, &signing_key(1))
+            .expect("the issuer's key signs")
+            .verify()
+            .expect("and verifies");
+        assert_eq!(verified.payload(), &r);
+        assert!(Signed::try_sign(&r, &signing_key(2)).is_err());
     }
 
     #[test]

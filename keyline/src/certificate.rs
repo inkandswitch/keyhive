@@ -109,6 +109,23 @@ mod tests {
     type Retained = Vec<u8>;
 
     #[test]
+    fn accessors_select_the_right_kind() {
+        use crate::{power::Power, test_utils::id};
+        let d = Delegation::new(id(1), id(2), id(3), Power::Read);
+        let r: Revocation<Retained> = Revocation::new(id(4), d.digest());
+
+        let as_delegation: Certificate<Retained> = d.into();
+        assert_eq!(as_delegation.as_delegation(), Some(&d));
+        assert_eq!(as_delegation.as_revocation(), None);
+        assert_eq!(as_delegation.issuer(), id(1));
+
+        let as_revocation: Certificate<Retained> = r.clone().into();
+        assert_eq!(as_revocation.as_delegation(), None);
+        assert_eq!(as_revocation.as_revocation(), Some(&r));
+        assert_eq!(as_revocation.issuer(), id(4));
+    }
+
+    #[test]
     fn empty_and_bad_tag() {
         assert_eq!(
             Certificate::<Retained>::decode(&[]),

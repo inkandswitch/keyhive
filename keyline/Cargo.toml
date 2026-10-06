@@ -32,6 +32,7 @@ arbitrary = { workspace = true }
 bolero = { workspace = true }
 divan = "0.1.15"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 rand = { workspace = true }
 
 [features]

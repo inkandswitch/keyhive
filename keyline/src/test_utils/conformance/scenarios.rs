@@ -107,6 +107,29 @@ pub fn audience_revocation_is_total<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, ALICE), None);
 }
 
+/// The audience clause on its own. Alice holds only Read in Members, so her
+/// admin reach is {Alice}, and no route of her membership transits it. Her
+/// revocation of it is still total. (In `audience_revocation_is_total` Alice
+/// holds Admin, so her admin reach covers Members and would kill the
+/// membership even without the audience clause.)
+pub fn audience_revocation_without_admin_reach_is_total<K: Keyline + Default>() {
+    let alice_reader = d(CAROL, ALICE, MEMBERS, Power::Read);
+    let mut g: K = build([
+        d(DOC, OWNERS, DOC, Power::Admin).into(),
+        d(OWNERS, CAROL, OWNERS, Power::Admin).into(),
+        d(MEMBERS, OWNERS, MEMBERS, Power::Admin).into(),
+        d(CAROL, MEMBERS, DOC, Power::Edit).into(),
+        alice_reader.into(),
+    ]);
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
+
+    g.insert(cert(r(ALICE, &alice_reader)));
+    assert!(!g.is_live(&alice_reader.digest()));
+    assert_eq!(power(&g, DOC, ALICE), None);
+    assert_eq!(power(&g, MEMBERS, ALICE), None);
+    assert_eq!(power(&g, DOC, CAROL), Some(Power::Admin));
+}
+
 /// Bob never signed Alice's membership, but Owners is in Bob's admin
 /// reach and Members' only route to Carol grounds through Owners.
 pub fn admin_reach_covers_a_transited_node<K: Keyline + Default>() {
@@ -396,9 +419,15 @@ pub fn unknown_revocation_is_inert<K: Keyline + Default>() {
     let (mut g, _, _) = standard::<K>();
     let before = g.members(id(DOC));
     let phantom = d(DAN, EVE, FRANK, Power::Relay);
-    assert!(g.insert(cert(r(BOB, &phantom))));
+    let revocation = cert(r(BOB, &phantom));
+    let revocation_digest = revocation.digest();
+    assert!(!g.contains(&revocation_digest));
+    assert!(g.insert(revocation));
+    assert!(g.contains(&revocation_digest));
     assert_eq!(g.members(id(DOC)), before);
     assert!(!g.is_live(&phantom.digest()));
+    // The target itself was never inserted.
+    assert!(!g.contains(&cert::<K::Content, _>(phantom).digest()));
 }
 
 /// First role of the gift-cert ladder; the ladder is `LADDER..LADDER + RUNGS`.

@@ -2,6 +2,7 @@
 
 use crate::{id::Id, power::Power, revocation::RevocationId};
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
@@ -141,18 +142,16 @@ impl Decode for Delegation {
                 }
                 None
             }
-            CITES_PRESENT => {
-                if bytes.len() < CITES_LEN {
-                    return Err(DecodeError::UnexpectedEnd);
+            CITES_PRESENT => match bytes.len().cmp(&CITES_LEN) {
+                Ordering::Less => return Err(DecodeError::UnexpectedEnd),
+                Ordering::Greater => return Err(DecodeError::TrailingBytes),
+                Ordering::Equal => {
+                    let raw: [u8; 32] = rest[2..]
+                        .try_into()
+                        .expect("exactly CITES_LEN bytes leaves 32 after the tags");
+                    Some(Digest::from(raw))
                 }
-                if bytes.len() > CITES_LEN {
-                    return Err(DecodeError::TrailingBytes);
-                }
-                let Ok(raw) = <[u8; 32]>::try_from(&rest[2..]) else {
-                    return Err(DecodeError::UnexpectedEnd);
-                };
-                Some(Digest::from(raw))
-            }
+            },
             other => return Err(DecodeError::InvalidTag(other)),
         };
 
@@ -186,7 +185,7 @@ mod tests {
     use crate::test_utils::id;
 
     #[test]
-    fn seen_changes_hash_and_nothing_else() {
+    fn cites_changes_hash_and_nothing_else() {
         let d = Delegation::new(id(1), id(2), id(3), Power::Edit);
         let r = d.reissue(Digest::from([9u8; 32]));
         assert_eq!(
@@ -227,6 +226,11 @@ mod tests {
         bytes[last - 1] = Power::Read as u8;
         bytes[last] = 1;
         assert_eq!(Delegation::decode(&bytes), Err(DecodeError::UnexpectedEnd));
+
+        // present tag with one byte too many
+        let mut long = d.reissue(Digest::from([5u8; 32])).encode().into_bytes();
+        long.push(0);
+        assert_eq!(Delegation::decode(&long), Err(DecodeError::TrailingBytes));
 
         // truncated
         assert_eq!(
