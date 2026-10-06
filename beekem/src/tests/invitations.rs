@@ -180,7 +180,7 @@ async fn an_invitation_wraps_every_concurrent_update_head() {
     assert!(
         recorded < heads.len(),
         "precondition: concurrency should leave some head secrets unrecorded, \
-         otherwise this test is not exercising the rebuild"
+         otherwise the invitation only wraps secrets already recorded"
     );
 
     let invitee = member(&mut rng);
