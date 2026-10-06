@@ -182,6 +182,12 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
     }
 
     /// Stratum 2, existence: the least fixed point of the live set.
+    ///
+    /// Semi-naive iteration: each round derives what it can from the live set
+    /// so far, keeps only what is new (`derived \ live`), and stops when
+    /// nothing is. The set difference is what guarantees termination: `live`
+    /// only grows, within the finite set of delegations, however the
+    /// derivation filters below are written.
     fn live_set(&self, contexts: &[Context]) -> Set<Digest<Delegation>> {
         let covered: Set<Digest<Delegation>> = contexts
             .iter()
@@ -194,7 +200,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
             // prunes covered ones: reach avoiding N is a subset of reach avoiding ∅.
             let base = self.search(self.edges.keys().copied(), &Params::live(None, &live, None));
 
-            let mut newly_live: Vec<Digest<Delegation>> = self
+            let mut derived: Set<Digest<Delegation>> = self
                 .delegations
                 .iter()
                 .filter(|(h, d)| {
@@ -224,7 +230,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     candidates.iter().map(|(_, d)| d.subject),
                     &Params::live(Some(&ctx.exclude), &live, None),
                 );
-                newly_live.extend(
+                derived.extend(
                     candidates
                         .iter()
                         .filter(|(_, d)| reached(&levels, d.subject, d.issuer))
@@ -232,6 +238,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                 );
             }
 
+            let newly_live: Vec<Digest<Delegation>> = derived.difference(&live).copied().collect();
             if newly_live.is_empty() {
                 return live;
             }
@@ -257,6 +264,11 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
 
     /// Stratum 2, level: the greatest fixed point of covered-edge caps,
     /// iterated down from `power`. Uncovered edges are absent; their cap is `power`.
+    ///
+    /// Kleene iteration from the top: each round computes the next caps from
+    /// the current ones and stops when they are equal. A cap only ever takes
+    /// the `min` of itself and its new bound, so the sequence descends a
+    /// finite lattice and must reach equality.
     fn caps(
         &self,
         contexts: &[Context],
@@ -270,7 +282,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
             .collect();
 
         loop {
-            let mut lowered: Vec<(Digest<Delegation>, Power)> = Vec::new();
+            let mut next = cap.clone();
 
             for ctx in contexts {
                 let edges: Vec<(&Digest<Delegation>, &Delegation)> = ctx
@@ -301,18 +313,15 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     ) else {
                         continue;
                     };
-                    let next = d.power.min(at_iss);
-                    if next < current {
-                        lowered.push((*h, next));
-                    }
+                    next.insert(*h, current.min(d.power.min(at_iss)));
                 }
             }
 
-            if lowered.is_empty() {
+            if next == cap {
                 return cap;
             }
-            trace!(lowered = lowered.len(), "cap descent round");
-            cap.extend(lowered);
+            trace!("cap descent round");
+            cap = next;
         }
     }
 
@@ -321,6 +330,11 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
     ///
     /// Returns `root -> node -> level`. A root inside the exclusion set has no
     /// entry for itself and reaches nothing.
+    ///
+    /// Each round recomputes every root in place, so later roots see earlier
+    /// roots' updates within the round, and stops when a whole round leaves
+    /// the map unchanged. Levels only grow and roots are only added, within
+    /// finitely many nodes, so the map must stop changing.
     fn search<R: IntoIterator<Item = Id>>(
         &self,
         roots: R,
@@ -330,29 +344,22 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
             roots.into_iter().map(|r| (r, Map::new())).collect();
 
         loop {
-            let mut changed = false;
-            let roots: Vec<Id> = levels.keys().copied().collect();
+            let before = levels.clone();
 
-            for r in roots {
-                let fresh = self.widest(r, params, &levels);
+            for r in before.keys() {
+                let fresh = self.widest(*r, params, &levels);
                 // Only nodes that are the subject of some delegation can contribute
                 // through rule 3: for any other n, reaches(n, ·) is just {n}, and
                 // composing it yields reaches(s, n), which we already have. In a
                 // document with many members this is the difference between one
                 // root per role and one per member.
-                for n in fresh.keys() {
-                    if self.edges.contains_key(n) && !levels.contains_key(n) {
-                        levels.insert(*n, Map::new());
-                        changed = true;
-                    }
+                for n in fresh.keys().filter(|n| self.edges.contains_key(n)) {
+                    levels.entry(*n).or_default();
                 }
-                if levels[&r] != fresh {
-                    levels.insert(r, fresh);
-                    changed = true;
-                }
+                levels.insert(*r, fresh);
             }
 
-            if !changed {
+            if levels == before {
                 return levels;
             }
         }
@@ -362,7 +369,13 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
     ///
     /// Steps along edges about `r` (rule 2) and into the members of any node
     /// reached (rule 3), taking members' levels from `others` as computed so
-    /// far. Four levels, so a node is finalised the first time it is popped.
+    /// far.
+    ///
+    /// Lazy Dijkstra over four levels: every step queues its level, buckets
+    /// pop highest first, and a step never raises a level, so a node's first
+    /// pop carries its final level. That pop settles the node into `best`;
+    /// later, lower entries for it are skipped. Each node is expanded at most
+    /// once, which bounds the loop.
     fn widest(
         &self,
         r: Id,
@@ -375,42 +388,34 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
         }
 
         let mut buckets: [Vec<Id>; Power::ALL.len()] = Default::default();
-        best.insert(r, Power::Admin);
         buckets[Power::Admin.rank()].push(r);
 
-        let relax = |best: &mut Map<Id, Power>, buckets: &mut [Vec<Id>; 4], v: Id, l: Power| {
+        let relax = |buckets: &mut [Vec<Id>; 4], v: Id, l: Power| {
             if params.excludes(&v) {
                 return;
             }
-            if best.get(&v).is_none_or(|current| *current < l) {
-                best.insert(v, l);
-                buckets[l.rank()].push(v);
-            }
+            buckets[l.rank()].push(v);
         };
 
         while let Some((u, lu)) = pop_highest(&mut buckets) {
-            if best.get(&u) != Some(&lu) {
-                continue; // stale entry; u was raised after this was queued
+            if best.contains_key(&u) {
+                continue; // settled earlier, at this level or higher
             }
+            best.insert(u, lu);
 
             if let Some(edges) = self.edges.get(&r).and_then(|by_iss| by_iss.get(&u)) {
                 for h in edges.iter().filter(|h| params.usable(h)) {
                     let Some(d) = self.delegations.get(h) else {
                         continue;
                     };
-                    relax(
-                        &mut best,
-                        &mut buckets,
-                        d.audience,
-                        lu.min(params.cap(h, d.power)),
-                    );
+                    relax(&mut buckets, d.audience, lu.min(params.cap(h, d.power)));
                 }
             }
 
             if u != r {
                 if let Some(members) = others.get(&u) {
                     for (x, lx) in members {
-                        relax(&mut best, &mut buckets, *x, lu.min(*lx));
+                        relax(&mut buckets, *x, lu.min(*lx));
                     }
                 }
             }

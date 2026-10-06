@@ -432,7 +432,12 @@
             set -x
             # No args: full workspace (slow, deliberate).
             # CI: keyhive-ci-mutants --in-diff pr.diff
-            cargo mutants --workspace "$@"
+            #
+            # Exit 3 means only timeouts: every mutant was detected, some by
+            # making the tests stop terminating (e.g. an inverted fixpoint
+            # exit). Missed mutants exit 2, which takes precedence, and still
+            # fail the job.
+            cargo mutants --workspace "$@" || [ $? -eq 3 ]
           '';
         };
 

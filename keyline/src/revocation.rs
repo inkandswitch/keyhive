@@ -117,6 +117,9 @@ impl<C> Verifiable for Revocation<C> {
 // than opaque.
 const BASE_LEN: usize = Id::LEN + 32 + 4;
 
+/// The smallest an entry can be: a subject and a length, with an empty value.
+const MIN_ENTRY_LEN: usize = Id::LEN + 4;
+
 /// `bytes[at..at + len]`, or `UnexpectedEnd`.
 ///
 /// Checked because `len` comes off the wire: on a 32-bit target (Wasm) a
@@ -159,6 +162,11 @@ impl<C: Decode> Decode for Revocation<C> {
             .try_into()
             .map_err(|_| DecodeError::UnexpectedEnd)?;
         let count = u32_at(bytes, Id::LEN + 32)?;
+        // Reject a count the input cannot hold before looping over it, so no
+        // input makes decoding loop more than `bytes.len() / MIN_ENTRY_LEN` times.
+        if count > (bytes.len() - BASE_LEN) / MIN_ENTRY_LEN {
+            return Err(DecodeError::UnexpectedEnd);
+        }
 
         let mut retains = BTreeMap::new();
         let mut at = BASE_LEN;
@@ -329,6 +337,26 @@ mod tests {
             Err(DecodeError::UnexpectedEnd),
             "the end offset overflows"
         );
+    }
+
+    /// A count larger than the remaining input could hold is rejected up
+    /// front; a count that exactly fills it (empty values) is not.
+    #[test]
+    fn rejects_a_count_the_input_cannot_hold() {
+        let r = sample().retaining(BTreeMap::from([(id(2), Vec::new()), (id(3), Vec::new())]));
+        let bytes = r.encode().into_bytes();
+        assert_eq!(bytes.len(), BASE_LEN + 2 * MIN_ENTRY_LEN);
+        assert_eq!(Revocation::<Retained>::decode(&bytes), Ok(r));
+
+        for count in [3, u32::MAX] {
+            let mut claimed = bytes.clone();
+            claimed[BASE_LEN - 4..BASE_LEN].copy_from_slice(&count.to_be_bytes());
+            assert_eq!(
+                Revocation::<Retained>::decode(&claimed),
+                Err(DecodeError::UnexpectedEnd),
+                "count {count}"
+            );
+        }
     }
 
     #[test]
