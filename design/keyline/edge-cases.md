@@ -215,14 +215,14 @@ The decisive argument against keeping `from`: rotation. Certificates anchored by
 
 What was checked before cutting: the total-kill guarantee (a block on an unpinned cert is per-route and future-open — the issuer gaining a new route revives the target silently; answered by pinning-via-`subject` for certs that want total killability), and the multi-hatted issuer case (Dan with a personal route: his `subject`-pinned acts still die with the pinned standing). An _optional_ `from` (pin bit) was considered and rejected: required or cut, period.
 
-### `nonce` vs `cites` — `cites` won on fail-direction
+### `nonce` vs `citation` — `citation` won on fail-direction
 
 Ed25519 is deterministic and certs are content-addressed: an identical re-issuance is byte-identical — the _same certificate_, still covered by any revocation naming it. Healing a mistaken removal on the same terms by the same issuer is impossible without a freshness field. The candidates:
 
 - _Nonce:_ unconditional freshness. Failure mode: accidental duplicates are independently live certs, each needing separate coverage at removal — a missed one is a lingering live grant. _Fails open._
-- _`cites: Hash<Revocation>`_ (optional; omitted on first issuance): freshness on demand, dedup by default, and the heal is an accountable act ("re-granted, knowing of the revocation"). Failure mode: an issuer unaware of a revoked twin re-mints the same hash and the grant silently doesn't take — visible on sync, fixed by re-chaining. _Fails closed._
+- _`citation: Hash<Revocation>`_ (optional; omitted on first issuance): freshness on demand, dedup by default, and the heal is an accountable act ("re-granted, knowing of the revocation"). Failure mode: an issuer unaware of a revoked twin re-mints the same hash and the grant silently doesn't take — visible on sync, fixed by re-chaining. _Fails closed._
 
-"Ambiguity resolves toward less authority" decides it. Constraints: optional, where absence means "no predecessor claimed" — the anti-optionality rule bans absence _aliasing_ a present value (the `{from: None} ≡ {from: issuer}` bug), and with no sentinel, `cites`'s absence has no present-value twin: one meaning, one encoding; zero semantics (not supersession, not ordering — issuer-supplied predecessors must never carry trust, or backdating-by-omission returns); bogus values harmless.
+"Ambiguity resolves toward less authority" decides it. Constraints: optional, where absence means "no predecessor claimed" — the anti-optionality rule bans absence _aliasing_ a present value (the `{from: None} ≡ {from: issuer}` bug), and with no sentinel, `citation`'s absence has no present-value twin: one meaning, one encoding; zero semantics (not supersession, not ordering — issuer-supplied predecessors must never carry trust, or backdating-by-omission returns); bogus values harmless.
 
 ### `via` on revocations — collapsed into the issuer
 
@@ -231,7 +231,7 @@ Option 3's block named its jurisdiction explicitly. Two refinements removed the 
 1. _Node, not hash._ A `via` naming a specific delegation hash fails "edges are certificates": the drawn edge Members→Dan may be several certs plus future re-adds, and hash-via covers exactly one — whack-a-mole against ordinary roster churn. Blocks speak about _venues_, so `via` must be a node.
 2. _Any node I control, not one I name._ Scoping the effect to the issuer's whole _admin reach_ — every node they were ever Admin-anchorable at — matches the actual intent ("out of everything I govern"), and dissolves option 3's residual cost: a surviving admin's admin reach grows as they are re-rostered into successor nodes, so their old revocations cover the successors automatically. _The carry-over deny-list liturgy stopped existing._ A griefer's admin reach froze at removal, so their revocations stay pinned to dead nodes. Coverage drift exists but only grows — fail-closed. Narrow revocation (ban in room A, not room B) is signing with the narrow capacity key: the field became the identity slot.
 
-With the scope derivable from `issuer`, the revocation is `{issuer, revokes, sig}`.
+With the scope derivable from `issuer`, the revocation is `{issuer, revoke, sig}`.
 
 ### The self-axiom — revocation by the issuer becomes a corollary
 
@@ -256,11 +256,11 @@ Admin reach computed on the raw graph preserves permanence and mutual invisibili
 ### Final certificate shapes
 
 ```
-Delegation: {issuer, audience, subject, power, cites: Option<Hash<Revocation>>, sig}
-Revocation: {issuer, revokes, retains, sig}
+Delegation: {issuer, audience, subject, power, citation: Option<Hash<Revocation>>, sig}
+Revocation: {issuer, revoke, retain, sig}
 ```
 
-Every scoping mechanism is a key or a node — capacities are dedicated keys, jurisdictions are rosters, pinning is `subject`, revocation scope is the signer's admin reach. Each surviving field defeated an elimination attempt; each eliminated field's jobs moved into the graph. `cites` names the revocation being re-issued past rather than the revoked delegation: the latter's hash is a function of the fields being re-issued, so it would carry no information and a second heal would collide.
+Every scoping mechanism is a key or a node — capacities are dedicated keys, jurisdictions are rosters, pinning is `subject`, revocation scope is the signer's admin reach. Each surviving field defeated an elimination attempt; each eliminated field's jobs moved into the graph. `citation` names the revocation being re-issued past rather than the revoked delegation: the latter's hash is a function of the fields being re-issued, so it would carry no information and a second heal would collide.
 
 <!-- Links -->
 

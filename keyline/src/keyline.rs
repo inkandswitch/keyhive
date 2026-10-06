@@ -23,7 +23,7 @@ use keyhive_crypto::digest::Digest;
 /// Concurrency is the wrapper's job: `keyhive_core` holds an implementation
 /// behind a `RwLock`, and readers call `&self` methods in parallel.
 pub trait Keyline {
-    /// The retention watermark a revocation may carry ([`crate::revocation::Revocation::retains`]).
+    /// The retention watermark a revocation may carry ([`crate::revocation::Revocation::retain`]).
     ///
     /// Evaluation never reads it; the bound exists only so certificates
     /// round-trip canonically. A backend that does not care picks `()`.
@@ -54,7 +54,7 @@ pub trait Keyline {
     /// issuer's admin reach; this reports the syntactic fact. Its main use
     /// is explaining a silent collision: an issuer who re-mints a grant
     /// byte-identical to a revoked one gets `insert == false`, and this tells
-    /// them why and that a re-issue with `cites` is needed.
+    /// them why and that a re-issue with `citation` is needed.
     fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>>;
 
     /// `audience`'s effective power over `subject`: the maximum over live routes of the

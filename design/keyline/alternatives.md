@@ -12,15 +12,15 @@ _Would buy._ Narrow revocation with one key (ban in room A, keep in room B). Leg
 
 _Rejected because._ Rotation would re-sign the deny list. A revocation pinned to `Members` does not cover `Members′` after rotation, so every standing revocation must be re-issued after every rotation, forever. Under admin-reach scoping a surviving admin's admin reach grows as they are re-rostered, and their old revocations follow automatically; the griefer's admin reach froze, so theirs do not. The explicit field taxes the honest admin on the routine path (rotation is the recommended hygiene) to buy flexibility on a rare one. It also introduces an inert-by-mistake state (naming a node the target never routes through) that admin-reach scoping cannot produce, and it picks the narrower of the two possible scopes for a revocation, where the design resolves ambiguity toward less authority. Narrow revocation is available today by signing with a capacity key per role administered.
 
-_Reopen if._ Narrow revocation turns out to be common. The compatible extension is `subject: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the [`cites`](#a-random-nonce-instead-of-cites) invariant carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations--collapsed-into-the-issuer).
+_Reopen if._ Narrow revocation turns out to be common. The compatible extension is `subject: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the [`citation`](#a-random-nonce-instead-of-citation) invariant carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations--collapsed-into-the-issuer).
 
-### A random nonce instead of `cites`
+### A random nonce instead of `citation`
 
-_Proposal._ Replace `cites: Option<Digest<Revocation>>` with random bytes so an issuer need not know which revoked certificate it is re-issuing past.
+_Proposal._ Replace `citation: Option<Digest<Revocation>>` with random bytes so an issuer need not know which revoked certificate it is re-issuing past.
 
 _Would buy._ No silent-collision UX; no dependency on having synced the revocation.
 
-_Rejected because._ It flips the fail direction. Two accidental issuances of one delegation become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering delegation. With `cites`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take. The collision is detectable: `insert` returns `false` and `revocations_naming` reports what named the duplicate. Long form: [edge-cases, `nonce` vs `cites`](edge-cases.md#nonce-vs-cites--cites-won-on-fail-direction) and [implementation, why `cites`](implementation.md#why-cites-and-not-a-nonce).
+_Rejected because._ It flips the fail direction. Two accidental issuances of one delegation become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering delegation. With `citation`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take. The collision is detectable: `insert` returns `false` and `revocations_naming` reports what named the duplicate. Long form: [edge-cases, `nonce` vs `citation`](edge-cases.md#nonce-vs-citation--citation-won-on-fail-direction) and [implementation, why `citation`](implementation.md#why-citation-and-not-a-nonce).
 
 _Reopen if._ Never on its own merits; only if a use case needs many live copies of one delegation, which would be a different feature.
 
@@ -44,9 +44,9 @@ _Reopen if._ A capacity cannot be expressed as a node. None found so far.
 
 ### Revocations that target revocations
 
-_Proposal._ Let `revokes` name a `Digest<Revocation>` so a mistaken revocation can be undone.
+_Proposal._ Let `revoke` name a `Digest<Revocation>` so a mistaken revocation can be undone.
 
-_Rejected because._ It starts the regress (who may revoke the un-revocation?), requires an authority rule for whoever signs an un-revocation, and needs an ordering to settle revoke/un-revoke/re-revoke races — causal metadata or merge-order dependence. Repair is by re-issuing with `cites`: access returns because live authority signed something new, never because a revocation was un-applied. Declining the feature costs one workflow and deletes the tower. Long form: [README, Revocations Cannot Be Revoked](README.md#revocations-cannot-be-revoked).
+_Rejected because._ It starts the regress (who may revoke the un-revocation?), requires an authority rule for whoever signs an un-revocation, and needs an ordering to settle revoke/un-revoke/re-revoke races — causal metadata or merge-order dependence. Repair is by re-issuing with `citation`: access returns because live authority signed something new, never because a revocation was un-applied. Declining the feature costs one workflow and deletes the tower. Long form: [README, Revocations Cannot Be Revoked](README.md#revocations-cannot-be-revoked).
 
 _Reopen if._ Never; the invariant "no merge may un-apply a revocation" depends on it.
 

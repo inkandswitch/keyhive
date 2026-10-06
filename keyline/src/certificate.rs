@@ -105,7 +105,7 @@ impl<C: Decode> Decode for Certificate<C> {
 mod tests {
     use super::*;
 
-    /// Variable-length, to exercise the `retains` codec through the wrapper.
+    /// Variable-length, to exercise the `retain` codec through the wrapper.
     type Retained = Vec<u8>;
 
     #[test]

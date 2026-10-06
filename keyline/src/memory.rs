@@ -453,7 +453,7 @@ impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
         match payload {
             Certificate::Delegation(d) => {
                 let h = d.digest();
-                debug!(issuer = %d.issuer, audience = %d.audience, subject = %d.subject, power = %d.power, cites = d.cites.is_some(), "delegation inserted");
+                debug!(issuer = %d.issuer, audience = %d.audience, subject = %d.subject, power = %d.power, citation = d.citation.is_some(), "delegation inserted");
                 self.edges
                     .entry(d.subject)
                     .or_default()
@@ -466,11 +466,11 @@ impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
                 let k = r.digest();
                 debug!(
                     issuer = %r.issuer,
-                    revokes = %r.revokes,
-                    target_known = self.delegations.contains_key(&r.revokes),
+                    revoke = %r.revoke,
+                    target_known = self.delegations.contains_key(&r.revoke),
                     "revocation inserted"
                 );
-                self.revocations_of.entry(r.revokes).or_default().insert(k);
+                self.revocations_of.entry(r.revoke).or_default().insert(k);
                 self.revocations.insert(k, r);
             }
         }
@@ -704,8 +704,8 @@ mod tests {
     }
 
     #[test]
-    fn reissue_with_cites_heals() {
-        scenarios::reissue_with_cites_heals::<MemoryKeyline>();
+    fn reissue_with_citation_heals() {
+        scenarios::reissue_with_citation_heals::<MemoryKeyline>();
     }
 
     #[test]
@@ -773,26 +773,26 @@ mod tests {
     /// A watermark type with a variable-length encoding.
     ///
     /// Every law above runs at `C = ()`, whose encoding is empty, so none of
-    /// them can tell "evaluation ignores `retains`" apart from "there was
+    /// them can tell "evaluation ignores `retain`" apart from "there was
     /// nothing there to ignore". The two below re-run the load-bearing pair
     /// against watermarks that carry bytes.
     #[cfg(feature = "arbitrary")]
     type Retained = Vec<u8>;
 
-    /// The naive oracle keeps only `(issuer, revokes)`, so it cannot read a
+    /// The naive oracle keeps only `(issuer, revoke)`, so it cannot read a
     /// watermark even by accident. Agreement therefore witnesses that the
     /// evaluator does not read one either.
     #[cfg(feature = "arbitrary")]
     #[test]
-    fn retains_do_not_affect_authority() {
+    fn retain_does_not_affect_authority() {
         laws::matches_naive_oracle_with_revocations::<MemoryKeyline<Retained>>();
     }
 
-    /// The converse: `retains` is covered by the certificate digest, so two
+    /// The converse: `retain` is covered by the certificate digest, so two
     /// revocations differing only there are two certificates, not one.
     #[cfg(feature = "arbitrary")]
     #[test]
-    fn retains_are_part_of_set_identity() {
+    fn retain_is_part_of_set_identity() {
         laws::digest_identifies_the_set::<MemoryKeyline<Retained>>();
     }
 

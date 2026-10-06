@@ -341,7 +341,7 @@ pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
         .eq([revocation_digest]));
 }
 
-pub fn reissue_with_cites_heals<K: Keyline + Default>() {
+pub fn reissue_with_citation_heals<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
     // Alice sponsors Eve, so the heal has something downstream to revive.
     let eve_member = d(ALICE, EVE, MEMBERS, Power::Edit);

@@ -62,7 +62,7 @@ pub mod naive {
     struct Facts {
         nodes: BTreeSet<Id>,
         dels: BTreeMap<Digest<Delegation>, Delegation>,
-        // Issuer and target only: `retains` has no bearing on authority, so the
+        // Issuer and target only: `retain` has no bearing on authority, so the
         // oracle cannot read it even by accident.
         revocations: Vec<(Id, Digest<Delegation>)>,
     }
@@ -134,7 +134,7 @@ pub mod naive {
                 }
                 Certificate::Revocation(r) => {
                     nodes.insert(r.issuer);
-                    revocations.push((r.issuer, r.revokes));
+                    revocations.push((r.issuer, r.revoke));
                 }
             }
         }
@@ -167,16 +167,16 @@ pub mod naive {
             s
         };
         let mut covered: BTreeMap<Digest<Delegation>, BTreeSet<Id>> = BTreeMap::new();
-        for (issuer, revokes) in &f.revocations {
+        for (issuer, revoke) in &f.revocations {
             covered
-                .entry(*revokes)
+                .entry(*revoke)
                 .or_default()
                 .extend(admin_reach(*issuer));
         }
         let revoked_by_audience = |h: &Digest<Delegation>, audience: Id| {
             f.revocations
                 .iter()
-                .any(|(issuer, revokes)| revokes == h && *issuer == audience)
+                .any(|(issuer, revoke)| revoke == h && *issuer == audience)
         };
 
         let mut live: BTreeSet<Digest<Delegation>> = BTreeSet::new();
@@ -418,7 +418,7 @@ where
                     let naming = k.revocations_naming(&d.digest());
                     let expected: BTreeSet<_> = set
                         .revocations()
-                        .filter(|r| r.revokes == d.digest())
+                        .filter(|r| r.revoke == d.digest())
                         .map(|r| r.digest())
                         .collect();
                     assert_eq!(naming, expected);

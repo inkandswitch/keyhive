@@ -19,11 +19,11 @@ use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 /// Anyone may issue a delegation over any subject. Admin is not required to
 /// grant; it matters for revocation reach.
 ///
-/// # `cites`
+/// # `citation`
 ///
 /// Ed25519 is deterministic and certificates are content-addressed, so
 /// re-issuing an identical delegation produces the identical certificate: same
-/// bytes, same signature, same hash. `cites` exists so that a grant identical to
+/// bytes, same signature, same hash. `citation` exists so that a grant identical to
 /// a revoked one can be re-issued with a fresh hash. It names the revocation the
 /// issuer has seen and is re-issuing past, documents the heal, and has no other
 /// semantics: evaluation ignores it entirely. Absent means first issuance.
@@ -57,25 +57,25 @@ pub struct Delegation {
     pub power: Power,
 
     /// The revocation this delegation is re-issued past. Ignored by evaluation.
-    pub cites: Option<Digest<RevocationId>>,
+    pub citation: Option<Digest<RevocationId>>,
 }
 
 impl Delegation {
-    /// A first issuance: `issuer` grants `audience` `power` over `subject`, with no `cites`.
+    /// A first issuance: `issuer` grants `audience` `power` over `subject`, with no `citation`.
     pub fn new(issuer: Id, audience: Id, subject: Id, power: Power) -> Self {
         Delegation {
             issuer,
             audience,
             subject,
             power,
-            cites: None,
+            citation: None,
         }
     }
 
     /// Re-issue this delegation past a revocation, giving it a fresh hash.
-    pub fn reissue(self, cites: Digest<RevocationId>) -> Self {
+    pub fn reissue(self, citation: Digest<RevocationId>) -> Self {
         Delegation {
-            cites: Some(cites),
+            citation: Some(citation),
             ..self
         }
     }
@@ -95,17 +95,17 @@ impl Verifiable for Delegation {
     }
 }
 
-// Fixed-width layout: issuer ‖ audience ‖ subject ‖ power ‖ cites_tag ‖ cites?
+// Fixed-width layout: issuer ‖ audience ‖ subject ‖ power ‖ citation_tag ‖ citation?
 // Placeholder until the bespoke codec lands; see design/keyline/implementation.md.
 
-/// Encoded length without `cites`.
+/// Encoded length without `citation`.
 const BASE_LEN: usize = Id::LEN * 3 + 1 + 1;
 
-/// Encoded length with `cites`.
-const CITES_LEN: usize = BASE_LEN + 32;
+/// Encoded length with `citation`.
+const CITATION_LEN: usize = BASE_LEN + 32;
 
-const CITES_ABSENT: u8 = 0;
-const CITES_PRESENT: u8 = 1;
+const CITATION_ABSENT: u8 = 0;
+const CITATION_PRESENT: u8 = 1;
 
 impl Encode for Delegation {
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -113,11 +113,11 @@ impl Encode for Delegation {
         self.audience.encode_into(out);
         self.subject.encode_into(out);
         self.power.encode_into(out);
-        match &self.cites {
-            None => out.push(CITES_ABSENT),
-            Some(cites) => {
-                out.push(CITES_PRESENT);
-                out.extend_from_slice(cites.as_slice());
+        match &self.citation {
+            None => out.push(CITATION_ABSENT),
+            Some(citation) => {
+                out.push(CITATION_PRESENT);
+                out.extend_from_slice(citation.as_slice());
             }
         }
     }
@@ -135,20 +135,20 @@ impl Decode for Delegation {
         let subject = Id::decode(&ids[Id::LEN * 2..])?;
         let power = Power::try_from(rest[0]).map_err(|_| DecodeError::InvalidTag(rest[0]))?;
 
-        let cites = match rest[1] {
-            CITES_ABSENT => {
+        let citation = match rest[1] {
+            CITATION_ABSENT => {
                 if bytes.len() != BASE_LEN {
                     return Err(DecodeError::TrailingBytes);
                 }
                 None
             }
-            CITES_PRESENT => match bytes.len().cmp(&CITES_LEN) {
+            CITATION_PRESENT => match bytes.len().cmp(&CITATION_LEN) {
                 Ordering::Less => return Err(DecodeError::UnexpectedEnd),
                 Ordering::Greater => return Err(DecodeError::TrailingBytes),
                 Ordering::Equal => {
                     let raw: [u8; 32] = rest[2..]
                         .try_into()
-                        .expect("exactly CITES_LEN bytes leaves 32 after the tags");
+                        .expect("exactly CITATION_LEN bytes leaves 32 after the tags");
                     Some(Digest::from(raw))
                 }
             },
@@ -160,7 +160,7 @@ impl Decode for Delegation {
             audience,
             subject,
             power,
-            cites,
+            citation,
         })
     }
 }
@@ -168,13 +168,13 @@ impl Decode for Delegation {
 #[cfg(feature = "arbitrary")]
 impl<'a> arbitrary::Arbitrary<'a> for Delegation {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let cites: Option<[u8; 32]> = u.arbitrary()?;
+        let citation: Option<[u8; 32]> = u.arbitrary()?;
         Ok(Delegation {
             issuer: u.arbitrary()?,
             audience: u.arbitrary()?,
             subject: u.arbitrary()?,
             power: u.arbitrary()?,
-            cites: cites.map(Digest::from),
+            citation: citation.map(Digest::from),
         })
     }
 }
@@ -185,7 +185,7 @@ mod tests {
     use crate::test_utils::id;
 
     #[test]
-    fn cites_changes_hash_and_nothing_else() {
+    fn citation_changes_hash_and_nothing_else() {
         let d = Delegation::new(id(1), id(2), id(3), Power::Edit);
         let r = d.reissue(Digest::from([9u8; 32]));
         assert_eq!(
@@ -199,7 +199,10 @@ mod tests {
     fn encoded_lengths() {
         let d = Delegation::new(id(1), id(2), id(3), Power::Read);
         assert_eq!(d.encode().len(), BASE_LEN);
-        assert_eq!(d.reissue(Digest::from([0u8; 32])).encode().len(), CITES_LEN);
+        assert_eq!(
+            d.reissue(Digest::from([0u8; 32])).encode().len(),
+            CITATION_LEN
+        );
     }
 
     #[test]
@@ -207,12 +210,12 @@ mod tests {
         let d = Delegation::new(id(1), id(2), id(3), Power::Read);
         let mut bytes = d.encode().into_bytes();
 
-        // trailing byte after an absent `cites`
+        // trailing byte after an absent `citation`
         bytes.push(0);
         assert_eq!(Delegation::decode(&bytes), Err(DecodeError::TrailingBytes));
         bytes.pop();
 
-        // bad cites tag
+        // bad citation tag
         let last = bytes.len() - 1;
         bytes[last] = 2;
         assert_eq!(Delegation::decode(&bytes), Err(DecodeError::InvalidTag(2)));

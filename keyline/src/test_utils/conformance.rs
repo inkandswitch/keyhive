@@ -51,7 +51,7 @@ pub fn r<C>(issuer: u8, target: &Delegation) -> Revocation<C> {
 
 /// What a backend's content type must satisfy to run the generated laws.
 ///
-/// The scenarios need none of this — they never look at [`crate::revocation::Revocation::retains`]
+/// The scenarios need none of this — they never look at [`crate::revocation::Revocation::retain`]
 /// — but the laws generate whole certificate sets, so the content type has to
 /// be generatable and comparable as well as encodable.
 pub trait TestContent:

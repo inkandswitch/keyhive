@@ -5,7 +5,7 @@
 //! draw from a fixed pool of [`POOL`] deterministic identities, plant a root
 //! edge for each subject, and wire the rest at random. Revocations name
 //! delegations already in the set; a few are re-issued past a revocation so
-//! `cites` collisions and heals both occur.
+//! `citation` collisions and heals both occur.
 
 use crate::{
     certificate::Certificate, delegation::Delegation, id::Id, power::Power, revocation::Revocation,
@@ -77,12 +77,12 @@ fn pick_id(u: &mut Unstructured<'_>) -> Result<Id> {
     Ok(id(u.int_in_range(1..=POOL)?))
 }
 
-/// Retention watermarks over pool subjects, for [`Revocation::retains`].
+/// Retention watermarks over pool subjects, for [`Revocation::retain`].
 ///
 /// Often empty, so both codec paths occur. Evaluation must ignore whatever
 /// lands here, and the naive oracle cannot read it at all, so running the
 /// oracle law with a variable-length `C` is what proves the two agree.
-fn retains<'a, C: Arbitrary<'a>>(u: &mut Unstructured<'a>) -> Result<BTreeMap<Id, C>> {
+fn watermarks<'a, C: Arbitrary<'a>>(u: &mut Unstructured<'a>) -> Result<BTreeMap<Id, C>> {
     let mut watermarks = BTreeMap::new();
     for _ in 0..u.int_in_range(0..=2)? {
         watermarks.insert(pick_id(u)?, u.arbitrary()?);
@@ -171,12 +171,12 @@ impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C
             };
             certs.push(
                 Revocation::new(issuer, target.digest())
-                    .retaining(retains(u)?)
+                    .retaining(watermarks(u)?)
                     .into(),
             );
         }
 
-        // Re-issues past a revocation, so heals and `cites` collisions happen.
+        // Re-issues past a revocation, so heals and `citation` collisions happen.
         for _ in 0..u.int_in_range(0..=2)? {
             let revocations: Vec<Revocation<C>> = certs
                 .iter()
@@ -190,7 +190,7 @@ impl<'a, C: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<C
             let Some(target) = certs
                 .iter()
                 .filter_map(Certificate::as_delegation)
-                .find(|d| d.digest() == revocation.revokes)
+                .find(|d| d.digest() == revocation.revoke)
                 .copied()
             else {
                 continue;

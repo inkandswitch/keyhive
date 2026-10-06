@@ -174,9 +174,9 @@ Extend with two revocations (assigning levels `#1/#3 Admin, #2/#4 Edit, #5 Read`
 
 | Revocation                               | Tier                                                   | Effect                                                                                                      |
 |------------------------------------------|--------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
-| `rA = {issuer: Bob, revokes: #2}`          | third party, `admin_reach(Bob) = {Bob}`                | inert: #2's routes are `{Doc, Alice}`; valid, admissible, zero effect                                       |
-| `rB = {issuer: Alice, revokes: #5}`        | deep revocation, `admin_reach(Alice) = {Alice, Doc, Members}` | #5 dead (its every route transits the reach); #4 and Bob untouched — scoped, no cascade                     |
-| variant `rB′ = {issuer: Alice, revokes: #4}` | by the issuer → total                                | #4 conducts nowhere; #5 — covered by _nothing_ — dies implicitly (failure to re-derive). Cascade ≠ coverage |
+| `rA = {issuer: Bob, revoke: #2}`          | third party, `admin_reach(Bob) = {Bob}`                | inert: #2's routes are `{Doc, Alice}`; valid, admissible, zero effect                                       |
+| `rB = {issuer: Alice, revoke: #5}`        | deep revocation, `admin_reach(Alice) = {Alice, Doc, Members}` | #5 dead (its every route transits the reach); #4 and Bob untouched — scoped, no cascade                     |
+| variant `rB′ = {issuer: Alice, revoke: #4}` | by the issuer → total                                | #4 conducts nowhere; #5 — covered by _nothing_ — dies implicitly (failure to re-derive). Cascade ≠ coverage |
 
 Two semantic findings this example surfaces:
 
@@ -217,7 +217,7 @@ Negation appears exactly once — stratum 2 consults `covered`, which is fully c
 Properties that make this work (from the spec, evaluation-side view):
 
 - _Coverage is monotone-stable._ Stratum 1 consults only delegations; the positive graph only grows; coverage can expand but never retract.
-- _Revocations are mutually invisible._ Revocations name delegations only (`revokes: Hash<Delegation>` — a revocation of a revocation is unwritable), so no revocation's effect depends on another's. This is what makes the coverage relation computable in one stroke, order-independently.
+- _Revocations are mutually invisible._ Revocations name delegations only (`revoke: Hash<Delegation>` — a revocation of a revocation is unwritable), so no revocation's effect depends on another's. This is what makes the coverage relation computable in one stroke, order-independently.
 - _`covered` is a relation, not a set._ `(cert, node)` pairs: node N may be forbidden for cert c and fine for cert c′. There is no single "graph-minus-holes"; each covered cert has its own mask.
 
 ## 4. Why It Is Not One Query
@@ -421,7 +421,7 @@ What the outer clock buys, against a bottom-up evaluator such as `MemoryKeyline`
 |------------------------|------------------------------------|----------------------------------------|
 | Add delegation         | S1 delta (if cached), S2 recompute | O(\|new facts\|)                       |
 | Add revocation         | full S2 recompute                  | retraction delta — O(\|facts killed\|) |
-| Heal (`cites` re-issue) | full S2 recompute                  | restoration delta — O(\|facts restored\|) |
+| Heal (`citation` re-issue) | full S2 recompute                  | restoration delta — O(\|facts restored\|) |
 | Query                  | read materialized                  | read materialized                      |
 
 The revocation row is the important one: Keyline's cert set is add-only, but the derived authority graph _flickers_ — new coverage retracts live facts, cascade is facts losing support. Retraction through a recursive fixpoint is the classically miserable part of incremental view maintenance, and it is exactly what Z-set circuits handle natively. Cascade costs what it kills; healing costs what it restores; both are one mechanism run with opposite signs — a literal implementation of the spec's "death and revival are one late-binding rule viewed from two directions."
@@ -516,7 +516,7 @@ role₁ over Doc, role₂ member of role₁, …, roleₖ member of roleₖ₋�
   → 2k certificates → R(s_j, node_i) for all j < i ≈ k²/2 facts
 ```
 
-Linear input, quadratic fact space. Aggravator: the `cites` field accepts arbitrary bytes, so one authority can mint unboundedly many distinct, grounded certificates without generating fresh audience keys (not a new capability — fresh `audience` keys do the same — but one field cheaper).
+Linear input, quadratic fact space. Aggravator: the `citation` field accepts arbitrary bytes, so one authority can mint unboundedly many distinct, grounded certificates without generating fresh audience keys (not a new capability — fresh `audience` keys do the same — but one field cheaper).
 
 Bounds: every cert is signed (a spree is a self-incriminating audit trail); scope is limited to documents the attacker is a member of; removal + rotation ends growth; stratum 1's append-only monotonicity means honest replicas pay the delta once, not per query.
 
@@ -584,7 +584,7 @@ The certificates are permanent; the _cost_ is late-bound. The quadratic requires
 |------------------------------|-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Certificates (storage)       | yes — add-only set      | nothing (quotas bound growth)                                                                                                                                                                                                                                                                                                           |
 | Ladder's k² fixpoint cost    | no — follows liveness   | removing the attacker: the ladder's standing over Doc rides their membership, so it dies in the ordinary cascade; dead facts are never derived                                                                                                                                                                                           |
-| Demand-path relevance        | no                      | the victim _revoking_ the gift — it names them as `audience`, so revocation by the audience gives an unconditional, total revocation. Re-gifts need fresh hashes (varied `cites`; identical fields collide with the revoked hash and silently fail), are rate-bounded, each revocable by the audience individually, and each is a fresh signed artifact naming the victim |
+| Demand-path relevance        | no                      | the victim _revoking_ the gift — it names them as `audience`, so revocation by the audience gives an unconditional, total revocation. Re-gifts need fresh hashes (varied `citation`; identical fields collide with the revoked hash and silently fail), are rate-bounded, each revocable by the audience individually, and each is a fresh signed artifact naming the victim |
 | Dead-ladder exploration bait | no — evaluator artifact | obligation 3 above (subject-first ordering); note a removed attacker's ladder stays _internally_ self-grounded, which is exactly what obligation 3 defends against                                                                                                                                                                       |
 | Revival risk                 | latent                  | fresh-key re-add discipline — the DoS analysis independently rejustifies the spec's compromise-hygiene rule, since same-key re-add revives the ladder's cost along with everything else                                                                                                                                                 |
 
@@ -662,7 +662,7 @@ phases and assertions:
   4. revoke gift:   victim revokes G (revocation by the audience). Assert relevance is
                   severed even if the attacker is re-added; assert an
                   identical re-gift (same fields) collides with the revoked
-                  hash and silently fails; a varied re-gift (fresh `cites`)
+                  hash and silently fails; a varied re-gift (fresh `citation`)
                   is a new hash requiring a new revocation.
   5. revive:      re-add the attacker's same key (G not revoked). Assert
                   the ladder cost returns — zombie economics — and that a
