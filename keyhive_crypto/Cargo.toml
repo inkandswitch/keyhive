@@ -66,6 +66,10 @@ std = [
   "tracing/std",
 ]
 arbitrary = ["dep:arbitrary", "std"]
+# Everything the full test suite needs. Also the feature hosted CI and
+# cargo-mutants pass to every crate: without it, `--features test_utils` fails
+# to build this crate and its mutants are never tested.
+test_utils = ["arbitrary"]
 
 [lints.clippy]
 doc_overindented_list_items = "allow"

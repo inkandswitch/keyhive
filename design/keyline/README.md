@@ -532,6 +532,20 @@ Why this is survivable:
 
 The tension is inherent: revocation power _is_ the power to deny access. Any design with decentralized durable removal hands every remover a griefing capability. Keyline chose durable (fail-closed); admin-reach scoping and rotation hygiene shrink the surface, and no semantics tweak eliminates it.
 
+### Evaluation Cost
+
+The analysis above prices denial of authority. The evaluator has a second surface: work. Evaluation is superlinear, so an adversary may try to make every replica's evaluation expensive. The full analysis is in [evaluation notes §7](evaluation-notes.md#7-threat-model-evaluation-cost-as-a-dos-surface). Its shape mirrors the authority case: the more standing an attacker has, the more they can force, and every step is signed.
+
+| Who         | What they can force                                                                                            | Bound                                                                                                                                              |
+|-------------|----------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| Outsiders   | Storage only. A certificate whose issuer never gains standing derives nothing, so it never enters the fixpoint | Sync-layer quotas                                                                                                                                  |
+| Any member  | Quadratic work from linear input: a ladder of `k` nested roles yields about `k²/2` facts                       | Signed and attributable; limited to documents the member belongs to; removal plus rotation stops growth                                            |
+| Ever-admins | Deep revocations against such a ladder                                                                         | `O(k²)`, not `O(k³)`: the evaluator groups covered delegations by exclusion set (one per signer) and skips contexts whose targets are already dead |
+
+An unconsented delegation can aim that structure at a victim's own queries (the [gift-cert attack](evaluation-notes.md#single-queries-and-the-gift-cert-attack)). The victim's revocation by the audience severs it, and removing the attacker removes its cost too, because cost follows liveness: a dead certificate derives nothing.
+
+What remains is a floor: a member can spend their own quota to make replicas do quadratic work once, and attributably. That floor is the size of the answer, not overhead. Lowering it would mean giving up composable roles or `subject` as a scope. As with authority griefing, rotation is the cure.
+
 ## Worked Example
 
 Setup as in [Roles]: Dan roots Doc, supplies Members, and administers it; Alice (`#m_Alice = {issuer: Dan, audience: Alice, subject: Members, power: Admin}`) and Bob are Admin members.

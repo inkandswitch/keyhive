@@ -62,3 +62,25 @@ impl Decode for alloc::vec::Vec<u8> {
         Ok(bytes.to_vec())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `()` has one value and one encoding: empty. Anything else is rejected.
+    #[test]
+    fn unit_is_the_empty_encoding() {
+        assert!(().encode().is_empty());
+        assert_eq!(<()>::decode(&[]), Ok(()));
+        assert_eq!(<()>::decode(&[0]), Err(DecodeError::TrailingBytes));
+    }
+
+    /// Bytes encode as themselves, so the codec laws hold trivially.
+    #[test]
+    fn bytes_encode_as_themselves() {
+        let value = alloc::vec![0u8, 7, 255];
+        assert_eq!(value.encode().as_bytes(), value.as_slice());
+        assert_eq!(Vec::<u8>::decode(&value), Ok(value.clone()));
+        assert_eq!(Vec::<u8>::decode(&[]), Ok(Vec::new()));
+    }
+}

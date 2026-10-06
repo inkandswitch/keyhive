@@ -168,39 +168,91 @@ impl<'de, T> serde::de::Visitor<'de> for EncodedVisitor<T> {
     }
 }
 
-#[cfg(all(test, feature = "serde"))]
+#[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
-    use serde::{
-        de::value::{BytesDeserializer, Error, SeqDeserializer},
-        Deserialize,
-    };
+    use std::hash::DefaultHasher;
 
     fn sample() -> Encoded<()> {
         Encoded::from_bytes_unchecked(alloc::vec![1, 2, 3, 255])
     }
 
-    /// Through a positional format: the `Serialize` side and a full round trip.
-    #[test]
-    fn round_trips_through_postcard() {
-        let bytes = postcard::to_allocvec(&sample()).expect("serialize");
-        let (decoded, rest) =
-            postcard::take_from_bytes::<Encoded<()>>(&bytes).expect("deserialize");
-        assert_eq!(decoded, sample());
-        assert!(rest.is_empty(), "every byte written is read back");
+    fn other() -> Encoded<()> {
+        Encoded::from_bytes_unchecked(alloc::vec![1, 2, 4])
     }
 
-    /// A byte string, as CBOR and MessagePack deliver what `Serialize` wrote.
-    #[test]
-    fn accepts_a_byte_string() {
-        let de = BytesDeserializer::<Error>::new(sample().as_bytes());
-        assert_eq!(Encoded::<()>::deserialize(de), Ok(sample()));
+    fn hash(value: &Encoded<()>) -> u64 {
+        let mut state = DefaultHasher::new();
+        value.hash(&mut state);
+        state.finish()
     }
 
-    /// A sequence, as JSON delivers bytes.
     #[test]
-    fn accepts_a_byte_sequence() {
-        let de = SeqDeserializer::<_, Error>::new(sample().into_bytes().into_iter());
-        assert_eq!(Encoded::<()>::deserialize(de), Ok(sample()));
+    fn length_and_bytes() {
+        assert_eq!(sample().len(), 4);
+        assert!(!sample().is_empty());
+        assert!(Encoded::<()>::from_bytes_unchecked(Vec::new()).is_empty());
+        assert_eq!(sample().as_ref(), &[1, 2, 3, 255]);
+        assert_eq!(sample().as_bytes(), sample().as_ref());
+    }
+
+    /// Identity, order, and hash are all by bytes, and agree with each other.
+    #[test]
+    fn identity_is_bytes() {
+        assert_eq!(sample(), sample());
+        assert_ne!(sample(), other());
+        assert_eq!(
+            sample().cmp(&other()),
+            [1u8, 2, 3, 255][..].cmp(&[1, 2, 4][..])
+        );
+        assert_eq!(sample().partial_cmp(&other()), Some(Ordering::Less));
+        assert_eq!(hash(&sample()), hash(&sample()));
+        assert_ne!(hash(&sample()), hash(&other()));
+    }
+
+    #[cfg(feature = "serde")]
+    mod serde_impls {
+        use super::*;
+        use alloc::string::ToString;
+        use serde::{
+            de::value::{BoolDeserializer, BytesDeserializer, Error, SeqDeserializer},
+            Deserialize,
+        };
+
+        /// Through a positional format: the `Serialize` side and a full round trip.
+        #[test]
+        fn round_trips_through_postcard() {
+            let bytes = postcard::to_allocvec(&sample()).expect("serialize");
+            let (decoded, rest) =
+                postcard::take_from_bytes::<Encoded<()>>(&bytes).expect("deserialize");
+            assert_eq!(decoded, sample());
+            assert!(rest.is_empty(), "every byte written is read back");
+        }
+
+        /// A byte string, as CBOR and MessagePack deliver what `Serialize` wrote.
+        #[test]
+        fn accepts_a_byte_string() {
+            let encoded = sample();
+            let de = BytesDeserializer::<Error>::new(encoded.as_bytes());
+            assert_eq!(Encoded::<()>::deserialize(de), Ok(sample()));
+        }
+
+        /// A sequence, as JSON delivers bytes.
+        #[test]
+        fn accepts_a_byte_sequence() {
+            let de = SeqDeserializer::<_, Error>::new(sample().into_bytes().into_iter());
+            assert_eq!(Encoded::<()>::deserialize(de), Ok(sample()));
+        }
+
+        #[test]
+        fn rejects_anything_else_by_name() {
+            let de = BoolDeserializer::<Error>::new(true);
+            assert_eq!(
+                Encoded::<()>::deserialize(de).map_err(|e| e.to_string()),
+                Err("invalid type: boolean `true`, expected the encoded bytes of a value".into())
+            );
+        }
     }
 }

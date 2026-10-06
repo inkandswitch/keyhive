@@ -679,7 +679,7 @@ Bottom-up evaluators pass phases 1, 3 and 5 by construction. Phases 2 and 4 are 
 | Early exit on inert disputes (§7, obligation 2)   | Implemented: covered edges whose issuer is unreachable in the shared pass are never searched                       |
 | Subject-first demand ordering (§7, obligation 3)  | Not applicable to bottom-up evaluators; binding for any demand-driven one                                          |
 | Gift-cert scenario (§9)                           | `scenarios::gift_cert_attack_follows_liveness` pins the semantic claims: the gift needs no consent, removing the attacker drops the ladder out of Doc's graph while its internals stay self-grounded, a same-key re-add revives it and a fresh key does not, revocation by the audience is total, and an identical re-gift collides. The cost assertions (phases 2 and 3) cannot be observed through the trait and remain obligations for demand-driven backends |
-| Compute-denial analysis in the model document     | §7 has no counterpart in `README.md`, whose griefing section prices authority-denial only                          |
+| Compute-denial analysis in the model document     | Summarised in `README.md`, Griefing / Evaluation Cost, which links back here                                       |
 | Depth cap as a semantic lever                     | Analysed and not recommended; consensus-critical if ever adopted, since every replica must agree                   |
 | Differential testing of SQL backends              | `test_utils::conformance::gen::CertSet` can drive an SQL backend against `MemoryKeyline`                           |
 
