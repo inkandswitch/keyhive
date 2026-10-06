@@ -49,7 +49,8 @@ std = [
 # `derive(Arbitrary)` needs `std` (see keyhive_crypto).
 arbitrary = ["dep:arbitrary", "keyhive_crypto/arbitrary", "std"]
 serde = ["dep:serde", "ed25519-dalek/serde", "keyhive_codec/serde"]
-test_utils = ["dep:bolero", "arbitrary"]
+# Everything the full test suite needs, including the serde round-trip tests.
+test_utils = ["dep:bolero", "arbitrary", "serde"]
 
 [[bench]]
 name = "bench_evaluate"

@@ -277,6 +277,54 @@ mod tests {
         assert_eq!(signed.digest(), Digest::of(&sample().encode()));
     }
 
+    /// Identity is the received bytes plus the signature, so the same payload
+    /// under a different signature is a different certificate. `Verified`
+    /// compares as the `Signed` it was built from.
+    #[test]
+    fn identity_is_bytes_and_signature() {
+        let a = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
+        let forged = Signed::from_parts(a.encoded().clone(), Signature::from_bytes(&[0u8; 64]));
+        let read = Delegation::new(id(1), id(2), id(3), Power::Read);
+        let other = Signed::try_sign(&read, &signing_key(1)).expect("key is the issuer");
+        assert_ne!(a, forged);
+        assert_ne!(a, other);
+
+        let verified = a.clone().verify().expect("verifies");
+        assert_eq!(verified, a.clone().verify().expect("verifies"));
+        assert_ne!(verified, other.verify().expect("verifies"));
+        assert_eq!(Verifiable::verifying_key(&verified), id(1).verifying_key());
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn hash_agrees_with_eq() {
+        use std::{
+            collections::hash_map::DefaultHasher,
+            hash::{Hash, Hasher},
+        };
+        fn hash<T: Hash>(value: &T) -> u64 {
+            let mut state = DefaultHasher::new();
+            value.hash(&mut state);
+            state.finish()
+        }
+
+        let a = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
+        let b = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
+        let forged = Signed::from_parts(a.encoded().clone(), Signature::from_bytes(&[0u8; 64]));
+        assert_eq!(hash(&a), hash(&b));
+        assert_ne!(hash(&a), hash(&forged));
+
+        let va = a.verify().expect("verifies");
+        let vb = b.verify().expect("verifies");
+        let read = Delegation::new(id(1), id(2), id(3), Power::Read);
+        let vc = Signed::try_sign(&read, &signing_key(1))
+            .expect("key is the issuer")
+            .verify()
+            .expect("verifies");
+        assert_eq!(hash(&va), hash(&vb));
+        assert_ne!(hash(&va), hash(&vc));
+    }
+
     #[test]
     fn deterministic() {
         let a = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");

@@ -171,6 +171,8 @@ impl<'a> arbitrary::Arbitrary<'a> for Id {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "serde")]
+    use alloc::string::ToString;
 
     #[test]
     fn rejects_non_curve_points() {
@@ -233,11 +235,17 @@ mod tests {
         assert_eq!(Id::deserialize(exact), Ok(id));
 
         let short = Seq::new(id.to_bytes()[..31].to_vec().into_iter());
-        assert!(Id::deserialize(short).is_err());
+        assert_eq!(
+            Id::deserialize(short).map_err(|e| e.to_string()),
+            Err("invalid length 31, expected the 32 bytes of an Ed25519 verifying key".into())
+        );
 
         let mut extra = id.to_bytes().to_vec();
         extra.push(0);
-        assert!(Id::deserialize(Seq::new(extra.into_iter())).is_err());
+        assert_eq!(
+            Id::deserialize(Seq::new(extra.into_iter())).map_err(|e| e.to_string()),
+            Err("invalid length 33, expected the 32 bytes of an Ed25519 verifying key".into())
+        );
 
         let not_a_point = Seq::new([0x02u8; 32].into_iter());
         assert!(Id::deserialize(not_a_point).is_err());
