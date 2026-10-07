@@ -1,0 +1,35 @@
+[package]
+name = "keyline_memory"
+version = "0.1.0"
+description = "The in-memory reference backend for Keyline"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+keyhive_codec = { version = "0.1.0", path = "../keyhive_codec", default-features = false }
+keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", default-features = false }
+keyline = { version = "0.1.0", path = "../keyline", default-features = false }
+tracing = { version = "0.1.40", default-features = false, features = [
+  "attributes",
+] }
+
+[dev-dependencies]
+divan = "0.1.15"
+# The scenarios run in every configuration, including `--no-default-features`.
+keyline = { version = "0.1.0", path = "../keyline", default-features = false, features = [
+  "conformance",
+] }
+
+[features]
+default = ["std"]
+std = ["keyhive_codec/std", "keyhive_crypto/std", "keyline/std", "tracing/std"]
+# The full conformance suite, including the `bolero` laws.
+test_utils = ["keyline/test_utils"]
+
+[[bench]]
+name = "bench_evaluate"
+harness = false

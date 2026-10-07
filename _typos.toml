@@ -4,3 +4,4 @@ encrypter = "encrypter"
 
 [default.extend-identifiers]
 r_ba = "r_ba"
+FO = "FO"

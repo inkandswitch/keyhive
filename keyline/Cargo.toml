@@ -1,0 +1,60 @@
+[package]
+name = "keyline"
+version = "0.1.0"
+description = "Keyline: Keyhive's convergent authority graph of signed delegations and revocations"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+arbitrary = { workspace = true, optional = true }
+bijoux = { version = "0.3", default-features = false, features = ["u32"] }
+bolero = { workspace = true, optional = true }
+# `zeroize` clears signing keys on drop and is `no_std`. `fast` (precomputed
+# tables) is left to the consumer: it speeds up verification but grows Wasm
+# binaries.
+ed25519-dalek = { version = "2.1", default-features = false, features = ["zeroize"] }
+keyhive_codec = { version = "0.1.0", path = "../keyhive_codec", default-features = false }
+keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", default-features = false }
+serde = { version = "1.0", default-features = false, features = [
+  "alloc",
+  "derive",
+], optional = true }
+sha2 = { version = "0.10", default-features = false, optional = true }
+# TODO(thiserror-2): the workspace pins thiserror 1, which is std-only. Pin 2 here
+# (no_std-capable) until the rest of the workspace migrates; then use `workspace = true`.
+thiserror = { version = "2", default-features = false }
+tracing = { version = "0.1.40", default-features = false, features = [
+  "attributes",
+] }
+
+[dev-dependencies]
+arbitrary = { workspace = true }
+bolero = { workspace = true }
+curve25519-dalek = "4.1"
+ed25519-dalek = { version = "2.1", features = ["hazmat", "rand_core"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+sha2 = "0.10"
+
+[features]
+default = ["std"]
+std = [
+  "ed25519-dalek/std",
+  "keyhive_codec/std",
+  "keyhive_crypto/std",
+  "serde?/std",
+  "thiserror/std",
+  "tracing/std",
+]
+# `derive(Arbitrary)` needs `std` (see keyhive_crypto).
+arbitrary = ["dep:arbitrary", "std"]
+serde = ["dep:serde", "ed25519-dalek/serde", "keyhive_codec/serde"]
+# The fixtures and conformance scenarios, without `std`: what a backend needs to
+# run the scenarios in a `no_std` build.
+conformance = ["dep:sha2", "ed25519-dalek/hazmat"]
+# Everything the full test suite needs: the scenarios plus the generator, the
+# oracles, the `bolero` laws, and the serde round-trip tests.
+test_utils = ["arbitrary", "conformance", "dep:bolero", "serde"]

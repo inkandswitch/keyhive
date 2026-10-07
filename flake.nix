@@ -221,6 +221,9 @@
             cargo clippy --workspace --all-targets --features test_utils,debug_events -- -D warnings
           '';
 
+          # `--features test_utils` is load-bearing: without it the conformance
+          # laws and every crate's property tests are compiled out, and the
+          # suite still reports green.
           ci-test = mkCheck "ci-test" ''
             cargo test --workspace --exclude keyhive_wasm --features test_utils
           '';
@@ -257,7 +260,16 @@
           # `std`, so they are compiled out and `beekem` cannot do without
           # them. Add `-p beekem` here once `bincode` is replaced.
           ci-no-std = mkCheck "ci-no-std" ''
-            cargo check -p keyhive_crypto --no-default-features
+            cargo check -p keyhive_codec -p keyhive_crypto -p keyline -p keyline_memory --no-default-features
+            # Browser Wasm. This target ships `std`, so it does not prove
+            # no_std either. It does reject `getrandom` without its `js`
+            # feature, which is what kept `keyline` off Wasm until the
+            # workspace turned off `chacha20poly1305`'s default features.
+            cargo check -p keyhive_codec -p keyhive_crypto -p keyline -p keyline_memory --no-default-features --target wasm32-unknown-unknown
+            # Unit tests, and every conformance scenario against MemoryKeyline,
+            # on the no_std crate code: the harness is std, the crates never
+            # link it.
+            cargo test -p keyline -p keyline_memory --no-default-features
           '';
 
           ci-deny = mkCheck "ci-deny" ''
@@ -281,21 +293,19 @@
             '';
           };
 
-        };
+          # Property tests. BOLERO_RANDOM_ITERATIONS bounds each harness (bolero
+          # also reads BOLERO_RANDOM_TEST_TIME_MS); hosted CI runs this quick
+          # sweep per PR and a thorough one nightly (see test-bolero.yml).
+          # Harnesses live in `keyline`: codec round-trip and canonicality, and
+          # the conformance laws, which check `MemoryKeyline` against two
+          # independent oracles.
+          ci-bolero = mkCheck "ci-bolero" ''
+            export BOLERO_RANDOM_ITERATIONS="''${BOLERO_RANDOM_ITERATIONS:-1000}"
+            export RUST_BACKTRACE=1
+            cargo test --workspace --exclude keyhive_wasm --features test_utils --tests
+          '';
 
-        # Property tests. BOLERO_RANDOM_ITERATIONS bounds each bolero harness
-        # (bolero also reads BOLERO_RANDOM_TEST_TIME_MS); hosted CI runs a quick
-        # and a thorough sweep (see test-bolero.yml).
-        #
-        # NOT in the `ci` aggregate: there are no `bolero::check!` harnesses in
-        # the workspace yet (bolero is only a workspace dependency), so today
-        # this is `ci-test` under another name. It exists so the wiring is in
-        # place when the first harness lands; move it into `ci-checks` then.
-        ci-bolero = mkCheck "ci-bolero" ''
-          export BOLERO_RANDOM_ITERATIONS="''${BOLERO_RANDOM_ITERATIONS:-100}"
-          export RUST_BACKTRACE=1
-          cargo test --workspace --exclude keyhive_wasm --features test_utils --tests
-        '';
+        };
 
         # Executes the wasm-bindgen-test suites under Node. `.cargo/config.toml`
         # sets `wasm-bindgen-test-runner` as the wasm32 runner; the CLI must
@@ -423,7 +433,18 @@
             set -x
             # No args: full workspace (slow, deliberate).
             # CI: keyhive-ci-mutants --in-diff pr.diff
-            cargo mutants --workspace "$@"
+            #
+            # Exit 3 means only timeouts: every mutant was detected, some by
+            # making the tests stop terminating (e.g. an inverted fixpoint
+            # exit). Missed mutants exit 2, which takes precedence, and still
+            # fail the job.
+            #
+            # A fixed iteration count gives every mutant the same number of
+            # generated sets per bolero harness, instead of one second each
+            # in a debug build. bolero draws those sets from fresh entropy, so
+            # the inputs still differ between runs.
+            export BOLERO_RANDOM_ITERATIONS="''${BOLERO_RANDOM_ITERATIONS:-50}"
+            cargo mutants --workspace "$@" || [ $? -eq 3 ]
           '';
         };
 
@@ -439,13 +460,14 @@
             # away, so without these a green board reads as full coverage
             # while the wasm suites went unexecuted.
             echo
-            echo "NOT RUN here (hosted CI runs them in ci.yml / test-bolero.yml): ci-wasm-node, ci-browser, ci-e2e, ci-mutants, ci-bolero"
+            echo "NOT RUN here (hosted CI runs them in ci.yml / test-bolero.yml): ci-wasm-node, ci-browser, ci-e2e, ci-mutants"
             echo "  nix run .#ci-wasm-node  # wasm-bindgen-test suites under Node"
             echo "  nix run .#ci-browser    # same suites in Chromium + Firefox"
             echo "  nix run .#ci-e2e        # Playwright against the web build"
             echo "  nix run .#ci-mutants    # full-workspace mutation testing (slow;"
             echo "                          # CI runs it scoped to the PR diff)"
-            echo "  nix run .#ci-bolero     # property tests (no harnesses yet; == ci-test)"
+            echo
+            echo "ci-bolero ran above at 1000 iterations per harness; test-bolero.yml sweeps harder nightly."
           '';
         };
 
@@ -461,8 +483,11 @@
           "release:host" = cmd "Build release for ${system}"
             "${cargoPath} build --release";
 
-          "test:all" = cmd "Run all tests"
-            "rust:test && wasm:test:node && test:ts:web";
+          "test:host" = cmd "Run every host test, all features (what CI runs)"
+            ''exec ${ci-checks.ci-test}/bin/keyhive-ci-test "$@"'';
+
+          "test:all" = cmd "Run all tests (host, wasm under node, Playwright)"
+            "test:host && wasm:test:node && test:ts:web";
 
           "test:ts:web" = cmd "Run keyhive_wasm Typescript tests in Playwright"
             ''exec ${ci-e2e}/bin/keyhive-ci-e2e "$@"'';
@@ -591,7 +616,7 @@
           })
           (ci-checks // {
             ci = ci-all;
-            inherit ci-bolero ci-browser ci-e2e ci-mutants ci-wasm-node;
+            inherit ci-browser ci-e2e ci-mutants ci-wasm-node;
           });
 
         formatter = pkgs.alejandra;
