@@ -158,8 +158,6 @@ pub fn admin_reach_covers_a_transited_node<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, CAROL), Some(Power::Admin));
 }
 
-/// Dan holds only Read, so Dan's admin reach is {Dan}. Alice's membership
-/// never transits Dan, so Dan's revocation of it is inert; Dan's own hop is Dan's to revoke.
 /// A non-admin's revocation covers routes through their own node and nothing
 /// else. Dan is an Edit member of Mods, so his reach is {Dan}. Eve holds Edit
 /// in Mods through a seat Dan issued, and Read through Mods itself. Dan
@@ -277,8 +275,8 @@ pub fn senior_role_admin_revokes_inside_junior_role<K: Keyline + Default>() {
 
 /// Dan supplies Members into Doc. He controls his own supply (revoking it cuts
 /// every Member off from Doc) but not Members' roster, which never routes
-/// through him. Even though Dan reaches
-/// Doc at Admin (through Mods), Members is not in his reach.
+/// through him. Dan reaches Doc at Admin through Mods, but Members is not in
+/// his reach.
 pub fn supply_is_daisy_chained<K: Keyline + Default>() {
     let supply = d(DAN, MEMBERS, DOC, Power::Edit);
     let alice_member = d(CAROL, ALICE, MEMBERS, Power::Admin);
@@ -431,7 +429,8 @@ pub fn reissue_with_citation_heals<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
 }
 
-/// Rotation is escape. Dan administers `Members`, so `Members` is in his admin
+/// Rotating a role escapes an ex-admin's frozen reach. Dan administers
+/// `Members`, so `Members` is in his admin
 /// reach forever and his revocations inside it stand. Minting a successor role,
 /// supplying it and re-rostering into it puts the survivors somewhere his
 /// frozen reach does not name: his revocations there are inert.
@@ -612,9 +611,10 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
 }
 
-/// The fixtures skip signing (`Verified::assume`). This is the one scenario
-/// that goes through `Signed::try_sign` and `Signed::verify` for every
-/// certificate, so a backend cannot depend on anything the shortcut leaves out.
+/// The fixtures skip signing (`Verified::assume`). This scenario goes through
+/// `Signed::try_sign` and `Signed::verify` for every certificate, so the
+/// production path runs at least once, and checks that the signed set gives
+/// the same answers and the same digest as the fixtures.
 pub fn signed_certificates_agree_with_fixtures<K: Keyline + Default>() {
     let (fixtures, carol_owner, alice_member) = standard::<K>();
     let mut real = K::default();
@@ -631,11 +631,14 @@ pub fn signed_certificates_agree_with_fixtures<K: Keyline + Default>() {
     assert!(real.insert(signed(r(CAROL, &alice_member))));
     assert!(!real.insert(signed(r(CAROL, &alice_member))));
 
-    assert_eq!(real.members(id(DOC)), {
-        let mut g = fixtures;
-        g.insert(assume_verified(r(CAROL, &alice_member)));
-        g.members(id(DOC))
-    });
+    let mut fixtures = fixtures;
+    fixtures.insert(assume_verified(r(CAROL, &alice_member)));
+    assert_eq!(real.members(id(DOC)), fixtures.members(id(DOC)));
+    assert_eq!(real.digest(), fixtures.digest());
+    assert_eq!(
+        real.is_live(&alice_member.digest()),
+        fixtures.is_live(&alice_member.digest())
+    );
     assert_eq!(power(&real, DOC, ALICE), None);
 }
 

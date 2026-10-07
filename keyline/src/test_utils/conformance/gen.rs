@@ -88,7 +88,7 @@ impl<W: Clone + Encode + Decode> CertSet<W> {
     }
 
     /// The same set in an order drawn from `seed`: a Fisher–Yates shuffle
-    /// over a SplitMix64 stream, so every permutation is reachable.
+    /// over a SplitMix64 stream: an unbiased shuffle for the seed.
     pub fn shuffled(&self, seed: u64) -> CertSet<W> {
         let mut state = seed;
         let mut next = move || {
@@ -175,14 +175,14 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         // grows faster than set size, and the laws evaluate many times per set.
         let shape = u.int_in_range(0..=4)?;
 
-        // Shape 1, the one where clamping bites: a role
-        // `m` supplied into `s`; `k` administers `m`; `e` is a member of `m`
-        // and also holds an independent, weaker grant over `s`; `e` grants `f`;
-        // `k` revokes that grant. Random wiring produces this rarely. The
-        // levels are chosen so gating and clamping always disagree: the role
-        // route is strictly better than the independent one, the supply is
-        // below Admin (else `s` is in `k`'s reach and the grant is dead),
-        // and the grant asks for at least the role level.
+        // Shape 1, clamping: a role `m` supplied into `s`; `k` administers
+        // `m`; `e` is a member of `m` and also holds an independent, weaker
+        // delegation over `s`; `e` delegates to `f`; `k` revokes that
+        // delegation. Random wiring produces this rarely. The levels are chosen
+        // so gating and clamping disagree unless another edge masks them: the
+        // role route is strictly better than the independent one, the supply
+        // is below Admin (else `s` is in `k`'s reach and the delegation is
+        // dead), and the delegation asks for at least the role level.
         if shape == 1 {
             let s_n = u.int_in_range(1..=subjects)?;
             let s = id(s_n);
@@ -208,11 +208,11 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
             ]);
         }
 
-        // Shape 2, two chained clamps: `e` and `f` each
-        // stand through their own role, `e` also holds a weaker direct grant,
-        // and each grants the other (and `f` grants `g`), revoked by the other's
-        // role. Each grant lies on the other's avoiding derivation, so a cap
-        // computed as a greatest fixed point lets them certify each other.
+        // Shape 2, two chained clamps: `e` and `f` each stand through their
+        // own role, `e` also holds a weaker direct delegation, and each
+        // delegates to the other (and `f` to `g`), each revoked by its issuer's
+        // role. Each delegation lies on the other's avoiding derivation, so a
+        // cap computed as a greatest fixed point lets them certify each other.
         if shape == 2 {
             let s_n = u.int_in_range(1..=subjects)?;
             let s = id(s_n);

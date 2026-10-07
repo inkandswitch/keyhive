@@ -253,6 +253,14 @@ impl CertificateId {
             CertificateId::Revocation(r) => r.as_slice(),
         }
     }
+
+    /// The digest bytes, by value.
+    pub fn to_bytes(&self) -> [u8; Digest::<Delegation>::LEN] {
+        match *self {
+            CertificateId::Delegation(d) => d.into(),
+            CertificateId::Revocation(r) => r.into(),
+        }
+    }
 }
 
 impl From<Digest<Delegation>> for CertificateId {

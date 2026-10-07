@@ -8,8 +8,7 @@
 //!   for rule: levels as thresholds, one context per covered certificate, and
 //!   no cap fixed point at all.
 //!
-//! Both are written to be read side by side with the design document, not for
-//! speed. A backend must agree with both on every generated set, and a law
+//! Both follow the design document line by line and make no attempt at speed. A backend must agree with both on every generated set, and a law
 //! with no backend checks that they agree with each other.
 //!
 //! Both share their inputs with every backend: `Delegation::digest`, `Power`'s

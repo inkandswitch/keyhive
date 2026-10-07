@@ -58,6 +58,15 @@ impl Id {
     pub fn to_bytes(&self) -> [u8; Self::LEN] {
         self.0
     }
+
+    /// [`Id::decode`] for a named field of a larger encoding, so that an
+    /// invalid key reports which field it was.
+    pub(crate) fn decode_field(bytes: &[u8], field: &'static str) -> Result<Self, DecodeError> {
+        Id::decode(bytes).map_err(|e| match e {
+            DecodeError::InvalidField(_) => DecodeError::InvalidField(field),
+            other => other,
+        })
+    }
 }
 
 /// A signing key's verifying key is always canonical and of prime order.
@@ -125,33 +134,6 @@ impl Decode for Id {
     }
 }
 
-impl Id {
-    /// [`Id::decode`] for a named field of a larger encoding, so that an
-    /// invalid key reports which field it was.
-    pub(crate) fn decode_field(bytes: &[u8], field: &'static str) -> Result<Self, DecodeError> {
-        Id::decode(bytes).map_err(|e| match e {
-            DecodeError::InvalidField(_) => DecodeError::InvalidField(field),
-            other => other,
-        })
-    }
-}
-
-/// Why bytes are not an [`Id`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum InvalidId {
-    /// The bytes do not decompress to a curve point.
-    #[error("bytes are not an Ed25519 curve point")]
-    NotAPoint,
-
-    /// The bytes decompress, but are not the point's canonical encoding.
-    #[error("bytes are a non-canonical encoding of a curve point")]
-    NonCanonical,
-
-    /// The point is in the small-order subgroup.
-    #[error("curve point has small order")]
-    SmallOrder,
-}
-
 #[cfg(feature = "serde")]
 impl serde::Serialize for Id {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -207,6 +189,22 @@ impl<'a> arbitrary::Arbitrary<'a> for Id {
         let seed: [u8; 32] = u.arbitrary()?;
         Ok(Id::from(&ed25519_dalek::SigningKey::from(seed)))
     }
+}
+
+/// Why bytes are not an [`Id`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidId {
+    /// The bytes do not decompress to a curve point.
+    #[error("bytes are not an Ed25519 curve point")]
+    NotAPoint,
+
+    /// The bytes decompress, but are not the point's canonical encoding.
+    #[error("bytes are a non-canonical encoding of a curve point")]
+    NonCanonical,
+
+    /// The point is in the small-order subgroup.
+    #[error("curve point has small order")]
+    SmallOrder,
 }
 
 #[cfg(test)]

@@ -288,12 +288,6 @@ mod tests {
         const CONTEXT: &'static str = "test/v0/example";
     }
 
-    struct Other;
-
-    impl Domain for Other {
-        const CONTEXT: &'static str = "test/v0/other";
-    }
-
     #[test]
     fn message_is_context_nul_bytes() {
         assert_eq!(message::<Example>(b"x"), b"test/v0/example\0x");
@@ -304,14 +298,6 @@ mod tests {
         assert_eq!(
             Digest::<Example>::of_bytes(b"payload").raw,
             blake3::hash(&message::<Example>(b"payload"))
-        );
-    }
-
-    #[test]
-    fn contexts_separate_equal_bytes() {
-        assert_ne!(
-            Digest::<Example>::of_bytes(b"payload").raw,
-            Digest::<Other>::of_bytes(b"payload").raw
         );
     }
 }

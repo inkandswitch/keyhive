@@ -207,7 +207,7 @@ mod tests {
         for (source, helper) in sources {
             let names = source
                 .lines()
-                .filter_map(|line| line.strip_prefix("pub fn "))
+                .filter_map(|line| line.trim_start().strip_prefix("pub fn "))
                 .filter_map(|rest| rest.split(['<', '(']).next())
                 .filter(|name| *name != helper);
             for name in names {

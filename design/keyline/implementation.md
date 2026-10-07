@@ -143,7 +143,7 @@ The type does not check the claim. `Encode::encode` produces canonical bytes fro
 
 ### `Digest<T>`
 
-`keyhive_crypto::digest::Digest<T>`: BLAKE3, 32 bytes, phantom-typed. `keyline` obtains it as `Digest::of(&Encoded<T>)`, which requires `T: Domain` and hashes the [domain-separated](#domain-separation) bytes. The `std`-gated `Digest::hash` (which needs `bincode`) is not used; its `T: Serialize` bound sits on `hash()` alone.
+`keyhive_crypto::digest::Digest<T>`: BLAKE3, 32 bytes, phantom-typed. `keyline` obtains it as `Digest::of(&Encoded<T>)`, which requires `T: Domain` and hashes the [domain-separated](#domain-separation) bytes, or as `Digest::of_bytes` for a composite with no `T` value of its own, such as the set digest. The `std`-gated `Digest::hash` (which needs `bincode`) is not used; its `T: Serialize` bound sits on `hash()` alone.
 
 ### Domain Separation
 
@@ -155,7 +155,7 @@ The keys that sign Keyline certificates may also sign in other protocols, such a
 | `Revocation<W>`  | `keyline/v0/revocation`      | signing, and its digest           |
 | `CertificateSet` | `keyline/v0/certificate_set` | the set digest only; never signed |
 
-Contexts contain no NUL (checked at compile time), so the context can be read back off any message and two contexts never produce the same message. The two kinds of certificate are separated by their contexts, which is also why their digests can share one key type without a kind tag. The trait is `keyhive_crypto::domain_separator::Domain`. The free function `domain_separator::message::<T>` builds the prefixed bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input; being a free function, no implementation can override it. `v0` is the protocol version. It changes whenever the meaning of signed bytes does, so a certificate from one version never verifies under another. Each type declares its context next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core` today, still relies on that protocol's formats.
+Contexts contain no NUL (checked at build time, when a type is first signed or hashed), so the context can be read back off any message and two contexts never produce the same message. The two kinds of certificate are separated by their contexts, which is also why their digests can share one key type without a kind tag. The trait is `keyhive_crypto::domain_separator::Domain`. The free function `domain_separator::message::<T>` builds the prefixed bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input; being a free function, no implementation can override it. `v0` is the protocol version. It changes whenever the meaning of signed bytes does, so a certificate from one version never verifies under another. Each type declares its context next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core` today, still relies on that protocol's formats.
 
 ### `Signed<T>` and `Verified<T>`
 

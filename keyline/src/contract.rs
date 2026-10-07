@@ -75,12 +75,14 @@ pub trait Keyline {
     /// `effective_power(x, x)` is `Some(Admin)` for every `x`.
     fn effective_power(&self, subject: Id, audience: Id) -> Option<Power>;
 
-    /// Every `Id` other than `subject` itself with a live route to `subject`, with its
-    /// effective power. The materialized view.
+    /// Every `Id` other than `subject` itself with a live route to `subject`,
+    /// with its effective power.
     fn members(&self, subject: Id) -> BTreeMap<Id, Power>;
 
-    /// Whether the named delegation participates in any live derivation.
-    /// `false` for digests not in the set.
+    /// Whether the named delegation is live: its issuer has standing over its
+    /// subject on a derivation that avoids every node its revocations cover,
+    /// and its audience has not revoked it. `false` for digests not in the
+    /// set.
     fn is_live(&self, cert: &Digest<Delegation>) -> bool;
 
     /// A digest of the whole set. Same set (in any order), same digest; usable
@@ -109,14 +111,8 @@ impl Domain for CertificateSet {
 /// and revocation digests are domain-separated, so they never collide and
 /// need no kind tag here.
 pub fn set_digest<I: IntoIterator<Item = CertificateId>>(ids: I) -> Digest<CertificateSet> {
-    let mut sorted: Vec<[u8; Digest::<Delegation>::LEN]> = ids
-        .into_iter()
-        .map(|id| {
-            id.as_slice()
-                .try_into()
-                .expect("every digest is Digest::LEN bytes")
-        })
-        .collect();
+    let mut sorted: Vec<[u8; Digest::<Delegation>::LEN]> =
+        ids.into_iter().map(|id| id.to_bytes()).collect();
     sorted.sort_unstable();
     sorted.dedup();
     Digest::of_bytes(sorted.as_flattened())

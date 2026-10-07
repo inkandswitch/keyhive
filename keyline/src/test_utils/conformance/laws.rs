@@ -117,8 +117,8 @@ where
         });
 }
 
-/// Every query agrees with the threshold form, which reaches its answers by a
-/// different route than [`naive`]: thresholds instead of values, and each
+/// Every query agrees with the threshold form, which computes its answers
+/// differently from [`naive`]: thresholds instead of values, and each
 /// covered certificate's level read off its own context instead of a cap
 /// fixed point.
 pub fn matches_threshold_oracle<K: Keyline + Default>()

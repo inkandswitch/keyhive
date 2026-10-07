@@ -199,7 +199,6 @@ mod tests {
         );
         assert_eq!(sample().partial_cmp(&other()), Some(Ordering::Less));
         assert_eq!(hash(&sample()), hash(&sample()));
-        assert_ne!(hash(&sample()), hash(&other()));
     }
 
     #[cfg(feature = "serde")]

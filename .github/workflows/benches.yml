@@ -33,7 +33,7 @@ jobs:
           - { package: keyhive_core, bench: bench_reachable_prekey_ops_all }
           - { package: keyhive_core, bench: bench_reverse_topsort }
           - { package: keyhive_core, bench: bench_toggling_delegate_revoke }
-          - { package: keyline, bench: bench_evaluate }
+          - { package: keyline_memory, bench: bench_evaluate }
 
     steps:
       - uses: actions/checkout@v4

@@ -13,7 +13,10 @@ rust-version.workspace = true
 arbitrary = { workspace = true, optional = true }
 bijoux = { version = "0.3", default-features = false, features = ["u32"] }
 bolero = { workspace = true, optional = true }
-ed25519-dalek = { version = "2.1", default-features = false }
+# `zeroize` clears signing keys on drop and is `no_std`. `fast` (precomputed
+# tables) is left to the consumer: it speeds up verification but grows Wasm
+# binaries.
+ed25519-dalek = { version = "2.1", default-features = false, features = ["zeroize"] }
 keyhive_codec = { version = "0.1.0", path = "../keyhive_codec", default-features = false }
 keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", default-features = false }
 serde = { version = "1.0", default-features = false, features = [

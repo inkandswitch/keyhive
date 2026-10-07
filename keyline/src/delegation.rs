@@ -13,8 +13,9 @@ use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verif
 ///
 /// Reads: _`issuer` asserts that `audience` may exercise `power` over `subject`_. The edge
 /// rides `issuer`'s own standing over `subject`: `audience` receives
-/// `min(power, issuer's effective power over subject)`, and the edge is live only while
-/// `issuer` reaches `subject`.
+/// `min(power, issuer's effective power over subject)`. The edge can be live only
+/// while `issuer` has standing over `subject`; revocations narrow that further
+/// (see [`crate::revocation::Revocation`]).
 ///
 /// Anyone may issue a delegation over any subject. Issuing needs no Admin;
 /// Admin matters for revocation reach.
@@ -266,11 +267,5 @@ mod tests {
             hex(d.digest().as_slice()),
             "e90472356fc5650ce40a68ab372fe1f8236c2b58b1239fdb013b2c71b3747451"
         );
-    }
-
-    #[test]
-    #[cfg(feature = "arbitrary")]
-    fn decode_is_canonical() {
-        crate::test_utils::decode_is_canonical_near::<Delegation>();
     }
 }

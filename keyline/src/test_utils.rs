@@ -201,8 +201,8 @@ impl Mutation {
 /// yields at most 64 bytes, below every certificate's minimum), so a
 /// raw-bytes harness would never reach its assertion. Starting from a valid
 /// encoding keeps the mutated input near the inputs that matter: tags,
-/// counts, lengths, and trailing bytes. At least one mutation always applies;
-/// the unmutated round trip is the codec laws' job.
+/// counts, lengths, and trailing bytes. At least one mutation is drawn (it may
+/// be a no-op); the unmutated round trip is the codec laws' job.
 #[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 pub fn decode_is_canonical_near<T>()
 where

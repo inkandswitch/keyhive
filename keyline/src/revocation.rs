@@ -38,7 +38,10 @@ use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verif
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
-    serde(bound = "W: serde::Serialize + serde::de::DeserializeOwned")
+    serde(bound(
+        serialize = "W: serde::Serialize",
+        deserialize = "W: serde::Deserialize<'de>"
+    ))
 )]
 pub struct Revocation<W> {
     /// Signer. Determines the admin reach that scopes the effect.

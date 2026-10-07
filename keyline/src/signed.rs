@@ -184,18 +184,14 @@ impl<T> Verified<T> {
     pub fn into_parts(self) -> (T, Signed<T>) {
         (self.payload, self.signed)
     }
+}
 
-    /// Construct without checking anything. Test fixtures only: lets the
+#[cfg(any(test, feature = "conformance"))]
+impl<T: Decode> Verified<T> {
+    /// Decode without verifying the signature. Test fixtures only: lets the
     /// conformance suite build certificates without paying for signing.
-    #[cfg(any(test, feature = "conformance"))]
-    pub(crate) fn assume(signed: Signed<T>) -> Self
-    where
-        T: Decode,
-    {
-        let payload = signed
-            .encoded
-            .decode()
-            .expect("test fixture must be canonically encoded");
+    pub(crate) fn assume(signed: Signed<T>) -> Self {
+        let payload = signed.encoded.decode().expect("test fixture must decode");
         Verified { payload, signed }
     }
 }
@@ -261,7 +257,7 @@ pub enum VerifyError {
     BadSignature,
 
     /// The bytes are not the canonical encoding of a `T`.
-    #[error("payload does not decode: {0}")]
+    #[error("payload is not a canonical encoding: {0}")]
     Decode(#[from] DecodeError),
 }
 
@@ -395,21 +391,14 @@ mod tests {
             state.finish()
         }
 
+        // `Hash` promises only that equal values hash equal.
         let a = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
         let b = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
-        let forged = Signed::from_parts(a.encoded().clone(), Signature::from_bytes(&[0u8; 64]));
         assert_eq!(hash(&a), hash(&b));
-        assert_ne!(hash(&a), hash(&forged));
 
         let va = a.verify().expect("verifies");
         let vb = b.verify().expect("verifies");
-        let read = Delegation::new(id(1), id(2), id(3), Power::Read);
-        let vc = Signed::try_sign(&read, &signing_key(1))
-            .expect("key is the issuer")
-            .verify()
-            .expect("verifies");
         assert_eq!(hash(&va), hash(&vb));
-        assert_ne!(hash(&va), hash(&vc));
     }
 
     #[test]

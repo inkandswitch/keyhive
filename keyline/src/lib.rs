@@ -20,8 +20,9 @@
 //! # What this crate does not do
 //!
 //! A backend never checks signatures: [`contract::Keyline::insert`] takes a
-//! [`certificate::VerifiedCertificate`], which outside the `conformance` and `test_utils` features
-//! only [`certificate::Certificate::verify`] can make.
+//! [`certificate::VerifiedCertificate`], which outside the `conformance` and
+//! `test_utils` features only signature verification
+//! ([`signed::Signed::verify`], [`certificate::Certificate::verify`]) can make.
 //! The crate knows nothing of prekeys, CGKA, documents, or groups, and is
 //! synchronous: concurrency is the wrapper's job. A wrapper holds an
 //! implementation behind a lock and converts its typed handles to [`id::Id`]s at
@@ -30,7 +31,8 @@
 //! # `no_std` support
 //!
 //! `no_std` with `alloc`. The `std` feature (default) enables the `std` features
-//! of `tracing` and `thiserror`; both crates are used in every configuration.
+//! of its dependencies; `tracing` and `thiserror` are used in every
+//! configuration.
 //!
 //! Builds for `wasm32-unknown-unknown` with `--no-default-features`, which
 //! `ci-no-std` checks. Bare-metal targets without atomic compare-and-swap

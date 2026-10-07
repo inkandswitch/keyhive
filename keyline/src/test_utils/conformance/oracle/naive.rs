@@ -1,6 +1,7 @@
 //! The value-form program from `design/keyline/implementation.md`
-//! § Evaluation, executed naively: plain tuple fixpoints (Jacobi iteration
-//! over `BTreeMap`s), with caps as a second fixed point.
+//! § Evaluation, executed naively: plain tuple fixpoints over `BTreeMap`s
+//! (Jacobi iteration for levels, caps raised in place), with caps as a second
+//! fixed point.
 
 use super::Levels;
 use crate::{

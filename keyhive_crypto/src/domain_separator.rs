@@ -15,7 +15,8 @@ pub const SEPARATOR: &[u8] = SEPARATOR_STR.as_bytes();
 /// were valid in two formats, one signature would be valid in both. Each
 /// signed or hashed encoding is therefore prefixed with a context naming the
 /// protocol, its version, and the type, then a NUL byte. Contexts contain no
-/// NUL (checked at compile time), so the context can be read back off any
+/// NUL (checked when a type is first signed or hashed, as a
+/// post-monomorphization error), so the context can be read back off any
 /// message, and two different contexts never produce the same message.
 ///
 /// This separates every type that implements `Domain` from every other.

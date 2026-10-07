@@ -2,7 +2,7 @@
 //!
 //! - `realistic`: one document, an apex role, three member roles with `n`
 //!   humans each, a handful of revocations. What a query costs in the common case.
-//! - `club_ladder`: `k` roles, each a member of the previous: the quadratic
+//! - `club_ladder`: `k` roles, each administered by the previous: the quadratic
 //!   fact-space shape from `design/keyline/evaluation-notes.md` §7.
 //! - `revocation_spree`: one ex-admin revokes `k` certificates; with context
 //!   dedup this should scale like one dispute, not `k`.
@@ -72,8 +72,8 @@ fn realistic(n: u8) -> MemoryKeyline<()> {
     g
 }
 
-/// Doc → role₁ → role₂ → … → roleₖ, each an Admin member of the previous, with
-/// one human at the bottom.
+/// role₁ … roleₖ, each rooted at the previous one (which administers it) and
+/// supplied into Doc at Admin, with one human at the bottom.
 fn club_ladder(k: u8) -> MemoryKeyline<()> {
     let mut certs = vec![d(DOC, OWNERS, DOC, Power::Admin)];
     let mut prev = OWNERS;

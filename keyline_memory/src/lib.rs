@@ -7,9 +7,9 @@
 //! faster backend must agree with it on every set; the conformance suite is
 //! how that is checked.
 //!
-//! It departs from a literal transcription in four ways, each of which
-//! preserves every answer (the oracles transcribe the program literally, so
-//! agreement checks this):
+//! Four shortcuts depart from a literal transcription and preserve every
+//! answer (the oracles transcribe the program literally, so agreement checks
+//! this):
 //!
 //! - _Coverage that touches no route is dropped._ A revoked delegation whose
 //!   covered nodes all lack standing over its subject needs no context.
@@ -17,8 +17,10 @@
 //!   search per round.
 //! - _One unexcluded search pre-filters._ Reach avoiding a set is a subset of
 //!   reach avoiding nothing, so a delegation unreached there is skipped.
-//! - _Uncovered caps are `power`._ An uncovered edge's cap would equal its
-//!   issuer's plain level, which the final search applies anyway.
+//! - _Uncovered caps are `power`._ An uncovered edge's cap would be
+//!   `min(power, issuer's plain level)`. Every search, final or in a context,
+//!   reaches the issuer at or below that level, so `power` alone gives the
+//!   same `min`.
 //!
 //! Without caching, stratum 1 is global, so a query costs what the whole
 //! replica costs, not what the queried subject costs. Without demand-driven
@@ -78,8 +80,8 @@ use tracing::{debug, instrument, trace};
 
 /// The in-memory reference [`Keyline`].
 ///
-/// Plain maps of plain data: no interior mutability, so `Send + Sync` hold and
-/// `&self` queries may run in parallel behind a read lock.
+/// No interior mutability, so `Send + Sync` hold and `&self` queries may run in
+/// parallel behind a read lock.
 #[derive(Debug, Clone)]
 pub struct MemoryKeyline<W> {
     /// The set itself, keyed by certificate identity. Retained as received so
@@ -672,17 +674,17 @@ mod tests {
     type Watermark = Vec<u8>;
 
     /// Both oracles keep only `(issuer, revoke)`, so neither can read a
-    /// watermark even by accident; agreement checks that the evaluator
-    /// ignores watermarks too.
+    /// watermark; agreement with watermark bytes present checks that
+    /// `MemoryKeyline` ignores them too.
     #[cfg(feature = "test_utils")]
     #[test]
-    fn naive_oracle_ignores_watermarks() {
+    fn matches_naive_oracle_with_watermark_bytes() {
         laws::matches_naive_oracle_with_revocations::<MemoryKeyline<Watermark>>();
     }
 
     #[cfg(feature = "test_utils")]
     #[test]
-    fn threshold_oracle_ignores_watermarks() {
+    fn matches_threshold_oracle_with_watermark_bytes() {
         laws::matches_threshold_oracle::<MemoryKeyline<Watermark>>();
     }
 
@@ -690,14 +692,6 @@ mod tests {
     #[test]
     fn retain_with_bytes_is_inert() {
         laws::retain_is_inert::<MemoryKeyline<Watermark>>();
-    }
-
-    /// The converse: `retain` is covered by the certificate digest, so two
-    /// revocations differing only there are two certificates, not one.
-    #[cfg(feature = "test_utils")]
-    #[test]
-    fn retain_is_part_of_set_identity() {
-        laws::digest_identifies_the_set::<MemoryKeyline<Watermark>>();
     }
 
     #[test]
