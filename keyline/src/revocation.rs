@@ -6,7 +6,7 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
+use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verifiable};
 
 /// A signed statement that a delegation no longer holds.
 ///
@@ -68,13 +68,12 @@ impl<W> Revocation<W> {
 }
 
 impl<W: Encode> Revocation<W> {
-    /// Content address of the payload: what a re-issued
-    /// [`Delegation::citation`] names. Digest of the revocation's own encoding,
-    /// without the [`crate::certificate::Certificate`] kind tag.
+    /// The revocation's identity: what a re-issued [`Delegation::citation`]
+    /// names, and its key in the set ([`crate::certificate::CertificateId`]).
     ///
     /// Typed as [`RevocationId`] rather than `Digest<Revocation<W>>` so that a
-    /// [`Delegation`] can name a revocation without being parameterised by a
-    /// content type it never uses.
+    /// [`Delegation`] can name a revocation without being parameterized by a
+    /// watermark type it never uses.
     pub fn digest(&self) -> Digest<RevocationId> {
         Digest::of(&self.encode()).coerce()
     }
@@ -85,6 +84,10 @@ impl<W: Encode> Revocation<W> {
 /// Only ever a phantom parameter of [`Digest`]; it has no values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RevocationId {}
+
+impl<W> Domain for Revocation<W> {
+    const CONTEXT: &'static str = "keyline/v0/revocation";
+}
 
 impl<W> Verifiable for Revocation<W> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
@@ -123,7 +126,7 @@ fn len_u32(len: usize) -> u32 {
 fn u32_at(bytes: &[u8], at: usize) -> Result<usize, DecodeError> {
     let raw: [u8; 4] = slice_at(bytes, at, 4)?
         .try_into()
-        .map_err(|_| DecodeError::UnexpectedEnd)?;
+        .expect("slice_at returns exactly the requested length");
     Ok(u32::from_be_bytes(raw) as usize)
 }
 
@@ -147,11 +150,11 @@ impl<W: Decode> Decode for Revocation<W> {
         if bytes.len() < BASE_LEN {
             return Err(DecodeError::UnexpectedEnd);
         }
-        let issuer = Id::decode(&bytes[..Id::LEN])?;
+        let issuer = Id::decode_field(&bytes[..Id::LEN], "issuer")?;
         let raw: [u8; Digest::<Delegation>::LEN] = bytes[Id::LEN..BASE_LEN - 4]
             .try_into()
-            .map_err(|_| DecodeError::UnexpectedEnd)?;
-        let count = u32_at(bytes, Id::LEN + 32)?;
+            .expect("BASE_LEN bytes are present");
+        let count = u32_at(bytes, BASE_LEN - 4)?;
         // Reject a count the input cannot hold before looping over it, so no
         // input makes decoding loop more than `bytes.len() / MIN_ENTRY_LEN` times.
         if count > (bytes.len() - BASE_LEN) / MIN_ENTRY_LEN {
@@ -162,7 +165,7 @@ impl<W: Decode> Decode for Revocation<W> {
         let mut at = BASE_LEN;
         let mut previous: Option<Id> = None;
         for _ in 0..count {
-            let subject = Id::decode(slice_at(bytes, at, Id::LEN)?)?;
+            let subject = Id::decode_field(slice_at(bytes, at, Id::LEN)?, "retain subject")?;
             if previous.is_some_and(|p| p >= subject) {
                 return Err(DecodeError::UnsortedKeys);
             }
@@ -268,7 +271,8 @@ mod tests {
         );
     }
 
-    /// The three ways a `retain` map could have two encodings, each rejected.
+    /// Out-of-order keys, repeated keys, and a count that disagrees with the
+    /// entries are each rejected.
     #[test]
     fn rejects_non_canonical_retain() {
         let r = sample().retaining(BTreeMap::from([
@@ -352,7 +356,6 @@ mod tests {
                 let encoded = r.encode();
                 let decoded = Revocation::decode(encoded.as_bytes()).expect("round trip");
                 assert_eq!(&decoded, r);
-                assert_eq!(decoded.encode(), encoded);
             });
     }
 

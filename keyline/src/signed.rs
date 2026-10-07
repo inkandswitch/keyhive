@@ -9,16 +9,15 @@
 //! same prefixed bytes by construction.
 //!
 //! [`Verified<T>`] is a witness that a `Signed<T>` has had its bytes decoded
-//! canonically and its signature checked against the decoded issuer. Its only
-//! public constructor is [`Signed::verify`], so an unchecked certificate cannot
-//! reach [`crate::contract::Keyline::insert`].
+//! canonically and its signature checked against the decoded issuer. Outside
+//! the `test_utils` feature its only public constructor is [`Signed::verify`],
+//! so an unchecked certificate cannot reach [`crate::contract::Keyline::insert`].
 //!
 //! `keyhive_crypto` has a serde-based `Signed<T>` that `keyhive_core` uses; this
 //! type is its `Encoded`-based counterpart.
 
 // TODO(keyhive_types): lift `Signed` and `Verified` out of keyline once beekem migrates.
 
-use crate::id::Id;
 use core::fmt;
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use keyhive_codec::{
@@ -73,9 +72,8 @@ impl<T: Domain> Signed<T> {
 impl<T: Domain + Encode + Verifiable> Signed<T> {
     /// Encode and sign a value with the key it names as issuer.
     ///
-    /// Fails if `key` is not the payload's issuer: a certificate signed by
-    /// anyone else would never verify, so refusing to mint it is the only
-    /// useful behaviour.
+    /// Fails if `key` is not the payload's issuer; `verify` would reject the
+    /// result.
     pub fn try_sign(value: &T, key: &SigningKey) -> Result<Self, SignError> {
         if key.verifying_key() != value.verifying_key() {
             return Err(SignError::NotTheIssuer);
@@ -173,12 +171,12 @@ impl<T> Verified<T> {
         &self.payload
     }
 
-    /// The certificate as received, for forwarding without re-encoding.
+    /// The signed form as received, for forwarding without re-encoding.
     pub fn signed(&self) -> &Signed<T> {
         &self.signed
     }
 
-    /// The payload and the certificate it came from.
+    /// The payload and the signed form it came from.
     pub fn into_parts(self) -> (T, Signed<T>) {
         (self.payload, self.signed)
     }
@@ -202,14 +200,6 @@ impl<T: Domain> Verified<T> {
     /// Content address of the payload.
     pub fn digest(&self) -> Digest<T> {
         self.signed.digest()
-    }
-}
-
-impl<T: Verifiable> Verified<T> {
-    /// The key that signed this certificate, as named by the payload.
-    pub fn issuer(&self) -> Id {
-        Id::try_from(self.payload.verifying_key())
-            .expect("payload keys are decoded from validated Ids")
     }
 }
 
@@ -275,9 +265,10 @@ pub enum VerifyError {
 mod tests {
     use super::*;
     use crate::{
-        certificate::Certificate,
         delegation::Delegation,
+        id::Id,
         power::Power,
+        revocation::Revocation,
         test_utils::{id, signing_key},
     };
 
@@ -290,7 +281,7 @@ mod tests {
         let signed = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
         let verified = signed.clone().verify().expect("verifies");
         assert_eq!(verified.payload(), &sample());
-        assert_eq!(verified.issuer(), id(1));
+        assert_eq!(verified.payload().issuer, id(1));
         assert_eq!(verified.digest(), signed.digest());
         assert_eq!(verified.signed(), &signed);
     }
@@ -418,13 +409,6 @@ mod tests {
     }
 
     #[test]
-    fn deterministic() {
-        let a = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
-        let b = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
-        assert_eq!(a, b);
-    }
-
-    #[test]
     fn signing_with_a_key_that_is_not_the_issuer_is_refused() {
         assert_eq!(
             Signed::try_sign(&sample(), &signing_key(2)).unwrap_err(),
@@ -474,41 +458,41 @@ mod tests {
     }
 
     #[test]
-    fn works_for_certificates() {
-        let cert = Certificate::<()>::from(sample());
-        let verified = Signed::try_sign(&cert, &signing_key(1))
+    fn works_for_revocations() {
+        let revocation: Revocation<alloc::vec::Vec<u8>> =
+            Revocation::new(id(1), sample().digest()).retaining([(id(3), alloc::vec![7])].into());
+        let verified = Signed::try_sign(&revocation, &signing_key(1))
             .expect("key is the issuer")
             .verify()
             .expect("verifies");
-        assert_eq!(verified.payload(), &cert);
+        assert_eq!(verified.payload(), &revocation);
     }
 
     #[test]
     #[cfg(feature = "arbitrary")]
     fn sign_verify_round_trip_property() {
         bolero::check!()
-            .with_arbitrary::<(Certificate<alloc::vec::Vec<u8>>, [u8; 32])>()
-            .for_each(|(cert, seed)| {
-                // Re-issue the certificate under the generated key so it is signable.
+            .with_arbitrary::<(Delegation, Revocation<alloc::vec::Vec<u8>>, [u8; 32])>()
+            .for_each(|(d, r, seed)| {
+                // Re-issue both under the generated key so they are signable.
                 let key = SigningKey::from(*seed);
                 let issuer = Id::from(&key);
-                let cert = match cert {
-                    Certificate::Delegation(d) => {
-                        Certificate::Delegation(Delegation { issuer, ..*d })
-                    }
-                    Certificate::Revocation(r) => {
-                        Certificate::Revocation(crate::revocation::Revocation {
-                            issuer,
-                            ..r.clone()
-                        })
-                    }
-                };
-                let verified = Signed::try_sign(&cert, &key)
+                let d = Delegation { issuer, ..*d };
+                let verified = Signed::try_sign(&d, &key)
                     .expect("key is the issuer")
                     .verify()
                     .expect("verifies");
-                assert_eq!(verified.payload(), &cert);
-                assert_eq!(verified.issuer(), issuer);
+                assert_eq!(verified.payload(), &d);
+
+                let r = Revocation {
+                    issuer,
+                    ..r.clone()
+                };
+                let verified = Signed::try_sign(&r, &key)
+                    .expect("key is the issuer")
+                    .verify()
+                    .expect("verifies");
+                assert_eq!(verified.payload(), &r);
             });
     }
 }

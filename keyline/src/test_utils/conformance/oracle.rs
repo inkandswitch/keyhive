@@ -8,9 +8,13 @@
 //!   for rule: levels as thresholds, one context per covered certificate, and
 //!   no cap fixed point at all.
 //!
-//! Both are slow and obviously correct. A backend must agree with both on
-//! every generated set, and their agreement with each other checks that the
-//! two forms in the design document say the same thing.
+//! Both are written to be read side by side with the design document, not for
+//! speed. A backend must agree with both on every generated set, and a law
+//! with no backend checks that they agree with each other.
+//!
+//! Both share their inputs with every backend: `Delegation::digest`, `Power`'s
+//! order, and the generator. A bug there would pass every law; the unit tests
+//! in those modules are what catch it.
 
 pub mod naive;
 pub mod threshold;

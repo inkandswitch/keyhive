@@ -4,18 +4,21 @@
 //! implementation over any store (in memory, DBSP, a database) is correct if and
 //! only if it agrees with the reference [`crate::memory::MemoryKeyline`] on every
 //! set. The conformance suite behind the `test_utils` feature is how a backend
-//! proves that.
+//! checks that.
 
 use crate::{
-    certificate::Certificate, delegation::Delegation, id::Id, power::Power,
-    revocation::RevocationId, signed::Verified,
+    certificate::{CertificateId, VerifiedCertificate},
+    delegation::Delegation,
+    id::Id,
+    power::Power,
+    revocation::RevocationId,
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
 use keyhive_codec::traits::{Decode, Encode};
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, domain_separator::Domain};
 
 /// A set of certificates and the authority they imply.
 ///
@@ -41,19 +44,19 @@ pub trait Keyline {
     /// The return value is a dedupe signal for gossip, not a membership-change
     /// signal: a new certificate may change no query result (it may be dead on
     /// arrival), so callers driving key rotation must diff [`Keyline::members`].
-    fn insert(&mut self, cert: Verified<Certificate<Self::RetentionWatermark>>) -> bool;
+    fn insert(&mut self, cert: VerifiedCertificate<Self::RetentionWatermark>) -> bool;
 
-    /// Whether a certificate with this digest is in the set.
+    /// Whether a certificate with this identity is in the set.
     ///
-    /// Call this before `Signed::verify`: `Signed::digest` is far cheaper than
-    /// a signature check.
-    fn contains(&self, cert: &Digest<Certificate<Self::RetentionWatermark>>) -> bool;
+    /// Call this before `Certificate::verify`: `Certificate::id` is far
+    /// cheaper than a signature check.
+    fn contains(&self, cert: &CertificateId) -> bool;
 
     /// Revocations in the set that name this delegation, covering or not.
     ///
     /// Whether a revocation actually covers the delegation depends on the
     /// issuer's admin reach; this reports the syntactic fact. Its main use
-    /// is explaining a silent collision: an issuer who re-mints a grant
+    /// is explaining a silent collision: an issuer who re-mints a delegation
     /// byte-identical to a revoked one gets `insert == false`, and this tells
     /// them why and that a re-issue with `citation` is needed.
     fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>>;
@@ -79,8 +82,8 @@ pub trait Keyline {
     fn digest(&self) -> Digest<CertificateSet<Self::RetentionWatermark>>;
 }
 
-/// What a [`Keyline::digest`] is the digest of: a set of
-/// `Certificate<W>`, by its members' digests.
+/// What a [`Keyline::digest`] is the digest of: a set of certificates, by
+/// their identities.
 ///
 /// Only ever a phantom parameter of [`Digest`]; it has no values. A distinct
 /// type keeps a set digest from being mistaken for a certificate's.
@@ -89,20 +92,24 @@ pub struct CertificateSet<W> {
     _watermark: core::marker::PhantomData<fn() -> W>,
 }
 
-/// Digest a certificate set from its members' certificate digests, in any
-/// order and with any repetition.
+impl<W> Domain for CertificateSet<W> {
+    const CONTEXT: &'static str = "keyline/v0/set";
+}
+
+/// Digest a certificate set from its members' identities, in any order and
+/// with any repetition.
 ///
 /// BLAKE3, under [`CertificateSet`]'s domain context, over the sorted and
-/// deduplicated digests, so the result depends only on the set.
-pub fn set_digest<W, I: IntoIterator<Item = Digest<Certificate<W>>>>(
-    digests: I,
-) -> Digest<CertificateSet<W>> {
-    let mut sorted: Vec<[u8; 32]> = digests
+/// deduplicated digests, so the result depends only on the set. Delegation
+/// and revocation digests are domain-separated, so they never collide and
+/// need no kind tag here.
+pub fn set_digest<W, I: IntoIterator<Item = CertificateId>>(ids: I) -> Digest<CertificateSet<W>> {
+    let mut sorted: Vec<[u8; Digest::<Delegation>::LEN]> = ids
         .into_iter()
-        .map(|d| {
-            let mut bytes = [0u8; 32];
-            bytes.copy_from_slice(d.as_slice());
-            bytes
+        .map(|id| {
+            id.as_slice()
+                .try_into()
+                .expect("every digest is Digest::LEN bytes")
         })
         .collect();
     sorted.sort_unstable();
@@ -114,19 +121,30 @@ pub fn set_digest<W, I: IntoIterator<Item = Digest<Certificate<W>>>>(
 mod tests {
     use super::*;
 
+    fn ids() -> [CertificateId; 3] {
+        [
+            CertificateId::Delegation(Digest::from([1u8; 32])),
+            CertificateId::Revocation(Digest::from([2u8; 32])),
+            CertificateId::Delegation(Digest::from([3u8; 32])),
+        ]
+    }
+
     #[test]
     fn set_digest_is_order_independent() {
-        let a: Digest<Certificate<()>> = Digest::from([1u8; 32]);
-        let b: Digest<Certificate<()>> = Digest::from([2u8; 32]);
-        let c: Digest<Certificate<()>> = Digest::from([3u8; 32]);
-        assert_eq!(set_digest([a, b, c]), set_digest([c, a, b]));
-        assert_ne!(set_digest([a, b]), set_digest([a, b, c]));
+        let [a, b, c] = ids();
+        assert_eq!(
+            set_digest::<(), _>([a, b, c]),
+            set_digest::<(), _>([c, a, b])
+        );
+        assert_ne!(set_digest::<(), _>([a, b]), set_digest::<(), _>([a, b, c]));
     }
 
     #[test]
     fn set_digest_ignores_repetition() {
-        let a: Digest<Certificate<()>> = Digest::from([1u8; 32]);
-        let b: Digest<Certificate<()>> = Digest::from([2u8; 32]);
-        assert_eq!(set_digest([a, b, a, a]), set_digest([b, a]));
+        let [a, b, _] = ids();
+        assert_eq!(
+            set_digest::<(), _>([a, b, a, a]),
+            set_digest::<(), _>([b, a])
+        );
     }
 }

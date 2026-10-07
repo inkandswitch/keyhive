@@ -4,11 +4,13 @@
 
 use super::Levels;
 use crate::{
-    certificate::Certificate,
     delegation::Delegation,
     id::Id,
     power::Power,
-    test_utils::conformance::gen::{ids, CertSet},
+    test_utils::{
+        conformance::gen::{ids, CertSet},
+        Statement,
+    },
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -92,11 +94,11 @@ fn facts<W>(set: &CertSet<W>) -> Facts {
     let mut revocations = Vec::new();
     for c in &set.certs {
         match c {
-            Certificate::Delegation(d) => {
+            Statement::Delegation(d) => {
                 nodes.extend([d.issuer, d.audience, d.subject]);
                 dels.insert(d.digest(), *d);
             }
-            Certificate::Revocation(r) => {
+            Statement::Revocation(r) => {
                 nodes.insert(r.issuer);
                 revocations.push((r.issuer, r.revoke));
             }

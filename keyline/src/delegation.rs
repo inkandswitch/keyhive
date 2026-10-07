@@ -7,7 +7,7 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
+use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verifiable};
 
 /// An edge in the authority graph.
 ///
@@ -70,13 +70,15 @@ impl Delegation {
         }
     }
 
-    /// Content address of the payload: what a [`crate::revocation::Revocation`] names.
-    ///
-    /// This is the digest of the delegation's own encoding, not of the
-    /// [`crate::certificate::Certificate`] wrapper (which carries a kind tag).
+    /// The delegation's identity: what a [`crate::revocation::Revocation`]
+    /// names, and its key in the set ([`crate::certificate::CertificateId`]).
     pub fn digest(&self) -> Digest<Delegation> {
         Digest::of(&self.encode())
     }
+}
+
+impl Domain for Delegation {
+    const CONTEXT: &'static str = "keyline/v0/delegation";
 }
 
 impl Verifiable for Delegation {
@@ -120,9 +122,9 @@ impl Decode for Delegation {
         }
 
         let (ids, rest) = bytes.split_at(Id::LEN * 3);
-        let issuer = Id::decode(&ids[..Id::LEN])?;
-        let audience = Id::decode(&ids[Id::LEN..Id::LEN * 2])?;
-        let subject = Id::decode(&ids[Id::LEN * 2..])?;
+        let issuer = Id::decode_field(&ids[..Id::LEN], "issuer")?;
+        let audience = Id::decode_field(&ids[Id::LEN..Id::LEN * 2], "audience")?;
+        let subject = Id::decode_field(&ids[Id::LEN * 2..], "subject")?;
         let power = Power::decode(&rest[..1])?;
 
         let citation = match rest[1] {
@@ -241,8 +243,29 @@ mod tests {
                 let encoded = d.encode();
                 let decoded = Delegation::decode(encoded.as_bytes()).expect("round trip");
                 assert_eq!(&decoded, d);
-                assert_eq!(decoded.encode(), encoded);
             });
+    }
+
+    /// Pins the wire encoding and the domain-separated digest of one fixed
+    /// delegation. Changing the codec or the context must change this test
+    /// on purpose.
+    #[test]
+    fn known_answer() {
+        let hex = |bytes: &[u8]| -> alloc::string::String {
+            bytes.iter().map(|b| alloc::format!("{b:02x}")).collect()
+        };
+        let d = Delegation::new(id(1), id(2), id(3), Power::Edit);
+        assert_eq!(
+            hex(d.encode().as_bytes()),
+            "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c\
+             8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394\
+             ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1\
+             4500"
+        );
+        assert_eq!(
+            hex(d.digest().as_slice()),
+            "e90472356fc5650ce40a68ab372fe1f8236c2b58b1239fdb013b2c71b3747451"
+        );
     }
 
     #[test]

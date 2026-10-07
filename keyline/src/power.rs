@@ -17,7 +17,7 @@ use keyhive_codec::{
 /// # Ordering and encoding are separate
 ///
 /// The lattice is [`Power::rank`]; the wire tag is the discriminant, an ASCII
-/// initial (`L`, `R`, `E`, `A`). Keeping them apart means a level added later
+/// letter (`L` for reLay, `R`, `E`, `A`). Keeping them apart means a level added later
 /// takes any free byte and sits wherever its rank puts it, with no renumbering
 /// and so no rehashing of certificates already in a set. Nothing may derive the
 /// order from the tag: `A` is the top of the lattice and the lowest byte of the
@@ -132,22 +132,15 @@ pub struct InvalidPower(u8);
 mod tests {
     use super::*;
 
-    #[test]
-    fn ordering() {
-        assert!(Power::Relay < Power::Read);
-        assert!(Power::Read < Power::Edit);
-        assert!(Power::Edit < Power::Admin);
-        assert!(Power::ALL.is_sorted());
-    }
-
     /// The lattice is [`Power::rank`], not the wire tag. `Admin` is the top of
     /// the order and the lowest of the four bytes, so anything that derived the
     /// order from the discriminant would fail here.
     #[test]
-    fn order_is_independent_of_the_tag() {
+    fn order_is_the_rank_not_the_tag() {
+        assert!(Power::ALL.is_sorted());
+        assert_eq!(Power::ALL.map(Power::rank), [0, 1, 2, 3]);
         assert!(Power::Admin > Power::Relay);
         assert!((Power::Admin as u8) < (Power::Relay as u8));
-        assert_eq!(Power::ALL.map(Power::rank), [0, 1, 2, 3]);
     }
 
     /// What each level may do, as a truth table over the whole ladder.
@@ -170,12 +163,12 @@ mod tests {
         for a in Power::ALL {
             let e = a.encode();
             assert_eq!(e.as_bytes().len(), 1, "tags are one byte");
-            assert_eq!(e.decode().unwrap(), a);
+            assert_eq!(e.decode(), Ok(a));
         }
         assert_eq!(
             Power::ALL.map(|a| a as u8),
             [b'L', b'R', b'E', b'A'],
-            "tags are the ASCII initials"
+            "tags are ASCII letters"
         );
         for byte in 0..=u8::MAX {
             match Power::ALL.iter().find(|p| **p as u8 == byte) {

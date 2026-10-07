@@ -7,7 +7,9 @@ use super::{
     oracle::{naive, threshold, Levels},
     TestWatermark,
 };
-use crate::{contract::Keyline, delegation::Delegation, id::Id, power::Power, test_utils::cert};
+use crate::{
+    contract::Keyline, delegation::Delegation, id::Id, power::Power, test_utils::assume_verified,
+};
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
@@ -15,7 +17,7 @@ use alloc::{
 use keyhive_crypto::digest::Digest;
 
 /// Every `(subject, node)` level a backend reports over the pool, plus the
-/// live status of every delegation: the whole observable state of a set.
+/// live status of every delegation: what the laws compare.
 ///
 /// Levels are read through `members`, one evaluation per subject rather than
 /// one per pair; [`queries_are_consistent`] checks that `members` and
@@ -81,7 +83,7 @@ where
         });
 }
 
-/// With revocations, every query agrees with the normative program: admin
+/// With revocations, `members` and `is_live` agree with the value form: admin
 /// reach, coverage, the live set as a least fixed point with revocation by the
 /// audience, and clamped powers.
 pub fn matches_naive_oracle_with_revocations<K: Keyline + Default>()
@@ -181,19 +183,18 @@ where
         });
 }
 
-/// Any insertion order gives the same answers and the same digest. Reversal
-/// is checked on every set, since a generated permutation is often the
-/// identity.
+/// Any insertion order gives the same answers and the same digest: a uniformly
+/// shuffled order, and the reverse order, on every set.
 pub fn order_independent<K: Keyline + Default>()
 where
     K::RetentionWatermark: TestWatermark,
 {
     bolero::check!()
-        .with_arbitrary::<(CertSet<K::RetentionWatermark>, Vec<u8>)>()
-        .for_each(|(set, keys)| {
+        .with_arbitrary::<(CertSet<K::RetentionWatermark>, u64)>()
+        .for_each(|(set, seed)| {
             let a: K = build(set.certs.iter().cloned());
             for b in [
-                build::<K, _>(set.permuted(keys).certs),
+                build::<K, _>(set.shuffled(*seed).certs),
                 build::<K, _>(set.reversed().certs),
             ] {
                 assert_eq!(a.digest(), b.digest());
@@ -216,7 +217,7 @@ where
             let mut k: K = build(set.certs.iter().cloned());
             let before = (k.digest(), observe(&k, set));
             for c in &set.certs {
-                assert!(!k.insert(cert(c.clone())));
+                assert!(!k.insert(assume_verified(c.clone())));
             }
             assert_eq!((k.digest(), observe(&k, set)), before);
         });
@@ -265,10 +266,10 @@ where
     K::RetentionWatermark: TestWatermark,
 {
     bolero::check!()
-        .with_arbitrary::<(CertSet<K::RetentionWatermark>, Vec<u8>)>()
-        .for_each(|(set, keys)| {
+        .with_arbitrary::<(CertSet<K::RetentionWatermark>, u64)>()
+        .for_each(|(set, seed)| {
             let a: K = build(set.certs.iter().cloned());
-            let b: K = build(set.permuted(keys).certs);
+            let b: K = build(set.shuffled(*seed).certs);
             assert_eq!(a.digest(), b.digest());
 
             let distinct: BTreeSet<_> = set.certs.iter().collect();
@@ -308,20 +309,45 @@ where
                 }
             }
             for (i, c) in set.certs.iter().enumerate() {
-                assert!(k.contains(&cert(c.clone()).digest()));
+                assert!(k.contains(&assume_verified(c.clone()).id()));
                 if set.certs.iter().filter(|x| *x == c).count() == 1 {
                     let smaller: K = build(set.without(i).certs);
-                    assert!(!smaller.contains(&cert(c.clone()).digest()));
-                }
-                if let Some(d) = c.as_delegation() {
-                    let naming = k.revocations_naming(&d.digest());
-                    let expected: BTreeSet<_> = set
-                        .revocations()
-                        .filter(|r| r.revoke == d.digest())
-                        .map(|r| r.digest())
-                        .collect();
-                    assert_eq!(naming, expected);
+                    assert!(!smaller.contains(&assume_verified(c.clone()).id()));
                 }
             }
+            // Every target named, present or not: a revocation that arrives
+            // before its target must already explain the collision.
+            let targets = set
+                .delegations()
+                .map(Delegation::digest)
+                .chain(set.revocations().map(|r| r.revoke));
+            for target in targets {
+                let expected: BTreeSet<_> = set
+                    .revocations()
+                    .filter(|r| r.revoke == target)
+                    .map(|r| r.digest())
+                    .collect();
+                assert_eq!(k.revocations_naming(&target), expected);
+            }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two oracles agree with each other on the same sets, with no
+    /// backend in between: the value form and the threshold form in
+    /// `design/keyline/implementation.md` say the same thing.
+    #[test]
+    fn oracles_agree() {
+        bolero::check!()
+            .with_arbitrary::<CertSet<alloc::vec::Vec<u8>>>()
+            .for_each(|set| {
+                let value = naive::evaluate(set);
+                let threshold = threshold::evaluate(set);
+                assert_eq!(value.live, threshold.live, "live sets");
+                assert_eq!(value.levels, threshold.effective, "levels");
+            });
+    }
 }

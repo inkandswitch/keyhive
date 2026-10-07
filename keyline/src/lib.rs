@@ -19,7 +19,8 @@
 //! # What this crate does not do
 //!
 //! A backend never checks signatures: [`contract::Keyline::insert`] takes a
-//! [`signed::Verified`] witness, which only [`signed::Signed::verify`] makes.
+//! [`certificate::VerifiedCertificate`], which outside the `test_utils` feature
+//! only [`certificate::Certificate::verify`] can make.
 //! The crate knows nothing of prekeys, CGKA, documents, or groups, and is
 //! synchronous: concurrency is the wrapper's job. A wrapper holds an
 //! implementation behind a lock and converts its typed handles to [`id::Id`]s at
@@ -47,7 +48,6 @@ pub mod certificate;
 mod collections;
 pub mod contract;
 pub mod delegation;
-pub mod domain;
 pub mod id;
 pub mod memory;
 pub mod power;

@@ -1,16 +1,19 @@
 //! The threshold form from `design/keyline/implementation.md`, transcribed
-//! rule for rule as naive set fixpoints.
+//! rule for rule as naive set fixpoints, except that stratum 3 takes the
+//! maximum threshold directly instead of through `shadowed`.
 //!
 //! Relation and rule names follow the document. A context is `None` for
 //! `empty`, or `Some(c)` for covered certificate `c`.
 
 use super::Levels;
 use crate::{
-    certificate::Certificate,
     delegation::Delegation,
     id::Id,
     power::Power,
-    test_utils::conformance::gen::{ids, CertSet},
+    test_utils::{
+        conformance::gen::{ids, CertSet},
+        Statement,
+    },
 };
 use alloc::{collections::BTreeSet, vec::Vec};
 use keyhive_crypto::digest::Digest;
@@ -31,11 +34,11 @@ pub fn evaluate<W>(set: &CertSet<W>) -> Evaluation {
     let mut revocation: BTreeSet<(Id, Digest<Delegation>)> = BTreeSet::new();
     for c in &set.certs {
         match c {
-            Certificate::Delegation(d) => {
+            Statement::Delegation(d) => {
                 node.extend([d.issuer, d.audience, d.subject]);
                 delegation.insert((d.digest(), d.issuer, d.audience, d.subject, d.power));
             }
-            Certificate::Revocation(r) => {
+            Statement::Revocation(r) => {
                 node.insert(r.issuer);
                 revocation.insert((r.issuer, r.revoke));
             }

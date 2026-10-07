@@ -6,13 +6,18 @@
 //! edge for each subject (at Admin or Edit), and wire the rest at random.
 //! Revocations mostly name delegations already in the set, and occasionally
 //! one that is absent; a few delegations are re-issued past a revocation, and
-//! some re-issues are revoked again. Most sets also get one of three shapes
-//! that random wiring rarely produces: a clamped grant, two covered grants on
-//! each other's avoiding derivation, or a three-deep role chain.
+//! some re-issues are revoked again. Most sets also get one of four shapes
+//! that random wiring rarely produces: a clamped delegation, two covered
+//! delegations on each other's avoiding derivation, a three-deep role chain
+//! (sometimes with a revocation through its composed reach), or a clamped
+//! delegation whose subject is a role.
 
 use crate::{
-    certificate::Certificate, delegation::Delegation, id::Id, power::Power, revocation::Revocation,
-    test_utils::id,
+    delegation::Delegation,
+    id::Id,
+    power::Power,
+    revocation::Revocation,
+    test_utils::{id, Statement},
 };
 use alloc::{collections::BTreeMap, vec::Vec};
 use arbitrary::{Arbitrary, Result, Unstructured};
@@ -30,16 +35,16 @@ pub fn ids() -> impl Iterator<Item = Id> {
 /// about order permute it themselves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CertSet<W> {
-    pub certs: Vec<Certificate<W>>,
+    pub certs: Vec<Statement<W>>,
 }
 
 impl<W: Clone + Encode + Decode> CertSet<W> {
     pub fn delegations(&self) -> impl Iterator<Item = &Delegation> {
-        self.certs.iter().filter_map(Certificate::as_delegation)
+        self.certs.iter().filter_map(Statement::as_delegation)
     }
 
     pub fn revocations(&self) -> impl Iterator<Item = &Revocation<W>> {
-        self.certs.iter().filter_map(Certificate::as_revocation)
+        self.certs.iter().filter_map(Statement::as_revocation)
     }
 
     /// The same set with every revocation removed.
@@ -68,8 +73,8 @@ impl<W: Clone + Encode + Decode> CertSet<W> {
                 .certs
                 .iter()
                 .map(|c| match c {
-                    Certificate::Revocation(r) => Revocation::new(r.issuer, r.revoke).into(),
-                    Certificate::Delegation(d) => (*d).into(),
+                    Statement::Revocation(r) => Revocation::new(r.issuer, r.revoke).into(),
+                    Statement::Delegation(d) => (*d).into(),
                 })
                 .collect(),
         }
@@ -82,18 +87,24 @@ impl<W: Clone + Encode + Decode> CertSet<W> {
         CertSet { certs }
     }
 
-    /// Reorder by a permutation given as sort keys, one per certificate.
-    pub fn permuted(&self, keys: &[u8]) -> CertSet<W> {
-        let mut indexed: Vec<(u8, &Certificate<W>)> = self
-            .certs
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (keys.get(i).copied().unwrap_or(0), c))
-            .collect();
-        indexed.sort_by_key(|(k, _)| *k);
-        CertSet {
-            certs: indexed.into_iter().map(|(_, c)| c.clone()).collect(),
+    /// The same set in an order drawn from `seed`: a Fisher–Yates shuffle
+    /// over a SplitMix64 stream, so every permutation is reachable.
+    pub fn shuffled(&self, seed: u64) -> CertSet<W> {
+        let mut state = seed;
+        let mut next = move || {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        let mut certs = self.certs.clone();
+        for i in (1..certs.len()).rev() {
+            let bound = u64::try_from(i + 1).expect("set sizes fit in u64");
+            let j = usize::try_from(next() % bound).expect("j <= i");
+            certs.swap(i, j);
         }
+        CertSet { certs }
     }
 }
 
@@ -120,7 +131,8 @@ fn pick_power(u: &mut Unstructured<'_>) -> Result<Power> {
 ///
 /// Often empty, so both codec paths occur. Evaluation must ignore whatever
 /// lands here, and the naive oracle cannot read it at all, so running the
-/// oracle law with a variable-length `W` is what proves the two agree.
+/// oracle laws with a variable-length `W` checks that the evaluator ignores
+/// it too.
 fn watermarks<'a, W: Arbitrary<'a>>(u: &mut Unstructured<'a>) -> Result<BTreeMap<Id, W>> {
     let mut watermarks = BTreeMap::new();
     for _ in 0..u.int_in_range(0..=2)? {
@@ -132,7 +144,7 @@ fn watermarks<'a, W: Arbitrary<'a>>(u: &mut Unstructured<'a>) -> Result<BTreeMap
 
 impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W> {
     fn arbitrary(u: &mut Unstructured<'a>) -> Result<Self> {
-        let mut certs: Vec<Certificate<W>> = Vec::new();
+        let mut certs: Vec<Statement<W>> = Vec::new();
 
         // Root edges: each subject grounds itself to some node, at Admin or,
         // so that nobody holds Admin over the subject, at Edit.
@@ -156,7 +168,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
 
         // At most one planted shape per set keeps sets small: evaluation cost
         // grows faster than set size, and the laws evaluate many times per set.
-        let shape = u.int_in_range(0..=3)?;
+        let shape = u.int_in_range(0..=4)?;
 
         // Shape 1, the one where clamping bites: a role
         // `m` supplied into `s`; `k` administers `m`; `e` is a member of `m`
@@ -164,7 +176,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         // `k` revokes that grant. Random wiring produces this rarely. The
         // levels are chosen so gating and clamping always disagree: the role
         // route is strictly better than the independent one, the supply is
-        // below Admin (else `s` is in `k`'s reach and the grant is simply dead),
+        // below Admin (else `s` is in `k`'s reach and the grant is dead),
         // and the grant asks for at least the role level.
         if shape == 1 {
             let s_n = u.int_in_range(1..=subjects)?;
@@ -181,7 +193,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
                 Power::Relay
             };
             let grant = Delegation::new(e, f, s, Power::Admin);
-            certs.extend::<[Certificate<W>; 6]>([
+            certs.extend::<[Statement<W>; 6]>([
                 Delegation::new(s, m, s, via_role).into(),
                 Delegation::new(m, k, m, Power::Admin).into(),
                 Delegation::new(k, e, m, Power::Admin).into(),
@@ -205,7 +217,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
                 Delegation::new(f, e, s, Power::Admin),
                 Delegation::new(f, g, s, Power::Admin),
             );
-            certs.extend::<[Certificate<W>; 11]>([
+            certs.extend::<[Statement<W>; 11]>([
                 Delegation::new(s, e, s, Power::Read).into(),
                 Delegation::new(s, m1, s, Power::Edit).into(),
                 Delegation::new(m1, e, m1, Power::Admin).into(),
@@ -220,18 +232,55 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
             ]);
         }
 
-        // Shape 3, a role chain three deep: `r1` is
-        // supplied into `s`, `r2` is a member of `r1`, `r3` of `r2`, and `p`
-        // of `r3`, at random levels.
+        // Shape 3, a role chain three deep: `r1` is a member of `s`, `r2` of
+        // `r1`, `r3` of `r2`, and `p` of `r3`, at random levels. Half the
+        // time every hop is Admin, so `s` is in `p`'s reach only through three
+        // compositions, and `p` revokes `s`'s root edge.
         if shape == 3 {
             let s_n = u.int_in_range(1..=subjects)?;
             let s = id(s_n);
             let [r1, r2, r3, p] = distinct(u, s_n)?;
-            certs.extend::<[Certificate<W>; 4]>([
-                Delegation::new(s, r1, s, pick_power(u)?).into(),
-                Delegation::new(r1, r2, r1, pick_power(u)?).into(),
-                Delegation::new(r2, r3, r2, pick_power(u)?).into(),
-                Delegation::new(r3, p, r3, pick_power(u)?).into(),
+            let composed = u.arbitrary::<bool>()?;
+            let hop = |u: &mut Unstructured<'a>| {
+                if composed {
+                    Ok(Power::Admin)
+                } else {
+                    pick_power(u)
+                }
+            };
+            certs.extend::<[Statement<W>; 4]>([
+                Delegation::new(s, r1, s, hop(u)?).into(),
+                Delegation::new(r1, r2, r1, hop(u)?).into(),
+                Delegation::new(r2, r3, r2, hop(u)?).into(),
+                Delegation::new(r3, p, r3, hop(u)?).into(),
+            ]);
+            if composed {
+                let root = certs[usize::from(s_n - 1)]
+                    .as_delegation()
+                    .expect("the first statements are the root edges")
+                    .digest();
+                certs.push(Revocation::new(p, root).into());
+            }
+        }
+
+        // Shape 4, shape 1 inside a role: `g` is supplied into `s`, and inside
+        // `g` a member `e` of role `m` (administered by `k`) also holds a weaker
+        // direct membership in `g`, delegates to `f` over `g`, and `k` revokes
+        // that. `f`'s level over `g`, and so over `s`, is clamped to the direct
+        // membership, in a subject that is not the one queried at the root.
+        if shape == 4 {
+            let s_n = u.int_in_range(1..=subjects)?;
+            let s = id(s_n);
+            let [g, m, k, e, f] = distinct(u, s_n)?;
+            let grant = Delegation::new(e, f, g, Power::Admin);
+            certs.extend::<[Statement<W>; 7]>([
+                Delegation::new(s, g, s, Power::Edit).into(),
+                Delegation::new(g, m, g, Power::Edit).into(),
+                Delegation::new(m, k, m, Power::Admin).into(),
+                Delegation::new(k, e, m, Power::Admin).into(),
+                Delegation::new(g, e, g, Power::Read).into(),
+                grant.into(),
+                Revocation::new(k, grant.digest()).into(),
             ]);
         }
 
@@ -245,12 +294,12 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         for _ in 0..u.int_in_range(0..=4)? {
             let dels: Vec<Delegation> = certs
                 .iter()
-                .filter_map(Certificate::as_delegation)
+                .filter_map(Statement::as_delegation)
                 .copied()
                 .collect();
             let target = dels[u.choose_index(dels.len())?];
-            // A third of revocations are by a party to the target (its issuer or
-            // its audience), which random issuers rarely produce.
+            // A third of revocations are by the target's issuer and a third by
+            // its audience, which random issuers rarely produce.
             let issuer = match u.int_in_range(0..=2)? {
                 0 => target.issuer,
                 1 => target.audience,
@@ -269,7 +318,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         for _ in 0..u.int_in_range(0..=2)? {
             let revocations: Vec<Revocation<W>> = certs
                 .iter()
-                .filter_map(Certificate::as_revocation)
+                .filter_map(Statement::as_revocation)
                 .cloned()
                 .collect();
             if revocations.is_empty() {
@@ -278,7 +327,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
             let revocation = revocations[u.choose_index(revocations.len())?].clone();
             let Some(target) = certs
                 .iter()
-                .filter_map(Certificate::as_delegation)
+                .filter_map(Statement::as_delegation)
                 .find(|d| d.digest() == revocation.revoke)
                 .copied()
             else {

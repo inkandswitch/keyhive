@@ -12,11 +12,15 @@ pub const SEPARATOR: &[u8] = SEPARATOR_STR.as_bytes();
 /// A type whose encodings are signed and hashed under a context of their own.
 ///
 /// One key may sign payloads for more than one protocol. If one byte string
-/// were valid in two formats, one signature would be valid in both. Prefixing
-/// every signed or hashed encoding with a context that names the protocol, its
-/// version, and the type rules that out by construction, rather than by the
-/// formats happening to differ. Contexts contain no NUL byte and a NUL ends
-/// each one, so no prefixed string is a prefix of another.
+/// were valid in two formats, one signature would be valid in both. Each
+/// signed or hashed encoding is therefore prefixed with a context naming the
+/// protocol, its version, and the type, then a NUL byte. Contexts contain no
+/// NUL (checked at compile time), so the context can be read back off any
+/// message, and two different contexts never produce the same message.
+///
+/// This separates every type that implements `Domain` from every other.
+/// Separation from a protocol that signs unprefixed bytes, such as
+/// `keyhive_core`'s serde payloads today, still relies on its formats.
 ///
 /// [`Digest::of`](crate::digest::Digest::of) hashes exactly the bytes
 /// [`Domain::message`] returns, so a signature and a digest cover the same
@@ -28,10 +32,24 @@ pub trait Domain {
     /// The context, a NUL byte, then `bytes`: what a signature over an
     /// encoding of `Self` covers.
     fn message(bytes: &[u8]) -> Vec<u8> {
+        const { assert!(nul_free(Self::CONTEXT), "a Domain context contains NUL") };
         let mut out = Vec::with_capacity(Self::CONTEXT.len() + 1 + bytes.len());
         out.extend_from_slice(Self::CONTEXT.as_bytes());
         out.push(0);
         out.extend_from_slice(bytes);
         out
     }
+}
+
+/// Whether `s` contains no NUL byte; usable in `const` assertions.
+pub(crate) const fn nul_free(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0 {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }

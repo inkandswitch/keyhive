@@ -12,17 +12,17 @@ _Would buy._ Narrow revocation with one key (ban in room A, keep in room B). Leg
 
 _Rejected because._ Rotation would re-sign the deny list. A revocation pinned to `Members` does not cover `Members′` after rotation, so every standing revocation must be re-issued after every rotation, forever. Under admin-reach scoping a surviving admin's admin reach grows as they are re-rostered, and their old revocations follow automatically; the griefer's admin reach froze, so theirs do not. The explicit field taxes the honest admin on the routine path (rotation is the recommended hygiene) to buy flexibility on a rare one. It also introduces an inert-by-mistake state (naming a node the target never routes through) that admin-reach scoping cannot produce, and it picks the narrower of the two possible scopes for a revocation, where the design resolves ambiguity toward less authority. Narrow revocation is available today by signing with a capacity key per role administered.
 
-_Reopen if._ Narrow revocation turns out to be common. The compatible extension is `subject: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the [`citation`](#a-random-nonce-instead-of-citation) invariant carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations--collapsed-into-the-issuer).
+_Reopen if._ Narrow revocation turns out to be common. The compatible extension is `subject: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the one-encoding invariant ([README, Delegations](README.md#delegations)) carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations--collapsed-into-the-issuer).
 
 ### A random nonce instead of `citation`
 
-_Proposal._ Replace `citation: Option<Digest<Revocation>>` with random bytes so an issuer need not know which revoked certificate it is re-issuing past.
+_Proposal._ Replace `citation: Option<Digest<RevocationId>>` with random bytes so an issuer need not know which revoked certificate it is re-issuing past.
 
 _Would buy._ No silent-collision UX; no dependency on having synced the revocation.
 
 _Rejected because._ It flips the fail direction. Two accidental issuances of one delegation become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering delegation (fails open). With `citation`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take (fails closed). The collision is detectable: `insert` returns `false` and `revocations_naming` reports what named the duplicate. A heal that does mean to re-issue past a revocation names it in `citation`, which makes the heal an accountable act. "Ambiguity resolves toward less authority" decides it.
 
-`citation` is safe as an optional field because its absence has exactly one encoding and no present value aliases it. It carries no semantics (no supersession, no ordering), so a bogus value is harmless; issuer-supplied predecessors must never carry trust, or backdating by omission returns. It names the revocation rather than the revoked delegation because the delegation's hash is a function of the fields being re-issued: it would carry no information, and a second heal would collide.
+Why `citation` is optional, carries no semantics, and names the revocation rather than the revoked delegation is in [README, The `citation` Field](README.md#the-citation-field).
 
 _Reopen if._ Never on its own merits; only if a use case needs many live copies of one delegation, which would be a different feature.
 
@@ -76,7 +76,7 @@ _Reopen if._ Causal metadata enters the system for other reasons (see whiteout).
 
 _Proposal._ Dropping your standing leaves the delegations you issued intact, as dropping an ocap reference leaves the copies intact.
 
-_Rejected because._ It depends on a moment of transfer that a weakly consistent system without finality does not have. The two timeless replacements are "issuer ever authorized" (independence recovered, fail-open) and "issuer currently authorized" (issuer-recursive, fail-closed). Keyline takes the second for delegations and the first for revocations. Long form: [README, Intuition & Lineage](README.md#lineage--prior-art).
+_Rejected because._ It depends on a moment of transfer that a weakly consistent system without finality does not have. The two timeless replacements are "issuer ever authorized" (independence recovered, fail-open) and "issuer currently authorized" (issuer-recursive, fail-closed). Keyline takes the second for delegations and the first for revocations. Long form: [README, Lineage & Prior Art](README.md#lineage--prior-art).
 
 _Reopen if._ Never in this consistency model.
 
@@ -130,7 +130,7 @@ _Proposal._ A covered delegation is live iff some derivation to its issuer avoid
 
 _Would buy._ One widest-path pass for levels; exclusion-set searches return a boolean.
 
-_Rejected because._ It leaks the authority the revocation was about. Dan administers `Mods`, which is supplied into `Doc` at Edit (so `Doc` is not in Dan's reach); Eve is a Mod (Edit over `Doc` through `Mods`) and separately holds Read over `Doc` from `Owners`; Eve grants Frank Admin; Dan revokes it. The gated reading hands Frank Edit: Eve's Mod standing flows through the very edge Dan revoked, because only existence consulted the exclusion set. Clamping the edge to the level reachable on the avoiding derivation gives Frank Read, yields the same live set, and is `≤` gated everywhere. Long form: [implementation, Evaluation](implementation.md#evaluation).
+_Rejected because._ It leaks the authority the revocation was about: a revoked edge that survives on an avoiding derivation at Read would still convey the issuer's Edit, which flows through the very node the revocation covers. Clamping the edge to the level reachable on the avoiding derivation yields the same live set and is `≤` gated everywhere. The worked counterexample (`Mods`, Eve, Frank) is in [implementation, Evaluation](implementation.md#evaluation).
 
 _Reopen if._ Never on its own merits; it is strictly more permissive than clamping for the same cost class.
 
@@ -178,15 +178,15 @@ _Reopen if._ A backend needs to page the certificate set in from storage during 
 
 _Proposal._ `Keyline::insert` verifies the Ed25519 signature and rejects bad certificates.
 
-_Rejected because._ It duplicates verification `keyhive_core` does at ingest and puts `ed25519-dalek`'s verifier in the evaluator's dependency set. `insert` takes a `Verified<Certificate>` witness whose only public constructor is `Signed::verify`, so unchecked certificates cannot reach the set. Decided in [implementation, `Verified<T>`](implementation.md#signedt-and-verifiedt).
+_Rejected because._ Verification is `Signed::verify`'s job. `insert` takes a `VerifiedCertificate`, built only from `Verified` witnesses whose only public constructor is `Signed::verify`, so every backend gets verification for free and none can skip it. Decided in [implementation, `Verified<T>`](implementation.md#signedt-and-verifiedt).
 
-_Reopen if._ A backend is used without `keyhive_core` in front of it and needs to be safe standalone. Then add a verifying wrapper, not a trait change.
+_Reopen if._ A backend needs a verification policy `Signed::verify` does not implement (another signature scheme, say). Then add a verifying constructor, not a trait change.
 
 ### Splitting `keyline` into a traits crate and an implementation crate
 
 _Proposal._ `keyline_core` (types, trait, semantics) and `keyline_memory` (the reference evaluator).
 
-_Rejected because._ One trait plus one implementation in one crate is the minimum that still lets a second backend exist. The types and normative semantics must live with the trait regardless, and the in-memory evaluator has no dependencies worth isolating. The conformance suite, exported behind `test_utils`, is what actually lets a second backend prove itself.
+_Rejected because._ One trait plus one implementation in one crate is the minimum that still lets a second backend exist. The types and the semantics (the trait and its conformance suite) must live together regardless, and the in-memory evaluator has no dependencies worth isolating. The conformance suite, exported behind `test_utils`, is what actually lets a second backend prove itself.
 
 _Reopen if._ A second backend appears.
 
@@ -202,6 +202,6 @@ _Reopen if._ Native evaluation cost becomes a problem on real graphs.
 
 _Proposal._ Canonical CBOR for the certificate types, hashed with BLAKE3.
 
-_Rejected because._ Keyhive is moving to a bespoke codec after this branch; adopting a second interim encoding would mean two migrations. A fixed-width placeholder needs no dependency and is replaced wholesale when the codec lands. Decided in [implementation, Encoding](implementation.md#encoding).
+_Rejected because._ Keyhive is moving to a bespoke codec; adopting a second interim encoding would mean two migrations. A fixed-width placeholder needs no dependency and is replaced wholesale when the codec lands. Decided in [implementation, Encoding](implementation.md#encoding).
 
 _Reopen if._ The codec is delayed indefinitely.

@@ -296,8 +296,8 @@
           # also reads BOLERO_RANDOM_TEST_TIME_MS); hosted CI runs this quick
           # sweep per PR and a thorough one nightly (see test-bolero.yml).
           # Harnesses live in `keyline`: codec round-trip and canonicality, and
-          # the two conformance laws that check `MemoryKeyline` against the
-          # naive transcription of the evaluation program.
+          # the conformance laws, which check `MemoryKeyline` against two
+          # independent oracles.
           ci-bolero = mkCheck "ci-bolero" ''
             export BOLERO_RANDOM_ITERATIONS="''${BOLERO_RANDOM_ITERATIONS:-1000}"
             export RUST_BACKTRACE=1
@@ -437,6 +437,12 @@
             # making the tests stop terminating (e.g. an inverted fixpoint
             # exit). Missed mutants exit 2, which takes precedence, and still
             # fail the job.
+            #
+            # A fixed iteration count gives every mutant the same number of
+            # generated sets per bolero harness, instead of one second each
+            # in a debug build. bolero draws those sets from fresh entropy, so
+            # the inputs still differ between runs.
+            export BOLERO_RANDOM_ITERATIONS="''${BOLERO_RANDOM_ITERATIONS:-50}"
             cargo mutants --workspace "$@" || [ $? -eq 3 ]
           '';
         };

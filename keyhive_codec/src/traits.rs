@@ -7,6 +7,13 @@ use crate::{encoded::Encoded, error::DecodeError};
 use alloc::vec::Vec;
 
 /// Serialize a value into its canonical byte form.
+///
+/// An encoding need not be self-delimiting: `Vec<u8>` encodes as its raw
+/// bytes, so two of them written back to back are ambiguous. [`Decode`]
+/// receives exactly one value's bytes. A composite type must therefore frame
+/// any field that is not fixed-width (with a length, as `keyline`'s
+/// `Revocation` does for its watermarks), or its own encoding is not
+/// canonical.
 pub trait Encode {
     /// Append the canonical encoding of `self` to `out`.
     fn encode_into(&self, out: &mut Vec<u8>);
@@ -29,7 +36,7 @@ pub trait Decode: Sized {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError>;
 }
 
-/// The empty encoding, for types parameterised by a payload they do not use.
+/// The empty encoding, for types parameterized by a payload they do not use.
 ///
 /// Canonical by construction: one value, one encoding, and `decode` accepts
 /// nothing else.

@@ -1,11 +1,24 @@
 //! [`MemoryKeyline`]: the in-memory reference implementation of [`Keyline`].
 //!
-//! This is the evaluation program in `design/keyline/implementation.md`
-//! executed literally, with no caching. Every query recomputes stratum 1
-//! (admin reach and coverage) and stratum 2 (the live set and edge caps)
-//! from the certificate set, then runs one widest-path search rooted at the
-//! queried subject. Any faster backend must agree with it on every set; the
-//! conformance suite is how that is checked.
+//! This is the evaluation program in `design/keyline/implementation.md`,
+//! with no caching. Every query recomputes stratum 1 (admin reach and
+//! coverage) and stratum 2 (the live set and edge caps) from the certificate
+//! set, then runs one widest-path search rooted at the queried subject. Any
+//! faster backend must agree with it on every set; the conformance suite is
+//! how that is checked.
+//!
+//! It departs from a literal transcription in four ways, each of which
+//! preserves every answer (the oracles transcribe the program literally, so
+//! agreement checks this):
+//!
+//! - _Coverage that touches no route is dropped._ A revoked delegation whose
+//!   covered nodes all lack standing over its subject needs no context.
+//! - _Contexts are shared._ Delegations with the same exclusion set share one
+//!   search per round.
+//! - _One unexcluded search pre-filters._ Reach avoiding a set is a subset of
+//!   reach avoiding nothing, so a delegation unreached there is skipped.
+//! - _Uncovered caps are `power`._ An uncovered edge's cap would equal its
+//!   issuer's plain level, which the final search applies anyway.
 //!
 //! Without caching, stratum 1 is global, so a query costs what the whole
 //! replica costs, not what the queried subject costs. Without demand-driven
@@ -32,14 +45,13 @@
 //! node's members inherit what the node reaches).
 
 use crate::{
-    certificate::Certificate,
+    certificate::{Certificate, CertificateId, VerifiedCertificate},
     collections::{Map, Set},
     contract::{set_digest, CertificateSet, Keyline},
     delegation::Delegation,
     id::Id,
     power::Power,
     revocation::{Revocation, RevocationId},
-    signed::{Signed, Verified},
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -57,7 +69,7 @@ use tracing::{debug, instrument, trace};
 pub struct MemoryKeyline<W> {
     /// The set itself, keyed by certificate identity. Retained as received so
     /// certificates can be forwarded without re-encoding.
-    certificates: Map<Digest<Certificate<W>>, Signed<Certificate<W>>>,
+    certificates: Map<CertificateId, Certificate<W>>,
 
     delegations: Map<Digest<Delegation>, Delegation>,
 
@@ -87,7 +99,7 @@ impl<W> MemoryKeyline<W> {
     }
 
     /// The certificate as received, if present.
-    pub fn get(&self, cert: &Digest<Certificate<W>>) -> Option<&Signed<Certificate<W>>> {
+    pub fn get(&self, cert: &CertificateId) -> Option<&Certificate<W>> {
         self.certificates.get(cert)
     }
 
@@ -132,8 +144,8 @@ impl<W> MemoryKeyline<W> {
     }
 
     /// Group covered delegations by exclusion set. `covered(h, ·)` depends
-    /// only on who revoked `h`, so one key's revocation spree yields one set;
-    /// every edge in a context shares its searches.
+    /// only on who revoked `h`, so one key's revocation spree yields one set,
+    /// and every edge in a context shares its searches.
     fn contexts(&self, covered: Map<Digest<Delegation>, Set<Id>>) -> Vec<Context> {
         let mut by_set: BTreeMap<BTreeSet<Id>, Context> = BTreeMap::new();
         for (h, exclude) in covered {
@@ -150,14 +162,17 @@ impl<W> MemoryKeyline<W> {
         by_set.into_values().collect()
     }
 
-    /// Stratum 1: `covered(h, ·)` for every revoked delegation, restricted to
-    /// nodes that could lie on a route for `h`.
+    /// Stratum 1: `covered(h, ·)` for every revoked delegation whose covered
+    /// nodes could lie on a route for it.
     ///
     /// A route for `h` transits only nodes with standing over `subject(h)`, so
-    /// covering any other node changes nothing: `h` then behaves exactly as an
-    /// uncovered edge. Dropping those nodes, and `h` when none remain, keeps a
-    /// revocation by a key with no reach over `h`'s subject from costing a
-    /// context, and so a search per round.
+    /// if no covered node has that standing, `h` behaves exactly as an
+    /// uncovered edge and is dropped: a revocation by a key with no reach over
+    /// `h`'s subject costs no context. The set itself is kept whole, not
+    /// trimmed to those nodes, so that it still depends only on who revoked
+    /// `h` and a one-key spree still shares one context. Excluding a node
+    /// without standing over a search's root changes nothing, since the search
+    /// never reaches it.
     fn coverage(&self) -> Map<Digest<Delegation>, Set<Id>> {
         let reaches = self.search(self.edges.keys().copied(), &Params::positive());
 
@@ -182,9 +197,11 @@ impl<W> MemoryKeyline<W> {
                         core::iter::once(r.issuer)
                             .chain(reach.get(&r.issuer).into_iter().flatten().copied())
                     })
-                    .filter(|n| on_routes.contains_key(n))
                     .collect();
-                (!nodes.is_empty()).then_some((*h, nodes))
+                nodes
+                    .iter()
+                    .any(|n| on_routes.contains_key(n))
+                    .then_some((*h, nodes))
             })
             .collect()
     }
@@ -211,7 +228,10 @@ impl<W> MemoryKeyline<W> {
                 .delegations
                 .iter()
                 .filter(|(h, d)| {
-                    !live.contains(h) && !covered.contains(h) && reached(&base, d.subject, d.issuer)
+                    !live.contains(h)
+                        && !covered.contains(h)
+                        && !self.revoked_by_audience(h, d.audience)
+                        && reached(&base, d.subject, d.issuer)
                 })
                 .map(|(h, _)| *h)
                 .collect();
@@ -332,7 +352,7 @@ impl<W> MemoryKeyline<W> {
         }
     }
 
-    /// The parameterised reachability search: `level(root, ·)` for each root and
+    /// The parameterized reachability search: `level(root, ·)` for each root and
     /// for every node discovered along the way, to a fixed point across roots.
     ///
     /// Returns `root -> node -> level`. A root inside the exclusion set has no
@@ -451,19 +471,26 @@ impl<W> Default for MemoryKeyline<W> {
 impl<W: Encode + Decode> Keyline for MemoryKeyline<W> {
     type RetentionWatermark = W;
 
-    #[instrument(level = "debug", skip(self, cert), fields(digest = %cert.digest()))]
-    fn insert(&mut self, cert: Verified<Certificate<W>>) -> bool {
-        let digest = cert.digest();
-        if self.certificates.contains_key(&digest) {
+    #[instrument(level = "debug", skip(self, cert), fields(id = ?cert.id()))]
+    fn insert(&mut self, cert: VerifiedCertificate<W>) -> bool {
+        let id = cert.id();
+        if self.certificates.contains_key(&id) {
             debug!("duplicate certificate; not inserted");
             return false;
         }
 
-        let (payload, signed) = cert.into_parts();
-        match payload {
-            Certificate::Delegation(d) => {
-                let h = d.digest();
-                debug!(issuer = %d.issuer, audience = %d.audience, subject = %d.subject, power = %d.power, citation = d.citation.is_some(), "delegation inserted");
+        let signed = match cert {
+            VerifiedCertificate::Delegation(v) => {
+                let h = v.digest();
+                let (d, signed) = v.into_parts();
+                debug!(
+                    issuer = %d.issuer,
+                    audience = %d.audience,
+                    subject = %d.subject,
+                    power = %d.power,
+                    citation = d.citation.is_some(),
+                    "delegation inserted"
+                );
                 self.edges
                     .entry(d.subject)
                     .or_default()
@@ -471,9 +498,11 @@ impl<W: Encode + Decode> Keyline for MemoryKeyline<W> {
                     .or_default()
                     .push(h);
                 self.delegations.insert(h, d);
+                Certificate::Delegation(signed)
             }
-            Certificate::Revocation(r) => {
-                let k = r.digest();
+            VerifiedCertificate::Revocation(v) => {
+                let k = v.digest().coerce();
+                let (r, signed) = v.into_parts();
                 debug!(
                     issuer = %r.issuer,
                     revoke = %r.revoke,
@@ -482,13 +511,14 @@ impl<W: Encode + Decode> Keyline for MemoryKeyline<W> {
                 );
                 self.revocations_of.entry(r.revoke).or_default().insert(k);
                 self.revocations.insert(k, r);
+                Certificate::Revocation(signed)
             }
-        }
-        self.certificates.insert(digest, signed);
+        };
+        self.certificates.insert(id, signed);
         true
     }
 
-    fn contains(&self, cert: &Digest<Certificate<W>>) -> bool {
+    fn contains(&self, cert: &CertificateId) -> bool {
         self.certificates.contains_key(cert)
     }
 
@@ -609,7 +639,7 @@ fn pop_highest(buckets: &mut [Vec<Id>; Power::ALL.len()]) -> Option<(Id, Power)>
 mod tests {
     use super::*;
     use crate::test_utils::{
-        cert,
+        assume_verified,
         conformance::{d, scenarios::standard, DOC, OWNERS},
     };
 
@@ -627,13 +657,23 @@ mod tests {
     type Watermark = Vec<u8>;
 
     /// Both oracles keep only `(issuer, revoke)`, so neither can read a
-    /// watermark even by accident. Agreement therefore shows that the
-    /// evaluator does not read one either.
+    /// watermark even by accident; agreement checks that the evaluator
+    /// ignores watermarks too.
     #[cfg(feature = "arbitrary")]
     #[test]
-    fn retain_does_not_affect_authority() {
+    fn naive_oracle_ignores_watermarks() {
         laws::matches_naive_oracle_with_revocations::<MemoryKeyline<Watermark>>();
+    }
+
+    #[cfg(feature = "arbitrary")]
+    #[test]
+    fn threshold_oracle_ignores_watermarks() {
         laws::matches_threshold_oracle::<MemoryKeyline<Watermark>>();
+    }
+
+    #[cfg(feature = "arbitrary")]
+    #[test]
+    fn retain_with_bytes_is_inert() {
         laws::retain_is_inert::<MemoryKeyline<Watermark>>();
     }
 
@@ -654,12 +694,12 @@ mod tests {
         assert!(!g.is_empty());
         let root = d(DOC, OWNERS, DOC, Power::Admin);
         assert_eq!(g.delegation(&root.digest()), Some(&root));
-        assert!(g.get(&cert(root).digest()).is_some());
+        assert!(g.get(&root.digest().into()).is_some());
         assert!(g.revocation(&Digest::from([0u8; 32])).is_none());
 
         let revocation: Revocation<()> =
             Revocation::new(alice_member.issuer, alice_member.digest());
-        g.insert(cert(revocation.clone()));
+        g.insert(assume_verified(revocation.clone()));
         assert_eq!(g.revocation(&revocation.digest()), Some(&revocation));
     }
 }

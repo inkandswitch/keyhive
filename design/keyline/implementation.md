@@ -2,7 +2,7 @@
 
 This document explains the Rust crate that implements the [Keyline model][keyline]. The model document says what authority _is_; this one says what the code exposes, what it assumes, and what it leaves to the layer above. The contract a backend is checked against is executable: the `Keyline` trait and the [conformance suite](#conformance-suite).
 
-Three things share a name. _Keyline_ is the design, `keyline` is the crate, and `Keyline` is the trait.
+_Keyline_ is the design, `keyline` is the crate, and `Keyline` is the trait.
 
 ## Scope
 
@@ -40,7 +40,7 @@ pub enum Power { Relay, Read, Edit, Admin }
 
 Totally ordered, `Relay < Read < Edit < Admin`. Attenuation along a route is `min`; combination across routes is `max`. The type belongs here rather than in `keyhive_core` because the ordering is part of the graph semantics, not of the API layer.
 
-Order and encoding are separate. The lattice is `Power::rank()`; the wire tag is the ASCII initial (`L`, `R`, `E`, `A`), one byte. Neither is derived from the other: `Admin` is the top of the order and the lowest of the four bytes, which a unit test pins. This keeps the level set extensible. A level added later takes any free byte and sits wherever its rank puts it, so no existing certificate's bytes change and no digest moves. With consecutive integer tags, inserting a level would renumber `Admin` and invalidate every `revoke` and `citation` pointer in every stored set.
+Order and encoding are separate. The lattice is `Power::rank()`; the wire tag is an ASCII letter (`L` for reLay, `R`, `E`, `A`), one byte. Neither is derived from the other: `Admin` is the top of the order and the lowest of the four bytes, which a unit test pins. This keeps the level set extensible. A level added later takes any free byte and sits wherever its rank puts it, so no existing certificate's bytes change and no digest moves. With consecutive integer tags, inserting a level would renumber `Admin` and invalidate every `revoke` and `citation` pointer in every stored set.
 
 ### `Delegation`
 
@@ -64,7 +64,7 @@ pub struct Delegation {
 | `power`    | Requested level; clamped, never raised.                                                                                             |
 | `citation` | The revocation being re-issued past. Gives a delegation identical to a revoked one a fresh digest. Evaluation ignores it. Absent means first issuance. |
 
-A delegation is the Granovetter introduction from object capabilities; the [model document](README.md#intuition) draws it. One difference matters for the rules: anyone can name anyone as `audience`, and the audience never consents. That is why revocation by the audience exists, and why the [gift-cert attack](evaluation-notes.md#single-queries-and-the-gift-cert-attack) is possible.
+A delegation is the Granovetter introduction from object capabilities; the [model document](README.md#intuition) draws it. One difference matters for the rules: anyone can name anyone as `audience`, and the audience never consents. That is one reason revocation by the audience exists, and it is why the [gift-cert attack](evaluation-notes.md#single-queries-and-the-gift-cert-attack) is possible.
 
 Anyone may issue a delegation over any subject. The issuer's effective power over `subject` clamps the result; issuing needs no Admin.
 
@@ -105,13 +105,26 @@ The policy for a subject that the map does not name therefore belongs to the con
 
 `retain` is covered by the digest. Two revocations of one delegation with different watermarks are two certificates. Both stand, and they revoke the same delegation. How to combine their watermarks is also a content-layer question.
 
-### `Certificate`
+### Certificates
 
 ```rust
-pub enum Certificate<W> { Delegation(Delegation), Revocation(Revocation<W>) }
+pub enum Certificate<W> {           // a signed statement, as received
+    Delegation(Signed<Delegation>),
+    Revocation(Signed<Revocation<W>>),
+}
+
+pub enum VerifiedCertificate<W> {   // what `insert` takes
+    Delegation(Verified<Delegation>),
+    Revocation(Verified<Revocation<W>>),
+}
+
+pub enum CertificateId {            // what the set is keyed by
+    Delegation(Digest<Delegation>),
+    Revocation(Digest<RevocationId>),
+}
 ```
 
-The unit of insertion and of the set. `W` is fixed for each set as `Keyline::RetentionWatermark`.
+What gets signed is the delegation or the revocation itself, each under its own [domain context](#domain-separation). A certificate is the sum of those two signed forms, not a signature over a sum, so each statement has one identity: the digest of its signed payload. That digest is the set key (`CertificateId`), and it is what `revoke` and `citation` name. `Certificate::verify` verifies whichever kind it holds. `W` is fixed for each set as `Keyline::RetentionWatermark`. `Certificate` equality is `Signed`'s, bytes and signature; compare ids for "same statement".
 
 ### `Encoded<T>`
 
@@ -140,10 +153,9 @@ The keys that sign Keyline certificates may also sign in other protocols, such a
 |---------------------|--------------------------|
 | `Delegation`        | `keyline/v0/delegation`  |
 | `Revocation<W>`     | `keyline/v0/revocation`  |
-| `Certificate<W>`    | `keyline/v0/certificate` |
 | `CertificateSet<W>` | `keyline/v0/set`         |
 
-Contexts contain no NUL, so no prefixed string is a prefix of another. The trait is `keyhive_crypto::domain_separator::Domain`: `Domain::message` builds the prefixed bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input. `v0` is the protocol version. It changes whenever the meaning of signed bytes does, so a certificate from one version never verifies under another. The contexts live together in `keyline/src/domain.rs`, where a test checks that they are distinct.
+Contexts contain no NUL (checked at compile time), so the context can be read back off any message and two contexts never produce the same message. The two kinds of certificate are separated by their contexts, which is also why their digests can share one key type without a kind tag. The trait is `keyhive_crypto::domain_separator::Domain`: `Domain::message` builds the prefixed bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input. `v0` is the protocol version. It changes whenever the meaning of signed bytes does, so a certificate from one version never verifies under another. Each type declares its context next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core` today, still relies on that protocol's formats.
 
 ### `Signed<T>` and `Verified<T>`
 
@@ -175,7 +187,7 @@ There is no issuer field. The payload names its own issuer (`Delegation.issuer`,
 
 A certificate that names one issuer and is signed by another does not verify. Storing the signer separately would be a redundant field that the transport controls, and checking the signature against it instead of the payload would admit exactly that forgery. `try_sign` refuses a key that is not the payload's issuer for the same reason. `verify_strict` rejects the small-order and malleable signatures that plain `verify` accepts; a unit test builds such a forgery and checks that it fails.
 
-`verify` is the only public constructor of `Verified<T>`. The digest is taken from the same bytes the signature covers, so nothing re-encodes a payload to identify it. Two digests exist per delegation: the set is keyed by `Digest<Certificate>` (over the tagged bytes), while `revoke` and `citation` name the payload digest (`Delegation::digest()`, `Revocation::digest()`, over the untagged bytes); both are functions of the same canonical bytes. A crate-private constructor lets `test_utils::cert` build fixtures without paying for signing; one scenario goes through `try_sign` and `verify` so the shortcut cannot hide a discrepancy.
+Outside the `test_utils` feature, `verify` is the only public constructor of `Verified<T>`. The digest is taken from the same bytes the signature covers, so nothing re-encodes a payload to identify it. A crate-private constructor lets `test_utils::assume_verified` build fixtures without paying for signing. With `test_utils` enabled the witness therefore proves nothing, so enable it only from dev-dependencies. One scenario goes through `try_sign` and `verify` so the shortcut cannot hide a discrepancy.
 
 `Signed<T>` equality is by bytes _and_ signature. RFC 8032 signing is deterministic, so one key signing one payload twice yields equal values. A signer that picks its nonce another way produces a different, equally valid signature: a different `Signed<T>` with the same digest. A `Keyline` set is keyed by digest, so it holds such a pair as one certificate; the `second_signature_is_the_same_certificate` scenario pins this.
 
@@ -187,8 +199,8 @@ These two types live in `keyline` (`TODO(keyhive_types)`). `keyhive_crypto`'s se
 pub trait Keyline {
     type RetentionWatermark: Encode + Decode;
 
-    fn insert(&mut self, cert: Verified<Certificate<Self::RetentionWatermark>>) -> bool;
-    fn contains(&self, cert: &Digest<Certificate<Self::RetentionWatermark>>) -> bool;
+    fn insert(&mut self, cert: VerifiedCertificate<Self::RetentionWatermark>) -> bool;
+    fn contains(&self, cert: &CertificateId) -> bool;
 
     fn effective_power(&self, subject: Id, audience: Id) -> Option<Power>;
     fn members(&self, subject: Id) -> BTreeMap<Id, Power>;
@@ -202,7 +214,7 @@ pub trait Keyline {
 |----------------------|---------------------------------------------------------------------------------------------------------------------------|
 | `RetentionWatermark` | The `retain` watermark type. Evaluation never reads it. A backend that does not care picks `()`.                          |
 | `insert`             | Add a certificate. `true` if newly added, as `BTreeSet::insert`. Idempotent. A dedupe signal, not a change signal.        |
-| `contains`           | Whether the digest is in the set. Ingest checks this before paying for signature verification.                            |
+| `contains`           | Whether a certificate with this id is in the set. Ingest checks this before paying for signature verification.            |
 | `effective_power`    | `audience`'s effective power over `subject`: max over live routes of min along each. `None` if unreachable.               |
 | `members`            | Every `Id` other than `subject` itself with a live route to `subject`, with its effective power. The materialized view.   |
 | `is_live`            | Whether the named delegation survives evaluation.                                                                         |
@@ -221,7 +233,7 @@ A duplicate is also how a silent `citation` collision shows up: an issuer who re
 
 A revocation whose target is not (yet) in the set is stored like any other certificate and contributes nothing until the target arrives; insertion order never matters.
 
-Not yet on the trait: `get(&Digest<Certificate>) -> Option<&Signed<Certificate>>` and iteration over the set. Sync and archiving need them, but their shape depends on how Subduction pulls certificates, and a database-backed implementation may not hold the signed bytes. Decided at integration.
+Not yet on the trait: `get(&CertificateId) -> Option<&Certificate<W>>` and iteration over the set. Sync and archiving need them, but their shape depends on how Subduction pulls certificates, and a database-backed implementation may not hold the signed bytes. Decided at integration.
 
 ### `MemoryKeyline`
 
@@ -231,7 +243,7 @@ It is also not demand-driven. `effective_power(s, a)` materializes `s`'s whole r
 
 ## Evaluation
 
-Evaluation is a pure function of the set. The strata below are the canonical order the model document describes (all delegations, then all revocations, then the check), made executable: stratum 1 replays the proxy network of delegations, stratum 2 applies every revocation to it, and a query is the invocation being checked. The reference implementation is this program executed literally, and any faster backend must agree with it on every set.
+Evaluation is a pure function of the set. The strata below are the canonical order the model document describes (all delegations, then all revocations, then the check), made executable: stratum 1 replays the proxy network of delegations, stratum 2 applies every revocation to it, and a query is the invocation being checked. The reference implementation is this program, with four answer-preserving shortcuts listed in `memory.rs` (dropping coverage that touches no route, sharing contexts, one unexcluded pre-filter search, and `cap = power` for uncovered edges). Any faster backend must agree with it on every set.
 
 ```
 Stratum 0 — facts
@@ -279,7 +291,7 @@ Notes on the program:
 - _Covered edges are clamped, not just gated._ A covered edge conveys at most the level its issuer holds _on a derivation that avoids the covered nodes_, not the issuer's global level. Example: Dan is an Admin of role `Mods`, which is supplied into `Doc` at Edit (so `Doc` is not in Dan's reach); Eve is a Mod (Edit over `Doc` via `Mods`) and also holds a direct Read over `Doc` from `Owners`; Eve delegates Admin over `Doc` to Frank (`h`); Dan revokes `h`. `admin_reach(Dan) = {Dan, Mods}`, so `h` is dead on the derivation through `Mods` and live on the one through `Owners`. Frank gets `min(Read, Admin) = Read`: Eve's standing as a Mod does not flow through the edge Dan revoked, while her independent Read does. Gating alone (existence via the avoiding derivation, level from Eve's global Edit) would hand Frank the very authority the revocation was about. Clamping yields the same live set and levels `≤` the gated reading everywhere: ambiguity resolves toward less authority.
 - _Clamping is a relaxation of route-consistency._ The exact reading (a single derivation in which every edge's own covered set is avoided by that derivation's prefix) is a path-with-forbidden-pairs problem and is not known to be polynomial, and a reference semantics an adversary can make exponential with crafted certificates is a denial-of-service vector. `cap(h)` avoids `h`'s covered set but takes the edges it traverses as already-live facts, each justified by its own derivation. See [alternatives, route-consistent levels](alternatives.md#route-consistent-levels).
 - _Negation appears once, over fully computed lower strata._ Revocations target delegations, never other revocations, so `covered` never depends on `live`. This is what makes the result independent of insertion order.
-- _Coverage that touches no route is dropped._ A route for `h` transits only nodes with standing over `subject(h)`, so a covered node without such standing changes nothing, and `h` behaves as if uncovered. `MemoryKeyline` drops those nodes before grouping, and drops `h` from coverage when none remain. A revocation by a key with no reach over its target's subject therefore costs storage only. Both oracles keep the unpruned coverage, so agreement checks that pruning changes no answer.
+- _Coverage that touches no route is dropped._ A route for `h` transits only nodes with standing over `subject(h)`, so a covered node without such standing changes nothing, and `h` behaves as if uncovered. `MemoryKeyline` drops `h` from coverage when none of its covered nodes has that standing, so a revocation by a key with no reach over its target's subject costs storage only. It keeps the exclusion set whole otherwise, so the set still depends only on who revoked `h` and grouping still shares one context per signer set. Both oracles keep all coverage, so agreement checks that dropping changes no answer.
 - _Aggregation is a bucketed BFS._ Four levels, so the widest-path pass over un-revoked certificates is linear. Covered certificates are grouped by exclusion set: `covered(h, ·)` depends only on who revoked `h`, so one key's revocation spree is one group. Each group pays one route search per round of the live fixpoint and one per round of the cap ascent. Without the grouping a `k`-revocation spree by one key would cost `k` searches per round instead of one.
 - _The route ends at `issuer`; the audience answers only to its own signature._ Admin-reach coverage applies to the nodes a derivation transits, and the derivation for `h` runs from `subject` to `issuer`. Revocation by the issuer (`k = issuer`) is therefore total with no special case: `issuer` is in its own admin reach and on its own route. Revocation by the audience (`k = audience`) is the one explicit clause, `¬rev(audience, h)`: the audience's _own_ revocation kills what names it, but nobody's _reach_ covers a certificate through its `audience`. Putting `audience` on the route would give every admin of a role revocation power over every delegation _to_ that role: a `Members` admin could revoke `Doc → Members` supply edges they never issued and hold no reach over on `Doc`'s side.
 - _Ungrounded certificates cost storage only._ Evaluation forward-chains from root edges and never visits them.
@@ -337,7 +349,7 @@ How it corresponds to the value form:
 
 One property of this program matters for every backend: the membership rule has _two_ premises in the relation being defined. That is non-linear recursion, and SQL's `WITH RECURSIVE` (SQLite, PostgreSQL) admits exactly one reference to the relation under construction, so the fixpoint cannot be a single recursive CTE. It is one plain statement per round plus a loop that stops when a round adds nothing. Stratification and the negation are the easy part (chained CTEs, anti-joins); the loop is the only non-declarative ingredient. This is why the `Keyline` trait is synchronous and `MemoryKeyline` has a driver loop, and why a Datalog engine (`ascent`, Soufflé, DBSP) hosts the program natively where SQL needs a stored procedure.
 
-Two things this does _not_ say. It is not a cost claim: evaluation is polynomial with small constants, and a document with 180 members answers in about a millisecond. And it is not caused by revocations: the difficulty is entirely in stratum 1, where `subject`-as-scope means the edges usable in a subject's graph are themselves derived facts. Coverage and replay are a join and an anti-join over a finished relation. A Keyline with no revocations has the same shape.
+This is not a cost claim: evaluation is polynomial with small constants, and a document with 180 members answers in about a millisecond. Nor is it caused by revocations: the difficulty is entirely in stratum 1, where `subject`-as-scope means the edges usable in a subject's graph are themselves derived facts. Coverage and replay are a join and an anti-join over a finished relation. A Keyline with no revocations has the same shape.
 
 Whether the rule could be _rewritten_ into linear form is a separate question, and one this document does not settle. Non-linear phrasing alone proves nothing: textbook transitive closure is usually written non-linearly and linearizes trivially. The argument that this one does not is inherited: the membership rule is RT₀'s linking inclusion, and SPKI/SDSI resolution maps onto pushdown reachability, which is P-complete. That is a citation, not a proof about this rule set. See [evaluation notes §4](evaluation-notes.md#4-why-it-is-not-one-query).
 
@@ -365,13 +377,14 @@ The second is a security requirement. Certificates travel as `Encoded<T>`, and t
 `keyline` implements the traits for its own types with a fixed-width layout:
 
 ```
-Certificate: kind:u8 ‖ payload
 Delegation:  issuer ‖ audience ‖ subject ‖ power:u8 ‖ citation_tag:u8 ‖ citation?    power is one of L R E A
 Revocation:  issuer ‖ revoke ‖ count:u32 ‖ entry*
   entry:     subject ‖ len:u32 ‖ W
 ```
 
-In `Delegation`, `citation_tag` is `0` with no following bytes when `citation` is absent, and `1` followed by 32 bytes when present. `power` is one of the four ASCII tags. Fixed-width layouts are canonical by construction, so `decode` only has to check length, tag membership, and that each `Id` is a valid point. `0x00` is not a valid `power`, so a zeroed buffer fails to decode.
+In `Delegation`, `citation_tag` is `0` with no following bytes when `citation` is absent, and `1` followed by 32 bytes when present. `power` is one of the four ASCII tags. Fixed-width layouts are canonical by construction, so `decode` only has to check length, tag membership, and that each `Id` is a valid point (an invalid one is reported by field name). `0x00` is not a valid `power`, so a zeroed buffer fails to decode.
+
+These are the bytes that are signed and hashed, under each type's context. How a signed certificate is framed on the wire (which kind follows, and the signature) belongs to the sync format, which is not defined yet. Encodings need not be self-delimiting, so any composite must frame its variable-length fields, as `Revocation` does.
 
 `retain` is the only variable-length field, so it is the only place where canonicality is not free. `decode` enforces it with four rules:
 
@@ -407,15 +420,14 @@ keyline/
     lib.rs           //! model summary, naming convention, links to design/keyline/
     id.rs            Id, InvalidId
     power.rs         Power
-    delegation.rs    Delegation
-    revocation.rs    Revocation, RevocationId
-    certificate.rs   Certificate; Encode/Decode impls for all three
-    domain.rs        Domain contexts for every signed or hashed type
+    delegation.rs    Delegation, its encoding and domain context
+    revocation.rs    Revocation, RevocationId, its encoding and domain context
+    certificate.rs   Certificate, VerifiedCertificate, CertificateId
     signed.rs        Signed<T>, Verified<T>
     contract.rs      the Keyline trait, CertificateSet, set_digest
     memory.rs        MemoryKeyline: storage, stratified evaluator, Keyline impl
     collections.rs   (private) Map/Set aliases: HashMap with std, BTreeMap without
-    test_utils.rs    deterministic ids, unsigned and signed Verified fixtures, fuzz helpers
+    test_utils.rs    Statement, deterministic ids, unsigned and signed fixtures, fuzz helpers
     test_utils/
       conformance.rs                  the cast, helpers, keyline_conformance! macro
       conformance/gen.rs              CertSet generator
@@ -424,12 +436,14 @@ keyline/
       conformance/oracle/naive.rs     value-form oracle
       conformance/oracle/threshold.rs threshold-form oracle
       conformance/scenarios.rs        named cases, generic over K: Keyline
+  tests/
+    invariants.rs    crate-wide invariants (distinct domain contexts)
 ```
 
 - `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`. `keyline`, `keyhive_codec` and `keyhive_crypto` build for `wasm32-unknown-unknown` with `--no-default-features` (checked by `ci-no-std`). Targets without atomic compare-and-swap (e.g. `thumbv6m-none-eabi`) fail in `tracing-core`. `keyline` uses three items from `keyhive_crypto`: `Digest<T>`, `Domain`, and `Verifiable`. Moving them down to `keyhive_codec`, or to a crate beneath it, would be the cleaner layering, for the same reason that put `Encode`/`Decode` at the bottom.
 - Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`, `Domain`, `Verifiable`), `ed25519-dalek` (`VerifyingKey`, `Signature`), `tracing`, and `thiserror` 2 (`no_std`-capable; pinned locally until the workspace moves off 1). Optional: `serde`, `arbitrary`, and, for `test_utils`, `bolero` and `sha2`.
 - `std` feature (default on): `HashMap`/`HashSet` for the evaluator's maps, plus the `std` features of `tracing` and `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
-- `test_utils` feature: the conformance suite, the fixtures, and `bolero`/`arbitrary`. Implies `arbitrary`, which implies `std` (`derive(Arbitrary)` expands to a `thread_local!`). Also implies `serde`, so the serde round-trip tests run wherever the full suite does (`ci-test`, mutation testing), and `ed25519-dalek/hazmat`, for the fixture that signs with a non-standard nonce.
+- `test_utils` feature: the conformance suite, the fixtures, and `bolero`/`arbitrary`. It lets `assume_verified` build a `VerifiedCertificate` without a signature check, so enable it only from dev-dependencies. Implies `arbitrary`, which implies `std` (`derive(Arbitrary)` expands to a `thread_local!`). Also implies `serde`, so the serde round-trip tests run wherever the full suite does (`ci-test`, mutation testing), and `ed25519-dalek/hazmat`, for the fixture that signs with a non-standard nonce.
 - Testing is split by feature, and no configuration silently skips the evaluator. `cargo test -p keyline` runs the unit tests and every conformance _scenario_ (plain generic functions needing nothing beyond the crate); `--no-default-features` runs the same set against the `no_std` build, since the crate never links `std` and only the harness does; `--features test_utils` adds the `bolero` laws and property tests, which need `Arbitrary` and so `std`. `nix run .#ci-test` (menu: `test:host`) runs the whole workspace with `test_utils`, as hosted CI does; `ci-no-std` runs the `no_std` set.
 - `serde` feature: derives on the public types for archives. Not the wire format.
 - No `parallel` feature yet. If one comes, it is native-only (`rayon`); Wasm stays single-threaded because `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator is written so the independent units (admin reach per issuer, route search per covered certificate) are plain iterators.
@@ -452,41 +466,43 @@ _Generator._ `test_utils::conformance::gen::CertSet` draws from a pool of eight 
 
 - a root edge per subject (one to three), at Admin or Edit;
 - up to ten free-form delegations over any node in the pool, so some land on roles and some are ungrounded;
-- at most one planted shape that random wiring rarely produces: the clamping shape (a role supplied into a subject, an admin of it, a member of it with an independent delegation over the subject, that member's delegation to a third party, and the admin's revocation of it); two clamps chained so that each covered edge lies on the other's avoiding derivation; or a role chain three deep;
+- at most one planted shape that random wiring rarely produces: the clamping shape (a role supplied into a subject, an admin of it, a member of it with an independent delegation over the subject, that member's delegation to a third party, and the admin's revocation of it); two clamps chained so that each covered edge lies on the other's avoiding derivation; a role chain three deep, half the time all at Admin with a revocation that relies on reach composed through all three roles; or the clamping shape inside a role supplied into the subject;
 - occasionally a revocation of a delegation that is not in the set;
-- up to four revocations naming delegations already present, a third of them by the target's issuer or audience, each carrying zero to two retention watermarks;
+- up to four revocations naming delegations already present, a third of them by the target's issuer and a third by its audience, each carrying zero to two retention watermarks;
 - up to two re-issues past a revocation, and sometimes a revocation of a re-issue.
 
 Random 32-byte keys would give nothing but ungrounded edges.
 
-_Oracles._ Two transcriptions of the program, sharing no code with each other or with any backend. `oracle::naive` runs the value form above as Jacobi iteration over tuple maps, with caps as a second fixed point. `oracle::threshold` runs the threshold form rule for rule, with one context per covered certificate and no cap fixed point. Both keep only `(issuer, revoke)` from each revocation, so neither can read a watermark. A backend must agree with both, and their agreement with each other checks that the two forms in this document say the same thing. With the chained-clamp shape in the generator, a backend whose caps are a greatest fixed point fails the threshold law within CI's iteration budget.
+_Oracles._ Two transcriptions of the program, sharing no code with each other or with any backend. `oracle::naive` runs the value form above as Jacobi iteration over tuple maps, with caps as a second fixed point. `oracle::threshold` runs the threshold form rule for rule, with one context per covered certificate and no cap fixed point. Both keep only `(issuer, revoke)` from each revocation, so neither can read a watermark. A backend must agree with both, and a law with no backend (`oracles_agree`) checks that the two forms in this document say the same thing. Both share their inputs with every backend (`Delegation::digest`, `Power`'s order, the generator), so bugs there are the unit tests' job; a known-answer test pins one delegation's encoding and digest. With the chained-clamp shape in the generator, a backend whose caps are a greatest fixed point fails the threshold law within CI's iteration budget.
 
 _Laws_ (`bolero`, over generated sets):
 
 - Oracle agreement: `members` over the pool and `is_live` for every delegation agree with `oracle::naive` (without revocations, and with) and with `oracle::threshold`.
-- Order independence: a generated permutation and the reversed order both give the same `digest`, the same levels over the pool, the same live set, and the same `members`.
+- Order independence: a uniformly shuffled order and the reversed order both give the same `digest`, the same levels over the pool, the same live set, and the same `members`.
 - Idempotence: re-inserting every certificate returns `false` and changes nothing.
 - Revocations only deny: for each revocation in a set, the set without it has levels `≥` everywhere and a live set `⊇`.
 - Revocation by a party is total: a revocation signed by its target's issuer or audience kills the target.
 - `retain` is inert: emptying every `retain` map changes no answer.
 - Digest identifies the set: permutation-invariant; dropping any non-duplicated certificate changes it.
-- Query consistency: `effective_power(s, s) = Some(Admin)` for every `s`; `members(s)` is `effective_power(s, ·)` minus `s`; `contains` holds for every inserted certificate and fails for one left out; `revocations_naming(h)` is exactly the revocations in the set with `revoke = h`.
+- Query consistency: `effective_power(s, s) = Some(Admin)` for every `s`; `members(s)` is `effective_power(s, ·)` minus `s`; `contains` holds for every inserted certificate and fails for one left out; `revocations_naming(h)` is exactly the revocations in the set with `revoke = h`, whether or not `h` is present.
 
-Every law builds its backend through a helper that checks each `insert` reports whether its certificate was new. At `W = ()` a `retain` entry carries a subject but no watermark bytes, so `MemoryKeyline` re-runs both oracles, the inert-`retain` law, and digest identity with `W = Vec<u8>`.
+Every law builds its backend through a helper that checks each `insert` reports whether its certificate was new. A unit test checks that the macro lists every scenario and law. At `W = ()` a `retain` entry carries a subject but no watermark bytes, so `MemoryKeyline` re-runs both oracles, the inert-`retain` law, and digest identity with `W = Vec<u8>`.
 
-_Scenarios._ Named cases derived from the [edge-cases] findings and the model document:
+_Scenarios._ Named cases derived from the [edge-cases] findings, the model document and the patterns, including:
 
 - rotation escapes a frozen admin reach while the revocations made in office stand;
-- concurrent mutual revocation leaves both standing, and in an Edit-rooted document an apex duel still kills both memberships signed at creation;
+- concurrent mutual revocations both take effect, and in an Edit-rooted document an apex duel still kills both memberships signed at creation;
 - ex-admin revocations cover only the frozen admin reach;
 - an apex admin of an Admin-rooted document can revoke the root edge, while an Edit-rooted document's root edge is irrevocable;
 - revocation by the issuer and revocation by the audience are total; a non-admin's revocation is confined to their own node;
 - `citation` re-issue heals, reviving everything downstream under its original digest;
 - membership carries whatever the role reaches, including documents added later;
 - a senior role's admin revokes delegations inside a junior role without an explicit delegation;
-- supplying a role into a document gives power over the supply edge and none over the roster;
+- supplying a role into a document gives power over the supply edge and none over the roster, and a role's admin cannot revoke the supply into it, because the audience is not on a route;
+- coverage is the union over every revocation of a delegation;
+- the patterns hold as described: pinning, a caretaker, and the Steward (rotating the officers leaves former officers nothing);
 - a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example), and two covered edges on each other's avoiding derivation cannot lift each other's level;
-- the gift-cert attack from the [evaluation notes](evaluation-notes.md#gift-cert-scenario): an unconsented delegation into an attacker's ladder, which removing the attacker takes out of the document, which a same-key re-add revives and a fresh key does not, and which the victim severs by revoking it as audience;
+- the gift-cert attack from the [evaluation notes](evaluation-notes.md#gift-cert-scenario): an unconsented delegation into an attacker's ladder, which removing the attacker takes out of the document, which a same-key re-add revives and a fresh key does not (though supplying the ladder again under any key regrounds the attacker through it), and which the victim severs by revoking it as audience;
 - a second valid signature over a certificate already present is the same certificate;
 - two revocations differing only in `retain` are two certificates with the same effect.
 
@@ -500,7 +516,7 @@ Not implemented here; recorded so the crate's shape is checked against its one p
 - `Group::members()`, `Document::members()`, `Membered::transitive_members()` become `keyline.members(id)` with ID conversion.
 - `add_member` builds a `Delegation`, signs it with the active signer, `verify()`s it (cheap, and it exercises the same path as ingest), and `insert`s.
 - `revoke_member` builds one `Revocation` per delegation to revoke. Whether to also revoke everything the member issued (explicit removal) is a `keyhive_core` policy, per the model document's removal tiers.
-- Events for sync carry `Verified<Certificate>`; ingest is `insert`.
+- Events for sync carry `Certificate<W>`; ingest is `verify` then `insert`.
 - BeeKEM membership is `members(doc).filter(|(_, a)| a >= Read)`. The coupling of revocation to key rotation remains an open design item in the model document.
 - `keyhive_core::Delegation`'s `proof`, `after_revocations`, and `after_content` fields have no counterpart, and `delegate: Agent` becomes `audience: Id`. This is a wire-format break, absorbed by the pending API break.
 

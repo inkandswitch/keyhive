@@ -41,6 +41,12 @@ impl<T: Domain> Digest<T> {
     /// [`Digest::of`] for bytes not wrapped in an [`Encoded<T>`], such as a
     /// composite that has no `T` value of its own.
     pub fn of_bytes(bytes: &[u8]) -> Self {
+        const {
+            assert!(
+                crate::domain_separator::nul_free(T::CONTEXT),
+                "a Domain context contains NUL"
+            )
+        };
         let mut hasher = blake3::Hasher::new();
         hasher.update(T::CONTEXT.as_bytes());
         hasher.update(&[0]);
@@ -294,6 +300,11 @@ mod tests {
 
     impl Domain for Other {
         const CONTEXT: &'static str = "test/v0/other";
+    }
+
+    #[test]
+    fn message_is_context_nul_bytes() {
+        assert_eq!(Example::message(b"x"), b"test/v0/example\0x");
     }
 
     #[test]

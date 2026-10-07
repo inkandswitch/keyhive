@@ -87,9 +87,14 @@ impl Verifiable for Id {
     }
 }
 
+/// The full key, so that two `Id`s sharing a prefix differ in test output.
 impl fmt::Debug for Id {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Id({self})")
+        f.write_str("Id(")?;
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        f.write_str(")")
     }
 }
 
@@ -110,13 +115,24 @@ impl Encode for Id {
 
 impl Decode for Id {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        let arr: [u8; 32] = bytes
+        let arr: [u8; Id::LEN] = bytes
             .try_into()
             .map_err(|_| match bytes.len().cmp(&Id::LEN) {
                 Ordering::Less => DecodeError::UnexpectedEnd,
                 _ => DecodeError::TrailingBytes,
             })?;
         Id::from_bytes(arr).map_err(|_| DecodeError::InvalidField("id"))
+    }
+}
+
+impl Id {
+    /// [`Id::decode`] for a named field of a larger encoding, so that an
+    /// invalid key reports which field it was.
+    pub(crate) fn decode_field(bytes: &[u8], field: &'static str) -> Result<Self, DecodeError> {
+        Id::decode(bytes).map_err(|e| match e {
+            DecodeError::InvalidField(_) => DecodeError::InvalidField(field),
+            other => other,
+        })
     }
 }
 

@@ -12,7 +12,7 @@ use crate::{
     delegation::Delegation,
     power::Power,
     revocation::{Revocation, RevocationId},
-    test_utils::{cert, id, resigned, signed},
+    test_utils::{assume_verified, id, resigned, signed},
 };
 use alloc::vec::Vec;
 use keyhive_crypto::digest::Digest;
@@ -88,23 +88,21 @@ pub fn membership_composes<K: Keyline + Default>() {
 pub fn late_binding_grants_new_documents_to_members<K: Keyline + Default>() {
     let (mut g, _, _) = standard::<K>();
     assert_eq!(power(&g, OTHER_DOC, ALICE), None);
-    g.insert(cert(d(OTHER_DOC, MEMBERS, OTHER_DOC, Power::Read)));
+    g.insert(assume_verified(d(
+        OTHER_DOC,
+        MEMBERS,
+        OTHER_DOC,
+        Power::Read,
+    )));
     assert_eq!(power(&g, OTHER_DOC, ALICE), Some(Power::Read));
 }
 
 pub fn issuer_revocation_is_total<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
-    g.insert(cert(r(CAROL, &alice_member)));
+    g.insert(assume_verified(r(CAROL, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), None);
     assert_eq!(power(&g, MEMBERS, ALICE), None);
-}
-
-pub fn audience_revocation_is_total<K: Keyline + Default>() {
-    let (mut g, _, alice_member) = standard::<K>();
-    g.insert(cert(r(ALICE, &alice_member)));
-    assert!(!g.is_live(&alice_member.digest()));
-    assert_eq!(power(&g, DOC, ALICE), None);
 }
 
 /// The audience clause on its own. Alice holds only Read in Members, so her
@@ -123,7 +121,7 @@ pub fn audience_revocation_without_admin_reach_is_total<K: Keyline + Default>() 
     ]);
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
 
-    g.insert(cert(r(ALICE, &alice_reader)));
+    g.insert(assume_verified(r(ALICE, &alice_reader)));
     assert!(!g.is_live(&alice_reader.digest()));
     assert_eq!(power(&g, DOC, ALICE), None);
     assert_eq!(power(&g, MEMBERS, ALICE), None);
@@ -134,7 +132,7 @@ pub fn audience_revocation_without_admin_reach_is_total<K: Keyline + Default>() 
 /// reach and Members' only route to Carol grounds through Owners.
 pub fn admin_reach_covers_a_transited_node<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
-    g.insert(cert(r(BOB, &alice_member)));
+    g.insert(assume_verified(r(BOB, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), None);
     // Carol herself is untouched.
@@ -146,12 +144,12 @@ pub fn admin_reach_covers_a_transited_node<K: Keyline + Default>() {
 pub fn non_admin_revocation_is_confined_to_own_node<K: Keyline + Default>() {
     let dan_grant = d(DAN, ALICE, DOC, Power::Read);
     let (mut g, _, alice_member) = standard::<K>();
-    g.insert(cert(d(DOC, DAN, DOC, Power::Read)));
-    g.insert(cert(dan_grant));
-    g.insert(cert(r(DAN, &alice_member)));
+    g.insert(assume_verified(d(DOC, DAN, DOC, Power::Read)));
+    g.insert(assume_verified(dan_grant));
+    g.insert(assume_verified(r(DAN, &alice_member)));
     assert!(g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
-    g.insert(cert(r(DAN, &dan_grant)));
+    g.insert(assume_verified(r(DAN, &dan_grant)));
     assert!(!g.is_live(&dan_grant.digest()));
 }
 
@@ -159,23 +157,23 @@ pub fn non_admin_revocation_is_confined_to_own_node<K: Keyline + Default>() {
 /// Carol's admin reach still holds Owners, so she can revoke Bob's re-sponsor.
 pub fn ex_admin_reach_is_frozen<K: Keyline + Default>() {
     let (mut g, carol_owner, alice_member) = standard::<K>();
-    g.insert(cert(r(BOB, &carol_owner)));
+    g.insert(assume_verified(r(BOB, &carol_owner)));
     assert_eq!(power(&g, DOC, CAROL), None);
     assert_eq!(power(&g, DOC, ALICE), None);
 
     let bob_sponsors = d(BOB, ALICE, MEMBERS, Power::Admin);
-    g.insert(cert(bob_sponsors));
+    g.insert(assume_verified(bob_sponsors));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
-    g.insert(cert(r(CAROL, &bob_sponsors)));
+    g.insert(assume_verified(r(CAROL, &bob_sponsors)));
     assert_eq!(power(&g, DOC, ALICE), None);
     assert!(!g.is_live(&alice_member.digest()));
 }
 
-pub fn mutual_revocations_both_stand<K: Keyline + Default>() {
+pub fn mutual_revocations_both_take_effect<K: Keyline + Default>() {
     let (mut g, carol_owner, _) = standard::<K>();
     let bob_owner = d(OWNERS, BOB, OWNERS, Power::Admin);
-    g.insert(cert(r(BOB, &carol_owner)));
-    g.insert(cert(r(CAROL, &bob_owner)));
+    g.insert(assume_verified(r(BOB, &carol_owner)));
+    g.insert(assume_verified(r(CAROL, &bob_owner)));
     assert_eq!(power(&g, DOC, BOB), None);
     assert_eq!(power(&g, DOC, CAROL), None);
     // The apex is bricked: nothing below survives.
@@ -189,7 +187,7 @@ pub fn apex_admin_can_revoke_the_root_edge<K: Keyline + Default>() {
     let (mut g, _, _) = standard::<K>();
     let root = d(DOC, OWNERS, DOC, Power::Admin);
     assert_eq!(power(&g, DOC, BOB), Some(Power::Admin));
-    g.insert(cert(r(BOB, &root)));
+    g.insert(assume_verified(r(BOB, &root)));
     assert!(!g.is_live(&root.digest()));
     assert!(g.members(id(DOC)).is_empty());
     // Owners itself is untouched: Bob is still an Owner, of a role that no
@@ -214,12 +212,12 @@ pub fn edit_rooted_root_edge_is_irrevocable<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, BOB), Some(Power::Edit));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-    g.insert(cert(r(BOB, &root)));
+    g.insert(assume_verified(r(BOB, &root)));
     assert!(g.is_live(&root.digest()));
     assert_eq!(power(&g, DOC, BOB), Some(Power::Edit));
 
     // Governance is Admin over the roles, which Edit-rooting leaves intact.
-    g.insert(cert(r(BOB, &alice_member)));
+    g.insert(assume_verified(r(BOB, &alice_member)));
     assert_eq!(power(&g, DOC, ALICE), None);
 }
 
@@ -241,7 +239,7 @@ pub fn senior_role_admin_revokes_inside_junior_role<K: Keyline + Default>() {
     assert_eq!(power(&g, MEMBERS, BOB), Some(Power::Admin));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-    g.insert(cert(r(BOB, &alice_member)));
+    g.insert(assume_verified(r(BOB, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), None);
     assert_eq!(power(&g, MEMBERS, ALICE), None);
@@ -269,12 +267,12 @@ pub fn supply_is_daisy_chained<K: Keyline + Default>() {
     assert_eq!(power(&g, MEMBERS, DAN), None);
 
     // Inert: Members is not in Dan's reach.
-    g.insert(cert(r(DAN, &alice_member)));
+    g.insert(assume_verified(r(DAN, &alice_member)));
     assert!(g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
     // Total, for the whole strip: Dan revokes his own supply edge.
-    g.insert(cert(r(DAN, &supply)));
+    g.insert(assume_verified(r(DAN, &supply)));
     assert_eq!(power(&g, DOC, MEMBERS), None);
     assert_eq!(power(&g, DOC, ALICE), None);
     assert_eq!(power(&g, MEMBERS, ALICE), Some(Power::Admin));
@@ -298,7 +296,7 @@ pub fn covered_edges_are_clamped_not_just_gated<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
     assert_eq!(power(&g, DOC, FRANK), Some(Power::Edit));
 
-    g.insert(cert(r(DAN, &h)));
+    g.insert(assume_verified(r(DAN, &h)));
     assert!(g.is_live(&h.digest()));
     assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
     assert_eq!(power(&g, DOC, FRANK), Some(Power::Read));
@@ -344,7 +342,7 @@ pub fn mutually_covered_edges_cannot_lift_each_other<K: Keyline + Default>() {
 pub fn revocation_may_arrive_before_its_target<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
     let mut early = K::default();
-    assert!(early.insert(cert(r(CAROL, &alice_member))));
+    assert!(early.insert(assume_verified(r(CAROL, &alice_member))));
     assert!(early.members(id(DOC)).is_empty());
     for c in [
         d(DOC, OWNERS, DOC, Power::Admin),
@@ -354,9 +352,9 @@ pub fn revocation_may_arrive_before_its_target<K: Keyline + Default>() {
         d(OWNERS, BOB, OWNERS, Power::Admin),
         alice_member,
     ] {
-        early.insert(cert(c));
+        early.insert(assume_verified(c));
     }
-    g.insert(cert(r(CAROL, &alice_member)));
+    g.insert(assume_verified(r(CAROL, &alice_member)));
     assert_eq!(early.members(id(DOC)), g.members(id(DOC)));
     assert_eq!(early.digest(), g.digest());
     assert_eq!(power(&early, DOC, ALICE), None);
@@ -365,13 +363,13 @@ pub fn revocation_may_arrive_before_its_target<K: Keyline + Default>() {
 pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
     let before = g.digest();
-    assert!(!g.insert(cert(alice_member)));
+    assert!(!g.insert(assume_verified(alice_member)));
     assert_eq!(g.digest(), before);
 
     let revocation: Revocation<K::RetentionWatermark> = r(CAROL, &alice_member);
     let revocation_digest = revocation.digest();
-    g.insert(cert(revocation));
-    assert!(!g.insert(cert(alice_member)));
+    g.insert(assume_verified(revocation));
+    assert!(!g.insert(assume_verified(alice_member)));
     assert!(g
         .revocations_naming(&alice_member.digest())
         .into_iter()
@@ -382,19 +380,19 @@ pub fn reissue_with_citation_heals<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
     // Alice sponsors Eve, so the heal has something downstream to revive.
     let eve_member = d(ALICE, EVE, MEMBERS, Power::Edit);
-    g.insert(cert(eve_member));
+    g.insert(assume_verified(eve_member));
     assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
 
     let revocation: Revocation<K::RetentionWatermark> = r(CAROL, &alice_member);
     let healed = alice_member.reissue(revocation.digest());
-    g.insert(cert(revocation));
+    g.insert(assume_verified(revocation));
     assert_eq!(power(&g, DOC, ALICE), None);
     // Eve dies implicitly: nothing named her certificate.
     assert!(!g.is_live(&eve_member.digest()));
     assert_eq!(power(&g, DOC, EVE), None);
 
     assert_ne!(healed.digest(), alice_member.digest());
-    assert!(g.insert(cert(healed)));
+    assert!(g.insert(assume_verified(healed)));
     assert!(g.is_live(&healed.digest()));
     assert!(!g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
@@ -421,7 +419,7 @@ pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
     // Members is in Dan's reach, so his revocation covers Alice's membership.
-    g.insert(cert(r(DAN, &alice_member)));
+    g.insert(assume_verified(r(DAN, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), None);
 
@@ -434,15 +432,15 @@ pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
         new_supply,
         alice_successor,
     ] {
-        g.insert(cert(c));
+        g.insert(assume_verified(c));
     }
-    g.insert(cert(r(BOB, &supply)));
+    g.insert(assume_verified(r(BOB, &supply)));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
     assert_eq!(power(&g, DOC, DAN), None);
 
     // Dan's reach froze at `{Dan, Members}`: nothing in the successor names it.
-    g.insert(cert(r(DAN, &alice_successor)));
-    g.insert(cert(r(DAN, &new_supply)));
+    g.insert(assume_verified(r(DAN, &alice_successor)));
+    g.insert(assume_verified(r(DAN, &new_supply)));
     assert!(g.is_live(&alice_successor.digest()));
     assert!(g.is_live(&new_supply.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
@@ -456,15 +454,15 @@ pub fn unknown_revocation_is_inert<K: Keyline + Default>() {
     let (mut g, _, _) = standard::<K>();
     let before = g.members(id(DOC));
     let phantom = d(DAN, EVE, FRANK, Power::Relay);
-    let revocation = cert(r(BOB, &phantom));
-    let revocation_digest = revocation.digest();
+    let revocation = assume_verified(r(BOB, &phantom));
+    let revocation_digest = revocation.id();
     assert!(!g.contains(&revocation_digest));
     assert!(g.insert(revocation));
     assert!(g.contains(&revocation_digest));
     assert_eq!(g.members(id(DOC)), before);
     assert!(!g.is_live(&phantom.digest()));
     // The target itself was never inserted.
-    assert!(!g.contains(&cert::<K::RetentionWatermark, _>(phantom).digest()));
+    assert!(!g.contains(&assume_verified::<K::RetentionWatermark, _>(phantom).id()));
 }
 
 /// First role of the gift-cert ladder; the ladder is `LADDER..LADDER + RUNGS`.
@@ -508,9 +506,9 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
             supply.into(),
         ]);
         for i in 0..RUNGS {
-            g.insert(cert(d(rung(i), EVE, rung(i), Power::Admin)));
+            g.insert(assume_verified(d(rung(i), EVE, rung(i), Power::Admin)));
             if i + 1 < RUNGS {
-                g.insert(cert(d(EVE, rung(i + 1), rung(i), Power::Admin)));
+                g.insert(assume_verified(d(EVE, rung(i + 1), rung(i), Power::Admin)));
             }
         }
 
@@ -519,13 +517,13 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
         assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
 
         // The gift: one certificate, no acceptance step.
-        assert!(g.insert(cert(gift)));
+        assert!(g.insert(assume_verified(gift)));
         assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
         // Remove Eve: the ladder's standing over Doc rides her membership.
         let removal: Revocation<K::RetentionWatermark> = r(BOB, &eve_member);
         let removal_digest = removal.digest();
-        g.insert(cert(removal));
+        g.insert(assume_verified(removal));
         assert_eq!(power(&g, DOC, EVE), None);
         assert!(!g.is_live(&supply.digest()));
         assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
@@ -537,29 +535,36 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
         (g, removal_digest)
     };
 
-    // A fresh key revives nothing: the supply was signed by the old one.
+    // Re-adding Eve under a fresh key revives nothing her old key signed.
     let (mut g, _) = after_removal();
-    g.insert(cert(d(BOB, FRANK, DOC, Power::Edit)));
+    g.insert(assume_verified(d(BOB, FRANK, DOC, Power::Edit)));
     assert!(!g.is_live(&supply.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
+
+    // But supplying the ladder again, under any key, regrounds Eve through her
+    // Admin seat at its top, and with her, her old supply and the gift.
+    g.insert(assume_verified(d(FRANK, top, DOC, Power::Edit)));
+    assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
+    assert!(g.is_live(&supply.digest()));
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
     // Same-key re-add: the ladder and the gift come back as the same
     // certificates. Nothing named them, so nothing stops them.
     let (mut g, removal) = after_removal();
-    g.insert(cert(eve_member.reissue(removal)));
+    g.insert(assume_verified(eve_member.reissue(removal)));
     assert!(g.is_live(&supply.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
     // Alice's revocation of the gift is total, and leaves her own route alone.
     let alice_revocation: Revocation<K::RetentionWatermark> = r(ALICE, &gift);
     let alice_revocation_digest = alice_revocation.digest();
-    g.insert(cert(alice_revocation));
+    g.insert(assume_verified(alice_revocation));
     assert!(!g.is_live(&gift.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
     assert_eq!(power(&g, DOC, bottom), Some(Power::Edit));
 
     // An identical re-gift is the revoked certificate.
-    assert!(!g.insert(cert(gift)));
+    assert!(!g.insert(assume_verified(gift)));
     assert!(g
         .revocations_naming(&gift.digest())
         .into_iter()
@@ -568,9 +573,9 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
 
     // A varied re-gift is a new hash and needs its own revocation.
     let regift = gift.reissue(alice_revocation_digest);
-    assert!(g.insert(cert(regift)));
+    assert!(g.insert(assume_verified(regift)));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
-    g.insert(cert(r(ALICE, &regift)));
+    g.insert(assume_verified(r(ALICE, &regift)));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
 }
 
@@ -595,7 +600,7 @@ pub fn signed_certificates_agree_with_fixtures<K: Keyline + Default>() {
 
     assert_eq!(real.members(id(DOC)), {
         let mut g = fixtures;
-        g.insert(cert(r(CAROL, &alice_member)));
+        g.insert(assume_verified(r(CAROL, &alice_member)));
         g.members(id(DOC))
     });
     assert_eq!(power(&real, DOC, ALICE), None);
@@ -608,10 +613,10 @@ pub fn second_signature_is_the_same_certificate<K: Keyline + Default>() {
     let root = d(DOC, ALICE, DOC, Power::Admin);
     let first = signed::<K::RetentionWatermark, _>(root);
     let second = resigned::<K::RetentionWatermark, _>(root, 1);
-    assert_ne!(first.signed(), second.signed());
-    assert_eq!(first.digest(), second.digest());
+    assert!(first != second, "different signatures");
+    assert_eq!(first.id(), second.id());
 
-    let digest = first.digest();
+    let digest = first.id();
     let mut g = K::default();
     assert!(g.insert(first));
     assert!(!g.insert(second));
@@ -629,8 +634,8 @@ pub fn apex_duel_kills_creation_memberships_even_when_edit_rooted<K: Keyline + D
     let mut g: K = build([root.into(), alice_owner.into(), bob_owner.into()]);
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-    g.insert(cert(r(ALICE, &bob_owner)));
-    g.insert(cert(r(BOB, &alice_owner)));
+    g.insert(assume_verified(r(ALICE, &bob_owner)));
+    g.insert(assume_verified(r(BOB, &alice_owner)));
     assert!(g.is_live(&root.digest()));
     assert!(!g.is_live(&alice_owner.digest()));
     assert!(!g.is_live(&bob_owner.digest()));
@@ -651,9 +656,9 @@ where
         .retaining([(id(DOC), K::RetentionWatermark::default())].into());
     assert_ne!(plain.digest(), retaining.digest());
 
-    assert!(g.insert(cert(plain)));
+    assert!(g.insert(assume_verified(plain)));
     let members = g.members(id(DOC));
-    assert!(g.insert(cert(retaining)));
+    assert!(g.insert(assume_verified(retaining)));
     assert_eq!(g.members(id(DOC)), members);
     assert_eq!(power(&g, DOC, ALICE), None);
 }
@@ -686,16 +691,135 @@ pub fn steward_rotation_leaves_former_officers_nothing<K: Keyline + Default>() {
 
     let successors = d(STEWARD, OFFICERS_B, STEWARD, Power::Edit);
     let bob_again = d(OFFICERS_B, BOB, OFFICERS_B, Power::Admin);
-    g.insert(cert(r(STEWARD, &officers)));
-    g.insert(cert(successors));
-    g.insert(cert(bob_again));
+    g.insert(assume_verified(r(STEWARD, &officers)));
+    g.insert(assume_verified(successors));
+    g.insert(assume_verified(bob_again));
     assert_eq!(power(&g, DOC, ALICE), None);
     assert_eq!(power(&g, DOC, CAROL), None);
     assert_eq!(power(&g, OTHER_DOC, BOB), Some(Power::Edit));
 
-    g.insert(cert(r(ALICE, &successors)));
-    g.insert(cert(r(ALICE, &bob_again)));
-    g.insert(cert(d(ALICE, CAROL, OTHER_DOC, Power::Edit)));
+    g.insert(assume_verified(r(ALICE, &successors)));
+    g.insert(assume_verified(r(ALICE, &bob_again)));
+    g.insert(assume_verified(d(ALICE, CAROL, OTHER_DOC, Power::Edit)));
     assert_eq!(power(&g, OTHER_DOC, BOB), Some(Power::Edit));
     assert_eq!(power(&g, OTHER_DOC, CAROL), None);
+}
+
+/// Keys for the pinning and caretaker scenarios.
+const PIN: u8 = 17;
+const CARETAKER: u8 = 18;
+
+/// The audience is not on a delegation's route. Carol administers Members,
+/// so Members is in her reach, but the supply into Members is grounded at Doc
+/// through Owners and Bob and never transits Members: her revocation of it
+/// covers nothing.
+pub fn role_admin_cannot_revoke_the_supply_into_the_role<K: Keyline + Default>() {
+    let supply = d(BOB, MEMBERS, DOC, Power::Edit);
+    let g: K = build([
+        d(DOC, OWNERS, DOC, Power::Admin).into(),
+        d(OWNERS, BOB, OWNERS, Power::Admin).into(),
+        supply.into(),
+        d(MEMBERS, CAROL, MEMBERS, Power::Admin).into(),
+        r(CAROL, &supply).into(),
+    ]);
+    assert!(g.is_live(&supply.digest()));
+    assert_eq!(power(&g, DOC, MEMBERS), Some(Power::Edit));
+    assert_eq!(power(&g, DOC, CAROL), Some(Power::Edit));
+}
+
+/// Coverage is the union over every revocation of a delegation. Eve stands
+/// over Doc through Mods and through Members; Dan administers Mods and Carol
+/// administers Members. Either revocation of Eve's delegation to Frank alone
+/// leaves the other derivation; both together leave none.
+pub fn revocations_of_one_delegation_cover_jointly<K: Keyline + Default>() {
+    let h = d(EVE, FRANK, DOC, Power::Admin);
+    let base = || -> K {
+        build([
+            d(DOC, OWNERS, DOC, Power::Admin).into(),
+            d(OWNERS, MODS, DOC, Power::Edit).into(),
+            d(MODS, DAN, MODS, Power::Admin).into(),
+            d(DAN, EVE, MODS, Power::Admin).into(),
+            d(OWNERS, MEMBERS, DOC, Power::Edit).into(),
+            d(MEMBERS, CAROL, MEMBERS, Power::Admin).into(),
+            d(CAROL, EVE, MEMBERS, Power::Admin).into(),
+            h.into(),
+        ])
+    };
+
+    for revoker in [DAN, CAROL] {
+        let mut g = base();
+        g.insert(assume_verified(r(revoker, &h)));
+        assert!(g.is_live(&h.digest()), "revoked by {revoker} alone");
+        assert_eq!(power(&g, DOC, FRANK), Some(Power::Edit));
+    }
+
+    let mut g = base();
+    g.insert(assume_verified(r(DAN, &h)));
+    g.insert(assume_verified(r(CAROL, &h)));
+    assert!(!g.is_live(&h.digest()));
+    assert_eq!(power(&g, DOC, FRANK), None);
+    assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
+}
+
+/// Pinning (`design/keyline/patterns.md`): Alice routes Eve's access through
+/// `PIN`, a node that is itself a member of Members, so the access answers to
+/// Members. `PIN`'s own key signs its creation edge, which is what gives Alice
+/// standing over it. Eve's access dies with Alice's Members standing, even
+/// though Alice keeps an independent route to Doc, and any Members admin can
+/// cut it before that.
+pub fn pinned_delegation_answers_to_the_role<K: Keyline + Default>() {
+    let alice_member = d(CAROL, ALICE, MEMBERS, Power::Admin);
+    let pinned = d(ALICE, PIN, MEMBERS, Power::Edit);
+    let base = || -> K {
+        build([
+            d(DOC, OWNERS, DOC, Power::Admin).into(),
+            d(OWNERS, BOB, OWNERS, Power::Admin).into(),
+            d(OWNERS, CAROL, OWNERS, Power::Admin).into(),
+            d(MEMBERS, OWNERS, MEMBERS, Power::Admin).into(),
+            d(BOB, MEMBERS, DOC, Power::Edit).into(),
+            alice_member.into(),
+            d(BOB, ALICE, DOC, Power::Edit).into(),
+            d(PIN, ALICE, PIN, Power::Admin).into(),
+            pinned.into(),
+            d(ALICE, EVE, PIN, Power::Edit).into(),
+        ])
+    };
+    assert_eq!(power(&base(), DOC, EVE), Some(Power::Edit));
+
+    let mut g = base();
+    g.insert(assume_verified(r(CAROL, &alice_member)));
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
+    assert_eq!(power(&g, DOC, EVE), None);
+
+    let mut g = base();
+    g.insert(assume_verified(r(BOB, &pinned)));
+    assert_eq!(power(&g, DOC, EVE), None);
+}
+
+/// A caretaker (`design/keyline/patterns.md`): `CARETAKER` is a member of
+/// Members with one roster edge, to Carol, and Dan administers it. Dan holds no
+/// Admin over Members or Doc, yet can sever Carol by revoking her roster edge.
+/// He cannot revoke the supply into the caretaker: its audience is not on its
+/// route. As an admin of the caretaker he also reaches what it reaches.
+pub fn caretaker_admin_severs_downstream_but_not_the_supply<K: Keyline + Default>() {
+    let supply = d(BOB, CARETAKER, MEMBERS, Power::Edit);
+    let carol_roster = d(CARETAKER, CAROL, CARETAKER, Power::Edit);
+    let mut g: K = build([
+        d(DOC, OWNERS, DOC, Power::Admin).into(),
+        d(OWNERS, BOB, OWNERS, Power::Admin).into(),
+        d(MEMBERS, OWNERS, MEMBERS, Power::Admin).into(),
+        d(BOB, MEMBERS, DOC, Power::Edit).into(),
+        supply.into(),
+        d(CARETAKER, DAN, CARETAKER, Power::Admin).into(),
+        carol_roster.into(),
+    ]);
+    assert_eq!(power(&g, DOC, CAROL), Some(Power::Edit));
+    assert_eq!(power(&g, DOC, DAN), Some(Power::Edit));
+    assert_eq!(power(&g, MEMBERS, DAN), Some(Power::Edit));
+
+    g.insert(assume_verified(r(DAN, &supply)));
+    assert!(g.is_live(&supply.digest()));
+
+    g.insert(assume_verified(r(DAN, &carol_roster)));
+    assert_eq!(power(&g, DOC, CAROL), None);
 }

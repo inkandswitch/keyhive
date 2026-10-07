@@ -11,14 +11,13 @@
 
 use divan::Bencher;
 use keyline::{
-    certificate::Certificate,
     contract::Keyline,
     delegation::Delegation,
     id::Id,
     memory::MemoryKeyline,
     power::Power,
     revocation::Revocation,
-    test_utils::{cert, conformance::build, id},
+    test_utils::{assume_verified, conformance::build, id, Statement},
 };
 
 fn main() {
@@ -33,7 +32,7 @@ const FIRST_HUMAN: u8 = 10;
 const LADDER_LEAF: u8 = 250;
 const LATE_JOINER: u8 = 251;
 
-fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Certificate<()> {
+fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Statement<()> {
     Delegation::new(id(issuer), id(audience), id(subject), power).into()
 }
 
@@ -62,8 +61,14 @@ fn realistic(n: u8) -> MemoryKeyline<()> {
         id(ROLES[0]),
         Power::Edit,
     );
-    g.insert(cert(Revocation::new(id(FIRST_HUMAN + 1), victim.digest())));
-    g.insert(cert(Revocation::new(id(FIRST_HUMAN + 4), victim.digest())));
+    g.insert(assume_verified(Revocation::new(
+        id(FIRST_HUMAN + 1),
+        victim.digest(),
+    )));
+    g.insert(assume_verified(Revocation::new(
+        id(FIRST_HUMAN + 4),
+        victim.digest(),
+    )));
     g
 }
 
@@ -87,7 +92,10 @@ fn club_ladder(k: u8) -> MemoryKeyline<()> {
 fn revocation_spree(k: u8) -> MemoryKeyline<()> {
     let mut g = realistic(k);
     let removed = Delegation::new(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Power::Admin);
-    g.insert(cert(Revocation::new(id(FIRST_HUMAN), removed.digest())));
+    g.insert(assume_verified(Revocation::new(
+        id(FIRST_HUMAN),
+        removed.digest(),
+    )));
     for i in 0..k {
         let target = Delegation::new(
             id(FIRST_HUMAN),
@@ -95,7 +103,10 @@ fn revocation_spree(k: u8) -> MemoryKeyline<()> {
             id(ROLES[0]),
             Power::Edit,
         );
-        g.insert(cert(Revocation::new(id(FIRST_HUMAN + 1), target.digest())));
+        g.insert(assume_verified(Revocation::new(
+            id(FIRST_HUMAN + 1),
+            target.digest(),
+        )));
     }
     g
 }
@@ -124,7 +135,7 @@ fn realistic_insert(bencher: Bencher, n: u8) {
         .with_inputs(|| {
             (
                 realistic(n),
-                cert(d(FIRST_HUMAN, LATE_JOINER, ROLES[1], Power::Read)),
+                assume_verified(d(FIRST_HUMAN, LATE_JOINER, ROLES[1], Power::Read)),
             )
         })
         .bench_values(|(mut g, c)| g.insert(c));

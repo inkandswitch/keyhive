@@ -10,7 +10,7 @@
 //!
 //! ```ignore
 //! mod conformance {
-//!     keyline::keyline_conformance!(my_crate::MyKeyline);
+//!     keyline::keyline_conformance!(my_crate::MyKeyline<()>);
 //! }
 //! ```
 
@@ -25,12 +25,11 @@ pub mod oracle;
 pub mod scenarios;
 
 use crate::{
-    certificate::Certificate,
     contract::Keyline,
     delegation::Delegation,
     power::Power,
     revocation::Revocation,
-    test_utils::{cert, id},
+    test_utils::{assume_verified, id, Statement},
 };
 use alloc::collections::BTreeSet;
 use keyhive_codec::traits::{Decode, Encode};
@@ -84,14 +83,14 @@ impl<
 
 /// A backend holding exactly these certificates. Checks that each `insert`
 /// reports whether its certificate was new.
-pub fn build<K: Keyline + Default, I: IntoIterator<Item = Certificate<K::RetentionWatermark>>>(
+pub fn build<K: Keyline + Default, I: IntoIterator<Item = Statement<K::RetentionWatermark>>>(
     certs: I,
 ) -> K {
     let mut k = K::default();
     let mut seen = BTreeSet::new();
     for c in certs {
-        let c = cert(c);
-        let new = seen.insert(c.digest());
+        let c = assume_verified(c);
+        let new = seen.insert(c.id());
         assert_eq!(
             k.insert(c),
             new,
@@ -122,12 +121,11 @@ macro_rules! keyline_conformance {
             membership_composes,
             late_binding_grants_new_documents_to_members,
             issuer_revocation_is_total,
-            audience_revocation_is_total,
             audience_revocation_without_admin_reach_is_total,
             admin_reach_covers_a_transited_node,
             non_admin_revocation_is_confined_to_own_node,
             ex_admin_reach_is_frozen,
-            mutual_revocations_both_stand,
+            mutual_revocations_both_take_effect,
             apex_admin_can_revoke_the_root_edge,
             edit_rooted_root_edge_is_irrevocable,
             apex_duel_kills_creation_memberships_even_when_edit_rooted,
@@ -144,6 +142,10 @@ macro_rules! keyline_conformance {
             unknown_revocation_is_inert,
             gift_cert_attack_follows_liveness,
             steward_rotation_leaves_former_officers_nothing,
+            role_admin_cannot_revoke_the_supply_into_the_role,
+            revocations_of_one_delegation_cover_jointly,
+            pinned_delegation_answers_to_the_role,
+            caretaker_admin_severs_downstream_but_not_the_supply,
             signed_certificates_agree_with_fixtures,
         );
         $crate::__keyline_conformance_laws!($backend);
@@ -186,4 +188,31 @@ macro_rules! __keyline_conformance_laws {
 #[macro_export]
 macro_rules! __keyline_conformance_laws {
     ($backend:ty) => {};
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every public scenario and law is listed in [`keyline_conformance!`].
+    /// One that is not still compiles, and then never runs for any backend.
+    #[test]
+    fn macro_lists_every_scenario_and_law() {
+        let listed = include_str!("conformance.rs");
+        let sources = [
+            (include_str!("conformance/scenarios.rs"), "standard"),
+            (include_str!("conformance/laws.rs"), "observe"),
+        ];
+        for (source, helper) in sources {
+            let names = source
+                .lines()
+                .filter_map(|line| line.strip_prefix("pub fn "))
+                .filter_map(|rest| rest.split(['<', '(']).next())
+                .filter(|name| *name != helper);
+            for name in names {
+                assert!(
+                    listed.contains(&alloc::format!("            {name},\n")),
+                    "{name} is missing from keyline_conformance!"
+                );
+            }
+        }
+    }
 }

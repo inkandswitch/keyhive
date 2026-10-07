@@ -4,11 +4,10 @@ name: Bolero Tests
 # runs every harness at 1000 iterations on Linux; this workflow exists for the
 # two things that gate cannot afford: a much longer sweep, and macOS.
 #
-# All 15 harnesses live in `keyline` — codec round-trip and canonicality for
-# every certificate type, and the conformance laws, which check `MemoryKeyline`
-# against a naive transcription of the evaluation program (with and without
-# revocations), plus order independence, idempotence, monotone denial, digest
-# stability, and query consistency.
+# The harnesses live in `keyline`: codec round-trip and canonicality for every
+# certificate type, and the conformance laws, which check `MemoryKeyline`
+# against two independent oracles, plus order independence, idempotence,
+# monotone denial, digest stability, and query consistency.
 
 on:
   schedule:
