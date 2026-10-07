@@ -8,7 +8,11 @@ use super::{
     TestWatermark,
 };
 use crate::{
-    contract::Keyline, delegation::Delegation, id::Id, power::Power, test_utils::assume_verified,
+    contract::{set_digest, Keyline},
+    delegation::Delegation,
+    id::Id,
+    power::Power,
+    test_utils::assume_verified,
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -177,9 +181,6 @@ where
             let with: K = build(set.certs.iter().cloned());
             let without: K = build(set.without_watermarks().certs);
             assert_eq!(observe(&with, set), observe(&without, set));
-            for s in ids() {
-                assert_eq!(with.members(s), without.members(s));
-            }
         });
 }
 
@@ -199,9 +200,6 @@ where
             ] {
                 assert_eq!(a.digest(), b.digest());
                 assert_eq!(observe(&a, set), observe(&b, set));
-                for s in ids() {
-                    assert_eq!(a.members(s), b.members(s));
-                }
             }
         });
 }
@@ -259,8 +257,9 @@ where
         });
 }
 
-/// `digest` is a function of the set: same set (any order), same digest;
-/// dropping any certificate changes it.
+/// `digest` is a function of the set: same set (any order), same digest, and
+/// that digest is `set_digest` of the members' ids; dropping any certificate
+/// changes it.
 pub fn digest_identifies_the_set<K: Keyline + Default>()
 where
     K::RetentionWatermark: TestWatermark,
@@ -271,6 +270,12 @@ where
             let a: K = build(set.certs.iter().cloned());
             let b: K = build(set.shuffled(*seed).certs);
             assert_eq!(a.digest(), b.digest());
+            // The digest is `set_digest` of the members' ids, so every backend
+            // computes the same one for the same set.
+            assert_eq!(
+                a.digest(),
+                set_digest(set.certs.iter().map(|c| assume_verified(c.clone()).id()))
+            );
 
             let distinct: BTreeSet<_> = set.certs.iter().collect();
             for i in 0..set.certs.len() {

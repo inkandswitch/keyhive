@@ -210,6 +210,16 @@ impl<W> PartialEq for VerifiedCertificate<W> {
 
 impl<W> Eq for VerifiedCertificate<W> {}
 
+impl<W> core::hash::Hash for VerifiedCertificate<W> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            VerifiedCertificate::Delegation(d) => d.hash(state),
+            VerifiedCertificate::Revocation(r) => r.hash(state),
+        }
+    }
+}
+
 impl<W> From<Verified<Delegation>> for VerifiedCertificate<W> {
     fn from(d: Verified<Delegation>) -> Self {
         VerifiedCertificate::Delegation(d)

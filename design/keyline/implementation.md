@@ -149,20 +149,20 @@ The type does not check the claim. `Encode::encode` produces canonical bytes fro
 
 The keys that sign Keyline certificates may also sign in other protocols, such as `keyhive_core`'s serde-encoded payloads. If one byte string were valid in two formats, one signature would be valid in both. So every byte string Keyline signs or hashes is prefixed with a context naming the protocol, its version, and the type, then a NUL byte:
 
-| Type                | Context                  |
-|---------------------|--------------------------|
-| `Delegation`        | `keyline/v0/delegation`  |
-| `Revocation<W>`     | `keyline/v0/revocation`  |
-| `CertificateSet<W>` | `keyline/v0/set`         |
+| Type             | Context                      | Used for                          |
+|------------------|------------------------------|-----------------------------------|
+| `Delegation`     | `keyline/v0/delegation`      | signing, and its digest           |
+| `Revocation<W>`  | `keyline/v0/revocation`      | signing, and its digest           |
+| `CertificateSet` | `keyline/v0/certificate_set` | the set digest only; never signed |
 
-Contexts contain no NUL (checked at compile time), so the context can be read back off any message and two contexts never produce the same message. The two kinds of certificate are separated by their contexts, which is also why their digests can share one key type without a kind tag. The trait is `keyhive_crypto::domain_separator::Domain`: `Domain::message` builds the prefixed bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input. `v0` is the protocol version. It changes whenever the meaning of signed bytes does, so a certificate from one version never verifies under another. Each type declares its context next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core` today, still relies on that protocol's formats.
+Contexts contain no NUL (checked at compile time), so the context can be read back off any message and two contexts never produce the same message. The two kinds of certificate are separated by their contexts, which is also why their digests can share one key type without a kind tag. The trait is `keyhive_crypto::domain_separator::Domain`. The free function `domain_separator::message::<T>` builds the prefixed bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input; being a free function, no implementation can override it. `v0` is the protocol version. It changes whenever the meaning of signed bytes does, so a certificate from one version never verifies under another. Each type declares its context next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core` today, still relies on that protocol's formats.
 
 ### `Signed<T>` and `Verified<T>`
 
 ```rust
 pub struct Signed<T> {
     encoded:   Encoded<T>,
-    signature: ed25519_dalek::Signature,   // over T::message(encoded.as_bytes())
+    signature: ed25519_dalek::Signature,   // over message::<T>(encoded.as_bytes())
 }
 
 pub struct Verified<T> {
@@ -206,7 +206,7 @@ pub trait Keyline {
     fn members(&self, subject: Id) -> BTreeMap<Id, Power>;
     fn is_live(&self, cert: &Digest<Delegation>) -> bool;
     fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>>;
-    fn digest(&self) -> Digest<CertificateSet<Self::RetentionWatermark>>;
+    fn digest(&self) -> Digest<CertificateSet>;
 }
 ```
 
@@ -219,7 +219,7 @@ pub trait Keyline {
 | `members`            | Every `Id` other than `subject` itself with a live route to `subject`, with its effective power. The materialized view.   |
 | `is_live`            | Whether the named delegation survives evaluation.                                                                         |
 | `revocations_naming` | Revocations that name the delegation, covering or not. Explains a silent `citation` collision.                            |
-| `digest`             | A digest of the set, usable as a cache key: same digest, same answers. `CertificateSet<W>` is an uninhabited marker.      |
+| `digest`             | A digest of the set, usable as a cache key: same digest, same answers. `CertificateSet` is an uninhabited marker.         |
 
 Every method is defined purely in terms of the set. That is what makes the trait a backend contract: an implementation over DBSP, Postgres, or anything else is correct if and only if it gives the same answers as the reference implementation for the same set. The conformance suite (below) is how a backend shows that.
 
@@ -237,13 +237,13 @@ Not yet on the trait: `get(&CertificateId) -> Option<&Certificate<W>>` and itera
 
 ### `MemoryKeyline`
 
-The reference implementation: in-memory, `impl Keyline`, generic over the watermark type `W` with no default. Plain maps of plain data; no `Rc`, no `Cell`, so `Send + Sync` hold without effort. It does no caching, and it computes stratum 1 over every subject on the replica rather than over the queried subject's closure: every query recomputes both strata, so cost scales with the replica's whole certificate set rather than with the queried subject. Structure that no query's closure contains, such as delegations an outsider roots at their own keys, is still searched. Rooting stratum 1 at the closure is a later optimization. That suits the deployment it is for, an embedded or Wasm replica holding a document's [closure](README.md#what-a-replica-must-hold), and not a relay holding many documents, which wants a backend that materializes the monotone stratum.
+The reference implementation, in its own crate (`keyline_memory::MemoryKeyline`): in-memory, `impl Keyline`, generic over the watermark type `W` with no default. Being a separate crate, it is written against `keyline`'s public API alone, as any other backend must be. Plain maps of plain data; no `Rc`, no `Cell`, so `Send + Sync` hold without effort. It does no caching, and it computes stratum 1 over every subject on the replica rather than over the queried subject's closure: every query recomputes both strata, so cost scales with the replica's whole certificate set rather than with the queried subject. Structure that no query's closure contains, such as delegations an outsider roots at their own keys, is still searched. Rooting stratum 1 at the closure is a later optimization. That suits the deployment it is for, an embedded or Wasm replica holding a document's [closure](README.md#what-a-replica-must-hold), and not a relay holding many documents, which wants a backend that materializes the monotone stratum.
 
 It is also not demand-driven. `effective_power(s, a)` materializes `s`'s whole row and indexes into it, so a point query costs what the full view costs. Magic sets would fix that, at the price of the property that makes a bottom-up evaluator safe: forward chaining from the subject never visits a fact it cannot ground, so an attacker's ungrounded structure costs nothing. A demand-driven evaluator must earn that back with the ordering obligation in [evaluation notes §7](evaluation-notes.md#7-threat-model-evaluation-cost-as-a-dos-surface). The reference implementation stays simple; a faster backend is what the trait and the conformance suite are for.
 
 ## Evaluation
 
-Evaluation is a pure function of the set. The strata below are the canonical order the model document describes (all delegations, then all revocations, then the check), made executable: stratum 1 replays the proxy network of delegations, stratum 2 applies every revocation to it, and a query is the invocation being checked. The reference implementation is this program, with four answer-preserving shortcuts listed in `memory.rs` (dropping coverage that touches no route, sharing contexts, one unexcluded pre-filter search, and `cap = power` for uncovered edges). Any faster backend must agree with it on every set.
+Evaluation is a pure function of the set. The strata below are the canonical order the model document describes (all delegations, then all revocations, then the check), made executable: stratum 1 replays the proxy network of delegations, stratum 2 applies every revocation to it, and a query is the invocation being checked. The reference implementation is this program, with four answer-preserving shortcuts listed in `keyline_memory`'s crate docs (dropping coverage that touches no route, sharing contexts, one unexcluded pre-filter search, and `cap = power` for uncovered edges). Any faster backend must agree with it on every set.
 
 ```
 Stratum 0 — facts
@@ -283,8 +283,8 @@ Notes on the program:
 
 - _`subject` composes._ The third `reaches` rule is what makes `subject: Members` mean membership: whatever `Members` reaches, its members reach too, clamped by both hops. Without it `members(Doc)` would name roles and never humans, and the layer above would have to know which nodes are roles, which the crate boundary forbids. Every node with standing over `s` acts as a role for `s`; the rule does not ask what kind of key `n` is. A "route" is therefore a derivation, not a walk along `issuer → audience` edges: Alice's membership `{issuer: Bob, audience: Alice, subject: Members}` sits on Doc's route to Alice because Bob has standing over `Members`, not because Bob is the previous node.
 - _Admin reach is composed._ `admin_reach(k, n)` is Admin standing over `n` however derived. Bob, an Admin member of `Owners`, has `Owners` in his reach and, because `Owners` is Admin over `Doc`, `Doc` as well, and every role `Owners` administers. Seniors adjudicate inside junior roles without an explicit `subject: Junior` delegation. The price is that the apex of an Admin-rooted document is in the reach of everyone who ever held Admin in the apex role, so any of them can revoke the root edge and brick the document, permanently. That is accepted; see [Griefing](README.md#griefing). A last-hop ("direct") definition was rejected; see [alternatives](alternatives.md#direct-last-hop-admin-reach).
-- _Admin over a document buys nothing but kill power._ Delegation is open to anyone, clamped by attenuation; membership management is Admin over the _role_. The only thing Admin over `Doc` itself gates is reach over `Doc`'s routes. Creation therefore chooses: root at `Admin` and every apex admin can brick the document; root at `Edit` and nobody ever holds Admin over `Doc`, so its root edge is irrevocable by anyone (the subject key being destroyed) and re-rooting with a retained key escapes old admins' reach. See [patterns, Rooting Level](patterns.md#rooting-level).
-- _A query needs the subject's closure, not only its certificates._ Write `C(s)` for `s` and every node with standing over `s`. A query about `s` reads stratum-1 rows rooted in `C(s)`: Bob's Admin over `Members` is what lets him revoke delegations on `Doc`'s routes, so `admin_reach` must see `Members`, which is in `C(Doc)` because `Members` has standing over `Doc`. Coverage needs nothing outside `C(s)` either: the covered nodes that matter have standing over the revoked delegation's subject, which is itself in `C(s)`, so they are too. Stratum 2 is likewise grounded at one subject and ranges over `C(s)`; "per-subject" means rooted at one subject, not confined to one subject's certificates. `MemoryKeyline` computes stratum 1 over every subject on the replica, which over-approximates `C(s)` (see [`MemoryKeyline`](#memorykeyline)).
+- _Admin over a document buys nothing but kill power._ Delegation is open to anyone, clamped by attenuation; membership management is Admin over the _role_. The only thing Admin over `Doc` itself gates is reach over `Doc`'s routes, so the rooting level chosen at creation decides who can destroy the document and nothing else; see [patterns, Rooting Level](patterns.md#rooting-level).
+- _A query needs the subject's closure, not only its certificates._ Write `C(s)` for `s` and every node with standing over `s` in the positive graph (revocations ignored, so every node that has ever had standing). It has to be the positive graph because coverage is computed there: a closure built from live standing could miss part of a revoker's reach and keep a revoked delegation live. A query about `s` reads stratum-1 rows rooted in `C(s)`: Bob's Admin over `Members` is what lets him revoke delegations on `Doc`'s routes, so `admin_reach` must see `Members`, which is in `C(Doc)` because `Members` has standing over `Doc`. Coverage needs nothing outside `C(s)` either: the covered nodes that matter have standing over the revoked delegation's subject, which is itself in `C(s)`, so they are too. Stratum 2 is likewise grounded at one subject and ranges over `C(s)`; "per-subject" means rooted at one subject, not confined to one subject's certificates. `MemoryKeyline` computes stratum 1 over every subject on the replica, which over-approximates `C(s)` (see [`MemoryKeyline`](#memorykeyline)).
 - _The route for `h` is rooted at `subject(h)`, not at the querying subject._ `route(subject, issuer, h)` lives entirely in `h`'s own subject's graph. How some other subject `S` reaches `subject(h)` is irrelevant to whether `h` is live. Supplying a role into `S` (a `{issuer: Dan, audience: Members, subject: S}` edge) gives Dan power over that supply edge (revoke it and every member loses `S` at once) but none over `Members`' roster, which never routes through him. To revoke delegations inside `Members`, `Members` must be in your reach. This holds even when Dan reaches `S` at Admin through some other role: `S` is in his reach, `Members` is not. (Checking the hop's coverage against the `S`-rooted derivation instead was considered and rejected: it would let anyone who feeds authority into a role revoke individual roster entries of that role.)
 - _Both passes are the same rule._ `reaches` is `level(·, ·, ⊥, ·)` with every edge live and every cap equal to its `power`. The reference implementation is one bounded widest-path search over the composed graph, parameterized by an exclusion set; stratum 1 runs it with the empty set.
 - _Both fixed points are least fixed points._ Existence (`route`, `live`) assumes a revisited node is dead, so ungrounded cycles cannot certify themselves. Caps rise from `Relay`: a live covered edge conveys at least `Relay`, because liveness found a grounded derivation that avoids its covered set, and each round raises it to `min(power, issuer's level on that derivation)`. Starting from the bottom means a cap is only as high as some grounded derivation supports. Two covered edges on each other's avoiding derivation therefore cannot lift each other, which a greatest fixed point descending from `power` would allow (the `mutually_covered_edges_cannot_lift_each_other` scenario). The ascent is finite (four levels, finitely many edges). The two are separable because existence never reads a cap.
@@ -378,24 +378,25 @@ The second is a security requirement. Certificates travel as `Encoded<T>`, and t
 
 ```
 Delegation:  issuer ‖ audience ‖ subject ‖ power:u8 ‖ citation_tag:u8 ‖ citation?    power is one of L R E A
-Revocation:  issuer ‖ revoke ‖ count:u32 ‖ entry*
-  entry:     subject ‖ len:u32 ‖ W
+Revocation:  issuer ‖ revoke ‖ count:bijou32 ‖ entry*
+  entry:     subject ‖ len:bijou32 ‖ W
+Certificate: kind:u8 ‖ signature:64 ‖ payload                                        kind is 0 (delegation) or 1 (revocation)
 ```
 
 In `Delegation`, `citation_tag` is `0` with no following bytes when `citation` is absent, and `1` followed by 32 bytes when present. `power` is one of the four ASCII tags. Fixed-width layouts are canonical by construction, so `decode` only has to check length, tag membership, and that each `Id` is a valid point (an invalid one is reported by field name). `0x00` is not a valid `power`, so a zeroed buffer fails to decode.
 
-These are the bytes that are signed and hashed, under each type's context. How a signed certificate is framed on the wire (which kind follows, and the signature) belongs to the sync format, which is not defined yet. Encodings need not be self-delimiting, so any composite must frame its variable-length fields, as `Revocation` does.
+`Delegation` and `Revocation` encodings are the bytes that are signed and hashed, under each type's context. `Certificate` is the wire form of a signed statement: its kind, its signature, then its payload. The payload is last and runs to the end of the input, so it needs no length; a larger message that carries certificates frames each one. `Certificate::decode` checks the framing only and keeps the payload as received; `Certificate::verify` decodes the payload, checks that it is canonical, and checks the signature. Encodings need not be self-delimiting, so any composite must frame its variable-length fields, as `Revocation` does. The `serde` feature also derives `Serialize`/`Deserialize` on the public types, for a caller that wants a format of its own; that is not Keyline's wire format.
 
 `retain` is the only variable-length field, so it is the only place where canonicality is not free. `decode` enforces it with four rules:
 
 1. Entries ascend by subject with no repeats, so a map has one ordering (`DecodeError::UnsortedKeys`).
-2. Counts and lengths are fixed-width big-endian `u32`, so a number has one encoding.
+2. Counts and lengths are [bijou32] varints, which have one encoding per number by construction: the tag byte fixes the length, and each length's range of values is disjoint from the others, so there is no overlong form to reject.
 3. The input must be consumed exactly, so there is no slack to hide bytes in.
 4. `W::decode` rejects a non-canonical value.
 
-Offsets are computed with checked arithmetic, because a declared length near `u32::MAX` overflows `usize` on 32-bit targets. An empty `retain` costs four bytes.
+Offsets are computed with checked arithmetic, because a declared length near `u32::MAX` overflows `usize` on 32-bit targets, and a count larger than the remaining input could hold is rejected before the loop. Values below 252 take one byte, so an empty `retain` costs one byte and typical watermark lengths one each.
 
-This layout is a placeholder for the bespoke codec. When that lands, these `Encode` / `Decode` impls are replaced (possibly by derive macros in `keyhive_codec`), every digest changes, and the domain contexts move to the next protocol version. `Encoded<T>`, `Signed<T>`, `Verified<T>`, and the `Keyline` trait do not change. The placeholder exists so that the crate is `no_std` from the start (no `bincode`) and so that the evaluator and its tests have stable digests to build against.
+This is the first step of Keyhive's bespoke codec: hand-written, canonical `Encode` / `Decode` impls in `keyhive_codec`'s traits, with bijou varints for variable-length integers. Later steps may replace the hand-written impls (for example with derive macros in `keyhive_codec`); if the bytes change, every digest changes and the domain contexts move to the next protocol version. `Encoded<T>`, `Signed<T>`, `Verified<T>`, and the `Keyline` trait do not change. Known-answer tests pin one delegation, one revocation and one set digest, so any change to the bytes is deliberate.
 
 ## Crates
 
@@ -405,9 +406,11 @@ keyhive_codec        Encode, Decode, Encoded<T>, DecodeError. Depends on thiserr
 keyhive_crypto       Digest<T>, Digest::of(&Encoded<T>), Domain. Its serde-based Signed<T> is untouched.
       ▲
 keyline              Id, Power, Delegation, Revocation, Certificate, Signed/Verified over Encoded,
-                     the Keyline trait, MemoryKeyline, conformance suite.
+                     the Keyline trait, the conformance suite.
       ▲
-keyhive_core         (planned) consumes keyline; never sees raw bytes.
+keyline_memory       MemoryKeyline, the reference backend, against keyline's public API.
+      ▲
+keyhive_core         (planned) consumes keyline and a backend; never sees raw bytes.
 ```
 
 `keyhive_codec` holds only the traits and `Encoded<T>` because the dependency direction is only right if it sits at the bottom: `beekem` will implement the same traits when it migrates, and `beekem → keyline` would be wrong. It contains no BLAKE3; hashing an `Encoded<T>` is `keyhive_crypto`'s job.
@@ -425,8 +428,6 @@ keyline/
     certificate.rs   Certificate, VerifiedCertificate, CertificateId
     signed.rs        Signed<T>, Verified<T>
     contract.rs      the Keyline trait, CertificateSet, set_digest
-    memory.rs        MemoryKeyline: storage, stratified evaluator, Keyline impl
-    collections.rs   (private) Map/Set aliases: HashMap with std, BTreeMap without
     test_utils.rs    Statement, deterministic ids, unsigned and signed fixtures, fuzz helpers
     test_utils/
       conformance.rs                  the cast, helpers, keyline_conformance! macro
@@ -438,14 +439,22 @@ keyline/
       conformance/scenarios.rs        named cases, generic over K: Keyline
   tests/
     invariants.rs    crate-wide invariants (distinct domain contexts)
+
+keyline_memory/
+  src/
+    lib.rs           MemoryKeyline: storage, stratified evaluator, Keyline impl, its conformance run
+    collections.rs   (private) Map/Set aliases: HashMap with std, BTreeMap without
+  benches/
+    bench_evaluate.rs
 ```
 
-- `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`. `keyline`, `keyhive_codec` and `keyhive_crypto` build for `wasm32-unknown-unknown` with `--no-default-features` (checked by `ci-no-std`). Targets without atomic compare-and-swap (e.g. `thumbv6m-none-eabi`) fail in `tracing-core`. `keyline` uses three items from `keyhive_crypto`: `Digest<T>`, `Domain`, and `Verifiable`. Moving them down to `keyhive_codec`, or to a crate beneath it, would be the cleaner layering, for the same reason that put `Encode`/`Decode` at the bottom.
-- Depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`, `Domain`, `Verifiable`), `ed25519-dalek` (`VerifyingKey`, `Signature`), `tracing`, and `thiserror` 2 (`no_std`-capable; pinned locally until the workspace moves off 1). Optional: `serde`, `arbitrary`, and, for `test_utils`, `bolero` and `sha2`.
-- `std` feature (default on): `HashMap`/`HashSet` for the evaluator's maps, plus the `std` features of `tracing` and `thiserror`. Without it, `BTreeMap`/`BTreeSet`.
-- `test_utils` feature: the conformance suite, the fixtures, and `bolero`/`arbitrary`. It lets `assume_verified` build a `VerifiedCertificate` without a signature check, so enable it only from dev-dependencies. Implies `arbitrary`, which implies `std` (`derive(Arbitrary)` expands to a `thread_local!`). Also implies `serde`, so the serde round-trip tests run wherever the full suite does (`ci-test`, mutation testing), and `ed25519-dalek/hazmat`, for the fixture that signs with a non-standard nonce.
-- Testing is split by feature, and no configuration silently skips the evaluator. `cargo test -p keyline` runs the unit tests and every conformance _scenario_ (plain generic functions needing nothing beyond the crate); `--no-default-features` runs the same set against the `no_std` build, since the crate never links `std` and only the harness does; `--features test_utils` adds the `bolero` laws and property tests, which need `Arbitrary` and so `std`. `nix run .#ci-test` (menu: `test:host`) runs the whole workspace with `test_utils`, as hosted CI does; `ci-no-std` runs the `no_std` set.
-- `serde` feature: derives on the public types for archives. Not the wire format.
+- `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`. `keyline`, `keyline_memory`, `keyhive_codec` and `keyhive_crypto` build for `wasm32-unknown-unknown` with `--no-default-features` (checked by `ci-no-std`). Targets without atomic compare-and-swap (e.g. `thumbv6m-none-eabi`) fail in `tracing-core`. `keyline` uses three items from `keyhive_crypto`: `Digest<T>`, `Domain`, and `Verifiable`. Moving them down to `keyhive_codec`, or to a crate beneath it, would be the cleaner layering, for the same reason that put `Encode`/`Decode` at the bottom.
+- `keyline` depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`, `Domain`, `Verifiable`), `ed25519-dalek` (`VerifyingKey`, `Signature`), `bijoux` (bijou32), `tracing`, and `thiserror` 2 (`no_std`-capable; pinned locally until the workspace moves off 1). Optional: `serde`, `arbitrary`, and, for the test features, `bolero` and `sha2`. `keyline_memory` depends on `keyline`, `keyhive_codec`, `keyhive_crypto` and `tracing`.
+- `std` feature (default on): the `std` features of `tracing` and `thiserror`, and in `keyline_memory` `HashMap`/`HashSet` for the evaluator's maps (`BTreeMap`/`BTreeSet` without it).
+- `conformance` feature (`keyline`): the fixtures and the conformance scenarios, without `std`, plus `ed25519-dalek/hazmat` for the fixture that signs with a non-standard nonce. Enough for a backend to run every scenario in a `no_std` build.
+- `test_utils` feature: `conformance` plus the generator, the oracles, the `bolero` laws and property tests, and `serde` (so the serde round-trip tests run wherever the full suite does). Implies `arbitrary`, which implies `std` (`derive(Arbitrary)` expands to a `thread_local!`). Both features let `assume_verified` build a `VerifiedCertificate` without a signature check, so enable them only from dev-dependencies. `keyline_memory`'s `test_utils` turns on `keyline/test_utils`.
+- Testing is split by feature, and no configuration silently skips the evaluator. `cargo test -p keyline_memory` runs every conformance _scenario_ against `MemoryKeyline`; `--no-default-features` runs the same set against the `no_std` build, since the crates never link `std` and only the harness does; `--features test_utils` adds the `bolero` laws. `cargo test -p keyline` runs the codec, crypto and oracle tests. `nix run .#ci-test` (menu: `test:host`) runs the whole workspace with `test_utils`, as hosted CI does; `ci-no-std` runs the `no_std` set.
+- `serde` feature: derives `Serialize`/`Deserialize` on the public types, for a caller that wants a format of its own. Not Keyline's wire format.
 - No `parallel` feature yet. If one comes, it is native-only (`rayon`); Wasm stays single-threaded because `wasm-bindgen-rayon` needs `SharedArrayBuffer`, COOP/COEP headers, and a worker pool. The evaluator is written so the independent units (admin reach per issuer, route search per covered certificate) are plain iterators.
 
 The crate follows the workspace's `beekem` conventions: `foo.rs` + `foo/`, manual impls instead of `derivative`, `tracing` in every configuration with its `std` feature behind ours. Library types take no defaulted type parameters: a backend states its watermark type.
@@ -458,7 +467,7 @@ Every backend runs the same tests against `impl Keyline`. The suite is exported 
 
 ```rust
 mod conformance {
-    keyline::keyline_conformance!(my_crate::MyKeyline<()>);
+    keyline::keyline_conformance!(my_crate::MyKeyline<()>);   // as keyline_memory does
 }
 ```
 
@@ -497,7 +506,7 @@ _Scenarios._ Named cases derived from the [edge-cases] findings, the model docum
 - revocation by the issuer and revocation by the audience are total; a non-admin's revocation is confined to their own node;
 - `citation` re-issue heals, reviving everything downstream under its original digest;
 - membership carries whatever the role reaches, including documents added later;
-- a senior role's admin revokes delegations inside a junior role without an explicit delegation;
+- an Admin member of a role that holds Admin over another role revokes delegations inside it without an explicit delegation;
 - supplying a role into a document gives power over the supply edge and none over the roster, and a role's admin cannot revoke the supply into it, because the audience is not on a route;
 - coverage is the union over every revocation of a delegation;
 - the patterns hold as described: pinning, a caretaker, and the Steward (rotating the officers leaves former officers nothing);
@@ -526,7 +535,7 @@ Not implemented here; recorded so the crate's shape is checked against its one p
 - The `Relay`/BeeKEM rotation coupling: an integration question.
 - The bespoke codec.
 - Incremental evaluation and memoization: only once the conformance suite pins semantics.
-- A second backend and a `keyline` / `keyline_memory` crate split: only if a second backend appears.
+
 
 <!-- Links -->
 

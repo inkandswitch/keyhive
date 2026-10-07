@@ -21,7 +21,10 @@ use crate::{
 };
 use ed25519_dalek::{Signature, SigningKey};
 use keyhive_codec::traits::{Decode, Encode};
-use keyhive_crypto::{domain_separator::Domain, verifiable::Verifiable};
+use keyhive_crypto::{
+    domain_separator::{message, Domain},
+    verifiable::Verifiable,
+};
 
 /// An unsigned statement: what the generator, the oracles and the fixtures
 /// work with before anything is signed.
@@ -140,7 +143,7 @@ pub fn resigned<W: Encode + Decode, X: Into<Statement<W>>>(
         let mut expanded = ExpandedSecretKey::from(key.as_bytes());
         expanded.hash_prefix = [salt; 32];
         let encoded = payload.encode();
-        let message = T::message(encoded.as_bytes());
+        let message = message::<T>(encoded.as_bytes());
         let signature = raw_sign::<sha2::Sha512>(&expanded, &message, &key.verifying_key());
         Signed::from_parts(encoded, signature)
             .verify()

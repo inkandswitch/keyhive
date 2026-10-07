@@ -33,7 +33,8 @@ pub struct Digest<T> {
 
 impl<T: Domain> Digest<T> {
     /// The content address of an encoded value: BLAKE3 over
-    /// [`Domain::message`], the same bytes a signature over it covers.
+    /// [`message`](crate::domain_separator::message), the same bytes a
+    /// signature over it covers.
     pub fn of(encoded: &Encoded<T>) -> Self {
         Self::of_bytes(encoded.as_bytes())
     }
@@ -41,17 +42,7 @@ impl<T: Domain> Digest<T> {
     /// [`Digest::of`] for bytes not wrapped in an [`Encoded<T>`], such as a
     /// composite that has no `T` value of its own.
     pub fn of_bytes(bytes: &[u8]) -> Self {
-        const {
-            assert!(
-                crate::domain_separator::nul_free(T::CONTEXT),
-                "a Domain context contains NUL"
-            )
-        };
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(T::CONTEXT.as_bytes());
-        hasher.update(&[0]);
-        hasher.update(bytes);
-        Self::from(hasher.finalize())
+        Self::from(blake3::hash(&crate::domain_separator::message::<T>(bytes)))
     }
 }
 
@@ -289,6 +280,7 @@ impl<T> From<Digest<T>> for Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain_separator::message;
 
     struct Example;
 
@@ -304,14 +296,14 @@ mod tests {
 
     #[test]
     fn message_is_context_nul_bytes() {
-        assert_eq!(Example::message(b"x"), b"test/v0/example\0x");
+        assert_eq!(message::<Example>(b"x"), b"test/v0/example\0x");
     }
 
     #[test]
     fn digest_covers_the_signed_message() {
         assert_eq!(
             Digest::<Example>::of_bytes(b"payload").raw,
-            blake3::hash(&Example::message(b"payload"))
+            blake3::hash(&message::<Example>(b"payload"))
         );
     }
 

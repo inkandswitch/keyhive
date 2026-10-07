@@ -9,7 +9,7 @@ use keyline::{contract::CertificateSet, delegation::Delegation, revocation::Revo
 const CONTEXTS: [&str; 3] = [
     <Delegation as Domain>::CONTEXT,
     <Revocation<()> as Domain>::CONTEXT,
-    <CertificateSet<()> as Domain>::CONTEXT,
+    <CertificateSet as Domain>::CONTEXT,
 ];
 
 #[test]

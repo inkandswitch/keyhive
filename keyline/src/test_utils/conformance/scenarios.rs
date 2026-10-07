@@ -97,19 +97,25 @@ pub fn late_binding_grants_new_documents_to_members<K: Keyline + Default>() {
     assert_eq!(power(&g, OTHER_DOC, ALICE), Some(Power::Read));
 }
 
+/// Revocation by the issuer needs no admin reach: Dan holds only Read over
+/// Doc, so his reach is his own node, yet his revocation of what he issued
+/// kills it.
 pub fn issuer_revocation_is_total<K: Keyline + Default>() {
-    let (mut g, _, alice_member) = standard::<K>();
-    g.insert(assume_verified(r(CAROL, &alice_member)));
-    assert!(!g.is_live(&alice_member.digest()));
-    assert_eq!(power(&g, DOC, ALICE), None);
-    assert_eq!(power(&g, MEMBERS, ALICE), None);
+    let dan_delegation = d(DAN, ALICE, DOC, Power::Read);
+    let (mut g, _, _) = standard::<K>();
+    g.insert(assume_verified(d(DOC, DAN, DOC, Power::Read)));
+    g.insert(assume_verified(dan_delegation));
+    assert!(g.is_live(&dan_delegation.digest()));
+
+    g.insert(assume_verified(r(DAN, &dan_delegation)));
+    assert!(!g.is_live(&dan_delegation.digest()));
 }
 
 /// The audience clause on its own. Alice holds only Read in Members, so her
 /// admin reach is {Alice}, and no route of her membership transits it. Her
-/// revocation of it is still total. (In `audience_revocation_is_total` Alice
-/// holds Admin, so her admin reach covers Members and would kill the
-/// membership even without the audience clause.)
+/// revocation of it is still total. (Were she an Admin member, her admin
+/// reach would cover Members and kill the membership even without the
+/// audience clause.)
 pub fn audience_revocation_without_admin_reach_is_total<K: Keyline + Default>() {
     let alice_reader = d(CAROL, ALICE, MEMBERS, Power::Read);
     let mut g: K = build([
@@ -128,10 +134,23 @@ pub fn audience_revocation_without_admin_reach_is_total<K: Keyline + Default>() 
     assert_eq!(power(&g, DOC, CAROL), Some(Power::Admin));
 }
 
-/// Bob never signed Alice's membership, but Owners is in Bob's admin
-/// reach and Members' only route to Carol grounds through Owners.
+/// Bob never signed Alice's membership, and Members is not in his reach:
+/// Owners is only an Edit member of Members. But Owners is in his reach, and
+/// the membership's only route, from Members to its issuer Carol, transits
+/// Owners. So his revocation covers it.
 pub fn admin_reach_covers_a_transited_node<K: Keyline + Default>() {
-    let (mut g, _, alice_member) = standard::<K>();
+    let alice_member = d(CAROL, ALICE, MEMBERS, Power::Edit);
+    let mut g: K = build([
+        d(DOC, OWNERS, DOC, Power::Admin).into(),
+        d(OWNERS, BOB, OWNERS, Power::Admin).into(),
+        d(OWNERS, CAROL, OWNERS, Power::Admin).into(),
+        d(MEMBERS, OWNERS, MEMBERS, Power::Edit).into(),
+        d(BOB, MEMBERS, DOC, Power::Edit).into(),
+        alice_member.into(),
+    ]);
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
+    assert_eq!(power(&g, MEMBERS, BOB), Some(Power::Edit));
+
     g.insert(assume_verified(r(BOB, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), None);
@@ -141,16 +160,27 @@ pub fn admin_reach_covers_a_transited_node<K: Keyline + Default>() {
 
 /// Dan holds only Read, so Dan's admin reach is {Dan}. Alice's membership
 /// never transits Dan, so Dan's revocation of it is inert; Dan's own hop is Dan's to revoke.
+/// A non-admin's revocation covers routes through their own node and nothing
+/// else. Dan is an Edit member of Mods, so his reach is {Dan}. Eve holds Edit
+/// in Mods through a seat Dan issued, and Read through Mods itself. Dan
+/// revokes Eve's delegation to Frank: the derivation through Dan is excluded,
+/// even though Dan sits inside Mods' row rather than on the path from Doc, so
+/// Frank keeps only what Eve's own Read seat conveys. Eve is untouched.
 pub fn non_admin_revocation_is_confined_to_own_node<K: Keyline + Default>() {
-    let dan_grant = d(DAN, ALICE, DOC, Power::Read);
-    let (mut g, _, alice_member) = standard::<K>();
-    g.insert(assume_verified(d(DOC, DAN, DOC, Power::Read)));
-    g.insert(assume_verified(dan_grant));
-    g.insert(assume_verified(r(DAN, &alice_member)));
-    assert!(g.is_live(&alice_member.digest()));
-    assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
-    g.insert(assume_verified(r(DAN, &dan_grant)));
-    assert!(!g.is_live(&dan_grant.digest()));
+    let h = d(EVE, FRANK, DOC, Power::Admin);
+    let mut g: K = build([
+        d(DOC, MODS, DOC, Power::Edit).into(),
+        d(MODS, DAN, MODS, Power::Edit).into(),
+        d(DAN, EVE, MODS, Power::Edit).into(),
+        d(MODS, EVE, MODS, Power::Read).into(),
+        h.into(),
+    ]);
+    assert_eq!(power(&g, DOC, FRANK), Some(Power::Edit));
+
+    g.insert(assume_verified(r(DAN, &h)));
+    assert!(g.is_live(&h.digest()));
+    assert_eq!(power(&g, DOC, FRANK), Some(Power::Read));
+    assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
 }
 
 /// Bob removes Carol; Carol was Alice's sponsor, so Alice dies implicitly.
@@ -407,7 +437,7 @@ pub fn reissue_with_citation_heals<K: Keyline + Default>() {
 /// frozen reach does not name: his revocations there are inert.
 pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
     let supply = d(BOB, MEMBERS, DOC, Power::Edit);
-    let alice_member = d(DAN, ALICE, MEMBERS, Power::Admin);
+    let alice_member = d(MEMBERS, ALICE, MEMBERS, Power::Admin);
     let mut g: K = build([
         d(DOC, OWNERS, DOC, Power::Admin).into(),
         d(OWNERS, BOB, OWNERS, Power::Admin).into(),
@@ -418,7 +448,8 @@ pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
     assert_eq!(power(&g, MEMBERS, DAN), Some(Power::Admin));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-    // Members is in Dan's reach, so his revocation covers Alice's membership.
+    // Dan did not issue Alice's membership, but Members is in his reach, so
+    // his revocation covers it.
     g.insert(assume_verified(r(DAN, &alice_member)));
     assert!(!g.is_live(&alice_member.digest()));
     assert_eq!(power(&g, DOC, ALICE), None);
@@ -445,7 +476,9 @@ pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
     assert!(g.is_live(&new_supply.digest()));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
-    // Permanence: the revocation he signed while in office still applies.
+    // Permanence: Alice's old membership is grounded at Members itself, so it
+    // would revive without the revocation Dan signed in office. That revocation
+    // still covers it, through the reach that froze at Members.
     assert!(!g.is_live(&alice_member.digest()));
 }
 

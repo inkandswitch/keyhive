@@ -23,22 +23,23 @@ pub const SEPARATOR: &[u8] = SEPARATOR_STR.as_bytes();
 /// `keyhive_core`'s serde payloads today, still relies on its formats.
 ///
 /// [`Digest::of`](crate::digest::Digest::of) hashes exactly the bytes
-/// [`Domain::message`] returns, so a signature and a digest cover the same
-/// prefixed bytes.
+/// [`message`] returns, so a signature and a digest cover the same prefixed
+/// bytes. `message` is a free function rather than a trait method so that no
+/// implementation can override it and make the two diverge.
 pub trait Domain {
     /// `<protocol>/<version>/<type>`, with no NUL byte.
     const CONTEXT: &'static str;
+}
 
-    /// The context, a NUL byte, then `bytes`: what a signature over an
-    /// encoding of `Self` covers.
-    fn message(bytes: &[u8]) -> Vec<u8> {
-        const { assert!(nul_free(Self::CONTEXT), "a Domain context contains NUL") };
-        let mut out = Vec::with_capacity(Self::CONTEXT.len() + 1 + bytes.len());
-        out.extend_from_slice(Self::CONTEXT.as_bytes());
-        out.push(0);
-        out.extend_from_slice(bytes);
-        out
-    }
+/// `T`'s context, a NUL byte, then `bytes`: what a signature over an encoding
+/// of `T` covers, and what its digest hashes.
+pub fn message<T: Domain>(bytes: &[u8]) -> Vec<u8> {
+    const { assert!(nul_free(T::CONTEXT), "a Domain context contains NUL") };
+    let mut out = Vec::with_capacity(T::CONTEXT.len() + 1 + bytes.len());
+    out.extend_from_slice(T::CONTEXT.as_bytes());
+    out.push(0);
+    out.extend_from_slice(bytes);
+    out
 }
 
 /// Whether `s` contains no NUL byte; usable in `const` assertions.

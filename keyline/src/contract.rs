@@ -32,6 +32,13 @@ pub trait Keyline {
     ///
     /// Evaluation never reads it; the bound exists only so certificates
     /// round-trip canonically. A backend that does not care picks `()`.
+    ///
+    /// Its `decode` runs on unauthenticated bytes: [`Certificate::verify`]
+    /// decodes before it checks the signature. It must reject non-canonical
+    /// input, never panic, and allocate no more than its input length
+    /// warrants.
+    ///
+    /// [`Certificate::verify`]: crate::certificate::Certificate::verify
     type RetentionWatermark: Encode + Decode;
 
     /// Add a certificate to the set. Returns `true` if it was not already
@@ -79,7 +86,7 @@ pub trait Keyline {
     /// A digest of the whole set. Same set (in any order), same digest; usable
     /// as a cache key for every other query. Backends compute it with
     /// [`set_digest`].
-    fn digest(&self) -> Digest<CertificateSet<Self::RetentionWatermark>>;
+    fn digest(&self) -> Digest<CertificateSet>;
 }
 
 /// What a [`Keyline::digest`] is the digest of: a set of certificates, by
@@ -87,13 +94,11 @@ pub trait Keyline {
 ///
 /// Only ever a phantom parameter of [`Digest`]; it has no values. A distinct
 /// type keeps a set digest from being mistaken for a certificate's.
-pub struct CertificateSet<W> {
-    _never: core::convert::Infallible,
-    _watermark: core::marker::PhantomData<fn() -> W>,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CertificateSet {}
 
-impl<W> Domain for CertificateSet<W> {
-    const CONTEXT: &'static str = "keyline/v0/set";
+impl Domain for CertificateSet {
+    const CONTEXT: &'static str = "keyline/v0/certificate_set";
 }
 
 /// Digest a certificate set from its members' identities, in any order and
@@ -103,7 +108,7 @@ impl<W> Domain for CertificateSet<W> {
 /// deduplicated digests, so the result depends only on the set. Delegation
 /// and revocation digests are domain-separated, so they never collide and
 /// need no kind tag here.
-pub fn set_digest<W, I: IntoIterator<Item = CertificateId>>(ids: I) -> Digest<CertificateSet<W>> {
+pub fn set_digest<I: IntoIterator<Item = CertificateId>>(ids: I) -> Digest<CertificateSet> {
     let mut sorted: Vec<[u8; Digest::<Delegation>::LEN]> = ids
         .into_iter()
         .map(|id| {
@@ -132,19 +137,28 @@ mod tests {
     #[test]
     fn set_digest_is_order_independent() {
         let [a, b, c] = ids();
-        assert_eq!(
-            set_digest::<(), _>([a, b, c]),
-            set_digest::<(), _>([c, a, b])
-        );
-        assert_ne!(set_digest::<(), _>([a, b]), set_digest::<(), _>([a, b, c]));
+        assert_eq!(set_digest([a, b, c]), set_digest([c, a, b]));
+        assert_ne!(set_digest([a, b]), set_digest([a, b, c]));
     }
+
+    /// Pins the set digest of fixed ids: the domain context, the sort, and the
+    /// concatenation. Changing any of them must change this test on purpose.
+    #[test]
+    fn set_digest_known_answer() {
+        let hex: alloc::string::String = set_digest(ids())
+            .as_slice()
+            .iter()
+            .map(|b| alloc::format!("{b:02x}"))
+            .collect();
+        assert_eq!(hex, SET_KNOWN_DIGEST);
+    }
+
+    const SET_KNOWN_DIGEST: &str =
+        "16812e35e58acf243711a745d30fe3de3902b99f2e7c35e0bca5ac870d04449e";
 
     #[test]
     fn set_digest_ignores_repetition() {
         let [a, b, _] = ids();
-        assert_eq!(
-            set_digest::<(), _>([a, b, a, a]),
-            set_digest::<(), _>([b, a])
-        );
+        assert_eq!(set_digest([a, b, a, a]), set_digest([b, a]));
     }
 }

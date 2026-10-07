@@ -112,11 +112,11 @@ fn pick_id(u: &mut Unstructured<'_>) -> Result<Id> {
     Ok(id(u.int_in_range(1..=POOL)?))
 }
 
-/// `N` distinct pool identities, none of them `id(not)`. A collision would
+/// `N` distinct pool identities, none of them in `not`. A collision would
 /// collapse a planted shape into something else.
-fn distinct<const N: usize>(u: &mut Unstructured<'_>, not: u8) -> Result<[Id; N]> {
-    let mut rest: Vec<u8> = (1..=POOL).filter(|n| *n != not).collect();
-    let mut out = [id(not); N];
+fn distinct<const N: usize>(u: &mut Unstructured<'_>, not: &[u8]) -> Result<[Id; N]> {
+    let mut rest: Vec<u8> = (1..=POOL).filter(|n| !not.contains(n)).collect();
+    let mut out = [id(1); N];
     for slot in &mut out {
         *slot = id(rest.swap_remove(u.choose_index(rest.len())?));
     }
@@ -149,15 +149,20 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         // Root edges: each subject grounds itself to some node, at Admin or,
         // so that nobody holds Admin over the subject, at Edit.
         let subjects = u.int_in_range(1..=3)?;
+        let mut root_audience: Vec<u8> = Vec::new();
         for s in 1..=subjects {
-            let audience = pick_id(u)?;
+            let audience = u.int_in_range(1..=POOL)?;
+            root_audience.push(audience);
             let rooting = if u.arbitrary()? {
                 Power::Admin
             } else {
                 Power::Edit
             };
-            certs.push(Delegation::new(id(s), audience, id(s), rooting).into());
+            certs.push(Delegation::new(id(s), id(audience), id(s), rooting).into());
         }
+        // Planted shapes avoid their subject and its root audience, whose
+        // independent standing would otherwise mask what the shape tests.
+        let clear_of = |s_n: u8| [s_n, root_audience[usize::from(s_n - 1)]];
 
         // Free-form delegations over any node in the pool as subject, so some
         // land on roles (composition) and some are ungrounded.
@@ -181,7 +186,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         if shape == 1 {
             let s_n = u.int_in_range(1..=subjects)?;
             let s = id(s_n);
-            let [m, k, e, f] = distinct(u, s_n)?;
+            let [m, k, e, f] = distinct(u, &clear_of(s_n))?;
             let via_role = if u.arbitrary()? {
                 Power::Edit
             } else {
@@ -211,7 +216,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         if shape == 2 {
             let s_n = u.int_in_range(1..=subjects)?;
             let s = id(s_n);
-            let [m1, e, m2, f, g] = distinct(u, s_n)?;
+            let [m1, e, m2, f, g] = distinct(u, &clear_of(s_n))?;
             let (h1, h2, h3) = (
                 Delegation::new(e, f, s, Power::Admin),
                 Delegation::new(f, e, s, Power::Admin),
@@ -239,7 +244,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         if shape == 3 {
             let s_n = u.int_in_range(1..=subjects)?;
             let s = id(s_n);
-            let [r1, r2, r3, p] = distinct(u, s_n)?;
+            let [r1, r2, r3, p] = distinct(u, &clear_of(s_n))?;
             let composed = u.arbitrary::<bool>()?;
             let hop = |u: &mut Unstructured<'a>| {
                 if composed {
@@ -271,7 +276,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         if shape == 4 {
             let s_n = u.int_in_range(1..=subjects)?;
             let s = id(s_n);
-            let [g, m, k, e, f] = distinct(u, s_n)?;
+            let [g, m, k, e, f] = distinct(u, &clear_of(s_n))?;
             let grant = Delegation::new(e, f, g, Power::Admin);
             certs.extend::<[Statement<W>; 7]>([
                 Delegation::new(s, g, s, Power::Edit).into(),

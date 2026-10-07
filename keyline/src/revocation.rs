@@ -13,7 +13,8 @@ use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verif
 /// Validity is unconditional: any well-signed revocation is admitted to the
 /// set. Its _effect_ is scoped by the issuer's admin reach: the target is
 /// dead on every route that transits a node the issuer ever held `Admin` over,
-/// or the issuer's own node, and inert elsewhere. Admin reach is computed on the
+/// or the issuer's own node, and inert elsewhere. A revocation signed by the
+/// target's audience is total instead. Admin reach is computed on the
 /// revocation-free graph and only grows, so a revocation's reach is permanent.
 ///
 /// There is no `subject`: effect is scoped by the admin reach, not by the issuer's

@@ -200,10 +200,12 @@ _Rejected because._ Wasm is a first-class target and `wasm-bindgen-rayon` needs 
 
 _Reopen if._ Native evaluation cost becomes a problem on real graphs.
 
-### `minicbor` as the interim encoding
+### `minicbor` as the encoding
 
 _Proposal._ Canonical CBOR for the certificate types, hashed with BLAKE3.
 
-_Rejected because._ Keyhive is moving to a bespoke codec; adopting a second interim encoding would mean two migrations. A fixed-width placeholder needs no dependency and is replaced wholesale when the codec lands. Decided in [implementation, Encoding](implementation.md#encoding).
+_Would buy._ An off-the-shelf, self-describing format with existing tooling.
 
-_Reopen if._ The codec is delayed indefinitely.
+_Rejected because._ Keyhive's bespoke codec starts here: hand-written canonical layouts in `keyhive_codec`'s traits, with bijou varints for variable-length integers, which are canonical by construction. Canonical CBOR needs a rule for each kind of non-minimal encoding, and every decoder has to enforce all of them. See [implementation, Encoding](implementation.md#encoding).
+
+_Reopen if._ Keyhive adopts CBOR as its wire format elsewhere.

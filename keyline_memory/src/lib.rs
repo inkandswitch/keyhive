@@ -223,10 +223,9 @@ impl<W> MemoryKeyline<W> {
 
     /// Stratum 2, existence: the least fixed point of the live set.
     ///
-    /// Semi-naive iteration: each round derives what it can from the live set
-    /// so far, keeps only what is new (`derived \ live`), and stops when
-    /// nothing is. It terminates because `live` only grows within the finite
-    /// set of delegations.
+    /// Each round re-runs the full search over the live set so far, keeps only
+    /// what is new (`derived \ live`), and stops when nothing is. It terminates
+    /// because `live` only grows within the finite set of delegations.
     fn live_set(&self, contexts: &[Context]) -> Set<Digest<Delegation>> {
         let covered: Set<Digest<Delegation>> = contexts
             .iter()
@@ -242,11 +241,12 @@ impl<W> MemoryKeyline<W> {
             let mut derived: Set<Digest<Delegation>> = self
                 .delegations
                 .iter()
+                // No audience check here: a delegation its audience revoked is
+                // always covered (the audience is in its own reach and has
+                // standing over the subject whenever the delegation could be
+                // live), so it is handled by the context loop below.
                 .filter(|(h, d)| {
-                    !live.contains(h)
-                        && !covered.contains(h)
-                        && !self.revoked_by_audience(h, d.audience)
-                        && reached(&base, d.subject, d.issuer)
+                    !live.contains(h) && !covered.contains(h) && reached(&base, d.subject, d.issuer)
                 })
                 .map(|(h, _)| *h)
                 .collect();
@@ -562,7 +562,7 @@ impl<W: Encode + Decode> Keyline for MemoryKeyline<W> {
         self.delegations.contains_key(cert) && self.evaluate().live.contains(cert)
     }
 
-    fn digest(&self) -> Digest<CertificateSet<W>> {
+    fn digest(&self) -> Digest<CertificateSet> {
         set_digest(self.certificates.keys().copied())
     }
 }

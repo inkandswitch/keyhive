@@ -25,7 +25,11 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verifiable};
+use keyhive_crypto::{
+    digest::Digest,
+    domain_separator::{message, Domain},
+    verifiable::Verifiable,
+};
 
 /// A value's canonical bytes and a signature over those bytes.
 ///
@@ -79,7 +83,7 @@ impl<T: Domain + Encode + Verifiable> Signed<T> {
             return Err(SignError::NotTheIssuer);
         }
         let encoded = value.encode();
-        let signature = key.sign(&T::message(encoded.as_bytes()));
+        let signature = key.sign(&message::<T>(encoded.as_bytes()));
         Ok(Signed { encoded, signature })
     }
 }
@@ -111,7 +115,7 @@ impl<T: Decode + Domain + Encode + Verifiable> Signed<T> {
             })?;
         payload
             .verifying_key()
-            .verify_strict(&T::message(self.encoded.as_bytes()), &self.signature)
+            .verify_strict(&message::<T>(self.encoded.as_bytes()), &self.signature)
             .map_err(|_| {
                 tracing::debug!(digest = %self.digest(), "certificate signature does not verify");
                 VerifyError::BadSignature
@@ -293,7 +297,7 @@ mod tests {
         assert!(sample()
             .verifying_key()
             .verify_strict(
-                &Delegation::message(signed.encoded().as_bytes()),
+                &message::<Delegation>(signed.encoded().as_bytes()),
                 signed.signature()
             )
             .is_ok());
@@ -334,7 +338,7 @@ mod tests {
             .flat_map(|n| EIGHT_TORSION.iter().map(move |r| (n, r)))
             .find_map(|(n, r)| {
                 let encoded = Delegation::new(issuer, id(n), id(1), Power::Edit).encode();
-                let message = Delegation::message(encoded.as_bytes());
+                let message = message::<Delegation>(encoded.as_bytes());
                 let r_bytes = r.compress().to_bytes();
                 let k = Scalar::from_bytes_mod_order_wide(
                     &Sha512::new()
@@ -422,7 +426,7 @@ mod tests {
     fn signer_must_be_the_payload_issuer() {
         let forger = signing_key(2);
         let encoded = sample().encode(); // issuer = id(1)
-        let signature = forger.sign(&Delegation::message(encoded.as_bytes()));
+        let signature = forger.sign(&message::<Delegation>(encoded.as_bytes()));
         let forged = Signed::<Delegation>::from_parts(encoded, signature);
         assert_eq!(forged.verify().unwrap_err(), VerifyError::BadSignature);
     }
@@ -448,7 +452,7 @@ mod tests {
         let key = signing_key(1);
         let mut bytes = sample().encode().into_bytes();
         bytes.push(0);
-        let signature = key.sign(&Delegation::message(&bytes));
+        let signature = key.sign(&message::<Delegation>(&bytes));
         let signed =
             Signed::<Delegation>::from_parts(Encoded::from_bytes_unchecked(bytes), signature);
         assert_eq!(
