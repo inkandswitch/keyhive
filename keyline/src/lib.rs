@@ -14,15 +14,16 @@
 //!
 //! # Naming
 //!
-//! _Keyline_ is the design, `keyline` is the crate, [`keyline::Keyline`] is the trait.
+//! _Keyline_ is the design, `keyline` is the crate, [`contract::Keyline`] is the trait.
 //!
 //! # What this crate does not do
 //!
-//! It does not verify signatures (`Keyline::insert` takes a [`signed::Verified`]
-//! witness), does not know about prekeys, CGKA, documents, or groups, and is
-//! synchronous: concurrency is the wrapper's job. `keyhive_core` holds an
-//! implementation behind a `RwLock` and converts its typed handles to [`id::Id`]s
-//! at the boundary.
+//! A backend never checks signatures: [`contract::Keyline::insert`] takes a
+//! [`signed::Verified`] witness, which only [`signed::Signed::verify`] makes.
+//! The crate knows nothing of prekeys, CGKA, documents, or groups, and is
+//! synchronous: concurrency is the wrapper's job. A wrapper holds an
+//! implementation behind a lock and converts its typed handles to [`id::Id`]s at
+//! the boundary.
 //!
 //! # `no_std` support
 //!
@@ -43,10 +44,11 @@ extern crate alloc;
 extern crate std;
 
 pub mod certificate;
-pub mod collections;
+mod collections;
+pub mod contract;
 pub mod delegation;
+pub mod domain;
 pub mod id;
-pub mod keyline;
 pub mod memory;
 pub mod power;
 pub mod revocation;

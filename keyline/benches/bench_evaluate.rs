@@ -2,7 +2,7 @@
 //!
 //! - `realistic`: one document, an apex role, three member roles with `n`
 //!   humans each, a handful of revocations. What a query costs in the common case.
-//! - `club_ladder`: `k` roles each a member of the previous — the quadratic
+//! - `club_ladder`: `k` roles, each a member of the previous: the quadratic
 //!   fact-space shape from `design/keyline/evaluation-notes.md` §7.
 //! - `revocation_spree`: one ex-admin revokes `k` certificates; with context
 //!   dedup this should scale like one dispute, not `k`.
@@ -12,13 +12,13 @@
 use divan::Bencher;
 use keyline::{
     certificate::Certificate,
+    contract::Keyline,
     delegation::Delegation,
     id::Id,
-    keyline::Keyline,
     memory::MemoryKeyline,
     power::Power,
     revocation::Revocation,
-    test_utils::{cert, id},
+    test_utils::{cert, conformance::build, id},
 };
 
 fn main() {
@@ -37,17 +37,9 @@ fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Certificate<()> {
     Delegation::new(id(issuer), id(audience), id(subject), power).into()
 }
 
-fn build<I: IntoIterator<Item = Certificate<()>>>(certs: I) -> MemoryKeyline {
-    let mut g = MemoryKeyline::new();
-    for c in certs {
-        g.insert(cert(c));
-    }
-    g
-}
-
 /// Doc rooted at Owners (two admins); three roles supplied into Doc at
 /// Edit/Read/Relay, each rooted at Owners, with `n` humans; two revocations.
-fn realistic(n: u8) -> MemoryKeyline {
+fn realistic(n: u8) -> MemoryKeyline<()> {
     let mut certs = vec![
         d(DOC, OWNERS, DOC, Power::Admin),
         d(OWNERS, FIRST_HUMAN, OWNERS, Power::Admin),
@@ -62,7 +54,7 @@ fn realistic(n: u8) -> MemoryKeyline {
             next = next.wrapping_add(1);
         }
     }
-    let mut g = build(certs);
+    let mut g: MemoryKeyline<()> = build(certs);
     // Two revocations: one by an Owner (covers), one by a member (inert).
     let victim = Delegation::new(
         id(FIRST_HUMAN),
@@ -77,7 +69,7 @@ fn realistic(n: u8) -> MemoryKeyline {
 
 /// Doc → role₁ → role₂ → … → roleₖ, each an Admin member of the previous, with
 /// one human at the bottom.
-fn club_ladder(k: u8) -> MemoryKeyline {
+fn club_ladder(k: u8) -> MemoryKeyline<()> {
     let mut certs = vec![d(DOC, OWNERS, DOC, Power::Admin)];
     let mut prev = OWNERS;
     for i in 0..k {
@@ -92,7 +84,7 @@ fn club_ladder(k: u8) -> MemoryKeyline {
 
 /// An Owner is removed and then revokes `k` roster certificates; all share one
 /// exclusion set.
-fn revocation_spree(k: u8) -> MemoryKeyline {
+fn revocation_spree(k: u8) -> MemoryKeyline<()> {
     let mut g = realistic(k);
     let removed = Delegation::new(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Power::Admin);
     g.insert(cert(Revocation::new(id(FIRST_HUMAN), removed.digest())));

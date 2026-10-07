@@ -1,20 +1,13 @@
 //! Properties every `Keyline` must satisfy on every set, checked with `bolero`
-//! over generated [`CertSet`]s.
-//!
-//! The oracle is [`naive`]: the normative program from
-//! `design/keyline/implementation.md` § Evaluation transcribed as plain tuple
-//! fixpoints (Jacobi iteration over `BTreeMap`s), sharing no code with any
-//! backend. It is slow and obviously correct; `MemoryKeyline` must agree with
-//! it on every generated set, with and without revocations.
+//! over generated [`CertSet`]s, including agreement with both
+//! [oracles](super::oracle).
 use super::{
     build,
     gen::{ids, CertSet},
-    TestContent,
+    oracle::{naive, threshold, Levels},
+    TestWatermark,
 };
-use crate::{
-    certificate::Certificate, delegation::Delegation, id::Id, keyline::Keyline, power::Power,
-    test_utils::cert,
-};
+use crate::{contract::Keyline, delegation::Delegation, id::Id, power::Power, test_utils::cert};
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
@@ -23,19 +16,27 @@ use keyhive_crypto::digest::Digest;
 
 /// Every `(subject, node)` level a backend reports over the pool, plus the
 /// live status of every delegation: the whole observable state of a set.
+///
+/// Levels are read through `members`, one evaluation per subject rather than
+/// one per pair; [`queries_are_consistent`] checks that `members` and
+/// `effective_power` agree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Observed {
     pub levels: BTreeMap<(Id, Id), Power>,
     pub live: BTreeSet<Digest<Delegation>>,
 }
 
-pub fn observe<K: Keyline>(k: &K, set: &CertSet<K::Content>) -> Observed
+pub fn observe<K: Keyline>(k: &K, set: &CertSet<K::RetentionWatermark>) -> Observed
 where
-    K::Content: TestContent,
+    K::RetentionWatermark: TestWatermark,
 {
     let levels = ids()
-        .flat_map(|s| ids().map(move |x| (s, x)))
-        .filter_map(|(s, x)| k.effective_power(s, x).map(|l| ((s, x), l)))
+        .flat_map(|s| {
+            k.members(s)
+                .into_iter()
+                .map(move |(x, l)| ((s, x), l))
+                .chain([((s, s), Power::Admin)])
+        })
         .collect();
     let live = set
         .delegations()
@@ -45,214 +46,30 @@ where
     Observed { levels, live }
 }
 
-/// The normative program, executed naively.
-pub mod naive {
-    use super::*;
-
-    /// `(subject, node) -> level`.
-    pub type Levels = BTreeMap<(Id, Id), Power>;
-
-    /// What the oracle derives from a set.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct Evaluation {
-        pub live: BTreeSet<Digest<Delegation>>,
-        pub levels: Levels,
-    }
-
-    struct Facts {
-        nodes: BTreeSet<Id>,
-        dels: BTreeMap<Digest<Delegation>, Delegation>,
-        // Issuer and target only: `retain` has no bearing on authority, so the
-        // oracle cannot read it even by accident.
-        revocations: Vec<(Id, Digest<Delegation>)>,
-    }
-
-    fn raise(m: &mut Levels, key: (Id, Id), l: Power) -> bool {
-        match m.get(&key) {
-            Some(current) if *current >= l => false,
-            _ => {
-                m.insert(key, l);
-                true
-            }
-        }
-    }
-
-    /// `level(s, x, h, l)` for one exclusion set: rules 1-3 over `usable`
-    /// edges weighted by `cap`, every node in `exclude` refused. With
-    /// `exclude = ∅`, every edge usable and `cap = power`, this is stratum 1.
-    fn level(
-        f: &Facts,
-        exclude: &BTreeSet<Id>,
-        usable: &dyn Fn(&Digest<Delegation>) -> bool,
-        cap: &dyn Fn(&Digest<Delegation>, &Delegation) -> Power,
-    ) -> Levels {
-        let mut m: Levels = f
-            .nodes
-            .iter()
-            .filter(|n| !exclude.contains(n))
-            .map(|n| ((*n, *n), Power::Admin))
-            .collect();
-
-        loop {
-            let mut changed = false;
-            let snapshot = m.clone();
-
-            for (h, d) in &f.dels {
-                if !usable(h) || exclude.contains(&d.audience) {
-                    continue;
-                }
-                if let Some(l) = snapshot.get(&(d.subject, d.issuer)) {
-                    changed |= raise(&mut m, (d.subject, d.audience), (*l).min(cap(h, d)));
-                }
-            }
-            for ((s, n), l1) in &snapshot {
-                if n == s {
-                    continue;
-                }
-                for ((n2, x), l2) in &snapshot {
-                    if n2 == n {
-                        changed |= raise(&mut m, (*s, *x), (*l1).min(*l2));
-                    }
-                }
-            }
-
-            if !changed {
-                return m;
-            }
-        }
-    }
-
-    fn facts<C>(set: &CertSet<C>) -> Facts {
-        let mut nodes: BTreeSet<Id> = ids().collect();
-        let mut dels = BTreeMap::new();
-        let mut revocations = Vec::new();
-        for c in &set.certs {
-            match c {
-                Certificate::Delegation(d) => {
-                    nodes.extend([d.issuer, d.audience, d.subject]);
-                    dels.insert(d.digest(), *d);
-                }
-                Certificate::Revocation(r) => {
-                    nodes.insert(r.issuer);
-                    revocations.push((r.issuer, r.revoke));
-                }
-            }
-        }
-        Facts {
-            nodes,
-            dels,
-            revocations,
-        }
-    }
-
-    /// Stratum 1 alone: `reaches` over the pool, blind to revocations.
-    pub fn reaches<C>(set: &CertSet<C>) -> Levels {
-        level(&facts(set), &BTreeSet::new(), &|_| true, &|_, d| d.power)
-    }
-
-    /// Both strata: the live set and the caps, each a least fixed point, then
-    /// the live levels.
-    pub fn evaluate<C>(set: &CertSet<C>) -> Evaluation {
-        let f = facts(set);
-        let none = BTreeSet::new();
-
-        let reaches = level(&f, &none, &|_| true, &|_, d| d.power);
-        let admin_reach = |k: Id| -> BTreeSet<Id> {
-            let mut s: BTreeSet<Id> = f
-                .nodes
-                .iter()
-                .copied()
-                .filter(|n| reaches.get(&(*n, k)) == Some(&Power::Admin))
-                .collect();
-            s.insert(k);
-            s
-        };
-        let mut covered: BTreeMap<Digest<Delegation>, BTreeSet<Id>> = BTreeMap::new();
-        for (issuer, revoke) in &f.revocations {
-            covered
-                .entry(*revoke)
-                .or_default()
-                .extend(admin_reach(*issuer));
-        }
-        let revoked_by_audience = |h: &Digest<Delegation>, audience: Id| {
-            f.revocations
-                .iter()
-                .any(|(issuer, revoke)| revoke == h && *issuer == audience)
-        };
-
-        let mut live: BTreeSet<Digest<Delegation>> = BTreeSet::new();
-        loop {
-            let added: Vec<Digest<Delegation>> = f
-                .dels
-                .iter()
-                .filter(|(h, d)| !live.contains(*h) && !revoked_by_audience(h, d.audience))
-                .filter(|(h, d)| {
-                    let exclude = covered.get(*h).cloned().unwrap_or_default();
-                    level(&f, &exclude, &|x| live.contains(x), &|_, d| d.power)
-                        .contains_key(&(d.subject, d.issuer))
-                })
-                .map(|(h, _)| *h)
-                .collect();
-            if added.is_empty() {
-                break;
-            }
-            live.extend(added);
-        }
-
-        // Caps rise from `Relay`: a live edge conveys at least that, and only
-        // a grounded derivation can raise it further.
-        let mut cap: BTreeMap<Digest<Delegation>, Power> =
-            f.dels.iter().map(|(h, _)| (*h, Power::Relay)).collect();
-        loop {
-            let mut changed = false;
-            for (h, d) in &f.dels {
-                if !live.contains(h) {
-                    continue;
-                }
-                let exclude = covered.get(h).cloned().unwrap_or_default();
-                let current = cap.clone();
-                let at_iss = level(&f, &exclude, &|x| live.contains(x), &|x, d| {
-                    current[x].min(d.power)
-                })[&(d.subject, d.issuer)];
-                let next = d.power.min(at_iss);
-                if next > cap[h] {
-                    cap.insert(*h, next);
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-
-        let levels = level(&f, &none, &|x| live.contains(x), &|x, d| {
-            cap[x].min(d.power)
-        });
-        Evaluation { live, levels }
-    }
+/// `members(s)` as an oracle's levels give it: every node but `s` with a level.
+fn members_of(levels: &Levels, s: Id) -> BTreeMap<Id, Power> {
+    levels
+        .iter()
+        .filter(|((s2, x), _)| *s2 == s && *x != s)
+        .map(|((_, x), l)| (*x, *l))
+        .collect()
 }
 
-/// Without revocations, `effective_power` is exactly stratum 1, and every
+/// Without revocations, `members` is exactly stratum 1, and every
 /// delegation whose issuer reaches its subject is live.
 pub fn matches_naive_oracle_without_revocations<K: Keyline + Default>()
 where
-    K::Content: TestContent,
+    K::RetentionWatermark: TestWatermark,
 {
     bolero::check!()
-        .with_arbitrary::<CertSet<K::Content>>()
+        .with_arbitrary::<CertSet<K::RetentionWatermark>>()
         .for_each(|set| {
             let set = set.without_revocations();
             let expected = naive::reaches(&set);
             let k: K = build(set.certs.iter().cloned());
 
             for s in ids() {
-                for x in ids() {
-                    assert_eq!(
-                        k.effective_power(s, x),
-                        expected.get(&(s, x)).copied(),
-                        "effective_power({s}, {x})"
-                    );
-                }
+                assert_eq!(k.members(s), members_of(&expected, s), "members({s})");
             }
             for d in set.delegations() {
                 assert_eq!(
@@ -269,22 +86,20 @@ where
 /// audience, and clamped powers.
 pub fn matches_naive_oracle_with_revocations<K: Keyline + Default>()
 where
-    K::Content: TestContent,
+    K::RetentionWatermark: TestWatermark,
 {
     bolero::check!()
-        .with_arbitrary::<CertSet<K::Content>>()
+        .with_arbitrary::<CertSet<K::RetentionWatermark>>()
         .for_each(|set| {
             let expected = naive::evaluate(set);
             let k: K = build(set.certs.iter().cloned());
 
             for s in ids() {
-                for x in ids() {
-                    assert_eq!(
-                        k.effective_power(s, x),
-                        expected.levels.get(&(s, x)).copied(),
-                        "effective_power({s}, {x})"
-                    );
-                }
+                assert_eq!(
+                    k.members(s),
+                    members_of(&expected.levels, s),
+                    "members({s})"
+                );
             }
             for d in set.delegations() {
                 assert_eq!(
@@ -296,20 +111,96 @@ where
         });
 }
 
-/// Any insertion order gives the same answers and the same digest.
-pub fn order_independent<K: Keyline + Default>()
+/// Every query agrees with the threshold form, which reaches its answers by a
+/// different route than [`naive`]: thresholds instead of values, and each
+/// covered certificate's level read off its own context instead of a cap
+/// fixed point.
+pub fn matches_threshold_oracle<K: Keyline + Default>()
 where
-    K::Content: TestContent,
+    K::RetentionWatermark: TestWatermark,
 {
     bolero::check!()
-        .with_arbitrary::<(CertSet<K::Content>, Vec<u8>)>()
+        .with_arbitrary::<CertSet<K::RetentionWatermark>>()
+        .for_each(|set| {
+            let expected = threshold::evaluate(set);
+            let k: K = build(set.certs.iter().cloned());
+
+            for s in ids() {
+                assert_eq!(
+                    k.members(s),
+                    members_of(&expected.effective, s),
+                    "members({s})"
+                );
+            }
+            for d in set.delegations() {
+                assert_eq!(
+                    k.is_live(&d.digest()),
+                    expected.live.contains(&d.digest()),
+                    "is_live({d:?})"
+                );
+            }
+        });
+}
+
+/// A revocation signed by its target's issuer or audience kills the target,
+/// whatever else is in the set.
+pub fn party_revocation_is_total<K: Keyline + Default>()
+where
+    K::RetentionWatermark: TestWatermark,
+{
+    bolero::check!()
+        .with_arbitrary::<CertSet<K::RetentionWatermark>>()
+        .for_each(|set| {
+            let k: K = build(set.certs.iter().cloned());
+            for r in set.revocations() {
+                let party = set.delegations().any(|d| {
+                    d.digest() == r.revoke && (r.issuer == d.issuer || r.issuer == d.audience)
+                });
+                if party {
+                    assert!(!k.is_live(&r.revoke), "{r:?} is by a party to its target");
+                }
+            }
+        });
+}
+
+/// `retain` never changes an answer: emptying every map leaves every query as
+/// it was.
+pub fn retain_is_inert<K: Keyline + Default>()
+where
+    K::RetentionWatermark: TestWatermark,
+{
+    bolero::check!()
+        .with_arbitrary::<CertSet<K::RetentionWatermark>>()
+        .for_each(|set| {
+            let with: K = build(set.certs.iter().cloned());
+            let without: K = build(set.without_watermarks().certs);
+            assert_eq!(observe(&with, set), observe(&without, set));
+            for s in ids() {
+                assert_eq!(with.members(s), without.members(s));
+            }
+        });
+}
+
+/// Any insertion order gives the same answers and the same digest. Reversal
+/// is checked on every set, since a generated permutation is often the
+/// identity.
+pub fn order_independent<K: Keyline + Default>()
+where
+    K::RetentionWatermark: TestWatermark,
+{
+    bolero::check!()
+        .with_arbitrary::<(CertSet<K::RetentionWatermark>, Vec<u8>)>()
         .for_each(|(set, keys)| {
             let a: K = build(set.certs.iter().cloned());
-            let b: K = build(set.permuted(keys).certs);
-            assert_eq!(a.digest(), b.digest());
-            assert_eq!(observe(&a, set), observe(&b, set));
-            for s in ids() {
-                assert_eq!(a.members(s), b.members(s));
+            for b in [
+                build::<K, _>(set.permuted(keys).certs),
+                build::<K, _>(set.reversed().certs),
+            ] {
+                assert_eq!(a.digest(), b.digest());
+                assert_eq!(observe(&a, set), observe(&b, set));
+                for s in ids() {
+                    assert_eq!(a.members(s), b.members(s));
+                }
             }
         });
 }
@@ -317,10 +208,10 @@ where
 /// Inserting a certificate already present returns `false` and changes nothing.
 pub fn idempotent<K: Keyline + Default>()
 where
-    K::Content: TestContent,
+    K::RetentionWatermark: TestWatermark,
 {
     bolero::check!()
-        .with_arbitrary::<CertSet<K::Content>>()
+        .with_arbitrary::<CertSet<K::RetentionWatermark>>()
         .for_each(|set| {
             let mut k: K = build(set.certs.iter().cloned());
             let before = (k.digest(), observe(&k, set));
@@ -334,10 +225,10 @@ where
 /// Adding a revocation never raises any level and never revives a delegation.
 pub fn revocations_only_deny<K: Keyline + Default>()
 where
-    K::Content: TestContent,
+    K::RetentionWatermark: TestWatermark,
 {
     bolero::check!()
-        .with_arbitrary::<CertSet<K::Content>>()
+        .with_arbitrary::<CertSet<K::RetentionWatermark>>()
         .for_each(|set| {
             let with: K = build(set.certs.iter().cloned());
             let after = observe(&with, set);
@@ -371,10 +262,10 @@ where
 /// dropping any certificate changes it.
 pub fn digest_identifies_the_set<K: Keyline + Default>()
 where
-    K::Content: TestContent,
+    K::RetentionWatermark: TestWatermark,
 {
     bolero::check!()
-        .with_arbitrary::<(CertSet<K::Content>, Vec<u8>)>()
+        .with_arbitrary::<(CertSet<K::RetentionWatermark>, Vec<u8>)>()
         .for_each(|(set, keys)| {
             let a: K = build(set.certs.iter().cloned());
             let b: K = build(set.permuted(keys).certs);
@@ -398,13 +289,14 @@ where
 }
 
 /// Every node is Admin over itself; `members` is exactly `effective_power`
-/// minus the subject; `contains` agrees with what was inserted.
+/// minus the subject; `contains` is true of every inserted certificate and
+/// false of one left out.
 pub fn queries_are_consistent<K: Keyline + Default>()
 where
-    K::Content: TestContent,
+    K::RetentionWatermark: TestWatermark,
 {
     bolero::check!()
-        .with_arbitrary::<CertSet<K::Content>>()
+        .with_arbitrary::<CertSet<K::RetentionWatermark>>()
         .for_each(|set| {
             let k: K = build(set.certs.iter().cloned());
             for s in ids() {
@@ -415,8 +307,12 @@ where
                     assert_eq!(members.get(&x).copied(), k.effective_power(s, x));
                 }
             }
-            for c in &set.certs {
+            for (i, c) in set.certs.iter().enumerate() {
                 assert!(k.contains(&cert(c.clone()).digest()));
+                if set.certs.iter().filter(|x| *x == c).count() == 1 {
+                    let smaller: K = build(set.without(i).certs);
+                    assert!(!smaller.contains(&cert(c.clone()).digest()));
+                }
                 if let Some(d) = c.as_delegation() {
                     let naming = k.revocations_naming(&d.digest());
                     let expected: BTreeSet<_> = set

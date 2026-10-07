@@ -18,4 +18,12 @@ pub enum DecodeError {
     /// A field's bytes were not a valid value of its type (e.g. not a curve point).
     #[error("invalid value for field `{0}`")]
     InvalidField(&'static str),
+
+    /// Map entries were out of ascending key order, or a key repeated.
+    #[error("map keys not in strictly ascending order")]
+    UnsortedKeys,
+
+    /// The bytes decoded, but the value re-encodes to different bytes.
+    #[error("bytes are not the canonical encoding of the decoded value")]
+    NonCanonical,
 }

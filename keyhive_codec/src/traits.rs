@@ -1,11 +1,7 @@
 //! The [`Encode`] and [`Decode`] traits.
 //!
-//! Every implementation MUST satisfy:
-//!
-//! 1. `decode(encode(x)) == x` — round trip.
-//! 2. `encode(decode(b)) == b` for every `b` that `decode` accepts — canonicality.
-//!
-//! See the crate docs for why the second law is a security requirement.
+//! The laws they satisfy, and why canonicality is a security requirement,
+//! are in the crate docs.
 
 use crate::{encoded::Encoded, error::DecodeError};
 use alloc::vec::Vec;
@@ -28,7 +24,8 @@ pub trait Encode {
 
 /// Deserialize a value from its canonical byte form, rejecting any other form.
 pub trait Decode: Sized {
-    /// Decode `bytes`, which MUST be exactly the canonical encoding of a value.
+    /// Decode `bytes`, failing unless they are exactly the canonical encoding
+    /// of a value.
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError>;
 }
 

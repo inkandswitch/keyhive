@@ -20,14 +20,16 @@ use keyhive_crypto::digest::Digest;
 /// A set of certificates and the authority they imply.
 ///
 /// Queries are `&self` and inserts are `&mut self`; the trait is synchronous.
-/// Concurrency is the wrapper's job: `keyhive_core` holds an implementation
-/// behind a `RwLock`, and readers call `&self` methods in parallel.
+/// Concurrency is the wrapper's job: hold an implementation behind a
+/// `RwLock`, and readers call `&self` methods in parallel.
 pub trait Keyline {
-    /// The retention watermark a revocation may carry ([`crate::revocation::Revocation::retain`]).
+    /// The per-subject bound a revocation may carry in
+    /// [`crate::revocation::Revocation::retain`]: which of the removed key's
+    /// content to keep, such as a set of content heads.
     ///
     /// Evaluation never reads it; the bound exists only so certificates
     /// round-trip canonically. A backend that does not care picks `()`.
-    type Content: Encode + Decode;
+    type RetentionWatermark: Encode + Decode;
 
     /// Add a certificate to the set. Returns `true` if it was not already
     /// present, as [`alloc::collections::BTreeSet::insert`] does. Idempotent;
@@ -39,14 +41,13 @@ pub trait Keyline {
     /// The return value is a dedupe signal for gossip, not a membership-change
     /// signal: a new certificate may change no query result (it may be dead on
     /// arrival), so callers driving key rotation must diff [`Keyline::members`].
-    fn insert(&mut self, cert: Verified<Certificate<Self::Content>>) -> bool;
+    fn insert(&mut self, cert: Verified<Certificate<Self::RetentionWatermark>>) -> bool;
 
     /// Whether a certificate with this digest is in the set.
     ///
-    /// Cheap. Ingest paths should call this before paying for signature
-    /// verification: `Digest::of(signed.encoded())` costs nanoseconds,
-    /// `verify` costs tens of microseconds.
-    fn contains(&self, cert: &Digest<Certificate<Self::Content>>) -> bool;
+    /// Call this before `Signed::verify`: `Signed::digest` is far cheaper than
+    /// a signature check.
+    fn contains(&self, cert: &Digest<Certificate<Self::RetentionWatermark>>) -> bool;
 
     /// Revocations in the set that name this delegation, covering or not.
     ///
@@ -75,17 +76,27 @@ pub trait Keyline {
     /// A digest of the whole set. Same set (in any order), same digest; usable
     /// as a cache key for every other query. Backends compute it with
     /// [`set_digest`].
-    fn digest(&self) -> Digest<BTreeSet<Certificate<Self::Content>>>;
+    fn digest(&self) -> Digest<CertificateSet<Self::RetentionWatermark>>;
 }
 
-/// Digest a certificate set from its members' certificate digests, in any order.
+/// What a [`Keyline::digest`] is the digest of: a set of
+/// `Certificate<W>`, by its members' digests.
 ///
-/// BLAKE3 over the sorted digests, so the result is independent of insertion
-/// order. Typed as `Digest<BTreeSet<Certificate>>` so it cannot be confused
-/// with the digest of a single certificate.
-pub fn set_digest<C, I: IntoIterator<Item = Digest<Certificate<C>>>>(
+/// Only ever a phantom parameter of [`Digest`]; it has no values. A distinct
+/// type keeps a set digest from being mistaken for a certificate's.
+pub struct CertificateSet<W> {
+    _never: core::convert::Infallible,
+    _watermark: core::marker::PhantomData<fn() -> W>,
+}
+
+/// Digest a certificate set from its members' certificate digests, in any
+/// order and with any repetition.
+///
+/// BLAKE3, under [`CertificateSet`]'s domain context, over the sorted and
+/// deduplicated digests, so the result depends only on the set.
+pub fn set_digest<W, I: IntoIterator<Item = Digest<Certificate<W>>>>(
     digests: I,
-) -> Digest<BTreeSet<Certificate<C>>> {
+) -> Digest<CertificateSet<W>> {
     let mut sorted: Vec<[u8; 32]> = digests
         .into_iter()
         .map(|d| {
@@ -95,11 +106,8 @@ pub fn set_digest<C, I: IntoIterator<Item = Digest<Certificate<C>>>>(
         })
         .collect();
     sorted.sort_unstable();
-    let mut hasher = blake3::Hasher::new();
-    for d in &sorted {
-        hasher.update(d);
-    }
-    Digest::from(hasher.finalize())
+    sorted.dedup();
+    Digest::of_bytes(sorted.as_flattened())
 }
 
 #[cfg(test)]
@@ -113,5 +121,12 @@ mod tests {
         let c: Digest<Certificate<()>> = Digest::from([3u8; 32]);
         assert_eq!(set_digest([a, b, c]), set_digest([c, a, b]));
         assert_ne!(set_digest([a, b]), set_digest([a, b, c]));
+    }
+
+    #[test]
+    fn set_digest_ignores_repetition() {
+        let a: Digest<Certificate<()>> = Digest::from([1u8; 32]);
+        let b: Digest<Certificate<()>> = Digest::from([2u8; 32]);
+        assert_eq!(set_digest([a, b, a, a]), set_digest([b, a]));
     }
 }

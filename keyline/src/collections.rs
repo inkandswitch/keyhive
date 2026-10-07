@@ -3,12 +3,12 @@
 
 #[cfg(feature = "std")]
 mod inner {
-    pub use std::collections::{hash_map::Entry, HashMap as Map, HashSet as Set};
+    pub use std::collections::{HashMap as Map, HashSet as Set};
 }
 
 #[cfg(not(feature = "std"))]
 mod inner {
-    pub use alloc::collections::{btree_map::Entry, BTreeMap as Map, BTreeSet as Set};
+    pub use alloc::collections::{BTreeMap as Map, BTreeSet as Set};
 }
 
-pub use inner::{Entry, Map, Set};
+pub use inner::{Map, Set};

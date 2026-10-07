@@ -1,17 +1,17 @@
 //! `Signed<T>` over `Encoded<T>`, and the `Verified<T>` witness.
 //!
 //! A [`Signed<T>`] carries a value's canonical bytes and a signature over
-//! exactly those bytes. The signer is not a separate field: the payload names
-//! its own issuer, and [`Signed::verify`] checks the signature against the key
-//! the payload names ([`Verifiable::verifying_key`]). A certificate that claims
-//! one issuer and is signed by another does not verify. Nothing re-encodes the
-//! payload to check it: the digest and the signature cover the same bytes by
-//! construction.
+//! those bytes, prefixed with `T`'s [`Domain`] context. The signer is not a
+//! separate field: the payload names its own issuer, and [`Signed::verify`]
+//! checks the signature against the key the payload names
+//! ([`Verifiable::verifying_key`]). A certificate that claims one issuer and is
+//! signed by another does not verify. The digest and the signature cover the
+//! same prefixed bytes by construction.
 //!
 //! [`Verified<T>`] is a witness that a `Signed<T>` has had its bytes decoded
 //! canonically and its signature checked against the decoded issuer. Its only
 //! public constructor is [`Signed::verify`], so an unchecked certificate cannot
-//! reach [`crate::keyline::Keyline::insert`].
+//! reach [`crate::contract::Keyline::insert`].
 //!
 //! `keyhive_crypto` has a serde-based `Signed<T>` that `keyhive_core` uses; this
 //! type is its `Encoded`-based counterpart.
@@ -26,12 +26,18 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
+use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verifiable};
 
 /// A value's canonical bytes and a signature over those bytes.
 ///
-/// Equality is by encoded bytes and signature. Two `Signed<T>` with the same
-/// payload and signer are equal: Ed25519 is deterministic.
+/// Equality is by encoded bytes _and_ signature. Ed25519 signing as specified
+/// in RFC 8032 is deterministic, so one key signing one payload twice yields
+/// equal values. A signer that picks its nonce another way produces a
+/// different signature that verifies just as well, and so a different
+/// `Signed<T>` with the same [`Signed::digest`]. Compare digests or payloads
+/// when "same statement" is what is meant. A
+/// [`Keyline`](crate::contract::Keyline) set is keyed by digest, so it holds
+/// such a pair as one certificate.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(bound = ""))]
 pub struct Signed<T> {
@@ -51,18 +57,20 @@ impl<T> Signed<T> {
         &self.encoded
     }
 
-    /// The signature over [`Signed::encoded`].
+    /// The signature over [`Signed::encoded`], under `T`'s [`Domain`] context.
     pub fn signature(&self) -> &Signature {
         &self.signature
     }
+}
 
+impl<T: Domain> Signed<T> {
     /// Content address of the payload: BLAKE3 over the same bytes the signature covers.
     pub fn digest(&self) -> Digest<T> {
         Digest::of(&self.encoded)
     }
 }
 
-impl<T: Encode + Verifiable> Signed<T> {
+impl<T: Domain + Encode + Verifiable> Signed<T> {
     /// Encode and sign a value with the key it names as issuer.
     ///
     /// Fails if `key` is not the payload's issuer: a certificate signed by
@@ -73,26 +81,39 @@ impl<T: Encode + Verifiable> Signed<T> {
             return Err(SignError::NotTheIssuer);
         }
         let encoded = value.encode();
-        let signature = key.sign(encoded.as_bytes());
+        let signature = key.sign(&T::message(encoded.as_bytes()));
         Ok(Signed { encoded, signature })
     }
 }
 
-impl<T: Decode + Verifiable> Signed<T> {
+impl<T: Decode + Domain + Encode + Verifiable> Signed<T> {
     /// Decode the payload and check the signature against the issuer it names.
     ///
-    /// Decoding comes first and rejects non-canonical bytes, so a `Verified<T>`
-    /// always re-encodes to exactly the bytes that were signed. The signature
-    /// is then checked with `verify_strict`, which rejects the malleable and
-    /// small-order signatures that plain `verify` accepts, against
-    /// `payload.verifying_key()` — never against a key the transport supplied.
+    /// The payload must decode and then re-encode to exactly the received
+    /// bytes, so a `Verified<T>` is always canonical. The re-encode check
+    /// covers what a decoder cannot vouch for itself, such as a consumer's
+    /// [`RetentionWatermark`](crate::contract::Keyline::RetentionWatermark)
+    /// codec. The signature is then checked with `verify_strict`, which
+    /// rejects the malleable and small-order signatures that plain `verify`
+    /// accepts, against `payload.verifying_key()`, never against a key the
+    /// transport supplied.
     pub fn verify(self) -> Result<Verified<T>, VerifyError> {
-        let payload = self.encoded.decode().inspect_err(|&e| {
-            tracing::debug!(digest = %self.digest(), error = %e, "certificate failed to decode");
-        })?;
+        let payload = self
+            .encoded
+            .decode()
+            .and_then(|p: T| {
+                if p.encode().as_bytes() == self.encoded.as_bytes() {
+                    Ok(p)
+                } else {
+                    Err(DecodeError::NonCanonical)
+                }
+            })
+            .inspect_err(|&e| {
+                tracing::debug!(digest = %self.digest(), error = %e, "certificate failed to decode");
+            })?;
         payload
             .verifying_key()
-            .verify_strict(self.encoded.as_bytes(), &self.signature)
+            .verify_strict(&T::message(self.encoded.as_bytes()), &self.signature)
             .map_err(|_| {
                 tracing::debug!(digest = %self.digest(), "certificate signature does not verify");
                 VerifyError::BadSignature
@@ -130,7 +151,7 @@ impl<T> core::hash::Hash for Signed<T> {
     }
 }
 
-impl<T> fmt::Debug for Signed<T> {
+impl<T: Domain> fmt::Debug for Signed<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Signed")
             .field("digest", &self.digest())
@@ -152,11 +173,6 @@ impl<T> Verified<T> {
         &self.payload
     }
 
-    /// Content address of the payload.
-    pub fn digest(&self) -> Digest<T> {
-        self.signed.digest()
-    }
-
     /// The certificate as received, for forwarding without re-encoding.
     pub fn signed(&self) -> &Signed<T> {
         &self.signed
@@ -170,7 +186,7 @@ impl<T> Verified<T> {
     /// Construct without checking anything. Test fixtures only: lets the
     /// conformance suite build certificates without paying for signing.
     #[cfg(any(test, feature = "test_utils"))]
-    pub fn assume(signed: Signed<T>) -> Self
+    pub(crate) fn assume(signed: Signed<T>) -> Self
     where
         T: Decode,
     {
@@ -182,10 +198,18 @@ impl<T> Verified<T> {
     }
 }
 
+impl<T: Domain> Verified<T> {
+    /// Content address of the payload.
+    pub fn digest(&self) -> Digest<T> {
+        self.signed.digest()
+    }
+}
+
 impl<T: Verifiable> Verified<T> {
     /// The key that signed this certificate, as named by the payload.
     pub fn issuer(&self) -> Id {
-        Id::new(self.payload.verifying_key())
+        Id::try_from(self.payload.verifying_key())
+            .expect("payload keys are decoded from validated Ids")
     }
 }
 
@@ -204,7 +228,7 @@ impl<T: Clone> Clone for Verified<T> {
     }
 }
 
-impl<T: fmt::Debug> fmt::Debug for Verified<T> {
+impl<T: Domain + fmt::Debug> fmt::Debug for Verified<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Verified")
             .field("payload", &self.payload)
@@ -275,10 +299,78 @@ mod tests {
     fn signature_and_digest_cover_the_same_bytes() {
         let signed = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
         assert_eq!(signed.digest(), Digest::of(&sample().encode()));
+        assert!(sample()
+            .verifying_key()
+            .verify_strict(
+                &Delegation::message(signed.encoded().as_bytes()),
+                signed.signature()
+            )
+            .is_ok());
     }
 
-    /// Identity is the received bytes plus the signature, so the same payload
-    /// under a different signature is a different certificate. `Verified`
+    /// A signature over the bare encoding, as another protocol sharing the
+    /// key might produce, is not a signature over the certificate.
+    #[test]
+    fn signature_without_the_domain_context_fails() {
+        let encoded = sample().encode();
+        let bare = signing_key(1).sign(encoded.as_bytes());
+        let signed = Signed::<Delegation>::from_parts(encoded, bare);
+        assert_eq!(signed.verify().unwrap_err(), VerifyError::BadSignature);
+    }
+
+    /// A signature that plain `verify` accepts and `verify_strict` rejects.
+    ///
+    /// The issuer key is `[a]B + T` for a point `T` of order 8. It has mixed
+    /// order, so [`Id`] accepts it. With a small-order `R` and `S = k·a`, the
+    /// verification equation leaves `-[k]T`, which equals `R` for about one
+    /// candidate in eight. Plain `verify` accepts that; `verify_strict`
+    /// rejects the small-order `R`.
+    #[test]
+    fn small_order_r_is_rejected() {
+        use curve25519_dalek::{
+            constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION},
+            scalar::Scalar,
+        };
+        use ed25519_dalek::Verifier;
+        use sha2::{Digest as _, Sha512};
+
+        let a = Scalar::from(0x5eed_u64);
+        let torsion = EIGHT_TORSION[1];
+        let point = a * ED25519_BASEPOINT_POINT + torsion;
+        let issuer = Id::from_bytes(point.compress().to_bytes()).expect("mixed order is accepted");
+
+        let (encoded, message, signature) = (2..=u8::MAX)
+            .flat_map(|n| EIGHT_TORSION.iter().map(move |r| (n, r)))
+            .find_map(|(n, r)| {
+                let encoded = Delegation::new(issuer, id(n), id(1), Power::Edit).encode();
+                let message = Delegation::message(encoded.as_bytes());
+                let r_bytes = r.compress().to_bytes();
+                let k = Scalar::from_bytes_mod_order_wide(
+                    &Sha512::new()
+                        .chain_update(r_bytes)
+                        .chain_update(issuer.as_bytes())
+                        .chain_update(&message)
+                        .finalize()
+                        .into(),
+                );
+                (k * torsion == -r).then(|| {
+                    let signature = Signature::from_components(r_bytes, (k * a).to_bytes());
+                    (encoded, message, signature)
+                })
+            })
+            .expect("about one candidate in eight works");
+
+        assert!(issuer.verifying_key().verify(&message, &signature).is_ok());
+        assert_eq!(
+            Signed::<Delegation>::from_parts(encoded, signature)
+                .verify()
+                .unwrap_err(),
+            VerifyError::BadSignature
+        );
+    }
+
+    /// `Signed` equality is the received bytes plus the signature, so the same
+    /// payload under a different signature is a different value. `Verified`
     /// compares as the `Signed` it was built from.
     #[test]
     fn identity_is_bytes_and_signature() {
@@ -346,16 +438,19 @@ mod tests {
     fn signer_must_be_the_payload_issuer() {
         let forger = signing_key(2);
         let encoded = sample().encode(); // issuer = id(1)
-        let signature = forger.sign(encoded.as_bytes());
+        let signature = forger.sign(&Delegation::message(encoded.as_bytes()));
         let forged = Signed::<Delegation>::from_parts(encoded, signature);
         assert_eq!(forged.verify().unwrap_err(), VerifyError::BadSignature);
     }
 
     #[test]
     fn tampered_bytes_fail() {
+        // Edit → Read: still a canonical delegation, so only the signature
+        // check can reject it.
         let signed = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
         let mut bytes = signed.encoded().clone().into_bytes();
-        bytes[40] ^= 1;
+        bytes[Id::LEN * 3] = Power::Read as u8;
+        assert!(Delegation::decode(&bytes).is_ok());
         let tampered = Signed::<Delegation>::from_parts(
             Encoded::from_bytes_unchecked(bytes),
             *signed.signature(),
@@ -369,7 +464,7 @@ mod tests {
         let key = signing_key(1);
         let mut bytes = sample().encode().into_bytes();
         bytes.push(0);
-        let signature = key.sign(&bytes);
+        let signature = key.sign(&Delegation::message(&bytes));
         let signed =
             Signed::<Delegation>::from_parts(Encoded::from_bytes_unchecked(bytes), signature);
         assert_eq!(
@@ -396,7 +491,7 @@ mod tests {
             .for_each(|(cert, seed)| {
                 // Re-issue the certificate under the generated key so it is signable.
                 let key = SigningKey::from(*seed);
-                let issuer = Id::new(key.verifying_key());
+                let issuer = Id::from(&key);
                 let cert = match cert {
                     Certificate::Delegation(d) => {
                         Certificate::Delegation(Delegation { issuer, ..*d })

@@ -1,5 +1,6 @@
 //! Helpers for working with hashes.
 
+use crate::domain_separator::Domain;
 use alloc::vec::Vec;
 use core::{
     fmt,
@@ -30,17 +31,27 @@ pub struct Digest<T> {
     pub _phantom: PhantomData<T>,
 }
 
-impl<T> Digest<T> {
-    /// Digest the canonical bytes of an encoded value.
-    ///
-    /// This is the constructor for content addressing: the signature over an
-    /// [`Encoded<T>`] and its digest cover the same bytes by construction.
+impl<T: Domain> Digest<T> {
+    /// The content address of an encoded value: BLAKE3 over
+    /// [`Domain::message`], the same bytes a signature over it covers.
     pub fn of(encoded: &Encoded<T>) -> Self {
-        Self {
-            raw: blake3::hash(encoded.as_bytes()),
-            _phantom: PhantomData,
-        }
+        Self::of_bytes(encoded.as_bytes())
     }
+
+    /// [`Digest::of`] for bytes not wrapped in an [`Encoded<T>`], such as a
+    /// composite that has no `T` value of its own.
+    pub fn of_bytes(bytes: &[u8]) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(T::CONTEXT.as_bytes());
+        hasher.update(&[0]);
+        hasher.update(bytes);
+        Self::from(hasher.finalize())
+    }
+}
+
+impl<T> Digest<T> {
+    /// Length of a digest, in bytes.
+    pub const LEN: usize = blake3::OUT_LEN;
 
     /// Get the hash as a byte slice.
     ///
@@ -266,5 +277,38 @@ impl<T> From<Digest<T>> for [u8; 32] {
 impl<T> From<Digest<T>> for Vec<u8> {
     fn from(hash: Digest<T>) -> Vec<u8> {
         hash.raw.as_bytes().to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Example;
+
+    impl Domain for Example {
+        const CONTEXT: &'static str = "test/v0/example";
+    }
+
+    struct Other;
+
+    impl Domain for Other {
+        const CONTEXT: &'static str = "test/v0/other";
+    }
+
+    #[test]
+    fn digest_covers_the_signed_message() {
+        assert_eq!(
+            Digest::<Example>::of_bytes(b"payload").raw,
+            blake3::hash(&Example::message(b"payload"))
+        );
+    }
+
+    #[test]
+    fn contexts_separate_equal_bytes() {
+        assert_ne!(
+            Digest::<Example>::of_bytes(b"payload").raw,
+            Digest::<Other>::of_bytes(b"payload").raw
+        );
     }
 }

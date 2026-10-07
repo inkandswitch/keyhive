@@ -4,9 +4,9 @@ Design choices that were considered and rejected, with the reason and the condit
 
 ## Certificate Shape
 
-### A `subject` (jurisdiction) field on `Revocation`
+### A `subject` field on `Revocation`
 
-_Proposal._ `{issuer, subject, revoke}`: the revocation applies only on routes through `subject`, not through every node in the issuer's admin reach. Earlier drafts called the field `from`, then `via`.
+_Proposal._ `{issuer, subject, revoke}`: the revocation applies only on routes through `subject`, not through every node in the issuer's admin reach.
 
 _Would buy._ Narrow revocation with one key (ban in room A, keep in room B). Legibility: the certificate names where the act was exercised. Symmetry with `Delegation`. A one-node exclusion set per revocation.
 
@@ -20,7 +20,9 @@ _Proposal._ Replace `citation: Option<Digest<Revocation>>` with random bytes so 
 
 _Would buy._ No silent-collision UX; no dependency on having synced the revocation.
 
-_Rejected because._ It flips the fail direction. Two accidental issuances of one delegation become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering delegation. With `citation`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take. The collision is detectable: `insert` returns `false` and `revocations_naming` reports what named the duplicate. Long form: [edge-cases, `nonce` vs `citation`](edge-cases.md#nonce-vs-citation--citation-won-on-fail-direction) and [implementation, why `citation`](implementation.md#why-citation-and-not-a-nonce).
+_Rejected because._ It flips the fail direction. Two accidental issuances of one delegation become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering delegation (fails open). With `citation`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take (fails closed). The collision is detectable: `insert` returns `false` and `revocations_naming` reports what named the duplicate. A heal that does mean to re-issue past a revocation names it in `citation`, which makes the heal an accountable act. "Ambiguity resolves toward less authority" decides it.
+
+`citation` is safe as an optional field because its absence has exactly one encoding and no present value aliases it. It carries no semantics (no supersession, no ordering), so a bogus value is harmless; issuer-supplied predecessors must never carry trust, or backdating by omission returns. It names the revocation rather than the revoked delegation because the delegation's hash is a function of the fields being re-issued: it would carry no information, and a second heal would collide.
 
 _Reopen if._ Never on its own merits; only if a use case needs many live copies of one delegation, which would be a different feature.
 
@@ -30,15 +32,15 @@ _Proposal._ Each delegation names the certificate(s) justifying it, as UCAN and 
 
 _Would buy._ Certificate-local verification: check a chain without holding the set.
 
-_Rejected because._ It makes a certificate's meaning depend on its issuer's sync state — two replicas producing "the same" delegation with different proofs — and turns healing into re-issuance: a severed subgraph cannot re-energize as the same certificates, because the proofs are dead. Chain discovery by the verifier (SDSI) gives late binding, redundant routes, order independence, and healing with provenance. Witness hints on the transport recover the verification shortcut without putting the route in the certificate.
+_Rejected because._ It makes a certificate's meaning depend on its issuer's sync state (two replicas producing "the same" delegation with different proofs), and it turns revival into re-issuance: a severed subgraph cannot revive as the same certificates, because the proofs are dead. Chain discovery by the verifier (SDSI) gives late binding, redundant routes, order independence, and revival with provenance. Witness hints on the transport recover the verification shortcut without putting the route in the certificate.
 
 _Reopen if._ Verification without the set becomes a hard requirement (e.g. a constrained verifier that cannot hold a subject's certificate set). Even then, prefer transport-level witnesses.
 
-### A `from` (jurisdiction) field on `Delegation`
+### A `from` field on `Delegation`
 
 _Proposal._ Name the capacity a delegation is exercised in.
 
-_Rejected because._ Every job it did is an arrangement of nodes: scoping is `subject`, acting in a capacity is a dedicated key per capacity, pinning is a subject-scoped intermediary, jurisdiction-narrow revocation is signing with the narrow key. An optional field whose absence aliased "the issuer" produced two encodings for one act, two hashes, and a revocation that killed one twin and missed the other. Long form: [edge-cases, `from` on delegations](edge-cases.md#from-on-delegations--eliminated).
+_Rejected because._ Every job it did is an arrangement of nodes: scoping is `subject`, acting in a capacity is a dedicated key per capacity, pinning is a subject-scoped intermediary, and revocation narrowed to one role is signing with that role's capacity key. An optional field whose absence aliased "the issuer" produced two encodings for one act, two hashes, and a revocation that killed one twin and missed the other. Long form: [edge-cases, `from` on delegations](edge-cases.md#from-on-delegations--eliminated).
 
 _Reopen if._ A capacity cannot be expressed as a node. None found so far.
 
@@ -46,7 +48,7 @@ _Reopen if._ A capacity cannot be expressed as a node. None found so far.
 
 _Proposal._ Let `revoke` name a `Digest<Revocation>` so a mistaken revocation can be undone.
 
-_Rejected because._ It starts the regress (who may revoke the un-revocation?), requires an authority rule for whoever signs an un-revocation, and needs an ordering to settle revoke/un-revoke/re-revoke races — causal metadata or merge-order dependence. Repair is by re-issuing with `citation`: access returns because live authority signed something new, never because a revocation was un-applied. Declining the feature costs one workflow and deletes the tower. Long form: [README, Revocations Cannot Be Revoked](README.md#revocations-cannot-be-revoked).
+_Rejected because._ It starts the regress (who may revoke the un-revocation?), requires an authority rule for whoever signs an un-revocation, and needs an ordering to settle revoke/un-revoke/re-revoke races (causal metadata or merge-order dependence). Repair is by re-issuing with `citation`: access returns because live authority signed something new, never because a revocation was un-applied. The cost is one workflow: re-issue instead of un-revoke. Long form: [README, Revocations Cannot Be Revoked](README.md#revocations-cannot-be-revoked).
 
 _Reopen if._ Never; the invariant "no merge may un-apply a revocation" depends on it.
 
@@ -66,7 +68,7 @@ _Reopen if._ Downstream references to a specific delegation hash (rather than to
 
 _Proposal._ Let a delegation stay live after its issuer loses standing, by recording that the issuer was authorized at issuance.
 
-_Rejected because._ Without a clock the only timeless fact is whether the issuer was _ever_ authorized, and that lets a removed issuer mint new durable delegations afterwards; "before the removal" and "after the removal" are the same bits. The ex-admin sharp edge is tolerable because it is deny-only; this would be the same edge with grant power. Distinguishing the two needs the causal metadata the design avoids. Long form: [README, Persistence Past Removal](README.md#persistence-past-removal).
+_Rejected because._ Without a clock the only timeless fact is whether the issuer was _ever_ authorized, and that lets a removed issuer mint new durable delegations afterwards; "before the removal" and "after the removal" are the same bits. The ex-admin sharp edge is tolerable because it is deny-only; this would be the same edge with the power to grant. Distinguishing the two needs the causal metadata the design avoids. Long form: [README, Persistence Past Removal](README.md#persistence-past-removal).
 
 _Reopen if._ Causal metadata enters the system for other reasons (see whiteout). Then revisit alongside [per-issuer causal streams](#per-issuer-from-causal-streams-option-2).
 
@@ -110,7 +112,7 @@ _Reopen if._ Whiteout forces causal metadata into the system anyway. Then this i
 
 _Proposal._ Delete revoked edges from the graph, then compute reachability. One pass.
 
-_Rejected because._ Revocations would then affect each other's authority, and the result would depend on merge order: applying `r1` (Dan revokes Bob's delegation) before checking `r2` (Bob revokes a delegation) rejects `r2`; the reverse order lands it. Stratification computes admin reach where no revocation can see any other. Long form: [README, Why the Strata Are Mandatory](README.md#why-the-strata-are-mandatory).
+_Rejected because._ Revocations would then affect each other's authority, and the result would depend on merge order: with `r1` (Dan revokes Bob's membership) and `r2` (Bob revokes a delegation), `r2` is inert if `r1` is applied first, and effective otherwise. Stratification computes admin reach where no revocation can see any other. Long form: [README, Why the Strata Are Mandatory](README.md#why-the-strata-are-mandatory).
 
 _Reopen if._ Never; this is a correctness requirement, not a trade.
 
@@ -148,7 +150,7 @@ _Proposal._ `admin_reach(k, n)` only when the last hop of `k`'s Admin standing o
 
 _Would buy._ An Admin-rooted document's root edge is irrevocable by construction: apex admins hold `Owners`, never `Doc`. Reach is answerable from a node's own certificates.
 
-_Rejected because._ Nested roles stop working as governance expects: an Admin of `Owners`, where `Owners` is Admin over `Members`, could not revoke delegations inside `Members` without a separate `subject: Members` delegation. And the protection it buys is one self-signed certificate from false: an apex admin signs `{issuer: me, audience: me, subject: Doc, power: Admin}` (their standing over `Doc` is Admin, so the delegation is direct) and `Doc` is in their reach permanently. Composed reach makes the rule uniform, and the same protection is available as a pattern with no rule: root the document at Edit ([patterns, Rooting Level](patterns.md#rooting-level)). Bricking an Admin-rooted document is not a new power — a root admin can already remove every peer and lose their key.
+_Rejected because._ Nested roles stop working as governance expects: an Admin of `Owners`, where `Owners` is Admin over `Members`, could not revoke delegations inside `Members` without a separate `subject: Members` delegation. And the protection it buys is one self-signed certificate from false: an apex admin signs `{issuer: me, audience: me, subject: Doc, power: Admin}` (their standing over `Doc` is Admin, so the delegation is direct) and `Doc` is in their reach permanently. Composed reach makes the rule uniform, and the same protection is available as a pattern with no rule: root the document at Edit ([patterns, Rooting Level](patterns.md#rooting-level)). Bricking an Admin-rooted document is not a new power ([README, Griefing](README.md#griefing)).
 
 _Reopen if._ Never on the protection argument; possibly if a use case needs reach to be locally computable per node.
 
@@ -158,7 +160,7 @@ _Proposal._ Keep composed reach but exempt root edges (`issuer = subject`) from 
 
 _Would buy._ Irrevocable root edges for every rooting level; re-rooting with a retained key always escapes old admins.
 
-_Rejected because._ It is a special case in a design that has none, and it buys nothing that Edit-rooting does not: a ceremony that wants an irrevocable apex roots at Edit. The power it would remove from Admin-rooted apex admins — ending the document in one certificate — is equivalent to what they already hold (remove everyone, lose the key); protecting against it protects nothing.
+_Rejected because._ It is a special case in a design that has none, and it buys nothing that Edit-rooting does not: a document that wants an irrevocable root edge is rooted at Edit at creation. The power it would remove from the apex admins of an Admin-rooted document, ending the document with one certificate, is not a new power ([README, Griefing](README.md#griefing)).
 
 _Reopen if._ Never.
 
@@ -168,7 +170,7 @@ _Reopen if._ Never.
 
 _Proposal._ `async fn` on the trait via `future_form`, so reads can await.
 
-_Rejected because._ The evaluator does no I/O; async buys an `F` parameter and `Send`-bound ceremony for nothing. Concurrency comes from the wrapper: `keyhive_core` holds the implementation behind a `RwLock`, and N readers hold the read guard and call `&self` methods in parallel.
+_Rejected because._ The evaluator does no I/O; async buys an `F` parameter and `Send`-bound boilerplate for nothing. Concurrency comes from the wrapper: `keyhive_core` holds the implementation behind a `RwLock`, and N readers hold the read guard and call `&self` methods in parallel.
 
 _Reopen if._ A backend needs to page the certificate set in from storage during evaluation (e.g. IndexedDB). Even then, consider making the backend load eagerly and keep the trait synchronous.
 

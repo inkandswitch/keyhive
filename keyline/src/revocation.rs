@@ -17,42 +17,29 @@ use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 /// revocation-free graph and only grows, so a revocation's reach is permanent.
 ///
 /// There is no `subject`: effect is scoped by the admin reach, not by the issuer's
-/// choice. A jurisdiction field was rejected because every rotation would then
-/// moot every standing denial, forcing the deny list to be re-signed; see
-/// `design/keyline/alternatives.md`.
+/// choice. A `subject` field was rejected because every rotation would then
+/// moot every standing revocation; see `design/keyline/alternatives.md`.
 ///
 /// The type of `revoke` makes revoking a revocation unwritable. Repair is by
-/// re-granting with [`Delegation::reissue`], never by un-revoking.
+/// issuing a new delegation with [`Delegation::reissue`], never by un-revoking.
 ///
 /// # `retain`
 ///
-/// Removing a key raises a second question the authority graph cannot answer:
-/// what becomes of the content that key already wrote. `retain` carries the
-/// issuer's answer — a retention watermark, opaque to this crate. Evaluation
-/// never reads it, exactly as it never reads [`Delegation::citation`]; the layer
-/// that materialises content does.
-///
-/// The keys are subjects — documents, in `keyhive_core`'s reading, though this
-/// crate does not distinguish them from any other node. `C` is the per-subject
-/// watermark, bounded only by [`Encode`] + [`Decode`] so it is canonically
-/// encoded like every other field. Carrying the whole map as opaque bytes
-/// instead would put a hole in the canonicality law precisely at the
-/// certificate digest: two encodings of one watermark would be two
-/// certificates for one act.
-///
-/// The map is not exhaustive and cannot be. A role's portfolio grows by late
-/// binding, so a subject supplied after this revocation was signed can never
-/// appear here, and partial visibility means the issuer may not have seen
-/// every subject that already exists. What to do for an unnamed subject is
-/// therefore the content layer's policy, and naming none — an empty map — is
-/// only the extreme of that same incompleteness, not a distinct instruction.
+/// What becomes of the content a removed key already wrote is a question the
+/// authority graph cannot answer. `retain` carries the issuer's answer: per
+/// subject, a retention watermark bounding which of that content to keep.
+/// Evaluation never reads it, as it never reads [`Delegation::citation`]; the
+/// layer that materializes content does. `W` is bounded by [`Encode`] +
+/// [`Decode`] so that watermarks are canonically encoded like every other
+/// field. The map is incomplete by construction; see the `retain` section of
+/// `design/keyline/implementation.md`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
     feature = "serde",
-    serde(bound = "C: serde::Serialize + serde::de::DeserializeOwned")
+    serde(bound = "W: serde::Serialize + serde::de::DeserializeOwned")
 )]
-pub struct Revocation<C> {
+pub struct Revocation<W> {
     /// Signer. Determines the admin reach that scopes the effect.
     pub issuer: Id,
 
@@ -60,10 +47,10 @@ pub struct Revocation<C> {
     pub revoke: Digest<Delegation>,
 
     /// Per-subject retention watermarks. Ignored by evaluation.
-    pub retain: BTreeMap<Id, C>,
+    pub retain: BTreeMap<Id, W>,
 }
 
-impl<C> Revocation<C> {
+impl<W> Revocation<W> {
     /// `issuer` withdraws the delegation with this payload digest, naming no
     /// retention watermarks.
     pub fn new(issuer: Id, revoke: Digest<Delegation>) -> Self {
@@ -75,17 +62,17 @@ impl<C> Revocation<C> {
     }
 
     /// The same revocation, carrying retention watermarks.
-    pub fn retaining(self, retain: BTreeMap<Id, C>) -> Self {
+    pub fn retaining(self, retain: BTreeMap<Id, W>) -> Self {
         Revocation { retain, ..self }
     }
 }
 
-impl<C: Encode> Revocation<C> {
+impl<W: Encode> Revocation<W> {
     /// Content address of the payload: what a re-issued
     /// [`Delegation::citation`] names. Digest of the revocation's own encoding,
     /// without the [`crate::certificate::Certificate`] kind tag.
     ///
-    /// Typed as [`RevocationId`] rather than `Digest<Revocation<C>>` so that a
+    /// Typed as [`RevocationId`] rather than `Digest<Revocation<W>>` so that a
     /// [`Delegation`] can name a revocation without being parameterised by a
     /// content type it never uses.
     pub fn digest(&self) -> Digest<RevocationId> {
@@ -93,13 +80,13 @@ impl<C: Encode> Revocation<C> {
     }
 }
 
-/// The identity of a revocation, independent of the content type it carries.
+/// The identity of a revocation, independent of the watermark type it carries.
 ///
 /// Only ever a phantom parameter of [`Digest`]; it has no values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RevocationId {}
 
-impl<C> Verifiable for Revocation<C> {
+impl<W> Verifiable for Revocation<W> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.issuer.verifying_key()
     }
@@ -109,13 +96,10 @@ impl<C> Verifiable for Revocation<C> {
 //   entry: id ‖ len:u32 ‖ value
 //
 // `retain` is the crate's only variable-length field, so it is the only place
-// canonicality is not free. Three rules make it so, and `decode` enforces all
-// three: entries ascend by `Id` with no repeats (one ordering per map), lengths
-// are fixed-width big-endian (one encoding per number), and the input must be
-// consumed exactly (no slack to hide bytes in). `C::decode` supplies the fourth
-// by rejecting a non-canonical value, which is why this field is typed rather
-// than opaque.
-const BASE_LEN: usize = Id::LEN + 32 + 4;
+// canonicality is not free. `decode` rejects unsorted or repeated subjects and
+// unconsumed bytes; lengths are fixed-width big-endian; `W::decode` rejects a
+// non-canonical value.
+const BASE_LEN: usize = Id::LEN + Digest::<Delegation>::LEN + 4;
 
 /// The smallest an entry can be: a subject and a length, with an empty value.
 const MIN_ENTRY_LEN: usize = Id::LEN + 4;
@@ -130,6 +114,12 @@ fn slice_at(bytes: &[u8], at: usize, len: usize) -> Result<&[u8], DecodeError> {
         .ok_or(DecodeError::UnexpectedEnd)
 }
 
+/// A length as the wire's `u32`. Panics past `u32::MAX`, which no
+/// certificate approaches.
+fn len_u32(len: usize) -> u32 {
+    u32::try_from(len).expect("retain lengths fit in a u32")
+}
+
 fn u32_at(bytes: &[u8], at: usize) -> Result<usize, DecodeError> {
     let raw: [u8; 4] = slice_at(bytes, at, 4)?
         .try_into()
@@ -137,28 +127,28 @@ fn u32_at(bytes: &[u8], at: usize) -> Result<usize, DecodeError> {
     Ok(u32::from_be_bytes(raw) as usize)
 }
 
-impl<C: Encode> Encode for Revocation<C> {
+impl<W: Encode> Encode for Revocation<W> {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.issuer.encode_into(out);
         out.extend_from_slice(self.revoke.as_slice());
-        out.extend_from_slice(&(self.retain.len() as u32).to_be_bytes());
+        out.extend_from_slice(&len_u32(self.retain.len()).to_be_bytes());
         // `BTreeMap` iterates in ascending key order, which is the canonical one.
         for (subject, value) in &self.retain {
             subject.encode_into(out);
             let encoded = value.encode();
-            out.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+            out.extend_from_slice(&len_u32(encoded.len()).to_be_bytes());
             out.extend_from_slice(encoded.as_bytes());
         }
     }
 }
 
-impl<C: Decode> Decode for Revocation<C> {
+impl<W: Decode> Decode for Revocation<W> {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.len() < BASE_LEN {
             return Err(DecodeError::UnexpectedEnd);
         }
         let issuer = Id::decode(&bytes[..Id::LEN])?;
-        let raw: [u8; 32] = bytes[Id::LEN..Id::LEN + 32]
+        let raw: [u8; Digest::<Delegation>::LEN] = bytes[Id::LEN..BASE_LEN - 4]
             .try_into()
             .map_err(|_| DecodeError::UnexpectedEnd)?;
         let count = u32_at(bytes, Id::LEN + 32)?;
@@ -174,16 +164,14 @@ impl<C: Decode> Decode for Revocation<C> {
         for _ in 0..count {
             let subject = Id::decode(slice_at(bytes, at, Id::LEN)?)?;
             if previous.is_some_and(|p| p >= subject) {
-                return Err(DecodeError::InvalidField(
-                    "retain: unsorted or repeated subject",
-                ));
+                return Err(DecodeError::UnsortedKeys);
             }
             previous = Some(subject);
             at += Id::LEN;
 
             let len = u32_at(bytes, at)?;
             at += 4;
-            retain.insert(subject, C::decode(slice_at(bytes, at, len)?)?);
+            retain.insert(subject, W::decode(slice_at(bytes, at, len)?)?);
             at += len;
         }
         if at != bytes.len() {
@@ -199,9 +187,9 @@ impl<C: Decode> Decode for Revocation<C> {
 }
 
 #[cfg(feature = "arbitrary")]
-impl<'a, C: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Revocation<C> {
+impl<'a, W: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Revocation<W> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let raw: [u8; 32] = u.arbitrary()?;
+        let raw: [u8; Digest::<Delegation>::LEN] = u.arbitrary()?;
         Ok(Revocation {
             issuer: u.arbitrary()?,
             revoke: Digest::from(raw),
@@ -220,9 +208,9 @@ mod tests {
 
     /// A watermark type with a variable-length encoding, so the `retain` codec is
     /// exercised on values of differing size rather than a fixed stand-in.
-    type Retained = Vec<u8>;
+    type Watermark = Vec<u8>;
 
-    fn sample() -> Revocation<Retained> {
+    fn sample() -> Revocation<Watermark> {
         Revocation::new(id(1), Digest::from([3u8; 32]))
     }
 
@@ -253,7 +241,7 @@ mod tests {
         ]));
         let encoded = r.encode();
         assert_eq!(
-            Revocation::<Retained>::decode(encoded.as_bytes()),
+            Revocation::<Watermark>::decode(encoded.as_bytes()),
             Ok(r.clone())
         );
         // 2 entries: (id + len + 3) + (id + len + 0)
@@ -269,13 +257,13 @@ mod tests {
     fn rejects_wrong_lengths() {
         let bytes = sample().encode().into_bytes();
         assert_eq!(
-            Revocation::<Retained>::decode(&bytes[..bytes.len() - 1]),
+            Revocation::<Watermark>::decode(&bytes[..bytes.len() - 1]),
             Err(DecodeError::UnexpectedEnd)
         );
         let mut longer = bytes.clone();
         longer.push(0);
         assert_eq!(
-            Revocation::<Retained>::decode(&longer),
+            Revocation::<Watermark>::decode(&longer),
             Err(DecodeError::TrailingBytes)
         );
     }
@@ -295,10 +283,8 @@ mod tests {
         swapped.extend_from_slice(&good[BASE_LEN + entry..BASE_LEN + 2 * entry]);
         swapped.extend_from_slice(&good[BASE_LEN..BASE_LEN + entry]);
         assert_eq!(
-            Revocation::<Retained>::decode(&swapped),
-            Err(DecodeError::InvalidField(
-                "retain: unsorted or repeated subject"
-            ))
+            Revocation::<Watermark>::decode(&swapped),
+            Err(DecodeError::UnsortedKeys)
         );
 
         // The same subject twice.
@@ -306,17 +292,15 @@ mod tests {
         repeated.extend_from_slice(&good[BASE_LEN..BASE_LEN + entry]);
         repeated.extend_from_slice(&good[BASE_LEN..BASE_LEN + entry]);
         assert_eq!(
-            Revocation::<Retained>::decode(&repeated),
-            Err(DecodeError::InvalidField(
-                "retain: unsorted or repeated subject"
-            ))
+            Revocation::<Watermark>::decode(&repeated),
+            Err(DecodeError::UnsortedKeys)
         );
 
         // A count that disagrees with the entries present.
         let mut miscounted = good.clone();
         miscounted[BASE_LEN - 1] = 1;
         assert_eq!(
-            Revocation::<Retained>::decode(&miscounted),
+            Revocation::<Watermark>::decode(&miscounted),
             Err(DecodeError::TrailingBytes)
         );
     }
@@ -329,7 +313,7 @@ mod tests {
         let len_at = BASE_LEN + Id::LEN;
         bytes[len_at..len_at + 4].copy_from_slice(&u32::MAX.to_be_bytes());
         assert_eq!(
-            Revocation::<Retained>::decode(&bytes),
+            Revocation::<Watermark>::decode(&bytes),
             Err(DecodeError::UnexpectedEnd)
         );
         assert_eq!(
@@ -346,13 +330,13 @@ mod tests {
         let r = sample().retaining(BTreeMap::from([(id(2), Vec::new()), (id(3), Vec::new())]));
         let bytes = r.encode().into_bytes();
         assert_eq!(bytes.len(), BASE_LEN + 2 * MIN_ENTRY_LEN);
-        assert_eq!(Revocation::<Retained>::decode(&bytes), Ok(r));
+        assert_eq!(Revocation::<Watermark>::decode(&bytes), Ok(r));
 
         for count in [3, u32::MAX] {
             let mut claimed = bytes.clone();
             claimed[BASE_LEN - 4..BASE_LEN].copy_from_slice(&count.to_be_bytes());
             assert_eq!(
-                Revocation::<Retained>::decode(&claimed),
+                Revocation::<Watermark>::decode(&claimed),
                 Err(DecodeError::UnexpectedEnd),
                 "count {count}"
             );
@@ -363,7 +347,7 @@ mod tests {
     #[cfg(feature = "arbitrary")]
     fn codec_laws() {
         bolero::check!()
-            .with_arbitrary::<Revocation<Retained>>()
+            .with_arbitrary::<Revocation<Watermark>>()
             .for_each(|r| {
                 let encoded = r.encode();
                 let decoded = Revocation::decode(encoded.as_bytes()).expect("round trip");
@@ -375,6 +359,6 @@ mod tests {
     #[test]
     #[cfg(feature = "arbitrary")]
     fn decode_is_canonical() {
-        crate::test_utils::decode_is_canonical_near::<Revocation<Retained>>();
+        crate::test_utils::decode_is_canonical_near::<Revocation<Watermark>>();
     }
 }

@@ -10,8 +10,9 @@ use crate::{
     id::Id,
     signed::{Signed, Verified},
 };
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey};
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_crypto::domain_separator::Domain;
 
 /// A deterministic signing key derived from a small integer.
 pub fn signing_key(n: u8) -> SigningKey {
@@ -20,7 +21,7 @@ pub fn signing_key(n: u8) -> SigningKey {
 
 /// The [`Id`] of [`signing_key`]`(n)`.
 pub fn id(n: u8) -> Id {
-    Id::new(VerifyingKey::from(&signing_key(n)))
+    Id::from(&signing_key(n))
 }
 
 /// Wrap a certificate as [`Verified`] without signing it.
@@ -28,7 +29,7 @@ pub fn id(n: u8) -> Id {
 /// The signature is all zeros and is never checked: [`Verified::assume`] exists
 /// so that graph tests do not pay for Ed25519. Use [`signed`] where the
 /// production path matters.
-pub fn cert<C: Encode + Decode, X: Into<Certificate<C>>>(cert: X) -> Verified<Certificate<C>> {
+pub fn cert<W: Encode + Decode, X: Into<Certificate<W>>>(cert: X) -> Verified<Certificate<W>> {
     let cert = cert.into();
     Verified::assume(Signed::from_parts(
         cert.encode(),
@@ -41,16 +42,43 @@ pub fn cert<C: Encode + Decode, X: Into<Certificate<C>>>(cert: X) -> Verified<Ce
 ///
 /// The issuer must be one of the fixture identities (`id(n)`), so its signing
 /// key is `signing_key(n)`.
-pub fn signed<C: Encode + Decode, X: Into<Certificate<C>>>(cert: X) -> Verified<Certificate<C>> {
+pub fn signed<W: Encode + Decode, X: Into<Certificate<W>>>(cert: X) -> Verified<Certificate<W>> {
     let cert = cert.into();
-    let key = (0..=u8::MAX)
-        .map(signing_key)
-        .find(|k| Id::new(k.verifying_key()) == cert.issuer())
-        .expect("issuer is a fixture identity");
-    Signed::try_sign(&cert, &key)
+    Signed::try_sign(&cert, &issuer_key(&cert))
         .expect("key is the issuer")
         .verify()
         .expect("freshly signed certificate verifies")
+}
+
+/// [`signed`], but with another valid signature over the same bytes.
+///
+/// The nonce is derived from `salt` instead of the RFC 8032 derivation, as a
+/// hedged or randomised signer would choose it. The result has the same digest
+/// as [`signed`]'s, and a different signature.
+pub fn resigned<W: Encode + Decode, X: Into<Certificate<W>>>(
+    cert: X,
+    salt: u8,
+) -> Verified<Certificate<W>> {
+    use ed25519_dalek::hazmat::{raw_sign, ExpandedSecretKey};
+
+    let cert = cert.into();
+    let key = issuer_key(&cert);
+    let mut expanded = ExpandedSecretKey::from(key.as_bytes());
+    expanded.hash_prefix = [salt; 32];
+    let encoded = cert.encode();
+    let message = Certificate::<W>::message(encoded.as_bytes());
+    let signature = raw_sign::<sha2::Sha512>(&expanded, &message, &key.verifying_key());
+    Signed::from_parts(encoded, signature)
+        .verify()
+        .expect("a signature with any nonce verifies")
+}
+
+/// The fixture signing key whose `Id` is the certificate's issuer.
+fn issuer_key<W>(cert: &Certificate<W>) -> SigningKey {
+    (0..=u8::MAX)
+        .map(signing_key)
+        .find(|k| Id::from(k) == cert.issuer())
+        .expect("issuer is a fixture identity")
 }
 
 /// One edit to a byte string. Positions wrap modulo the current length, so
@@ -93,7 +121,7 @@ impl Mutation {
 #[cfg(feature = "arbitrary")]
 pub fn decode_is_canonical_near<T>()
 where
-    T: for<'a> arbitrary::Arbitrary<'a> + Encode + Decode + core::fmt::Debug,
+    T: for<'a> arbitrary::Arbitrary<'a> + Encode + Decode + core::fmt::Debug + 'static,
 {
     bolero::check!()
         .with_arbitrary::<(T, alloc::vec::Vec<Mutation>)>()

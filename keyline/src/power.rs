@@ -22,8 +22,8 @@ use keyhive_codec::{
 /// and so no rehashing of certificates already in a set. Nothing may derive the
 /// order from the tag: `A` is the top of the lattice and the lowest byte of the
 /// four.
-// TODO(keyhive_types): `keyhive_core::Access` is the same type under its old
-// name; unify at integration and settle which name survives.
+// TODO(keyhive_types): `keyhive_core::Access` is the same type; unify at
+// integration and settle which name survives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -177,8 +177,12 @@ mod tests {
             [b'L', b'R', b'E', b'A'],
             "tags are the ASCII initials"
         );
-        assert_eq!(Power::decode(&[0]), Err(DecodeError::InvalidTag(0)));
-        assert_eq!(Power::decode(b"l"), Err(DecodeError::InvalidTag(b'l')));
+        for byte in 0..=u8::MAX {
+            match Power::ALL.iter().find(|p| **p as u8 == byte) {
+                Some(p) => assert_eq!(Power::decode(&[byte]), Ok(*p)),
+                None => assert_eq!(Power::decode(&[byte]), Err(DecodeError::InvalidTag(byte))),
+            }
+        }
         assert_eq!(Power::decode(b"EE"), Err(DecodeError::TrailingBytes));
         assert_eq!(Power::decode(&[]), Err(DecodeError::UnexpectedEnd));
     }

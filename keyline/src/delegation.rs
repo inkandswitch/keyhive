@@ -16,28 +16,18 @@ use keyhive_crypto::{digest::Digest, verifiable::Verifiable};
 /// `min(power, issuer's effective power over subject)`, and the edge is live only while
 /// `issuer` reaches `subject`.
 ///
-/// Anyone may issue a delegation over any subject. Admin is not required to
-/// grant; it matters for revocation reach.
+/// Anyone may issue a delegation over any subject. Issuing needs no Admin;
+/// Admin matters for revocation reach.
 ///
 /// # `citation`
 ///
-/// Ed25519 is deterministic and certificates are content-addressed, so
-/// re-issuing an identical delegation produces the identical certificate: same
-/// bytes, same signature, same hash. `citation` exists so that a grant identical to
-/// a revoked one can be re-issued with a fresh hash. It names the revocation the
-/// issuer has seen and is re-issuing past, documents the heal, and has no other
-/// semantics: evaluation ignores it entirely. Absent means first issuance.
-///
-/// It names the revocation rather than the revoked delegation because the
-/// latter's digest is a function of the fields being re-issued (so it adds no
-/// information and a second heal would collide), and because a revocation is
-/// the only event that ever poisons a hash. When several revocations name the
-/// same delegation, any of them serves.
-///
-/// A random nonce was rejected in its place because it would flip the fail
-/// direction: accidental duplicate issuance would yield independently live
-/// certificates that a single revocation cannot cover. See
-/// `design/keyline/alternatives.md`.
+/// Certificates are content-addressed, so re-issuing an identical delegation
+/// produces the same digest: the same certificate. `citation` lets a
+/// delegation identical to a revoked one be re-issued with a fresh digest. It
+/// names the revocation the issuer is re-issuing past, and evaluation ignores
+/// it. Absent means first issuance. When several revocations name the same
+/// delegation, any of them serves. For why it names a revocation, and why not
+/// a random nonce, see `design/keyline/alternatives.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Delegation {
@@ -102,7 +92,7 @@ impl Verifiable for Delegation {
 const BASE_LEN: usize = Id::LEN * 3 + 1 + 1;
 
 /// Encoded length with `citation`.
-const CITATION_LEN: usize = BASE_LEN + 32;
+const CITATION_LEN: usize = BASE_LEN + Digest::<RevocationId>::LEN;
 
 const CITATION_ABSENT: u8 = 0;
 const CITATION_PRESENT: u8 = 1;
@@ -133,7 +123,7 @@ impl Decode for Delegation {
         let issuer = Id::decode(&ids[..Id::LEN])?;
         let audience = Id::decode(&ids[Id::LEN..Id::LEN * 2])?;
         let subject = Id::decode(&ids[Id::LEN * 2..])?;
-        let power = Power::try_from(rest[0]).map_err(|_| DecodeError::InvalidTag(rest[0]))?;
+        let power = Power::decode(&rest[..1])?;
 
         let citation = match rest[1] {
             CITATION_ABSENT => {
@@ -146,9 +136,9 @@ impl Decode for Delegation {
                 Ordering::Less => return Err(DecodeError::UnexpectedEnd),
                 Ordering::Greater => return Err(DecodeError::TrailingBytes),
                 Ordering::Equal => {
-                    let raw: [u8; 32] = rest[2..]
+                    let raw: [u8; Digest::<RevocationId>::LEN] = rest[2..]
                         .try_into()
-                        .expect("exactly CITATION_LEN bytes leaves 32 after the tags");
+                        .expect("exactly CITATION_LEN bytes leaves a digest after the tags");
                     Some(Digest::from(raw))
                 }
             },
@@ -168,7 +158,7 @@ impl Decode for Delegation {
 #[cfg(feature = "arbitrary")]
 impl<'a> arbitrary::Arbitrary<'a> for Delegation {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let citation: Option<[u8; 32]> = u.arbitrary()?;
+        let citation: Option<[u8; Digest::<RevocationId>::LEN]> = u.arbitrary()?;
         Ok(Delegation {
             issuer: u.arbitrary()?,
             audience: u.arbitrary()?,
@@ -192,7 +182,7 @@ mod tests {
             (r.issuer, r.audience, r.subject, r.power),
             (d.issuer, d.audience, d.subject, d.power)
         );
-        assert_ne!(Digest::of(&d.encode()), Digest::of(&r.encode()));
+        assert_ne!(d.digest(), r.digest());
     }
 
     #[test]

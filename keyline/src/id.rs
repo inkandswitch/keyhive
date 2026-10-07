@@ -16,7 +16,9 @@ use keyhive_crypto::verifiable::Verifiable;
 ///
 /// Stored as the 32-byte compressed key, not as [`VerifyingKey`] (which caches
 /// the decompressed point and is roughly 200 bytes). Every constructor checks
-/// that the bytes are a valid curve point, so [`Id::verifying_key`] cannot fail.
+/// that the bytes are the canonical encoding of a curve point outside the
+/// small-order subgroup, so [`Id::verifying_key`] cannot fail and each key has
+/// exactly one `Id`.
 // TODO(keyhive_types): unify with `keyhive_core::Identifier` and `beekem::MemberId`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Id([u8; Self::LEN]);
@@ -25,16 +27,21 @@ impl Id {
     /// Length of the compressed verifying key, in bytes.
     pub const LEN: usize = 32;
 
-    /// The `Id` of a verifying key.
-    pub fn new(key: VerifyingKey) -> Self {
-        Id(key.to_bytes())
-    }
-
-    /// Construct from raw bytes, checking that they are a valid verifying key.
+    /// Construct from raw bytes.
+    ///
+    /// Rejects bytes that do not decompress, a non-canonical encoding of a
+    /// point (the y-coordinate not reduced mod p), and the eight small-order
+    /// points, any of which would give one key two `Id`s or a key that
+    /// verifies forged signatures.
     pub fn from_bytes(bytes: [u8; Self::LEN]) -> Result<Self, InvalidId> {
-        VerifyingKey::from_bytes(&bytes)
-            .map(|_| Id(bytes))
-            .map_err(|_| InvalidId)
+        let key = VerifyingKey::from_bytes(&bytes).map_err(|_| InvalidId::NotAPoint)?;
+        if key.to_edwards().compress().to_bytes() != bytes {
+            Err(InvalidId::NonCanonical)
+        } else if key.is_weak() {
+            Err(InvalidId::SmallOrder)
+        } else {
+            Ok(Id(bytes))
+        }
     }
 
     /// Decompress to a [`VerifyingKey`] for signature verification.
@@ -53,9 +60,18 @@ impl Id {
     }
 }
 
-impl From<VerifyingKey> for Id {
-    fn from(key: VerifyingKey) -> Self {
-        Id::new(key)
+/// A signing key's verifying key is always canonical and of prime order.
+impl From<&ed25519_dalek::SigningKey> for Id {
+    fn from(key: &ed25519_dalek::SigningKey) -> Self {
+        Id(key.verifying_key().to_bytes())
+    }
+}
+
+impl TryFrom<VerifyingKey> for Id {
+    type Error = InvalidId;
+
+    fn try_from(key: VerifyingKey) -> Result<Self, InvalidId> {
+        Id::from_bytes(key.to_bytes())
     }
 }
 
@@ -104,10 +120,21 @@ impl Decode for Id {
     }
 }
 
-/// The bytes are not a valid Ed25519 verifying key.
+/// Why bytes are not an [`Id`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("bytes are not a valid Ed25519 verifying key")]
-pub struct InvalidId;
+pub enum InvalidId {
+    /// The bytes do not decompress to a curve point.
+    #[error("bytes are not an Ed25519 curve point")]
+    NotAPoint,
+
+    /// The bytes decompress, but are not the point's canonical encoding.
+    #[error("bytes are a non-canonical encoding of a curve point")]
+    NonCanonical,
+
+    /// The point is in the small-order subgroup.
+    #[error("curve point has small order")]
+    SmallOrder,
+}
 
 #[cfg(feature = "serde")]
 impl serde::Serialize for Id {
@@ -162,9 +189,7 @@ impl<'de> serde::de::Visitor<'de> for IdVisitor {
 impl<'a> arbitrary::Arbitrary<'a> for Id {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let seed: [u8; 32] = u.arbitrary()?;
-        Ok(Id::new(VerifyingKey::from(
-            &ed25519_dalek::SigningKey::from(seed),
-        )))
+        Ok(Id::from(&ed25519_dalek::SigningKey::from(seed)))
     }
 }
 
@@ -177,17 +202,47 @@ mod tests {
     #[test]
     fn rejects_non_curve_points() {
         // 0x02 repeated is not a decompressable Edwards y-coordinate.
-        assert_eq!(Id::from_bytes([0x02; 32]), Err(InvalidId));
+        assert_eq!(Id::from_bytes([0x02; 32]), Err(InvalidId::NotAPoint));
         assert_eq!(
             Id::decode(&[0x02; 32]),
             Err(DecodeError::InvalidField("id"))
         );
     }
 
+    #[test]
+    fn rejects_small_order_points() {
+        use curve25519_dalek::constants::EIGHT_TORSION;
+        for point in EIGHT_TORSION {
+            assert_eq!(
+                Id::from_bytes(point.compress().to_bytes()),
+                Err(InvalidId::SmallOrder)
+            );
+        }
+    }
+
+    /// `y + p` for small `y` still fits in 255 bits and decompresses to the
+    /// same point as `y`. Each such encoding must be rejected, not given an
+    /// `Id` of its own.
+    #[test]
+    fn rejects_non_canonical_encodings() {
+        // p = 2^255 - 19, little-endian.
+        let mut p = [0xffu8; 32];
+        p[0] = 0xed;
+        p[31] = 0x7f;
+
+        let rejected = (0u8..19)
+            .filter_map(|y| {
+                let mut bytes = p;
+                bytes[0] = p[0] + y;
+                VerifyingKey::from_bytes(&bytes).ok().map(|_| bytes)
+            })
+            .inspect(|bytes| assert_eq!(Id::from_bytes(*bytes), Err(InvalidId::NonCanonical)))
+            .count();
+        assert!(rejected > 0, "some y + p decompresses");
+    }
+
     fn sample() -> Id {
-        Id::new(VerifyingKey::from(&ed25519_dalek::SigningKey::from(
-            [7u8; 32],
-        )))
+        Id::from(&ed25519_dalek::SigningKey::from([7u8; 32]))
     }
 
     #[test]
@@ -197,7 +252,7 @@ mod tests {
         assert_eq!(&id.to_bytes(), id.as_bytes());
         assert_eq!(id.to_bytes(), key.to_bytes());
         assert_eq!(VerifyingKey::from(id), key);
-        assert_eq!(Id::from(key), id);
+        assert_eq!(Id::try_from(key), Ok(id));
         assert_eq!(Verifiable::verifying_key(&id), key);
     }
 
@@ -255,7 +310,7 @@ mod tests {
     #[cfg(feature = "arbitrary")]
     fn round_trips_through_verifying_key() {
         bolero::check!().with_arbitrary::<Id>().for_each(|id| {
-            assert_eq!(Id::new(id.verifying_key()), *id);
+            assert_eq!(Id::try_from(id.verifying_key()), Ok(*id));
             assert_eq!(Id::decode(id.as_bytes()), Ok(*id));
         });
     }

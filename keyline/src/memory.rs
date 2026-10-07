@@ -4,15 +4,14 @@
 //! executed literally, with no caching. Every query recomputes stratum 1
 //! (admin reach and coverage) and stratum 2 (the live set and edge caps)
 //! from the certificate set, then runs one widest-path search rooted at the
-//! queried subject. Anything faster MUST agree with it on every set; the
+//! queried subject. Any faster backend must agree with it on every set; the
 //! conformance suite is how that is checked.
 //!
-//! Two consequences of "no caching" worth knowing before using this at scale.
-//! Stratum 1 is global, so a query costs what the whole replica costs, not what
-//! the queried subject costs. And there is no demand-driven evaluation, so
-//! `effective_power` materializes the subject's entire row before indexing into
-//! it: a point query costs what `members` costs. Both are appropriate for an
-//! embedded replica holding one document's closure, and wrong for a relay.
+//! Without caching, stratum 1 is global, so a query costs what the whole
+//! replica costs, not what the queried subject costs. Without demand-driven
+//! evaluation, `effective_power` materializes the subject's entire row before
+//! indexing into it, so a point query costs what `members` costs. Both suit an
+//! embedded replica holding one document's closure, and not a relay.
 //!
 //! ```text
 //! stratum 1   reaches   = search(all subjects, exclude ∅, every edge, cap = power)
@@ -35,9 +34,9 @@
 use crate::{
     certificate::Certificate,
     collections::{Map, Set},
+    contract::{set_digest, CertificateSet, Keyline},
     delegation::Delegation,
     id::Id,
-    keyline::{set_digest, Keyline},
     power::Power,
     revocation::{Revocation, RevocationId},
     signed::{Signed, Verified},
@@ -55,23 +54,23 @@ use tracing::{debug, instrument, trace};
 /// Plain maps of plain data: no interior mutability, so `Send + Sync` hold and
 /// `&self` queries may run in parallel behind a read lock.
 #[derive(Debug, Clone)]
-pub struct MemoryKeyline<C = ()> {
+pub struct MemoryKeyline<W> {
     /// The set itself, keyed by certificate identity. Retained as received so
     /// certificates can be forwarded without re-encoding.
-    certificates: Map<Digest<Certificate<C>>, Signed<Certificate<C>>>,
+    certificates: Map<Digest<Certificate<W>>, Signed<Certificate<W>>>,
 
     delegations: Map<Digest<Delegation>, Delegation>,
 
     /// `subject -> issuer -> edges about subject issued by issuer`: the adjacency the search walks.
     edges: Map<Id, Map<Id, Vec<Digest<Delegation>>>>,
 
-    revocations: Map<Digest<RevocationId>, Revocation<C>>,
+    revocations: Map<Digest<RevocationId>, Revocation<W>>,
 
     /// Target delegation -> the revocations naming it.
     revocations_of: Map<Digest<Delegation>, Set<Digest<RevocationId>>>,
 }
 
-impl<C: Encode + Decode> MemoryKeyline<C> {
+impl<W> MemoryKeyline<W> {
     /// An empty set.
     pub fn new() -> Self {
         Self::default()
@@ -88,7 +87,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
     }
 
     /// The certificate as received, if present.
-    pub fn get(&self, cert: &Digest<Certificate<C>>) -> Option<&Signed<Certificate<C>>> {
+    pub fn get(&self, cert: &Digest<Certificate<W>>) -> Option<&Signed<Certificate<W>>> {
         self.certificates.get(cert)
     }
 
@@ -98,7 +97,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
     }
 
     /// The revocation with this payload digest, if present.
-    pub fn revocation(&self, cert: &Digest<RevocationId>) -> Option<&Revocation<C>> {
+    pub fn revocation(&self, cert: &Digest<RevocationId>) -> Option<&Revocation<W>> {
         self.revocations.get(cert)
     }
 
@@ -115,7 +114,10 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
             contexts = contexts.len(),
             live = live.len(),
             dead = self.delegations.len() - live.len(),
-            clamped = cap.values().filter(|c| **c < Power::Admin).count(),
+            clamped = cap
+                .iter()
+                .filter(|(h, c)| self.delegations.get(*h).is_some_and(|d| **c < d.power))
+                .count(),
             "evaluated"
         );
         Evaluation { live, cap }
@@ -148,7 +150,14 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
         by_set.into_values().collect()
     }
 
-    /// Stratum 1: `covered(h, ·)` for every revoked delegation.
+    /// Stratum 1: `covered(h, ·)` for every revoked delegation, restricted to
+    /// nodes that could lie on a route for `h`.
+    ///
+    /// A route for `h` transits only nodes with standing over `subject(h)`, so
+    /// covering any other node changes nothing: `h` then behaves exactly as an
+    /// uncovered edge. Dropping those nodes, and `h` when none remain, keeps a
+    /// revocation by a key with no reach over `h`'s subject from costing a
+    /// context, and so a search per round.
     fn coverage(&self) -> Map<Digest<Delegation>, Set<Id>> {
         let reaches = self.search(self.edges.keys().copied(), &Params::positive());
 
@@ -164,19 +173,18 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
 
         self.revocations_of
             .iter()
-            .map(|(h, ids)| {
-                let mut nodes = Set::new();
-                for k in ids
+            .filter_map(|(h, ids)| {
+                let on_routes = reaches.get(&self.delegations.get(h)?.subject)?;
+                let nodes: Set<Id> = ids
                     .iter()
                     .filter_map(|r| self.revocations.get(r))
-                    .map(|r| r.issuer)
-                {
-                    nodes.insert(k);
-                    if let Some(ns) = reach.get(&k) {
-                        nodes.extend(ns.iter().copied());
-                    }
-                }
-                (*h, nodes)
+                    .flat_map(|r| {
+                        core::iter::once(r.issuer)
+                            .chain(reach.get(&r.issuer).into_iter().flatten().copied())
+                    })
+                    .filter(|n| on_routes.contains_key(n))
+                    .collect();
+                (!nodes.is_empty()).then_some((*h, nodes))
             })
             .collect()
     }
@@ -185,9 +193,8 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
     ///
     /// Semi-naive iteration: each round derives what it can from the live set
     /// so far, keeps only what is new (`derived \ live`), and stops when
-    /// nothing is. The set difference is what guarantees termination: `live`
-    /// only grows, within the finite set of delegations, however the
-    /// derivation filters below are written.
+    /// nothing is. It terminates because `live` only grows within the finite
+    /// set of delegations.
     fn live_set(&self, contexts: &[Context]) -> Set<Digest<Delegation>> {
         let covered: Set<Digest<Delegation>> = contexts
             .iter()
@@ -280,7 +287,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
     ) -> Map<Digest<Delegation>, Power> {
         // `live` is fixed for the whole iteration, so each context's live
         // covered edges are too.
-        let edges_by_context: Vec<(&Context, Vec<(&Digest<Delegation>, &Delegation)>)> = contexts
+        let edges_by_context: Vec<(&Context, Vec<_>)> = contexts
             .iter()
             .map(|ctx| {
                 let edges = ctx
@@ -288,10 +295,10 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
                     .iter()
                     .filter(|h| live.contains(h))
                     .filter_map(|h| self.delegations.get(h).map(|d| (h, d)))
-                    .collect();
+                    .collect::<Vec<_>>();
                 (ctx, edges)
             })
-            .filter(|(_, edges): &(_, Vec<_>)| !edges.is_empty())
+            .filter(|(_, edges)| !edges.is_empty())
             .collect();
 
         let mut cap: Map<Digest<Delegation>, Power> = edges_by_context
@@ -344,22 +351,25 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
             roots.into_iter().map(|r| (r, Map::new())).collect();
 
         loop {
-            let before = levels.clone();
+            let roots: Vec<Id> = levels.keys().copied().collect();
+            let mut changed = false;
 
-            for r in before.keys() {
-                let fresh = self.widest(*r, params, &levels);
+            for r in roots {
+                let fresh = self.widest(r, params, &levels);
                 // Only nodes that are the subject of some delegation can contribute
                 // through rule 3: for any other n, reaches(n, ·) is just {n}, and
-                // composing it yields reaches(s, n), which we already have. In a
-                // document with many members this is the difference between one
-                // root per role and one per member.
+                // composing it yields reaches(s, n), which we already have.
                 for n in fresh.keys().filter(|n| self.edges.contains_key(n)) {
-                    levels.entry(*n).or_default();
+                    if !levels.contains_key(n) {
+                        levels.insert(*n, Map::new());
+                        changed = true;
+                    }
                 }
-                levels.insert(*r, fresh);
+                changed |= levels.get(&r) != Some(&fresh);
+                levels.insert(r, fresh);
             }
 
-            if levels == before {
+            if !changed {
                 return levels;
             }
         }
@@ -390,7 +400,7 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
         let mut buckets: [Vec<Id>; Power::ALL.len()] = Default::default();
         buckets[Power::Admin.rank()].push(r);
 
-        let relax = |buckets: &mut [Vec<Id>; 4], v: Id, l: Power| {
+        let relax = |buckets: &mut [Vec<Id>; Power::ALL.len()], v: Id, l: Power| {
             if params.excludes(&v) {
                 return;
             }
@@ -425,8 +435,8 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
     }
 }
 
-// Manual: the derive would add a spurious `C: Default` bound, which no field needs.
-impl<C> Default for MemoryKeyline<C> {
+// Manual: the derive would add a spurious `W: Default` bound, which no field needs.
+impl<W> Default for MemoryKeyline<W> {
     fn default() -> Self {
         MemoryKeyline {
             certificates: Map::new(),
@@ -438,11 +448,11 @@ impl<C> Default for MemoryKeyline<C> {
     }
 }
 
-impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
-    type Content = C;
+impl<W: Encode + Decode> Keyline for MemoryKeyline<W> {
+    type RetentionWatermark = W;
 
     #[instrument(level = "debug", skip(self, cert), fields(digest = %cert.digest()))]
-    fn insert(&mut self, cert: Verified<Certificate<C>>) -> bool {
+    fn insert(&mut self, cert: Verified<Certificate<W>>) -> bool {
         let digest = cert.digest();
         if self.certificates.contains_key(&digest) {
             debug!("duplicate certificate; not inserted");
@@ -478,7 +488,7 @@ impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
         true
     }
 
-    fn contains(&self, cert: &Digest<Certificate<C>>) -> bool {
+    fn contains(&self, cert: &Digest<Certificate<W>>) -> bool {
         self.certificates.contains_key(cert)
     }
 
@@ -507,7 +517,7 @@ impl<C: Encode + Decode> Keyline for MemoryKeyline<C> {
         self.delegations.contains_key(cert) && self.evaluate().live.contains(cert)
     }
 
-    fn digest(&self) -> Digest<BTreeSet<Certificate<C>>> {
+    fn digest(&self) -> Digest<CertificateSet<W>> {
         set_digest(self.certificates.keys().copied())
     }
 }
@@ -600,197 +610,31 @@ mod tests {
     use super::*;
     use crate::test_utils::{
         cert,
-        conformance::{d, scenarios, scenarios::standard, DOC, OWNERS},
+        conformance::{d, scenarios::standard, DOC, OWNERS},
     };
 
     #[cfg(feature = "arbitrary")]
     use crate::test_utils::conformance::laws;
 
-    // One test per scenario and law. Add new ones to `scenarios.rs` / `laws.rs`
-    // and list them here; a second backend copies this block.
-    #[test]
-    fn empty_graph() {
-        scenarios::empty_graph::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn attenuation_and_widest_path() {
-        scenarios::attenuation_and_widest_path::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn ungrounded_edges_are_dead() {
-        scenarios::ungrounded_edges_are_dead::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn membership_composes() {
-        scenarios::membership_composes::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn late_binding_grants_new_documents_to_members() {
-        scenarios::late_binding_grants_new_documents_to_members::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn issuer_revocation_is_total() {
-        scenarios::issuer_revocation_is_total::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn audience_revocation_is_total() {
-        scenarios::audience_revocation_is_total::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn audience_revocation_without_admin_reach_is_total() {
-        scenarios::audience_revocation_without_admin_reach_is_total::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn admin_reach_covers_a_transited_node() {
-        scenarios::admin_reach_covers_a_transited_node::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn non_admin_revocation_is_confined_to_own_node() {
-        scenarios::non_admin_revocation_is_confined_to_own_node::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn ex_admin_reach_is_frozen() {
-        scenarios::ex_admin_reach_is_frozen::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn mutual_revocations_both_stand() {
-        scenarios::mutual_revocations_both_stand::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn apex_admin_can_revoke_the_root_edge() {
-        scenarios::apex_admin_can_revoke_the_root_edge::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn edit_rooted_root_edge_is_irrevocable() {
-        scenarios::edit_rooted_root_edge_is_irrevocable::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn senior_role_admin_revokes_inside_junior_role() {
-        scenarios::senior_role_admin_revokes_inside_junior_role::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn supply_is_daisy_chained() {
-        scenarios::supply_is_daisy_chained::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn covered_edges_are_clamped_not_just_gated() {
-        scenarios::covered_edges_are_clamped_not_just_gated::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn mutually_covered_edges_cannot_lift_each_other() {
-        scenarios::mutually_covered_edges_cannot_lift_each_other::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn revocation_may_arrive_before_its_target() {
-        scenarios::revocation_may_arrive_before_its_target::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn insert_is_idempotent_and_reports_duplicates() {
-        scenarios::insert_is_idempotent_and_reports_duplicates::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn reissue_with_citation_heals() {
-        scenarios::reissue_with_citation_heals::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn rotation_escapes_frozen_reach() {
-        scenarios::rotation_escapes_frozen_reach::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn unknown_revocation_is_inert() {
-        scenarios::unknown_revocation_is_inert::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn gift_cert_attack_follows_liveness() {
-        scenarios::gift_cert_attack_follows_liveness::<MemoryKeyline>();
-    }
-
-    #[test]
-    fn signed_certificates_agree_with_fixtures() {
-        scenarios::signed_certificates_agree_with_fixtures::<MemoryKeyline>();
-    }
-
-    #[cfg(feature = "arbitrary")]
-    #[test]
-    fn matches_naive_oracle_without_revocations() {
-        laws::matches_naive_oracle_without_revocations::<MemoryKeyline>();
-    }
-
-    #[cfg(feature = "arbitrary")]
-    #[test]
-    fn matches_naive_oracle_with_revocations() {
-        laws::matches_naive_oracle_with_revocations::<MemoryKeyline>();
-    }
-
-    #[cfg(feature = "arbitrary")]
-    #[test]
-    fn order_independent() {
-        laws::order_independent::<MemoryKeyline>();
-    }
-
-    #[cfg(feature = "arbitrary")]
-    #[test]
-    fn idempotent() {
-        laws::idempotent::<MemoryKeyline>();
-    }
-
-    #[cfg(feature = "arbitrary")]
-    #[test]
-    fn revocations_only_deny() {
-        laws::revocations_only_deny::<MemoryKeyline>();
-    }
-
-    #[cfg(feature = "arbitrary")]
-    #[test]
-    fn digest_identifies_the_set() {
-        laws::digest_identifies_the_set::<MemoryKeyline>();
-    }
-
-    #[cfg(feature = "arbitrary")]
-    #[test]
-    fn queries_are_consistent() {
-        laws::queries_are_consistent::<MemoryKeyline>();
-    }
+    crate::keyline_conformance!(MemoryKeyline<()>);
 
     /// A watermark type with a variable-length encoding.
     ///
-    /// Every law above runs at `C = ()`, whose encoding is empty, so none of
-    /// them can tell "evaluation ignores `retain`" apart from "there was
-    /// nothing there to ignore". The two below re-run the load-bearing pair
-    /// against watermarks that carry bytes.
+    /// At `W = ()` a `retain` entry carries a subject and an empty watermark,
+    /// so the laws above never see watermark bytes. The tests below re-run
+    /// the laws about `retain` with watermarks that carry bytes.
     #[cfg(feature = "arbitrary")]
-    type Retained = Vec<u8>;
+    type Watermark = Vec<u8>;
 
-    /// The naive oracle keeps only `(issuer, revoke)`, so it cannot read a
-    /// watermark even by accident. Agreement therefore witnesses that the
+    /// Both oracles keep only `(issuer, revoke)`, so neither can read a
+    /// watermark even by accident. Agreement therefore shows that the
     /// evaluator does not read one either.
     #[cfg(feature = "arbitrary")]
     #[test]
     fn retain_does_not_affect_authority() {
-        laws::matches_naive_oracle_with_revocations::<MemoryKeyline<Retained>>();
+        laws::matches_naive_oracle_with_revocations::<MemoryKeyline<Watermark>>();
+        laws::matches_threshold_oracle::<MemoryKeyline<Watermark>>();
+        laws::retain_is_inert::<MemoryKeyline<Watermark>>();
     }
 
     /// The converse: `retain` is covered by the certificate digest, so two
@@ -798,14 +642,14 @@ mod tests {
     #[cfg(feature = "arbitrary")]
     #[test]
     fn retain_is_part_of_set_identity() {
-        laws::digest_identifies_the_set::<MemoryKeyline<Retained>>();
+        laws::digest_identifies_the_set::<MemoryKeyline<Watermark>>();
     }
 
     #[test]
     fn inherent_accessors() {
         assert!(MemoryKeyline::<()>::new().is_empty());
 
-        let (mut g, _, alice_member) = standard::<MemoryKeyline>();
+        let (mut g, _, alice_member) = standard::<MemoryKeyline<()>>();
         assert_eq!(g.len(), 6);
         assert!(!g.is_empty());
         let root = d(DOC, OWNERS, DOC, Power::Admin);

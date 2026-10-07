@@ -1,5 +1,5 @@
 //! Named scenarios from `design/keyline/{README,edge-cases}.md`, each a
-//! function generic over the backend. Every one MUST pass on every `Keyline`.
+//! function generic over the backend. Every backend must pass every one.
 //!
 //! The cast: `DOC` is a document; `OWNERS` and `MEMBERS` are roles; `MODS` is a
 //! role in the clamping example; the rest are people.
@@ -8,11 +8,11 @@ use super::{
     build, d, power, r, ALICE, BOB, CAROL, DAN, DOC, EVE, FRANK, MEMBERS, MODS, OTHER_DOC, OWNERS,
 };
 use crate::{
+    contract::Keyline,
     delegation::Delegation,
-    keyline::Keyline,
     power::Power,
     revocation::{Revocation, RevocationId},
-    test_utils::{cert, id, signed},
+    test_utils::{cert, id, resigned, signed},
 };
 use alloc::vec::Vec;
 use keyhive_crypto::digest::Digest;
@@ -247,9 +247,9 @@ pub fn senior_role_admin_revokes_inside_junior_role<K: Keyline + Default>() {
     assert_eq!(power(&g, MEMBERS, ALICE), None);
 }
 
-/// Dan supplies Members into Doc. That gives him power over his own plug —
-/// revoke the supply and every Member loses Doc at once — and none over
-/// Members' roster, which never routes through him. Even though Dan reaches
+/// Dan supplies Members into Doc. He controls his own supply (revoking it cuts
+/// every Member off from Doc) but not Members' roster, which never routes
+/// through him. Even though Dan reaches
 /// Doc at Admin (through Mods), Members is not in his reach.
 pub fn supply_is_daisy_chained<K: Keyline + Default>() {
     let supply = d(DAN, MEMBERS, DOC, Power::Edit);
@@ -368,7 +368,7 @@ pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
     assert!(!g.insert(cert(alice_member)));
     assert_eq!(g.digest(), before);
 
-    let revocation: Revocation<K::Content> = r(CAROL, &alice_member);
+    let revocation: Revocation<K::RetentionWatermark> = r(CAROL, &alice_member);
     let revocation_digest = revocation.digest();
     g.insert(cert(revocation));
     assert!(!g.insert(cert(alice_member)));
@@ -385,7 +385,7 @@ pub fn reissue_with_citation_heals<K: Keyline + Default>() {
     g.insert(cert(eve_member));
     assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
 
-    let revocation: Revocation<K::Content> = r(CAROL, &alice_member);
+    let revocation: Revocation<K::RetentionWatermark> = r(CAROL, &alice_member);
     let healed = alice_member.reissue(revocation.digest());
     g.insert(cert(revocation));
     assert_eq!(power(&g, DOC, ALICE), None);
@@ -464,7 +464,7 @@ pub fn unknown_revocation_is_inert<K: Keyline + Default>() {
     assert_eq!(g.members(id(DOC)), before);
     assert!(!g.is_live(&phantom.digest()));
     // The target itself was never inserted.
-    assert!(!g.contains(&cert::<K::Content, _>(phantom).digest()));
+    assert!(!g.contains(&cert::<K::RetentionWatermark, _>(phantom).digest()));
 }
 
 /// First role of the gift-cert ladder; the ladder is `LADDER..LADDER + RUNGS`.
@@ -482,7 +482,7 @@ const RUNGS: u8 = 4;
 ///
 /// - a gift raises the victim's effective power without her consent;
 /// - removing the attacker takes the ladder out of Doc, while its internals stay
-///   self-grounded (what a demand-driven evaluator MUST NOT walk);
+///   self-grounded (what a demand-driven evaluator must not walk);
 /// - re-adding the same key revives the ladder and the gift with it;
 /// - a fresh key revives nothing;
 /// - revocation by the audience is total, an identical re-gift collides with the
@@ -523,7 +523,7 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
         assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
         // Remove Eve: the ladder's standing over Doc rides her membership.
-        let removal: Revocation<K::Content> = r(BOB, &eve_member);
+        let removal: Revocation<K::RetentionWatermark> = r(BOB, &eve_member);
         let removal_digest = removal.digest();
         g.insert(cert(removal));
         assert_eq!(power(&g, DOC, EVE), None);
@@ -551,7 +551,7 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
     // Alice's revocation of the gift is total, and leaves her own route alone.
-    let alice_revocation: Revocation<K::Content> = r(ALICE, &gift);
+    let alice_revocation: Revocation<K::RetentionWatermark> = r(ALICE, &gift);
     let alice_revocation_digest = alice_revocation.digest();
     g.insert(cert(alice_revocation));
     assert!(!g.is_live(&gift.digest()));
@@ -599,4 +599,61 @@ pub fn signed_certificates_agree_with_fixtures<K: Keyline + Default>() {
         g.members(id(DOC))
     });
     assert_eq!(power(&real, DOC, ALICE), None);
+}
+
+/// Two valid signatures over one payload are two `Signed` values but one
+/// certificate: the set is keyed by digest, so the second insert is a
+/// duplicate.
+pub fn second_signature_is_the_same_certificate<K: Keyline + Default>() {
+    let root = d(DOC, ALICE, DOC, Power::Admin);
+    let first = signed::<K::RetentionWatermark, _>(root);
+    let second = resigned::<K::RetentionWatermark, _>(root, 1);
+    assert_ne!(first.signed(), second.signed());
+    assert_eq!(first.digest(), second.digest());
+
+    let digest = first.digest();
+    let mut g = K::default();
+    assert!(g.insert(first));
+    assert!(!g.insert(second));
+    assert!(g.contains(&digest));
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Admin));
+}
+
+/// Edit-rooting protects only the root edge. Memberships the role key signed
+/// at creation are grounded at the role, which is in every apex admin's reach,
+/// so two apex admins who revoke each other both lose their standing.
+pub fn apex_duel_kills_creation_memberships_even_when_edit_rooted<K: Keyline + Default>() {
+    let root = d(DOC, OWNERS, DOC, Power::Edit);
+    let alice_owner = d(OWNERS, ALICE, OWNERS, Power::Admin);
+    let bob_owner = d(OWNERS, BOB, OWNERS, Power::Admin);
+    let mut g: K = build([root.into(), alice_owner.into(), bob_owner.into()]);
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
+
+    g.insert(cert(r(ALICE, &bob_owner)));
+    g.insert(cert(r(BOB, &alice_owner)));
+    assert!(g.is_live(&root.digest()));
+    assert!(!g.is_live(&alice_owner.digest()));
+    assert!(!g.is_live(&bob_owner.digest()));
+    assert!(g.members(id(DOC)).into_keys().eq([id(OWNERS)]));
+}
+
+/// `retain` is part of a revocation's identity but not of its effect: two
+/// revocations of one delegation that differ only there are two certificates,
+/// and the set answers exactly as with either one.
+pub fn retain_distinguishes_certificates_not_authority<K: Keyline + Default>()
+where
+    K::RetentionWatermark: Clone + Default,
+{
+    let (mut g, _, alice_member) = standard::<K>();
+    let plain: Revocation<K::RetentionWatermark> = r(CAROL, &alice_member);
+    let retaining = plain
+        .clone()
+        .retaining([(id(DOC), K::RetentionWatermark::default())].into());
+    assert_ne!(plain.digest(), retaining.digest());
+
+    assert!(g.insert(cert(plain)));
+    let members = g.members(id(DOC));
+    assert!(g.insert(cert(retaining)));
+    assert_eq!(g.members(id(DOC)), members);
+    assert_eq!(power(&g, DOC, ALICE), None);
 }

@@ -1,9 +1,6 @@
 //! The [`Encoded<T>`] byte container.
 
-use crate::{
-    error::DecodeError,
-    traits::{Decode, Encode},
-};
+use crate::{error::DecodeError, traits::Decode};
 use alloc::vec::Vec;
 use core::{
     cmp::Ordering,
@@ -12,11 +9,13 @@ use core::{
     marker::PhantomData,
 };
 
-/// The canonical bytes of a `T`, tagged with the type they encode.
+/// Bytes that claim to encode a `T`, tagged with the type.
 ///
-/// Equality, ordering, and hashing are by bytes. For certificate types this is
-/// certificate identity, so a set of `Encoded<Certificate>` needs no separate
-/// digest index.
+/// The type does not check the claim. [`Encode::encode`](crate::traits::Encode::encode) produces canonical
+/// bytes, but [`Encoded::from_bytes_unchecked`] wraps whatever a transport
+/// received; [`Encoded::decode`] is the check. Equality, ordering, and hashing
+/// are by bytes, so for bytes that decode canonically, equal bytes mean equal
+/// values.
 ///
 /// The phantom is `fn() -> T` so that `Encoded<T>` is covariant in `T` and is
 /// `Send + Sync` regardless of `T`.
@@ -26,12 +25,10 @@ pub struct Encoded<T> {
 }
 
 impl<T> Encoded<T> {
-    /// Wrap bytes that are already known to be the canonical encoding of a `T`.
+    /// Wrap bytes that claim to encode a `T`, without checking the claim.
     ///
-    /// This is `pub` so that codec implementations and transports can construct
-    /// an `Encoded<T>` from received bytes; it does not itself check anything.
-    /// Callers that need the value MUST go through [`Encoded::decode`], which
-    /// enforces canonicality.
+    /// For codec implementations and transports holding received bytes. Get
+    /// the value through [`Encoded::decode`], which enforces canonicality.
     pub fn from_bytes_unchecked(bytes: Vec<u8>) -> Self {
         Self {
             bytes,
@@ -57,13 +54,6 @@ impl<T> Encoded<T> {
     /// Whether the encoding is empty.
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
-    }
-}
-
-impl<T: Encode> Encoded<T> {
-    /// Encode a value.
-    pub fn new(value: &T) -> Self {
-        value.encode()
     }
 }
 
