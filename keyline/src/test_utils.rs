@@ -26,8 +26,8 @@ pub fn id(n: u8) -> Id {
 
 /// Wrap a certificate as [`Verified`] without signing it.
 ///
-/// The signature is all zeros and is never checked: [`Verified::assume`] exists
-/// so that graph tests do not pay for Ed25519. Use [`signed`] where the
+/// The signature is all zeros and is never checked, so graph tests do not pay
+/// for Ed25519. Use [`signed`] where the
 /// production path matters.
 pub fn cert<W: Encode + Decode, X: Into<Certificate<W>>>(cert: X) -> Verified<Certificate<W>> {
     let cert = cert.into();

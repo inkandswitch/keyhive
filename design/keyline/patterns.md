@@ -118,6 +118,31 @@ Edit-rooting costs nothing in capability: humans reach the document at Edit, whi
 
 A document's rooting level is fixed at creation (the root edge cannot be replaced without the subject key) and is visible to anyone holding the set, so it is a published fact about the document rather than a policy.
 
+## Steward
+
+One permanent key owns many documents, and the people who run them change over time. The steward is that key; the officers are a role the steward appoints and can replace.
+
+```
+Doc₁ ─┐  root edges, at Edit
+Doc₂ ─┼────────────────────────► Steward          (key retained: cold storage, threshold-split)
+Doc₃ ─┘                             │
+                                    │  {issuer: Steward, audience: Officers, subject: Steward, power: Edit}
+                                    ▼
+                                 Officers ──► Alice, Bob   {issuer: Officers, audience: Alice, subject: Officers, power: Admin}
+```
+
+- _Each document_ is rooted at Edit in the steward: `{issuer: Doc, audience: Steward, subject: Doc, power: Edit}`. Nobody holds Admin over a document, so nobody can revoke its root edge ([Rooting Level][rooting level]).
+- _The officers_ are an Edit member of the steward. Membership composes, so the officers reach every document the steward reaches, at Edit, including documents rooted in the steward later. Being an Edit member puts nothing in anyone's admin reach: neither the steward nor any document is in an officer's reach.
+- _The roster_ is Admin over `Officers`, signed by the role key at creation and then by the officers themselves. Officers add and remove each other, and can revoke anything on routes through `Officers`, such as a delegation a removed officer issued.
+
+Officers can delegate onward, at most Edit, and every such delegation routes through `Officers`. What they can never do is put a document into anyone's admin reach, because none of them holds Admin over one.
+
+_Rotation_ is one revocation by the steward. It revokes `Steward → Officers`, which is total because it is the issuer, mints `Officers′`, makes it an Edit member, and re-rosters whoever stays. Everything routed through the old role dies at once. A former officer's admin reach is the old `Officers` node, which no longer routes anything, so their revocations cover nothing that matters and their new delegations convey nothing. The `steward_rotation_leaves_former_officers_nothing` scenario pins this.
+
+The cost is the steward key. It is the one thing that cannot rotate, and whoever holds it can replace the officers or supply anyone into every document. Guard it as a recovery key: offline, threshold-split, exercised rarely. Rooting the documents at Admin instead also works, but then the steward key can brick each document as well.
+
+The pattern is [Constitutional Flatness](#constitutional-flatness) applied at the top: the officers hold a transit-level (Edit) membership in the steward, never Admin, so the steward controls them only wholesale, through the supply line. The tempting alternative, making the officers an Admin member of the steward, puts every document in the reach of everyone who was ever an officer, permanently, and lets any officer delegate Admin over a document to someone outside the role.
+
 ## Memberships as the Only Shape
 
 Because delegations name no intermediate node, the schema enforces the shape: humans hold _memberships in roles, at a level_; the only `subject: Doc` edges are supplies. Every delegation to a person is a membership; a delegation to one individual is a membership in a [caretaker][caretakers] role of one.

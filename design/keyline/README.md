@@ -2,26 +2,25 @@
 
 Keyline describes the core authority graph of Keyhive: who can do what, to which subjects, and on whose authority. It is the substrate that the rest of Keyhive (membership, CGKA, encryption) hangs off of.
 
-The adversarial scenarios and field-elimination arguments that shaped this design are fleshed out in more detail in [edge-cases](edge-cases.md).
+## Documents
+
+| Document                                | Contents                                                                                                                               |
+|-----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| [implementation](implementation.md)     | The crate: types, the `Keyline` trait, the evaluation program, the conformance suite                                                   |
+| [patterns](patterns.md)                 | Conventions over the two primitives: roles, pinning, caretakers, rotation, sealing, constitutional flatness, memberships-only, steward |
+| [alternatives](alternatives.md)         | Rejected designs, each with the condition under which to reopen it                                                                     |
+| [evaluation notes](evaluation-notes.md) | For evaluator implementers: fixed point vs. graph search, what SQL can express, evaluation cost as a DoS surface                       |
+| [edge-cases](edge-cases.md)             | The design record: the adversarial scenarios and field-elimination arguments that shaped the design                                    |
 
 ## Design Goals
 
 Keyline is a _state-based CRDT_. Any two replicas that have seen the same set of delegations and revocations compute the same authority graph, regardless of the order they received them in. This buys us the usual local-first properties: replicas can be offline indefinitely, sync in any order over any transport, and never conflict.
 
-## Intuition & Lineage
+## Intuition
 
 > Whether to enable cooperation or to limit vulnerability, we care about _authority_ rather than _permissions._ Permissions determine what actions an individual program may perform on objects it can directly access. Authority describes the effects that a program may cause on objects it can access, either directly by permission, or indirectly by permitted interactions with other programs.
 >
 > — [Mark Miller](https://github.com/erights), [Robust Composition](https://papers.agoric.com/assets/pdf/papers/robust-composition.pdf)
-
-Keyline is related to certificate capability systems in the [SPKI] lineage (by way of [UCAN]). Delegation and attenuation behave as in a UCAN chain. The difference is who assembles the chain: a UCAN invoker presents one with each invocation, while a Keyline verifier searches the whole certificate set for one. Keyline needs this because replicas receive certificates in different orders, so a chain presented by one party cannot be trusted to be current for another.
-
-|                               | UCAN                                            | Keyline                                                                                          |
-|-------------------------------|-------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| Who assembles the proof chain | The invoker presents a chain                    | The verifier searches the graph                                                                  |
-| When authority is evaluated   | At invocation, by replaying the presented chain | At invocation, by replaying the whole set: all delegations, then all revocations, then the check |
-| Third-party revocation        | Issuers along the chain                         | Scoped: [deep revocations][revocation semantics] cover routes through the signer's admin reach   |
-| Rough analogy                 | Movie ticket                                    | Daisy-chained power strips                                                                       |
 
 A delegation is the Granovetter operator from object capabilities: Alice, who has a reference to Carol, introduces Bob to Carol by handing him that reference. In the classic diagram the arrows are references; here they are authority over a subject.
 
@@ -50,33 +49,6 @@ A movie ticket is checked on its own terms at the door. Authority in Keyline is 
 
 The direction is the one capabilities want: device to strip to wall, user to resource. The analogy also shows the cost: one unplugged strip upstream darkens everything below it.
 
-- All certificate-capability systems, Keyline especially, behave as an [ocap] network simulation. Nodes act as proxies, and authority flows through the graph.
-- Revocation is a forwarder declining to forward: at its own hop (anyone), for its own signatures (issuers and audiences), or across its admin reach (admins). Revocation by a third party here is not the foreign concept that third-party revocation is in classical ocap; it is the [caretaker][caretakers] pattern.
-
-One ocap property is deliberately absent: delegator-independence. Dropping your reference in ocap leaves the copies you introduced intact. That property depends on a moment of transfer (an instant at which the audience definitively holds the reference), and in a weakly consistent system with no finality and no wall clock there is no such instant. Two timeless replacements remain: a delegation is live if its issuer was _ever_ authorized (independence recovered, but fail-open: a removed admin's delegations stand), or only while its issuer is _currently_ authorized. Keyline takes the second for delegations, so your delegations live and die with your standing; it takes the first for revocations, where "ever" is the [admin reach][admin reach]. Both follow from one rule: ambiguity resolves toward less authority. The trade buys revival (a partitioned graph reconnects with every certificate's provenance intact) at the price of [unintended revival][revival].
-
-### Prior Art
-
-Keyline's wire format is certificate-capability and its evaluation is graph-based.
-
-| System                            | What Keyline takes from it                                                                                                                   | What differs                                                                                                         |
-|-----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
-| [SPKI/SDSI]                       | Signed, self-certifying certificates; keys as the only principals; attenuation along a chain; and _chain discovery_ by the verifier ([Clarke et al.][sdsi discovery]), which is the SDSI half that later systems dropped | No CRLs; a revocation is a first-class signed fact with scoped effect                                                     |
-| [UCAN]                            | Certificate shape (`issuer`, `audience`, `subject`, `power`), content addressing, offline verification                                                    | UCAN embeds the proof chain and evaluates it at invocation; Keyline has no proof field and searches the set          |
-| [RT₀][rt]                         | Roles as principals; membership in a role as an edge (`Members.member ← Alice`); role-to-resource supply (`Doc.admin ← Members.member`); evaluation as reachability over the credential graph; the chain-discovery complexity results | RT has no revocation. Keyline adds revocation without leaving the Datalog fragment                                        |
-| [ARBAC97][arbac]                  | Administrative relations: authority _over_ a role's membership as distinct from membership in it. "Admin over `N` lets you act as `N`" is an administrative role | ARBAC assumes a central RBAC store; Keyline's admin relation is a signed edge and its reach is the frozen admin reach |
-| [Binder], [SecPAL]                | Authorization as stratified Datalog with a unique least model; negation only over fully computed strata                                     | Those are policy languages; Keyline fixes one program                                                                |
-| [Zanzibar]                        | Operational shape: `group#member` usersets, admin relations, membership as the only edge kind                                              | Zanzibar's tuple store is trusted and central; its consistency problem (the "new enemy": a revocation and a later write observed out of order) is one Keyline cannot express, because it has no order. That problem reappears at the content layer as whiteout |
-| [ocap]                            | The proxy-network reading of a certificate chain; revocation as a forwarder declining to forward; the caretaker pattern                     | Delegator-independence, given up for the reasons above                                                               |
-
-One comparison is easy to get wrong. UCAN _without_ revocation has certificate-local validity: a chain is checked on its own terms. UCAN _with_ revocation does not: the moment a verifier honors a revocation list, validity depends on a set the verifier holds, and a revoked certificate deep in a chain kills everything below it. That is issuer-recursive, set-global liveness, and every deployed certificate-capability system has it. Keyline did not introduce it; it made it the model instead of a bolt-on. Likewise delegator-independence was never a certificate-capability property; it belongs to ocap references, and SPKI with a CRL lacks it too. What Keyline gives up relative to ocap it does not give up relative to SPKI or UCAN.
-
-Structurally, then: RT₀ with SDSI chain discovery, revocation semantics closest to ARBAC97's administrative relations, evaluated as stratified Datalog. The certificate layer is why no server is needed: any replica holding the set computes the same answer, offline, and two replicas merge by set union.
-
-### An Assembly Language for Authority
-
-With a uniform directed authority graph, the cases a capability system usually special-cases (roles, pinning, caretakers, rotation) are arrangements of nodes ([patterns]). The core carries two certificate kinds and one evaluation rule; meaning is assigned above it. The cost is that some guarantees become conventions rather than semantics, and that one consequence of the rule set is sharp: an admin's revocation power over a node is permanent, so an admin who has lost the ability to write through a node can still revoke every delegation downstream of it. The remedy is topological (rotate the node and re-roster the survivors), and it is worked out under [The Ex-Admin Sharp Edge][the ex-admin sharp edge].
-
 ## Nodes
 
 All nodes in the graph are Ed25519 verifying keys. At this level there is _no distinction_ between individuals, groups, and documents; they are all merely keys that can appear as the issuer, audience, or subject of a delegation. This uniformity is deliberate. Higher layers of Keyhive assign meaning to particular keys (this one is a person, that one is a document), but the authority graph itself doesn't care. A delegation from a "document" to a "group" and a delegation from one "person" to another are the same kind of edge, checked the same way.
@@ -100,6 +72,10 @@ A delegation is a signed statement extending the issuer's own authority over a s
 `citation` is the one optional field. A one-byte tag in the encoding says which case applies: `0` means absent (first issuance) and nothing follows, and `1` is followed by the 32-byte digest ([Encoding](implementation.md#encoding)). An optional field is safe only when its absence cannot alias a present value. An optional field with a default would give one act two encodings, two hashes, and a revocation that kills one twin and misses the other ([alternatives, `from`](alternatives.md#a-from-field-on-delegation)). The absence of `citation` aliases nothing, because no digest stands for "none", so it has exactly one encoding. Every meaning in Keyline has exactly one encoding; that, not "no optional fields", is the invariant.
 
 A delegation has no field naming the node it is issued through. Every job such a field would do is an arrangement of nodes: scoping is `subject`, acting in a capacity is a dedicated key per capacity, pinning is a [subject-scoped intermediary][pinning], and a narrowly scoped revocation is one signed with a key whose admin reach is narrow. Where a certificate format wants a _mode_, the graph wants a _vertex_. The arguments are in [alternatives](alternatives.md#a-from-field-on-delegation) and [edge-cases](edge-cases.md).
+
+### Roles
+
+A role is just a node that others hold membership in. Nothing in the format marks a key as a role: a key becomes one when delegations name it as `subject` (memberships, such as `{issuer: Dan, audience: Alice, subject: Members, power: Admin}`) and when supplies name it as `audience` to connect it to a subject. Later sections use `Members` and `Owners` as example roles. Conventions for building them are in [patterns, Roles][roles].
 
 ### `subject` is a Scope, Not an Endpoint
 
@@ -137,38 +113,6 @@ Relay < Read < Edit < Admin
 | Admin | Manage membership         | The only level that acts on the graph: reshape it, revoke others' certificates               |
 
 `Relay`, `Read`, and `Edit` are _data_ levels: what may travel along the edge. `Admin` is the only level that acts on the graph. The distinction carries the [revocation rule][revocation semantics]: revoking a third party's certificate acts on the graph, so it is gated on Admin; non-admin levels get revocation power only over their own hop and their own signatures.
-
-## Revocations
-
-A revocation breaks a previously issued delegation, identified by hash:
-
-| Field     | Type                  | Notes                                             |
-|-----------|-----------------------|---------------------------------------------------|
-| `issuer`  | Ed25519 verifying key | The key that signs                                |
-| `revoke`  | `Digest<Delegation>`  | The delegation being revoked                      |
-| `retain`  | subject ↦ watermark   | Content-layer retention; never read by evaluation |
-| signature | Ed25519 signature     | Over all of the above                             |
-
-`retain` answers a question that the authority graph cannot answer: what happens to the content that the revoked key already wrote ([whiteout](#open-questions)). It plays no part in anything below. It is in the certificate so that the answer is signed by the same act that revokes the edge.
-
-Revocations kill delegations on the routes their issuer controls, or everywhere if their issuer signed the delegation. Both certificate species are add-only; merging is set union.
-
-There is one revocation rule for third parties and one for the parties themselves. Third parties: a revocation breaks the target on every route that passes through the issuer's _admin reach_: the nodes the issuer ever held Admin over, plus the issuer's own node ([Admin Reach][admin reach]). The parties: whoever signed the certificate, as issuer or as audience, may kill it on every route.
-
-Where the admin reach doesn't touch the target's routes and the issuer is neither party, the revocation is _inert_: a no-op, not an error. Validity is unconditional; any well-signed revocation is admissible. A revocation has no authority of its own, only coverage. One that breaks a certificate far below its issuer, through the issuer's admin reach, is a _deep revocation_.
-
-- _Revocation by the issuer_ (`issuer = target.issuer`) needs no second rule: the issuer is the final node on every route of their own certificate and in their own admin reach.
-- _Revocation by the audience_ (`issuer = target.audience`) is why the second rule exists. Routes end at the issuer, so no admin reach (not even the audience's own) reaches a certificate through its `audience`; if it did, every admin of a role could revoke the supply edges _into_ that role, which they never issued and hold no reach over on the supplier's side.
-
-The full tier structure, each tier matched to its trust basis:
-
-| Who                             | Breaks the edge on…              | Trust basis               |
-|---------------------------------|----------------------------------|---------------------------|
-| Anyone                          | routes through their own node    | it's your own hop         |
-| Issuer / audience of the target | all routes (total)               | your signature, your act  |
-| Anyone who ever held Admin      | routes through their admin reach | Admin, granted explicitly |
-
-The first row means even a Read-level intermediate can refuse to let their standing carry someone else's delegation. This is deny-only, confined to their own hop, and strictly weaker than revoking their own incoming delegation as its audience (which they can always do, and which kills the same routes plus their own access).
 
 ## Graph Semantics
 
@@ -254,6 +198,38 @@ The AND/OR view shows directly:
 
 The two-feed AND-node is also the reason evaluation is a fixed point rather than a graph search: which edges _exist_ in the authority graph is an output of the computation, not an input. See [implementation, Evaluation](implementation.md#evaluation) for the program.
 
+## Revocations
+
+A revocation breaks a previously issued delegation, identified by hash:
+
+| Field     | Type                  | Notes                                             |
+|-----------|-----------------------|---------------------------------------------------|
+| `issuer`  | Ed25519 verifying key | The key that signs                                |
+| `revoke`  | `Digest<Delegation>`  | The delegation being revoked                      |
+| `retain`  | subject ↦ watermark   | Content-layer retention; never read by evaluation |
+| signature | Ed25519 signature     | Over all of the above                             |
+
+`retain` answers a question that the authority graph cannot answer: what happens to the content that the revoked key already wrote ([whiteout](#open-questions)). It plays no part in anything below. It is in the certificate so that the answer is signed by the same act that revokes the edge.
+
+Both certificate species are add-only; merging is set union.
+
+There is one revocation rule for third parties and one for the parties themselves. Third parties: a revocation breaks the target on every route that passes through the issuer's _admin reach_: the nodes the issuer ever held Admin over, plus the issuer's own node ([Admin Reach][admin reach]). The parties: whoever signed the certificate, as issuer or as audience, may kill it on every route.
+
+Where the admin reach doesn't touch the target's routes and the issuer is neither party, the revocation is _inert_: a no-op, not an error. Validity is unconditional; any well-signed revocation is admissible. A revocation has no authority of its own, only coverage. One that breaks a certificate far below its issuer, through the issuer's admin reach, is a _deep revocation_.
+
+- _Revocation by the issuer_ (`issuer = target.issuer`) needs no second rule: the issuer is the final node on every route of their own certificate and in their own admin reach.
+- _Revocation by the audience_ (`issuer = target.audience`) is why the second rule exists. Routes end at the issuer, so no admin reach (not even the audience's own) reaches a certificate through its `audience`; if it did, every admin of a role could revoke the supply edges _into_ that role, which they never issued and hold no reach over on the supplier's side.
+
+The full tier structure, each tier matched to its trust basis:
+
+| Who                             | Breaks the edge on…              | Trust basis               |
+|---------------------------------|----------------------------------|---------------------------|
+| Anyone                          | routes through their own node    | it's your own hop         |
+| Issuer / audience of the target | all routes (total)               | your signature, your act  |
+| Anyone who ever held Admin      | routes through their admin reach | Admin, granted explicitly |
+
+The first row means even a Read-level intermediate can refuse to let their standing carry someone else's delegation. This is deny-only, confined to their own hop, and strictly weaker than revoking their own incoming delegation as its audience (which they can always do, and which kills the same routes plus their own access).
+
 ### Revocation Semantics
 
 #### Admin Reach
@@ -272,8 +248,6 @@ Computing it while ignoring revocations looks strange at first. A rule that shra
 - _Quitting must not un-ban anyone._ If resigning shrank your admin reach, resigning would cancel your own past revocations. Leaving a role would become a way to let banned people back in.
 
 The growth direction is safe: when Bob joins a new role, his old revocations now also cover routes through it. Coverage can only ever expand, and expanding coverage only ever removes access, so the surprise, if any, is in the fail-closed direction.
-
-Point 2 (your own node always counts) makes revocation by the issuer total with no extra rule: a certificate's issuer is the last node on every one of its routes, so the issuer's revocation always covers it completely. Revocation by the audience does not work this way; the audience is where a route delivers, not a node it transits, and is handled by signature ([Revocations][revocations]).
 
 #### The Effect is Scoped; the Validity is Not
 
@@ -375,7 +349,7 @@ Under admin-reach scoping, the place rotation moves to is well-defined:
 
 One correction to the tempting intuition that rotation leaves the old node harmlessly dead: it leaves it _dormant_. See [Reconnection and Sealing][sealing].
 
-### Computation
+## Computation
 
 Evaluation is graph-global rather than certificate-local: no certificate can be verified in isolation, only against a set. The same search runs twice, with negation only between the runs.
 
@@ -395,14 +369,14 @@ Stratum 2: the live pass
 
 Stratum 1 and stratum 2 are the same grounded, issuer-recursive, level-thresholded route search: the positive pass runs blind to revocations, to learn who ever stood where. Negation appears exactly once, over fully computed lower strata: stratified Datalog, unique least model. The normative program is in [implementation, Evaluation](implementation.md#evaluation).
 
-#### Why the Strata Are Mandatory
+### Why the Strata Are Mandatory
 
 The tempting shortcut (subtract revoked edges, then compute reachability) gives order-dependent results, because revocations would then affect each other's authority. Take `r1` (Dan revokes Bob's membership) and `r2` (Bob revokes some delegation): subtract-first makes `r2` inert if `r1` is applied first, and effective otherwise. Same set, different results by merge order. Stratification restores determinism: admin reach is computed where no revocation can see any other. It follows that:
 
 - _Coverage is monotone-stable._ Stratum 1 consults only delegations, and the positive graph only grows. Coverage can activate or expand as delegations arrive, never shrink. Once applied anywhere, applied everywhere, forever.
 - _Revocations are mutually invisible._ Revocations target delegations, never other revocations, so mutual invisibility is structural. Removing whoever signed a revocation does not undo it; that is [permanence] again, seen from the evaluation side.
 
-#### Revocations Cannot Be Revoked
+### Revocations Cannot Be Revoked
 
 The `revoke` field's type is `Digest<Delegation>`. A revocation naming another revocation is not invalid; it is unwritable. The classic regress ("who may revoke the revocation? and who may revoke _that_?") never starts, because the question cannot be spelled in the format.
 
@@ -410,7 +384,7 @@ Nothing is lost by this. A mistaken revocation is repaired by granting again, no
 
 The evaluator is simpler for it. Revocations are terminal facts: there is no "is this revocation itself revoked?" check, stratum 1 never recurses over revocations, and applied coverage never switches off. Compare what un-revocation would require: an authority rule for whoever signs the un-revocation, another for revoking the un-revocation, and an ordering to settle revoke/un-revoke/re-revoke races, which means causal metadata or merge-order dependence at every level. The cost of declining the feature is one workflow: re-grant instead of un-revoke.
 
-#### Cost
+### Cost
 
 - _Rooted at one subject._ Every query is grounded at one subject and ranges over the subjects it reaches: `subject: Members` edges are on Doc's routes because Members has standing over Doc. Scoping is by reachability, not by which certificates carry `subject: Doc`.
 - _Stratum 1 can be cached._ It is monotone, so merges can evaluate deltas, and admin reach and coverage can be cached indefinitely. `MemoryKeyline` does not cache: every query recomputes both strata ([evaluation notes, Status](evaluation-notes.md#10-status)).
@@ -418,17 +392,17 @@ The evaluator is simpler for it. Revocations are terminal facts: there is no "is
 - _Junk never enters the fixpoint._ Evaluation forward-chains from root edges, so ungrounded certificates cost storage but no computation. Cycles: _assume dead on revisit_ (the least fixed point). Assuming live computes the greatest and makes ungrounded cycles self-certifying: a one-line bug with a security consequence.
 - _Timeless is the cheap option._ Ordering-aware revocation would require temporal reachability over historical graphs plus causal metadata on every certificate. Here there is one graph, ever; results are a pure function of the set, and the set digest is a perfect cache key.
 
-#### Witness Hints
+### Witness Hints
 
 The [no-proof design][no proof field] pushes route information out of the certificate, but transport may carry it: a peer asserting a conclusion may attach the witness route, and checking a claimed route costs its length. Soundness never depends on the hint: a wrong hint falls back to search.
 
-#### Partial Visibility
+### Partial Visibility
 
 Graph-global evaluation needs the relevant certificates on hand. A replica cannot confirm a revocation's coverage without the delegations that built the issuer's admin reach, and cannot mint a _working_ re-issue of a certificate it has never seen revoked. The [`citation`][the citation field] collision is silent and fail-closed; tooling should surface it ("matches a revoked certificate; re-issue with `citation`?"). We recommend provisionally honoring unconfirmed revocations: over-applying a revocation fails closed, and fuller sync confirms or retires it.
 
 Missing certificates can err in either direction. A missing _delegation_ usually costs access, but it can also grant it: admin reach is computed from delegations, so a replica that has not seen the certificate making K an admin of `Members` will judge K's revocations there inert, and honor access the full set revokes. Coverage [activates and expands as delegations arrive][why the strata are mandatory]; a replica short of delegations is a replica short of revocations.
 
-#### What a Replica Must Hold
+### What a Replica Must Hold
 
 A replica does not need the world. Define the _closure_ of a subject `S` as `S`, every node reachable from it, every certificate about those nodes, and every revocation naming one of those certificates. Then:
 
@@ -498,14 +472,6 @@ Mitigations: a single-owner apex has no peers and therefore no duel. Memberships
 
 [^mad]: "Mutual assured destruction," from Cold War deterrence theory. Below the apex the senior resolves a duel by rotation.
 
-## Patterns
-
-Roles, pinning, caretakers, rotation, sealing, constitutional flatness, and the memberships-only shape are conventions over the two primitives, not extra mechanism. They live in [patterns](patterns.md).
-
-Design choices that were considered and rejected, each with the condition under which to reopen it, are collected in [alternatives](alternatives.md).
-
-For implementers of an evaluator (why it is a fixed point and not a graph search, what SQL can and cannot express, and evaluation cost as an attack surface), see [evaluation notes](evaluation-notes.md).
-
 ## Griefing
 
 Anyone upstream can deny access downstream, and "upstream" includes anyone who ever held Admin there. The griefer set has an exact characterization: an audience's access dies iff every live route is covered, and X can cover a route iff it transits X's admin reach. So:
@@ -557,6 +523,44 @@ _3a. It was a mistake._ Dan re-adds Alice: `{issuer: Dan, audience: Alice, subje
 _3b. It was not, and Carol should stay._ Dan instead grants Carol a membership of her own (in Members or another role, or through her own caretaker). `#d1` stays dead with Alice; Carol's new access hangs on Dan's standing.
 
 _4. Unintended revival._ If the removal was for key compromise, re-adding "Alice" means a _fresh key_; the old key's certificates stay dead. Re-adding the same key revives everything it ever issued (step 3a run by accident). Explicit revocations on removal are the durable form. See [Death, Revocation, and Revival][revival].
+
+## Lineage & Prior Art
+
+Keyline is related to certificate capability systems in the [SPKI] lineage (by way of [UCAN]). Delegation and attenuation behave as in a UCAN chain. The difference is who assembles the chain: a UCAN invoker presents one with each invocation, while a Keyline verifier searches the whole certificate set for one. Keyline needs this because replicas receive certificates in different orders, so a chain presented by one party cannot be trusted to be current for another.
+
+|                               | UCAN                                            | Keyline                                                                                          |
+|-------------------------------|-------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| Who assembles the proof chain | The invoker presents a chain                    | The verifier searches the graph                                                                  |
+| When authority is evaluated   | At invocation, by replaying the presented chain | At invocation, by replaying the whole set: all delegations, then all revocations, then the check |
+| Third-party revocation        | Issuers along the chain                         | Scoped: [deep revocations][revocation semantics] cover routes through the signer's admin reach   |
+| Rough analogy                 | Movie ticket                                    | Daisy-chained power strips                                                                       |
+
+- All certificate-capability systems, Keyline especially, behave as an [ocap] network simulation. Nodes act as proxies, and authority flows through the graph.
+- Revocation is a forwarder declining to forward: at its own hop (anyone), for its own signatures (issuers and audiences), or across its admin reach (admins). Revocation by a third party here is not the foreign concept that third-party revocation is in classical ocap; it is the [caretaker][caretakers] pattern.
+
+One ocap property is deliberately absent: delegator-independence. Dropping your reference in ocap leaves the copies you introduced intact. That property depends on a moment of transfer (an instant at which the audience definitively holds the reference), and in a weakly consistent system with no finality and no wall clock there is no such instant. Two timeless replacements remain: a delegation is live if its issuer was _ever_ authorized (independence recovered, but fail-open: a removed admin's delegations stand), or only while its issuer is _currently_ authorized. Keyline takes the second for delegations, so your delegations live and die with your standing; it takes the first for revocations, where "ever" is the [admin reach][admin reach]. Both follow from one rule: ambiguity resolves toward less authority. The trade buys revival (a partitioned graph reconnects with every certificate's provenance intact) at the price of [unintended revival][revival].
+
+### Prior Art
+
+Keyline's wire format is certificate-capability and its evaluation is graph-based.
+
+| System                            | What Keyline takes from it                                                                                                                   | What differs                                                                                                         |
+|-----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| [SPKI/SDSI]                       | Signed, self-certifying certificates; keys as the only principals; attenuation along a chain; and _chain discovery_ by the verifier ([Clarke et al.][sdsi discovery]), which is the SDSI half that later systems dropped | No CRLs; a revocation is a first-class signed fact with scoped effect                                                     |
+| [UCAN]                            | Certificate shape (`issuer`, `audience`, `subject`, `power`), content addressing, offline verification                                                    | UCAN embeds the proof chain and evaluates it at invocation; Keyline has no proof field and searches the set          |
+| [RT₀][rt]                         | Roles as principals; membership in a role as an edge (`Members.member ← Alice`); role-to-resource supply (`Doc.admin ← Members.member`); evaluation as reachability over the credential graph; the chain-discovery complexity results | RT has no revocation. Keyline adds revocation without leaving the Datalog fragment                                        |
+| [ARBAC97][arbac]                  | Administrative relations: authority _over_ a role's membership as distinct from membership in it. "Admin over `N` lets you act as `N`" is an administrative role | ARBAC assumes a central RBAC store; Keyline's admin relation is a signed edge and its reach is the frozen admin reach |
+| [Binder], [SecPAL]                | Authorization as stratified Datalog with a unique least model; negation only over fully computed strata                                     | Those are policy languages; Keyline fixes one program                                                                |
+| [Zanzibar]                        | Operational shape: `group#member` usersets, admin relations, membership as the only edge kind                                              | Zanzibar's tuple store is trusted and central; its consistency problem (the "new enemy": a revocation and a later write observed out of order) is one Keyline cannot express, because it has no order. That problem reappears at the content layer as whiteout |
+| [ocap]                            | The proxy-network reading of a certificate chain; revocation as a forwarder declining to forward; the caretaker pattern                     | Delegator-independence, given up for the reasons above                                                               |
+
+One comparison is easy to get wrong. UCAN _without_ revocation has certificate-local validity: a chain is checked on its own terms. UCAN _with_ revocation does not: the moment a verifier honors a revocation list, validity depends on a set the verifier holds, and a revoked certificate deep in a chain kills everything below it. That is issuer-recursive, set-global liveness, and every deployed certificate-capability system has it. Keyline did not introduce it; it made it the model instead of a bolt-on. Likewise delegator-independence was never a certificate-capability property; it belongs to ocap references, and SPKI with a CRL lacks it too. What Keyline gives up relative to ocap it does not give up relative to SPKI or UCAN.
+
+Structurally, then: RT₀ with SDSI chain discovery, revocation semantics closest to ARBAC97's administrative relations, evaluated as stratified Datalog. The certificate layer is why no server is needed: any replica holding the set computes the same answer, offline, and two replicas merge by set union.
+
+### An Assembly Language for Authority
+
+With a uniform directed authority graph, the cases a capability system usually special-cases (roles, pinning, caretakers, rotation) are arrangements of nodes ([patterns]). The core carries two certificate kinds and one evaluation rule; meaning is assigned above it. The cost is that some guarantees become conventions rather than semantics, and that one consequence of the rule set is sharp: an admin's revocation power over a node is permanent, so an admin who has lost the ability to write through a node can still revoke every delegation downstream of it. The remedy is topological (rotate the node and re-roster the survivors), and it is worked out under [The Ex-Admin Sharp Edge][the ex-admin sharp edge].
 
 ## Open Questions
 

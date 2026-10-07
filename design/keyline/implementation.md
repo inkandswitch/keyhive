@@ -64,7 +64,7 @@ pub struct Delegation {
 | `power`    | Requested level; clamped, never raised.                                                                                             |
 | `citation` | The revocation being re-issued past. Gives a delegation identical to a revoked one a fresh digest. Evaluation ignores it. Absent means first issuance. |
 
-A delegation is the Granovetter introduction from object capabilities; the [model document](README.md#intuition--lineage) draws it. One difference matters for the rules: anyone can name anyone as `audience`, and the audience never consents. That is why revocation by the audience exists, and why the [gift-cert attack](evaluation-notes.md#single-queries-and-the-gift-cert-attack) is possible.
+A delegation is the Granovetter introduction from object capabilities; the [model document](README.md#intuition) draws it. One difference matters for the rules: anyone can name anyone as `audience`, and the audience never consents. That is why revocation by the audience exists, and why the [gift-cert attack](evaluation-notes.md#single-queries-and-the-gift-cert-attack) is possible.
 
 Anyone may issue a delegation over any subject. The issuer's effective power over `subject` clamps the result; issuing needs no Admin.
 

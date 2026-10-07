@@ -657,3 +657,45 @@ where
     assert_eq!(g.members(id(DOC)), members);
     assert_eq!(power(&g, DOC, ALICE), None);
 }
+
+/// Keys for `steward_rotation_leaves_former_officers_nothing`.
+const STEWARD: u8 = 14;
+const OFFICERS: u8 = 15;
+const OFFICERS_B: u8 = 16;
+
+/// The Steward pattern (`design/keyline/patterns.md`): documents rooted at
+/// Edit in a permanent key, whose officers are an Edit member of it. Officers
+/// reach every document at Edit and run their own roster, but never hold
+/// Admin over a document or the steward. Rotating the officers' role is one
+/// revocation by the steward, after which a former officer has no standing
+/// and no reach over anything still routed.
+pub fn steward_rotation_leaves_former_officers_nothing<K: Keyline + Default>() {
+    let officers = d(STEWARD, OFFICERS, STEWARD, Power::Edit);
+    let mut g: K = build([
+        d(DOC, STEWARD, DOC, Power::Edit).into(),
+        d(OTHER_DOC, STEWARD, OTHER_DOC, Power::Edit).into(),
+        officers.into(),
+        d(OFFICERS, ALICE, OFFICERS, Power::Admin).into(),
+        d(OFFICERS, BOB, OFFICERS, Power::Admin).into(),
+        d(ALICE, CAROL, DOC, Power::Admin).into(),
+    ]);
+    assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
+    assert_eq!(power(&g, OTHER_DOC, BOB), Some(Power::Edit));
+    assert_eq!(power(&g, DOC, CAROL), Some(Power::Edit));
+    assert_eq!(power(&g, STEWARD, ALICE), Some(Power::Edit));
+
+    let successors = d(STEWARD, OFFICERS_B, STEWARD, Power::Edit);
+    let bob_again = d(OFFICERS_B, BOB, OFFICERS_B, Power::Admin);
+    g.insert(cert(r(STEWARD, &officers)));
+    g.insert(cert(successors));
+    g.insert(cert(bob_again));
+    assert_eq!(power(&g, DOC, ALICE), None);
+    assert_eq!(power(&g, DOC, CAROL), None);
+    assert_eq!(power(&g, OTHER_DOC, BOB), Some(Power::Edit));
+
+    g.insert(cert(r(ALICE, &successors)));
+    g.insert(cert(r(ALICE, &bob_again)));
+    g.insert(cert(d(ALICE, CAROL, OTHER_DOC, Power::Edit)));
+    assert_eq!(power(&g, OTHER_DOC, BOB), Some(Power::Edit));
+    assert_eq!(power(&g, OTHER_DOC, CAROL), None);
+}

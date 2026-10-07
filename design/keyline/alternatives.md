@@ -76,7 +76,7 @@ _Reopen if._ Causal metadata enters the system for other reasons (see whiteout).
 
 _Proposal._ Dropping your standing leaves the delegations you issued intact, as dropping an ocap reference leaves the copies intact.
 
-_Rejected because._ It depends on a moment of transfer that a weakly consistent system without finality does not have. The two timeless replacements are "issuer ever authorized" (independence recovered, fail-open) and "issuer currently authorized" (issuer-recursive, fail-closed). Keyline takes the second for delegations and the first for revocations. Long form: [README, Intuition & Lineage](README.md#intuition--lineage).
+_Rejected because._ It depends on a moment of transfer that a weakly consistent system without finality does not have. The two timeless replacements are "issuer ever authorized" (independence recovered, fail-open) and "issuer currently authorized" (issuer-recursive, fail-closed). Keyline takes the second for delegations and the first for revocations. Long form: [README, Intuition & Lineage](README.md#lineage--prior-art).
 
 _Reopen if._ Never in this consistency model.
 

@@ -143,6 +143,7 @@ macro_rules! keyline_conformance {
             rotation_escapes_frozen_reach,
             unknown_revocation_is_inert,
             gift_cert_attack_follows_liveness,
+            steward_rotation_leaves_former_officers_nothing,
             signed_certificates_agree_with_fixtures,
         );
         $crate::__keyline_conformance_laws!($backend);
