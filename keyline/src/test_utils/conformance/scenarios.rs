@@ -304,6 +304,43 @@ pub fn covered_edges_are_clamped_not_just_gated<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, FRANK), Some(Power::Read));
 }
 
+/// Second key standing in for a role, and a third person, for
+/// `mutually_covered_edges_cannot_lift_each_other`.
+const MODS_B: u8 = 12;
+const GUS: u8 = 13;
+
+/// Two covered edges on each other's avoiding derivation cannot raise each
+/// other's level above what a derivation outside the cycle supports.
+///
+/// Eve holds Read over Doc directly and Edit through Mods; Frank holds Edit
+/// through Mods′. Eve grants Frank Admin (h1), revoked by Mods. Frank grants
+/// Eve Admin (h2) and Gus Admin (h3), both revoked by Mods′. Avoiding Mods,
+/// Eve's only grounded standing is Read, so h1 conveys Read; avoiding Mods′,
+/// Frank's only standing comes through h1, so h3 conveys Read too. Gus gets
+/// Read. Edit would require h1 and h2 to certify each other.
+pub fn mutually_covered_edges_cannot_lift_each_other<K: Keyline + Default>() {
+    let h1 = d(EVE, FRANK, DOC, Power::Admin);
+    let h2 = d(FRANK, EVE, DOC, Power::Admin);
+    let h3 = d(FRANK, GUS, DOC, Power::Admin);
+    let g: K = build([
+        d(DOC, EVE, DOC, Power::Read).into(),
+        d(DOC, MODS, DOC, Power::Edit).into(),
+        d(MODS, EVE, MODS, Power::Admin).into(),
+        d(DOC, MODS_B, DOC, Power::Edit).into(),
+        d(MODS_B, FRANK, MODS_B, Power::Admin).into(),
+        h1.into(),
+        h2.into(),
+        h3.into(),
+        r(MODS, &h1).into(),
+        r(MODS_B, &h2).into(),
+        r(MODS_B, &h3).into(),
+    ]);
+    assert!(g.is_live(&h1.digest()) && g.is_live(&h2.digest()) && g.is_live(&h3.digest()));
+    assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
+    assert_eq!(power(&g, DOC, FRANK), Some(Power::Edit));
+    assert_eq!(power(&g, DOC, GUS), Some(Power::Read));
+}
+
 pub fn revocation_may_arrive_before_its_target<K: Keyline + Default>() {
     let (mut g, _, alice_member) = standard::<K>();
     let mut early = K::default();

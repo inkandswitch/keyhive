@@ -118,7 +118,7 @@ _Reopen if._ Never; this is a correctness requirement, not a trade.
 
 _Proposal._ On revisiting a node during route search, assume live.
 
-_Rejected because._ Ungrounded cycles become self-certifying: a ring of keys delegating to each other with no root edge would grant themselves authority. Least fixed point (assume dead on revisit) is the only sound choice. Noted in [README, Cost](README.md#cost).
+_Rejected because._ Ungrounded cycles become self-certifying: a ring of keys delegating to each other with no root edge would grant themselves authority. Least fixed point (assume dead on revisit) is the only sound choice. The same holds for caps: they rise from `Relay`, because caps descending from `power` would let two covered edges on each other's avoiding derivation certify each other's level ([implementation, Evaluation](implementation.md#evaluation)). Noted in [README, Cost](README.md#cost).
 
 _Reopen if._ Never.
 

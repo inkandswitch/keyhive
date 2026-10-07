@@ -150,7 +150,8 @@ pub mod naive {
         level(&facts(set), &BTreeSet::new(), &|_| true, &|_, d| d.power)
     }
 
-    /// Both strata: the live set (LFP) and caps (GFP), then the live levels.
+    /// Both strata: the live set and the caps, each a least fixed point, then
+    /// the live levels.
     pub fn evaluate<C>(set: &CertSet<C>) -> Evaluation {
         let f = facts(set);
         let none = BTreeSet::new();
@@ -198,8 +199,10 @@ pub mod naive {
             live.extend(added);
         }
 
+        // Caps rise from `Relay`: a live edge conveys at least that, and only
+        // a grounded derivation can raise it further.
         let mut cap: BTreeMap<Digest<Delegation>, Power> =
-            f.dels.iter().map(|(h, d)| (*h, d.power)).collect();
+            f.dels.iter().map(|(h, _)| (*h, Power::Relay)).collect();
         loop {
             let mut changed = false;
             for (h, d) in &f.dels {
@@ -212,7 +215,7 @@ pub mod naive {
                     current[x].min(d.power)
                 })[&(d.subject, d.issuer)];
                 let next = d.power.min(at_iss);
-                if next < cap[h] {
+                if next > cap[h] {
                     cap.insert(*h, next);
                     changed = true;
                 }

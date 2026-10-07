@@ -256,12 +256,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "arbitrary")]
     fn decode_is_canonical() {
-        // Any byte string that decodes must re-encode to itself.
-        bolero::check!().with_type::<Vec<u8>>().for_each(|bytes| {
-            if let Ok(d) = Delegation::decode(bytes) {
-                assert_eq!(d.encode().as_bytes(), bytes.as_slice());
-            }
-        });
+        crate::test_utils::decode_is_canonical_near::<Delegation>();
     }
 }

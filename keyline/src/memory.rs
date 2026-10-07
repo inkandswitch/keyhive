@@ -22,7 +22,7 @@
 //! stratum 2   live      = least fixed point:  h joins when issuer(h) is reachable
 //!                         from subject(h) over live edges avoiding covered(h),
 //!                         and audience(h) has not revoked h itself
-//!             cap       = greatest fixed point from power: covered h conveys at most
+//!             cap       = least fixed point from Relay: covered h conveys at most
 //!                         the level issuer(h) holds on a derivation avoiding covered(h)
 //!
 //! query       search(s, exclude ∅, live edges, cap)
@@ -262,65 +262,65 @@ impl<C: Encode + Decode> MemoryKeyline<C> {
         })
     }
 
-    /// Stratum 2, level: the greatest fixed point of covered-edge caps,
-    /// iterated down from `power`. Uncovered edges are absent; their cap is `power`.
+    /// Stratum 2, level: the least fixed point of covered-edge caps, rising
+    /// from `Relay`. Uncovered edges are absent; their cap is `power`.
     ///
-    /// Kleene iteration from the top: each round computes the next caps from
-    /// the current ones and stops when they are equal. A cap only ever takes
-    /// the `min` of itself and its new bound, so the sequence descends a
-    /// finite lattice and must reach equality.
+    /// A live covered edge conveys at least `Relay`: being live means its
+    /// issuer has a grounded derivation that avoids `covered(h)`. Each round
+    /// raises a cap to `min(power, issuer's level on that derivation)` under
+    /// the current caps, and iteration stops when a round changes nothing.
+    /// Rising from the bottom is what keeps levels grounded: two covered edges
+    /// on each other's avoiding derivation cannot lift each other above what
+    /// some derivation outside the cycle supports. Caps only rise, within
+    /// `power`, so the iteration terminates.
     fn caps(
         &self,
         contexts: &[Context],
         live: &Set<Digest<Delegation>>,
     ) -> Map<Digest<Delegation>, Power> {
-        let mut cap: Map<Digest<Delegation>, Power> = contexts
+        // `live` is fixed for the whole iteration, so each context's live
+        // covered edges are too.
+        let edges_by_context: Vec<(&Context, Vec<(&Digest<Delegation>, &Delegation)>)> = contexts
             .iter()
-            .flat_map(|c| c.edges.iter())
-            .filter(|h| live.contains(h))
-            .filter_map(|h| self.delegations.get(h).map(|d| (*h, d.power)))
-            .collect();
-
-        loop {
-            let mut next = cap.clone();
-
-            for ctx in contexts {
-                let edges: Vec<(&Digest<Delegation>, &Delegation)> = ctx
+            .map(|ctx| {
+                let edges = ctx
                     .edges
                     .iter()
                     .filter(|h| live.contains(h))
                     .filter_map(|h| self.delegations.get(h).map(|d| (h, d)))
                     .collect();
-                if edges.is_empty() {
-                    continue;
-                }
+                (ctx, edges)
+            })
+            .filter(|(_, edges): &(_, Vec<_>)| !edges.is_empty())
+            .collect();
 
+        let mut cap: Map<Digest<Delegation>, Power> = edges_by_context
+            .iter()
+            .flat_map(|(_, edges)| edges.iter().map(|(h, _)| (**h, Power::Relay)))
+            .collect();
+
+        loop {
+            let mut next = cap.clone();
+
+            for (ctx, edges) in &edges_by_context {
                 let levels = self.search(
                     edges.iter().map(|(_, d)| d.subject),
                     &Params::live(Some(&ctx.exclude), live, Some(&cap)),
                 );
                 for (h, d) in edges {
-                    // A live edge's issuer is reachable on its avoiding
-                    // derivation — that is what made it live — so both lookups
-                    // succeed. Were one ever to fail there would be nothing to
-                    // lower, which is what skipping does.
-                    let (Some(at_iss), Some(current)) = (
-                        levels
-                            .get(&d.subject)
-                            .and_then(|m| m.get(&d.issuer))
-                            .copied(),
-                        cap.get(h).copied(),
-                    ) else {
-                        continue;
-                    };
-                    next.insert(*h, current.min(d.power.min(at_iss)));
+                    // Liveness found a grounded avoiding derivation, so the
+                    // issuer is reached; a miss would leave the cap at `Relay`.
+                    if let Some(at_iss) = levels.get(&d.subject).and_then(|m| m.get(&d.issuer)) {
+                        let raised = cap[*h].max(d.power.min(*at_iss));
+                        next.insert(**h, raised);
+                    }
                 }
             }
 
             if next == cap {
                 return cap;
             }
-            trace!("cap descent round");
+            trace!("cap ascent round");
             cap = next;
         }
     }
@@ -691,6 +691,11 @@ mod tests {
     #[test]
     fn covered_edges_are_clamped_not_just_gated() {
         scenarios::covered_edges_are_clamped_not_just_gated::<MemoryKeyline>();
+    }
+
+    #[test]
+    fn mutually_covered_edges_cannot_lift_each_other() {
+        scenarios::mutually_covered_edges_cannot_lift_each_other::<MemoryKeyline>();
     }
 
     #[test]

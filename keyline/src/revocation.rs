@@ -373,11 +373,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "arbitrary")]
     fn decode_is_canonical() {
-        bolero::check!().with_type::<Vec<u8>>().for_each(|bytes| {
-            if let Ok(r) = Revocation::<Retained>::decode(bytes) {
-                assert_eq!(r.encode().as_bytes(), bytes.as_slice());
-            }
-        });
+        crate::test_utils::decode_is_canonical_near::<Revocation<Retained>>();
     }
 }
