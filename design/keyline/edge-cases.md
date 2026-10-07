@@ -36,8 +36,8 @@ Bob's revocation of Eve's delegation and Mallory's revocation of Frank's are _st
 
 |                    | Bob revokes Eve | Mallory revokes Frank   |
 |--------------------|-----------------|-------------------------|
-| Upstream rule      | valid — desired | valid — unbounded grief |
-| Anchor-scoped rule | invalid         | invalid — contained     |
+| Upstream rule      | valid, desired  | valid, unbounded grief  |
+| Anchor-scoped rule | invalid         | invalid, contained      |
 
 Under the _upstream rule_ (a revocation's issuer must be upstream of the edge it revokes, evaluated against the revocation-free graph), both revocations are valid, both are permanent, and both are immune to the concurrent rotation: stratum 1 sees `#s1` as a fact forever, so each issuer's justification holds regardless of merge order. This is the strata doing their job, and the grief doing its worst.
 
@@ -67,10 +67,10 @@ The retail/wholesale distinction collapses to a latency gap: a removed admin's e
 
 When `#s4` re-supplies the existing `members1` node, revival is _wholesale, not selective_: every dormant `members1`-anchored certificate whose issuer still stands re-energizes at once by late binding. Nobody chooses. Deny-state survives by two different mechanisms depending on layer:
 
-| Layer                                             | Mechanism                                                | Property                                                                                                      |
-|---------------------------------------------------|----------------------------------------------------------|---------------------------------------------------------------------------------------------------------------|
-| At the rotated node (`mods1 → mods2`)             | Fresh hashes; revoke = selective omission from the sweep | Requires the sweeper to have synced the revocations — an unsynced revocation means a faithful, wrong re-issue |
-| Below the rotation boundary (`members1` and down) | Hashes unchanged; existing revocations keep biting       | Automatic, zero action — but only _explicit_ revocations. Implicit (cascade) deaths revive with the supply    |
+| Layer                                             | Mechanism                                                | Property                                                                                                     |
+|---------------------------------------------------|----------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| At the rotated node (`mods1 → mods2`)             | Fresh hashes; revoke = selective omission from the sweep | Requires the sweeper to have synced the revocations: an unsynced revocation means a faithful, wrong re-issue |
+| Below the rotation boundary (`members1` and down) | Hashes unchanged; existing revocations keep biting       | Automatic, zero action, but only _explicit_ revocations. Implicit (cascade) deaths revive with the supply    |
 
 Corollary: a death that must survive re-supply must be revoked explicitly. Omission works only at a layer whose hashes are being regenerated.
 
@@ -80,8 +80,8 @@ In every variant considered, revoking an admin's membership removes what they ha
 
 |                              | Removes access (delegations die) | Removes revocation power (grief ends) |
 |------------------------------|----------------------------------|---------------------------------------|
-| Regular revocation           | yes                              | no — ever                             |
-| Issuer revocation / rotation | yes, collaterally                | yes — the only thing that does        |
+| Regular revocation           | yes                              | no, ever                              |
+| Issuer revocation / rotation | yes, collaterally                | yes, the only thing that does         |
 
 The reason is structural and shared: revocation validity must ignore other revocations (mutual invisibility) or concurrent revocations become merge-order dependent. So a removed admin's removal is invisible to the validity check on their subsequent revocations. Only removing the supply line they ride (revocation by its issuer, hence rotation) ends revocation power. Every removal of an admin is therefore incomplete until the follow-up rotation, in every design on the table.
 
@@ -145,7 +145,7 @@ Costs: the timeless core dies. Evaluation is no longer a pure function of an uno
 
 A trap to refuse if option 2 is chosen: punishing equivocation. Detecting a forked stream and invalidating it voids the forker's _legitimate_ old revocations, which is non-monotone revocation validity through the back door. Accept both branches; the named-hash bound already confines what forking buys.
 
-### Option 3: Jurisdiction-Scoped Blocks — Scope the Effect, Not the Validity
+### Option 3: Jurisdiction-Scoped Blocks (Scope the Effect, Not the Validity)
 
 The options above, and the whole 2×2 grid of "the revocation's issuer ⟨ever/currently⟩ controls a node ⟨ever/currently⟩ on the target's path," scope a revocation's _validity_ by topology, and every cell lands on Mallory, fail-open, or causal order. The escape is to scope the _effect_ instead. First, the invariant the path-scoped family violates, which any candidate must satisfy:
 
@@ -172,7 +172,7 @@ Revocation by the issuer (issuer kills their own certificate) and revocation by 
 - _Local validation._ Anchorability at N is checkable against N's own membership certificates (under flatness, roster membership) with no global path search. Partial-visibility friendly.
 
 > [!NOTE]
-> The root-safety claim above depends on the root edge's level, not on a rule. Admin reach is composed (Admin standing over a node through a role puts the node in reach), so an Admin-rooted document is in every apex admin's reach and its root edge is revocable by any of them. This is accepted: bricking is not a new power ([README, Griefing](README.md#griefing)). An Edit-rooted document is in nobody's reach and its root edge is irrevocable. See [README, Who Can Revoke the Root Edge](README.md#who-can-revoke-the-root-edge) and [patterns, Rooting Level](patterns.md#rooting-level).
+> The root-safety claim above depends on the root edge's level, not on a rule. Admin reach is composed (Admin standing over a node through a role puts the node in reach), so an Admin-rooted document is in every apex admin's reach and its root edge is revocable by any of them. This is accepted: bricking is not a new power ([README, Griefing](README.md#griefing)). An Edit-rooted document is in nobody's reach and its root edge is irrevocable. The same holds one layer down: `#s1` gives `mods1` Admin over `doc1`, so under composed reach Mallory holds `doc1` itself in her reach, and rotating `mods1` does not contain her. Containment by rotation needs the role to hold at most Edit over the document ([patterns, Rotating a Role](patterns.md#rotating-a-role)). See [README, Who Can Revoke the Root Edge](README.md#who-can-revoke-the-root-edge) and [patterns, Rooting Level](patterns.md#rooting-level).
 
 #### Stratification
 
@@ -192,8 +192,8 @@ Every path through the scenario arrives at the same choice about third-party rev
 | Design A, anchor-scoped | unconditional, roster-local | contained to rosters she sat on | no | timeless, 2 strata | pays for permanence without the feature it bought |
 | Option 1 | conditional on live topology | ends at rotation | yes, until the path rotates | timeless, 3 strata | fail-open windows; revival lever; perpetual re-signing |
 | Option 2 | ordered (pre-removal only) | one bounded backdated sweep | yes | causal DAGs per pair | ordering metadata; purity lost |
-| Issuer revocation & rotate (Design B) | none | zero | no — via Dan or rotation | timeless, semipositive | coarse removal collectively punishes (Finding 7); peer-removal gap |
-| Jurisdiction-scoped blocks (option 3) | permanent in validity, scoped in effect | contained to her admin reach, by construction | yes — re-scoped per rotation | timeless, 2 strata | re-scope on rotation (moot, not void); apex block power; epoch grief until rotation |
+| Issuer revocation & rotate (Design B) | none | zero | no: via Dan or rotation | timeless, semipositive | coarse removal collectively punishes (Finding 7); peer-removal gap |
+| Jurisdiction-scoped blocks (option 3) | permanent in validity, scoped in effect | contained to her admin reach, by construction | yes: re-scoped per rotation | timeless, 2 strata | re-scope on rotation (moot, not void); apex block power; epoch grief until rotation |
 
 Unconditional revocations buy durable removal and cost permanent grief. Conditional revocations cost fail-open revival. Ordered revocations cost the timeless core. No revocations cost removal ergonomics. Option 1 is not a stable point; it decomposes into a mix of the first and last. Option 3 is the genuine fourth point, reached by scoping a revocation's _effect_ rather than its _validity_: revocations stay unconditional (monotone, permanent) while their reach is confined to a jurisdiction. It preserves the timeless core, deep revocations, revival with provenance, and spatial containment as a theorem. Option 3 was adopted, and then simplified further by the second convergence below, which eliminated the explicit jurisdiction field in favor of the issuer's admin reach and dissolved option 3's one residual cost (re-scoping blocks on rotation).
 
@@ -201,7 +201,7 @@ Unconditional revocations buy durable removal and cost permanent grief. Conditio
 
 A second pass interrogated every certificate field. Each elimination follows the same move: where a certificate format wants a _mode_, the graph wants a _vertex_.
 
-### `from` on delegations — eliminated
+### `from` on delegations: eliminated
 
 The field did three jobs; each has a node-based replacement that is structurally stronger:
 
@@ -211,15 +211,15 @@ The field did three jobs; each has a node-based replacement that is structurally
 | Pinning (act dies with my standing in a role, regardless of my other routes) | Sub-scoped intermediary (`M2`): route the delegation through a node whose inbound is `subject`-pinned, and whose creation edge (signed by `M2`'s own key) gives the issuer standing over it ([patterns, Pinning](patterns.md#pinning-sub-scoped-intermediaries)) | The pin is topological: leakage onto the issuer's other standings is inexpressible, not just forbidden |
 | Capacity filing ("what did Dan do as a mod") | Capacity key (`D_m`): a dedicated keypair whose only inbound is a pinned membership | Enumeration is `issuer: D_m`; collective kill is one revocation of the capacity key's inbound; leakage onto personal standing is topologically impossible |
 
-The decisive argument against keeping `from`: rotation. Certificates anchored by a field die when the anchor rotates and must be enumerated and re-signed: the sweep exists _because_ the field exists. With no anchor field, members' delegations ride whatever membership is live: rotation re-issues exactly the roster, and everything survivors issued re-grounds automatically. Rotation cost fell from $O(\text{certs at the node})$ to $O(\text{roster})$, and the spine pattern became unnecessary, since every delegation is spine-like natively.
+The decisive argument against keeping `from`: rotation. Certificates anchored by a field die when the anchor rotates and must be enumerated and re-signed: the sweep exists _because_ the field exists. With no anchor field, members' delegations ride whatever membership is live: rotation re-issues exactly the roster, and everything survivors issued about other subjects re-grounds automatically (memberships they issued in the old role are part of the roster, and are re-issued with it). Rotation cost fell from $O(\text{certs at the node})$ to $O(\text{roster})$, and the spine pattern became unnecessary, since every delegation is spine-like natively.
 
 What was checked before cutting: the total-kill guarantee (a block on an unpinned cert is per-route and future-open, since the issuer gaining a new route revives the target silently; answered by pinning-via-`subject` for certs that want total killability), and the multi-hatted issuer case (Dan with a personal route: his `subject`-pinned acts still die with the pinned standing). An _optional_ `from` (pin bit) was considered and rejected: it had to be required or removed.
 
-### `nonce` vs `citation` — `citation` won on fail-direction
+### `nonce` vs `citation`: `citation` won on fail-direction
 
 An identical re-issuance is byte-identical, so healing needs a freshness field; a nonce fails open on accidental duplicates, while `citation` fails closed. The argument is in [alternatives, A random nonce instead of `citation`](alternatives.md#a-random-nonce-instead-of-citation).
 
-### `via` on revocations — collapsed into the issuer
+### `via` on revocations: collapsed into the issuer
 
 Option 3's block named its jurisdiction explicitly. Two refinements removed the field:
 
@@ -228,7 +228,7 @@ Option 3's block named its jurisdiction explicitly. Two refinements removed the 
 
 With the scope derivable from `issuer`, the revocation is `{issuer, revoke, sig}`.
 
-### The self-axiom — revocation by the issuer becomes a corollary
+### The self-axiom: revocation by the issuer becomes a corollary
 
 Add `admin_reach(K) ⊇ {K}` (every key governs its own node). A cert's route runs from the subject to its _issuer_, and the issuer is in their own admin reach, so a revocation by the target's issuer is automatically _total_: revocation by the issuer stops being a special case. The audience is where a route delivers, not a node it transits, so revocation by the audience does not fall out the same way; it is the one explicit clause, by the audience's signature (`¬rev(audience, h)`). Counting the audience within admin-reach coverage was rejected because it would let anyone who ever held Admin in `Owners` revoke `Doc → Owners` regardless of rooting level. Granted in passing: any intermediate, at any level, can refuse to let their own standing carry a third party's cert. That is deny-only, confined to their own hop, and never needed by anyone who can revoke their own incoming delegation.
 

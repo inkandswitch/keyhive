@@ -13,7 +13,7 @@
 | Edge cases / field eliminations               | `edge-cases.md`                             |
 | Patterns (roles, pinning, rotation)           | `patterns.md`                               |
 | Crate                                         | `../../keyline/`                            |
-| Reference implementation                      | `../../keyline/src/memory.rs`               |
+| Reference implementation                      | `../../keyline_memory/`                     |
 | Conformance scenarios and laws (the contract) | `../../keyline/src/test_utils/conformance/` |
 
 Where this document and the conformance suite disagree, the suite wins. The SQL below is illustrative; the in-repository evaluator is `MemoryKeyline`.
@@ -65,14 +65,14 @@ The authority graph is the _least_ fixpoint. A clique of delegations vouching fo
 
 ### Worked Sketch: Five Certificates (and a Cycle)
 
-A minimal set exercising every mechanism. One subject (Doc), one role (Members), and a sponsorship into the role:
+A minimal set exercising every mechanism. One subject (Doc), one role (Members), and a membership issued by a member:
 
 | #   | Certificate                                            | Kind                                      |
 |-----|--------------------------------------------------------|-------------------------------------------|
 | 1   | `{issuer: Doc, audience: Alice, subject: Doc}`         | root (subject self-grounds)               |
 | 2   | `{issuer: Alice, audience: Members, subject: Doc}`     | supply (role receives Doc-standing)       |
 | 3   | `{issuer: Members, audience: Alice, subject: Members}` | roster (role self-grounds its membership) |
-| 4   | `{issuer: Alice, audience: Bob, subject: Members}`     | sponsorship: the role-rule AND-node       |
+| 4   | `{issuer: Alice, audience: Bob, subject: Members}`     | membership: the role-rule AND-node        |
 | 5   | `{issuer: Bob, audience: Dan, subject: Doc}`           | direct delegation riding derived standing |
 
 ```mermaid
@@ -89,7 +89,7 @@ flowchart LR
     c1["#1 root"]:::cert
     c2["#2 supply"]:::cert
     c3["#3 roster"]:::cert
-    c4["#4 sponsor"]:::cert
+    c4["#4 membership"]:::cert
     c5["#5 direct"]:::cert
 
     Doc ==> c1 ==> Alice
@@ -116,7 +116,7 @@ What the example shows:
 
 - _One certificate, two kinds of fact._ #4 delivers `R(Members, Bob)` (round 2: the roster feed alone suffices when the evaluated subject _is_ the role) and `R(Doc, Bob)` (round 3: both feeds required). Membership conveys everything the role reaches, now and later: supply the role with a second subject and Bob inherits it with no new certificate. `subject` is a scope, not an endpoint.
 - _The cycle is benign._ #2 and #3 form `Alice → Members → Alice`. The role route back into Alice grounds through Alice's own root standing, so it is min-clamped to what she already had. Cycles amplify nothing; only subjects ground (least fixpoint, revisited nodes treated as dead).
-- _False redundancy._ Alice has OR fan-in (the direct root and the route around the role), but the role route transits her own root delegation: revoke #1 and every fact from round 1 onward dies. Redundant routes defend only when they are disjoint through distinct roles, and a loop through your own standing is not disjoint at all. Real redundancy here requires an _independent_ supply into Members from a second holder of standing over Doc.
+- _False redundancy._ Alice has OR fan-in (the direct root and the route around the role), but the role route transits her own root delegation: revoke #1 and every fact about Doc from round 1 onward dies. Redundant routes defend only when they are disjoint through distinct roles, and a loop through your own standing is not disjoint at all. Real redundancy here requires an _independent_ supply into Members from a second holder of standing over Doc.
 - _Variant:_ change #5 to `subject: Members` and Dan joins the role instead: two feeds, lands in round 3, and inherits whatever the role reaches later. Delegating power over a thing and delegating membership differ in one field.
 
 Extend with two revocations (assigning levels `#1/#3 Admin, #2/#4 Edit, #5 Read`) and the full pipeline becomes exercisable:
@@ -162,9 +162,9 @@ Properties an evaluator relies on:
 
 _Where the difficulty is._ Entirely in the positive pass: stratum 1, delegation semantics, `subject`-as-scope. A Keyline with zero revocations has it in full. Coverage and replay, which look like the complicated parts, are a join and an anti-join over an already-computed relation. No redesign of revocations touches this; the rejected `subject`-on-`Revocation` field ([alternatives](alternatives.md#a-subject-field-on-revocation)) would have left it exactly as it is. Conversely, deleting `subject`-as-scope from delegations would collapse the whole thing to per-subject reachability, and delete the role system with it.
 
-_What "hard" means here._ Not slow. The evaluation is polynomial with small constants; `MemoryKeyline` answers `members()` in about a millisecond for a document with 180 members. The claim is about _expressibility_: the rule cannot be written as a single recursive SQL query, so a backend needs a driver loop. Even the P-completeness inherited below would mean _in P_; it says nothing about the constants.
+_What "hard" means here._ It is not a cost claim: the evaluation is polynomial with small constants; `MemoryKeyline` answers `members()` in about a millisecond for a document with 180 members. The claim is about _expressibility_: the rule cannot be written as a single recursive SQL query, so a backend needs a driver loop. Even the P-completeness inherited below would mean _in P_; it says nothing about the constants.
 
-### The rule that causes it
+### The Rule That Causes It
 
 ```text
 rule 2:  reaches(n, audience, …) :- reaches(n, issuer, l), del(_, issuer, audience, n, power)
@@ -176,7 +176,7 @@ rule 3:  reaches(s, x, …)        :- reaches(s, n, l₁), reaches(n, x, l₂)
 
 Rule 2 is linear, and linear is exactly what `WITH RECURSIVE` implements: SQLite and PostgreSQL allow the recursive self-reference once, not inside a subquery, aggregate, or the nullable side of an outer join, because the working-table algorithm joins in-progress rows against base tables only. Rule 3 has two, so it is not expressible there verbatim.
 
-### "Isn't that just the ancestor rule?"
+### "Isn't That Just the Ancestor Rule?"
 
 It is. The textbook pair
 
@@ -196,7 +196,7 @@ Owners → Bob      (subject: Owners)
 
 `reaches(Doc, Owners)` and `reaches(Owners, Bob)` each come from rule 2. `reaches(Doc, Bob)` comes only from rule 3: there is no `subject: Doc` edge into Bob, so no sequence of rule-2 steps in Doc's graph derives it, and the missing step lies in a different edge set. The relation being closed over is an output of the closure.
 
-### What is and is not established
+### What Is and Is Not Established
 
 | Claim | Status |
 |---|---|
@@ -243,7 +243,7 @@ Options, from most to least appropriate:
 | "Is Bob reachable from Doc over _given_ edges?"                                                                    | NL: transitive closure       | one `WITH RECURSIVE`; SQL's home turf    |
 | "Is Bob reachable from Doc, where each edge only _counts_ if two other reachability facts already hold?" (Keyline) | Non-linear fixpoint (see §4) | exceeds `WITH RECURSIVE`; needs the loop |
 
-Reachability is not the problem; _this_ reachability is. The edge set is an output of the search (a delegation conducts only once both its feeds are derived), so the graph and the search over it are one entangled fixpoint. Delete feed 2, or make it a base-table lookup, and the whole pipeline drops back into NL and single-statement SQL. The two-feed rule _is_ the role system.
+Plain reachability is easy; the difficulty is that edge usability is derived. The edge set is an output of the search (a delegation conducts only once both its feeds are derived), so the graph and the search over it are one entangled fixpoint. Delete feed 2, or make it a base-table lookup, and the whole pipeline drops back into NL and single-statement SQL. Removing feed 2 would remove roles.
 
 ### An SQL Sketch
 
@@ -324,7 +324,7 @@ This is why Keyline's lineage (Binder, SecPAL) chose the language: it is the sma
 
 ### Incremental Evaluation: DBSP
 
-DBSP (the Z-set/stream-circuit theory under Feldera; Budiu, McSherry et al.) is the natural engine for this workload. Z-sets are multisets with signed multiplicities, so _retractions are first-class_, and any query circuit, including recursive fixpoints and stratified negation, can be mechanically differentiated into an incremental circuit that processes input deltas in time proportional to change size. Its distinctive construction is nested time: fixpoint iteration (inner clock) and input evolution (outer clock) as two stream dimensions, incrementalized independently. Semi-naive evaluation falls out as the derivative of naive evaluation; `MemoryKeyline`'s semi-naive loops are that inner-clock derivative, written by hand.
+DBSP (the Z-set/stream-circuit theory under Feldera; Budiu, McSherry et al.) is the natural engine for this workload. Z-sets are multisets with signed multiplicities, so _retractions are first-class_, and any query circuit, including recursive fixpoints and stratified negation, can be mechanically differentiated into an incremental circuit that processes input deltas in time proportional to change size. Its distinctive construction is nested time: fixpoint iteration (inner clock) and input evolution (outer clock) as two stream dimensions, incrementalized independently. Semi-naive evaluation falls out as the derivative of naive evaluation. `MemoryKeyline` is not semi-naive: it iterates to a fixed point, keeping only new delegations each round, but re-runs the full search every round.
 
 What the outer clock buys, against `MemoryKeyline`:
 
@@ -344,7 +344,7 @@ What DBSP does _not_ fix:
 - _State size gets worse._ Incremental engines trade CPU for resident memory: arrangements (indexes) of every intermediate relation stay materialized. An attacker who cannot burn CPU inflates RSS instead, and eviction brings back recompute.
 - _Eagerness inverts the cost model._ Today insertion is a map write and queries pay. Incrementally, ingest pays and queries are reads. For a replica taking a certificate stream, that means paying for every certificate received, including ones nobody ever asks about. Ungrounded junk is still free, since it derives nothing, but the [gift-cert attack](#single-queries-and-the-gift-cert-attack) gets worse: the attacker's ladder is grounded, so its facts materialize at ingest on every replica that holds them, rather than only on those that ask. A lazy evaluator with memoization pays once, when asked; an eager one pays at ingest, always. Which tier a replica belongs to is decided by this more than by throughput: exposure to junk argues for lazy evaluation, update volume for eager.
 
-`keyline` is `no_std` and targets Wasm; the `dbsp` crate is a std, multithreaded runtime. That suggests two tiers. Embedded replicas (apps, Wasm) run a bottom-up evaluator like `memory.rs`, which can add digest memoization and a stratum-1 frontier cache (`MemoryKeyline` has neither; see §10). Heavy replicas (relays, sync servers, org indexers) run a DBSP/Feldera circuit. That puts the strongest DoS defense where update volume and exposure concentrate. Differential-dataflow/Materialize occupy the same niche; DBSP's edge here is the cleaner theory, a Rust library, and Feldera's SQL frontend with first-class recursive views.
+`keyline` is `no_std` and targets Wasm; the `dbsp` crate is a std, multithreaded runtime. That suggests two tiers. Embedded replicas (apps, Wasm) run a bottom-up evaluator like `keyline_memory::MemoryKeyline`, which can add digest memoization and a stratum-1 frontier cache (`MemoryKeyline` has neither; see §10). Heavy replicas (relays, sync servers, org indexers) run a DBSP/Feldera circuit. That puts the strongest DoS defense where update volume and exposure concentrate. Differential-dataflow/Materialize occupy the same niche; DBSP's edge here is the cleaner theory, a Rust library, and Feldera's SQL frontend with first-class recursive views.
 
 ## 6. Evaluator Implementation Notes
 
@@ -407,13 +407,13 @@ Paging follows the same split, for the same reason. A per-root search chases poi
 
 ## 7. Threat Model: Evaluation Cost as a DoS Surface
 
-Evaluation is superlinear (quadratic fact space; more under dispute), which raises the question: can an adversary weaponize the evaluator? An adversary can, but only from _inside_ the authorization graph, and the boundary between tiers is sharp. The model document's [griefing analysis](README.md#griefing) prices authority-denial; this section prices compute-denial. A member with standing has easier avenues than clever graph constructions: writing very many edges works, much as it would against an Automerge document, and needs no insight at all. What the shapes below buy an attacker is leverage rather than possibility: a role ladder turns 2k certificates into k²/2 facts, so a thousand-odd certificates reach what flooding needs a million for. The leverage lasts only while the attacker does. The derived cost follows liveness and vanishes when the attacker is revoked, though the certificates themselves are add-only and stay.
+Evaluation is superlinear (quadratic fact space; more under dispute), which raises the question: can an adversary weaponize the evaluator? An adversary can, but only from _inside_ the authorization graph, and the boundary between tiers is sharp. The model document's [griefing analysis](README.md#griefing) prices authority-denial; this section prices compute-denial. A member with standing has easier avenues than clever graph constructions: writing very many edges works, much as it would against an Automerge document, and needs no insight at all. The shapes below amplify input: a role ladder turns 2k certificates into k²/2 facts, so a thousand-odd certificates reach what flooding needs a million for. The amplification ends when the attacker is removed. The derived cost follows liveness and vanishes when the attacker is revoked, though the certificates themselves are add-only and stay.
 
-### Tier 0 — Outsiders: storage spam only
+### Tier 0: Outsiders, Storage Spam Only
 
 Anyone can sign anything, but evaluation forward-chains from subjects. A delegation whose issuer never receives standing over its subject produces _zero rule instantiations_, so junk that never grounds never enters the fixpoint.
 
-An outsider's revocation is pruned the same way. A route of the revoked delegation transits only nodes with standing over its subject, and an outsider has none of those in their admin reach. A delegation none of whose covered nodes has such standing behaves exactly like an uncovered one, so it gets no exclusion context. (The exclusion set itself is kept whole, so it still depends only on who revoked the delegation.) It costs storage and a lookup while coverage is computed, and nothing in either stratum's search.
+An outsider's revocation is pruned the same way. A route of the revoked delegation transits only nodes with standing over its subject in the positive graph, and an outsider has none of those in their admin reach. A delegation none of whose covered nodes has such standing behaves exactly like an uncovered one, so it gets no exclusion context. (The exclusion set itself is kept whole, so it still depends only on who revoked the delegation.) It costs storage and a lookup while coverage is computed, and nothing in either stratum's search.
 
 Other defenses come free:
 
@@ -424,7 +424,7 @@ An outsider can also build structure grounded at keys they control: every node s
 
 The residual outsider surface is transport flooding, which the sync layer owns (quotas), not the evaluator.
 
-### Tier 1 — Any member: quadratic inflation, attributable
+### Tier 1: Any Member, Quadratic Inflation, Attributable
 
 Anyone with standing can delegate. The amplifying shape is a _club ladder_:
 
@@ -437,7 +437,7 @@ Linear input, quadratic fact space. Aggravator: evaluation never checks `citatio
 
 Bounds: every certificate is signed, so a spree is a self-incriminating audit trail; scope is limited to documents the attacker is a member of; removal and rotation end growth. Stratum 1 is append-only, so a backend that caches it pays each delta once rather than per query. `MemoryKeyline` does not cache, and pays per query (§10).
 
-### Tier 2 — Anyone who ever held Admin: the cubic version, non-expiring
+### Tier 2: Anyone Who Ever Held Admin, the Cubic Version, Non-Expiring
 
 Disputes multiply. Each third-party deep revocation against an otherwise-live delegation mints an exclusion context, which costs one route search over the fact space. Take an _ex_-admin (frozen reach; permanence means their revocations stay valid forever) covering each of the k ladder delegations, under a naive per-delegation context encoding:
 
@@ -455,9 +455,9 @@ This is the compute-denial counterpart of the model document's [griefing analysi
 > 2. The evaluator must early-exit exclusion contexts whose target delegations are already underivable in the shared pass. After a rotation, revocations of delegations in the abandoned role then cost a lookup instead of a search. Without this, inert revocations keep their price forever, because permanence means nobody can ever garbage-collect them.
 > 3. Top-down (demand-driven) evaluators must demand the subject-side feed first and short-circuit on its failure, and should memoize failed demands per set state. Role internals (self-grounded rosters, which an attacker shapes to be expensive) must never be explored until the role's standing over the query's subject is established. Bottom-up evaluators never demand anything, so the ordering question does not arise for them; whether they still pay for self-grounded internals depends on whether stratum 1 is global (see the [gift-cert scenario](#gift-cert-scenario)).
 
-### Which n²? A disambiguation
+### Which n²? A Disambiguation
 
-"Quadratic" is doing several jobs in this analysis, and they are routinely conflated with each other and with unrelated n²'s from graph algorithms:
+"Quadratic" has several meanings here, and they are routinely conflated with each other and with unrelated n²'s from graph algorithms:
 
 | #   | The n²                         | Nature                                                                                                                                                                                                                   |
 |-----|--------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -468,7 +468,7 @@ This is the compute-denial counterpart of the model document's [griefing analysi
 
 Keyline's k² is #3: because roles are themselves subjects, the fact space is `(subject × node)`. Materializing all standing is inherently closure-shaped, and the role ladder makes the closure contain Θ(k²) true facts. No evaluator avoids Ω(output).
 
-### Single queries and the gift-cert attack
+### Single Queries and the Gift-Cert Attack
 
 For a single existence query ("does Dan have Read over Doc?") the output is one bit, so bound #3 vanishes, and honest and adversarial graphs come apart:
 
@@ -485,7 +485,7 @@ The forcing construction, the _gift-cert attack_, is why demand-driven evaluatio
    nested rosters: self-grounded, expensive to walk, relevant to no one.
    A demand-driven evaluator pays nothing for it while it is unaimed.
 2. Attacker signs ONE delegation, the "gift":
-   {issuer: attacker, audience: victim, subject: ladder_top}
+   {issuer: attacker, audience: victim, subject: roleₖ}  (the bottom rung)
    No acceptance step exists; it is in the set after sync.
 3. The victim's own access check now has the ladder as a candidate route.
    An existence search must explore candidates (any one might be the
@@ -494,21 +494,21 @@ The forcing construction, the _gift-cert attack_, is why demand-driven evaluatio
 
 The problem family (RT₀ chain discovery / pushdown reachability) is believed to carry conditional lower bounds that apply to _single-pair_ queries, unlike plain reachability where single-source really is linear. So this is probably not an evaluator deficiency, though see §4 on how much weight that literature can bear here.
 
-### Why the gift-cert attack is survivable: cost follows liveness
+### Why the Gift-Cert Attack Is Survivable: Cost Follows Liveness
 
 The certificates are permanent, but their evaluation cost follows liveness. The quadratic requires two things simultaneously, and a revocation can kill either:
 
 | Component                    | Permanent?              | Killed by                                                                                                                                                                                                                                                                                                                                                                                                 |
 |------------------------------|-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Certificates (storage)       | yes (add-only set)      | nothing (quotas bound growth)                                                                                                                                                                                                                                                                                                                                                                             |
-| Ladder's k² fixpoint cost    | no (follows liveness)   | removing the attacker: the ladder's standing over Doc rides their membership, so it dies in the ordinary cascade; dead facts are never derived                                                                                                                                                                                                                                                            |
+| Ladder's k² fixpoint cost    | no (follows liveness)   | removing the attacker: the ladder's standing over Doc rides the attacker's standing over Doc, so it dies in the ordinary cascade; dead facts are never derived                                                                                                                                                                                                                                                            |
 | Demand-path relevance        | no                      | the victim _revoking_ the gift: it names them as `audience`, so revocation by the audience is unconditional and total. Re-gifts need fresh hashes (varied `citation`; identical fields collide with the revoked hash and silently fail), are rate-bounded, each revocable by the audience individually, and each is a fresh signed artifact naming the victim                                             |
 | Dead-ladder exploration bait | no (evaluator artifact) | obligation 3 above (subject-first ordering); note a removed attacker's ladder stays _internally_ self-grounded, which is exactly what obligation 3 defends against                                                                                                                                                                                                                                        |
 | Revival risk                 | latent                  | fresh-key re-add discipline: the DoS analysis independently supports the model document's compromise-hygiene rule, since a same-key re-add revives the ladder's cost along with everything else. A fresh key is not the whole story: the attacker still holds Admin seats inside the ladder, so supplying its top again under _any_ key regrounds the attacker, and with them the old supply and the gift |
 
 The gift certificate is signed by the attacker and names the victim, so attribution is direct. And the keys that can inflict this cost are keys the victim already depends on: to force expensive queries on a victim, the attacker must sit upstream-adjacent to the victim's demanded routes, and upstream parties already hold outright deny-power ([griefing](README.md#griefing)). Demand-driven evaluation aligns "who can burn your CPU" with "who could already revoke the delegations you depend on," adding little marginal power.
 
-### Non-issues
+### Non-Issues
 
 | Worry                       | Why it is not one                                                                                                                                |
 |-----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -516,7 +516,7 @@ The gift certificate is signed by the attacker and names the victim, so attribut
 | Deep chains → many rounds   | Serializes latency, not work: semi-naive total work is bounded by fact count                                                                     |
 | Unrelated documents' graphs | Queries root at one subject; you pay only for graphs you replicate                                                                               |
 
-### Mitigation checklist for implementations
+### Mitigation Checklist for Implementations
 
 1. Context dedup by exclusion-set signature (implemented in `MemoryKeyline`): collapses one-key revocation sprees from O(k³) to O(k²)
 2. Early-exit inert disputes (shared pass first; context search only for delegations otherwise live): rotation then restores the compute fast path as well as authority
@@ -551,12 +551,12 @@ Plausible readings of the model that are wrong, and why.
 
 ## 9. Testing an Evaluator
 
-- `keyline/src/test_utils/conformance/{scenarios,laws}.rs` are a ready-made corpus; `memory.rs` is the reference implementation to differential-test against. A backend runs the whole suite with `keyline_conformance!(Backend)`.
+- `keyline/src/test_utils/conformance/{scenarios,laws}.rs` are a ready-made corpus; `keyline_memory::MemoryKeyline` is the reference implementation to differential-test against. A backend runs the whole suite with `keyline_conformance!(Backend)`.
 - The laws compare a backend against two oracles in `conformance::oracle`: `naive` (the value form) and `threshold` (a literal transcription of the threshold form).
 - The model document's [Worked Example](README.md#worked-example) (Doc, Dan, Members, Alice, Bob, M2, Carol: pinning, removal, healing, a fresh membership from a surviving admin, and unintended revival on a same-key re-add) exercises every mechanism with about a dozen certificates; encode it first. Its pinning step is the construction `scenarios::pinned_delegation_answers_to_the_role` checks.
 - The laws already cover permutation invariance (the CRDT property) and agreement with both oracles. Further property-based targets (bolero is already in the workspace): monotonicity of stratum 1 under insertion; coverage never retracts under merge; least-fixpoint-ness (no fact without a derivation: inject ungrounded cycles and assert they stay dead).
 
-### Gift-cert scenario
+### Gift-Cert Scenario
 
 A conformance case aimed at demand-driven evaluators:
 
@@ -575,7 +575,7 @@ Each phase has _semantic_ assertions, which change answers and are pinned by `co
 |----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
 | 1. Pre-gift    | The victim holds only her own standing over Doc                                                                                                                                                                                                                                                                               | The victim's query `R(Doc, victim)?` does not explore the ladder                                                                        |
 | 2. Post-gift   | G raises the victim's standing over Doc with no consent                                                                                                                                                                                                                                                                       | The ladder is explored, and the cost is paid once across repeated queries on the same set                                               |
-| 3. Remove      | Revoking the attacker's membership in Doc takes the ladder out of Doc; its internals stay self-grounded and live                                                                                                                                                                                                              | The query does not walk those internals (obligation 3: subject-side feed first). This is the assertion a naive top-down evaluator fails |
+| 3. Remove      | Revoking the delegation that gives the attacker standing over Doc takes the ladder out of Doc; its internals stay self-grounded and live                                                                                                                                                                                      | The query does not walk those internals (obligation 3: subject-side feed first). This is the assertion a naive top-down evaluator fails |
 | 4. Revoke gift | The victim's revocation of G (by the audience) is total, even after the attacker is re-added; an identical re-gift collides with the revoked hash; a varied re-gift (fresh `citation`) is a new hash that needs its own revocation                                                                                            | None                                                                                                                                    |
 | 5. Revive      | Re-adding the attacker's same key revives the ladder and the gift (G not revoked). Re-adding the attacker under a fresh key revives nothing the old key signed, but supplying the ladder's top again under _any_ key regrounds the attacker through their Admin seat in the ladder, and with them the old supply and the gift | The ladder's cost returns with the same-key re-add or a new supply into the ladder, and not with a fresh-key re-add alone               |
 
@@ -587,7 +587,7 @@ An evaluator that forward-chains only from the queried subject passes the cost a
 |---------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Context dedup by exclusion set (§7, obligation 1) | Implemented: `MemoryKeyline::contexts` groups covered delegations by exclusion set; one search per group per round                                                                                                                                                                                                                                                                                                                                                                                           |
 | Early exit on inert disputes (§7, obligation 2)   | Implemented: covered edges whose issuer is unreachable in the shared pass are never searched                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Coverage pruning (§7, Tier 0)                     | Implemented: a revoked delegation none of whose covered nodes has standing over its subject gets no context. The exclusion set of one that does is kept whole, so contexts are still grouped by who revoked                                                                                                                                                                                                                                                                                                  |
+| Coverage pruning (§7, Tier 0)                     | Implemented: a revoked delegation none of whose covered nodes has standing over its subject in the positive graph gets no context. The exclusion set of one that does is kept whole, so contexts are still grouped by who revoked                                                                                                                                                                                                                                                                            |
 | Subject-first demand ordering (§7, obligation 3)  | Not applicable to bottom-up evaluators; binding for any demand-driven one                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Caching (stratum-1 frontier, digest memoization)  | Not implemented: `MemoryKeyline` recomputes both strata on every query                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Gift-cert scenario (§9)                           | `scenarios::gift_cert_attack_follows_liveness` pins the semantic column of §9: the gift needs no consent, removing the attacker drops the ladder out of Doc's graph while its internals stay self-grounded, a same-key re-add revives it, a fresh-key re-add does not but a new supply into the ladder under any key does, revocation by the audience is total, and an identical re-gift collides. The cost column cannot be observed through the trait and remains an obligation for demand-driven backends |
@@ -599,12 +599,10 @@ An evaluator that forward-chains only from the queried subject passes the cost a
 
 Evaluator-specific terms only; for the model's vocabulary see [README, Glossary](README.md#glossary).
 
-| Term              | Meaning                                                                                                                                                                         |
-|-------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| AND-node          | A certificate in the authority graph: conducts iff all feeds are live; output is the min of its feeds and its own `power`                                                       |
-| Authority graph   | Derived standing facts (the model document's term); recomputed per evaluation; stored nowhere. The _positive graph_ is the same thing computed blind to revocations (stratum 1) |
-| Exclusion context | The set of nodes a search must avoid for the covered delegations that share it; one per distinct exclusion set, plus the empty one                                              |
-| Message graph     | The stored certificate set; append-only; merge is set union                                                                                                                     |
-| OR-node           | A principal in the authority graph: standing is the max over incident conducting certificates                                                                                   |
-| Path vs tree      | Linear vs non-linear derivation shape; the boundary between `WITH RECURSIVE` and a driver loop                                                                                  |
-| Role rule         | The non-linear derivation step: a delegation whose subject is a role needs the role's standing over the evaluated subject AND the issuer's standing in the role                 |
+| Term              | Meaning                                                                                                                                                         |
+|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| AND-node          | A certificate in the authority graph: conducts iff all feeds are live; output is the min of its feeds and its own `power`                                       |
+| Exclusion context | The set of nodes a search must avoid for the covered delegations that share it; one per distinct exclusion set, plus the empty one                              |
+| OR-node           | A principal in the authority graph: standing is the max over incident conducting certificates                                                                   |
+| Path vs tree      | Linear vs non-linear derivation shape; the boundary between `WITH RECURSIVE` and a driver loop                                                                  |
+| Role rule         | The non-linear derivation step: a delegation whose subject is a role needs the role's standing over the evaluated subject AND the issuer's standing in the role |

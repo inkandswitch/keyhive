@@ -2,9 +2,9 @@
 //!
 //! Every method is defined purely in terms of the certificate set, so an
 //! implementation over any store (in memory, DBSP, a database) is correct if and
-//! only if it agrees with the reference [`crate::memory::MemoryKeyline`] on every
-//! set. The conformance suite behind the `test_utils` feature is how a backend
-//! checks that.
+//! only if it agrees with the reference backend, `keyline_memory::MemoryKeyline`,
+//! on every set. The conformance suite behind the `conformance` and
+//! `test_utils` features is how a backend checks that.
 
 use crate::{
     certificate::{CertificateId, VerifiedCertificate},

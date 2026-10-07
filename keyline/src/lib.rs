@@ -10,7 +10,8 @@
 //!
 //! The model is specified in `design/keyline/README.md`; this crate's shape in
 //! `design/keyline/implementation.md`; rejected alternatives in
-//! `design/keyline/alternatives.md`.
+//! `design/keyline/alternatives.md`. The reference backend is the
+//! `keyline_memory` crate.
 //!
 //! # Naming
 //!
@@ -19,7 +20,7 @@
 //! # What this crate does not do
 //!
 //! A backend never checks signatures: [`contract::Keyline::insert`] takes a
-//! [`certificate::VerifiedCertificate`], which outside the `test_utils` feature
+//! [`certificate::VerifiedCertificate`], which outside the `conformance` and `test_utils` features
 //! only [`certificate::Certificate::verify`] can make.
 //! The crate knows nothing of prekeys, CGKA, documents, or groups, and is
 //! synchronous: concurrency is the wrapper's job. A wrapper holds an
@@ -28,9 +29,8 @@
 //!
 //! # `no_std` support
 //!
-//! `no_std` with `alloc`. The `std` feature (default) switches the collections to
-//! `HashMap`/`HashSet` and enables the `std` features of `tracing` and `thiserror`;
-//! both crates are used in every configuration.
+//! `no_std` with `alloc`. The `std` feature (default) enables the `std` features
+//! of `tracing` and `thiserror`; both crates are used in every configuration.
 //!
 //! Builds for `wasm32-unknown-unknown` with `--no-default-features`, which
 //! `ci-no-std` checks. Bare-metal targets without atomic compare-and-swap
@@ -45,14 +45,12 @@ extern crate alloc;
 extern crate std;
 
 pub mod certificate;
-mod collections;
 pub mod contract;
 pub mod delegation;
 pub mod id;
-pub mod memory;
 pub mod power;
 pub mod revocation;
 pub mod signed;
 
-#[cfg(any(test, feature = "test_utils"))]
+#[cfg(any(test, feature = "conformance"))]
 pub mod test_utils;

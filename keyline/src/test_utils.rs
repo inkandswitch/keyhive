@@ -2,12 +2,13 @@
 //! suite in [`conformance`].
 //!
 //! Public so that other backends can run the conformance suite, and gated on
-//! `cfg(test)` and the `test_utils` feature. Not covered by semver.
+//! `cfg(test)` and the `conformance` feature (which `test_utils` implies). Not
+//! covered by semver.
 //!
 //! > [!WARNING]
 //! > [`assume_verified`] builds a [`VerifiedCertificate`] without checking any
-//! > signature, so with `test_utils` enabled the `Verified` witness proves
-//! > nothing. Enable the feature only from dev-dependencies.
+//! > signature, so with either feature enabled the `Verified` witness proves
+//! > nothing. Enable them only from dev-dependencies.
 
 pub mod conformance;
 
@@ -163,7 +164,7 @@ fn issuer_key(issuer: Id) -> SigningKey {
 
 /// One edit to a byte string. Positions wrap modulo the current length, so
 /// every mutation applies to any input.
-#[cfg(feature = "arbitrary")]
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 #[derive(Debug, Clone, arbitrary::Arbitrary)]
 pub enum Mutation {
     Flip { at: usize, mask: u8 },
@@ -172,7 +173,7 @@ pub enum Mutation {
     Truncate { len: usize },
 }
 
-#[cfg(feature = "arbitrary")]
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 impl Mutation {
     pub fn apply(&self, bytes: &mut alloc::vec::Vec<u8>) {
         match *self {
@@ -199,7 +200,7 @@ impl Mutation {
 /// encoding keeps the mutated input near the inputs that matter: tags,
 /// counts, lengths, and trailing bytes. At least one mutation always applies;
 /// the unmutated round trip is the codec laws' job.
-#[cfg(feature = "arbitrary")]
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 pub fn decode_is_canonical_near<T>()
 where
     T: for<'a> arbitrary::Arbitrary<'a> + Encode + Decode + core::fmt::Debug + 'static,

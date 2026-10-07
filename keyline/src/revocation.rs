@@ -95,17 +95,18 @@ impl<W> Verifiable for Revocation<W> {
     }
 }
 
-// Layout:  issuer ‖ revoke ‖ count:u32 ‖ entry*
-//   entry: id ‖ len:u32 ‖ value
+// Layout:  issuer ‖ revoke ‖ count:bijou32 ‖ entry*
+//   entry: id ‖ len:bijou32 ‖ value
 //
 // `retain` is the crate's only variable-length field, so it is the only place
-// canonicality is not free. `decode` rejects unsorted or repeated subjects and
-// unconsumed bytes; lengths are fixed-width big-endian; `W::decode` rejects a
-// non-canonical value.
-const BASE_LEN: usize = Id::LEN + Digest::<Delegation>::LEN + 4;
+// canonicality is not free. bijou32 has one encoding per number by
+// construction; `decode` rejects unsorted or repeated subjects and unconsumed
+// bytes; `W::decode` rejects a non-canonical value.
+const FIXED_LEN: usize = Id::LEN + Digest::<Delegation>::LEN;
 
-/// The smallest an entry can be: a subject and a length, with an empty value.
-const MIN_ENTRY_LEN: usize = Id::LEN + 4;
+/// The smallest an entry can be: a subject and a one-byte length, with an
+/// empty value.
+const MIN_ENTRY_LEN: usize = Id::LEN + 1;
 
 /// `bytes[at..at + len]`, or `UnexpectedEnd`.
 ///
@@ -117,29 +118,36 @@ fn slice_at(bytes: &[u8], at: usize, len: usize) -> Result<&[u8], DecodeError> {
         .ok_or(DecodeError::UnexpectedEnd)
 }
 
-/// A length as the wire's `u32`. Panics past `u32::MAX`, which no
+/// Append a count or length as bijou32. Panics past `u32::MAX`, which no
 /// certificate approaches.
-fn len_u32(len: usize) -> u32 {
-    u32::try_from(len).expect("retain lengths fit in a u32")
+fn put_len(len: usize, out: &mut Vec<u8>) {
+    bijoux::u32::encode(
+        u32::try_from(len).expect("retain lengths fit in a u32"),
+        out,
+    );
 }
 
-fn u32_at(bytes: &[u8], at: usize) -> Result<usize, DecodeError> {
-    let raw: [u8; 4] = slice_at(bytes, at, 4)?
-        .try_into()
-        .expect("slice_at returns exactly the requested length");
-    Ok(u32::from_be_bytes(raw) as usize)
+/// The bijou32 at `bytes[at..]`, and the offset just past it.
+fn len_at(bytes: &[u8], at: usize) -> Result<(usize, usize), DecodeError> {
+    let rest = bytes.get(at..).ok_or(DecodeError::UnexpectedEnd)?;
+    let (value, consumed) = bijoux::u32::decode(rest).map_err(|e| match e {
+        bijoux::u32::DecodeError::BufferTooShort => DecodeError::UnexpectedEnd,
+        bijoux::u32::DecodeError::Overflow => DecodeError::InvalidField("length"),
+    })?;
+    let value = usize::try_from(value).map_err(|_| DecodeError::InvalidField("length"))?;
+    Ok((value, at + consumed))
 }
 
 impl<W: Encode> Encode for Revocation<W> {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.issuer.encode_into(out);
         out.extend_from_slice(self.revoke.as_slice());
-        out.extend_from_slice(&len_u32(self.retain.len()).to_be_bytes());
+        put_len(self.retain.len(), out);
         // `BTreeMap` iterates in ascending key order, which is the canonical one.
         for (subject, value) in &self.retain {
             subject.encode_into(out);
             let encoded = value.encode();
-            out.extend_from_slice(&len_u32(encoded.len()).to_be_bytes());
+            put_len(encoded.len(), out);
             out.extend_from_slice(encoded.as_bytes());
         }
     }
@@ -147,22 +155,21 @@ impl<W: Encode> Encode for Revocation<W> {
 
 impl<W: Decode> Decode for Revocation<W> {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() < BASE_LEN {
+        if bytes.len() < FIXED_LEN {
             return Err(DecodeError::UnexpectedEnd);
         }
         let issuer = Id::decode_field(&bytes[..Id::LEN], "issuer")?;
-        let raw: [u8; Digest::<Delegation>::LEN] = bytes[Id::LEN..BASE_LEN - 4]
+        let raw: [u8; Digest::<Delegation>::LEN] = bytes[Id::LEN..FIXED_LEN]
             .try_into()
-            .expect("BASE_LEN bytes are present");
-        let count = u32_at(bytes, BASE_LEN - 4)?;
+            .expect("FIXED_LEN bytes are present");
+        let (count, mut at) = len_at(bytes, FIXED_LEN)?;
         // Reject a count the input cannot hold before looping over it, so no
         // input makes decoding loop more than `bytes.len() / MIN_ENTRY_LEN` times.
-        if count > (bytes.len() - BASE_LEN) / MIN_ENTRY_LEN {
+        if count > (bytes.len() - at) / MIN_ENTRY_LEN {
             return Err(DecodeError::UnexpectedEnd);
         }
 
         let mut retain = BTreeMap::new();
-        let mut at = BASE_LEN;
         let mut previous: Option<Id> = None;
         for _ in 0..count {
             let subject = Id::decode_field(slice_at(bytes, at, Id::LEN)?, "retain subject")?;
@@ -172,10 +179,9 @@ impl<W: Decode> Decode for Revocation<W> {
             previous = Some(subject);
             at += Id::LEN;
 
-            let len = u32_at(bytes, at)?;
-            at += 4;
-            retain.insert(subject, W::decode(slice_at(bytes, at, len)?)?);
-            at += len;
+            let (len, value_at) = len_at(bytes, at)?;
+            retain.insert(subject, W::decode(slice_at(bytes, value_at, len)?)?);
+            at = value_at + len;
         }
         if at != bytes.len() {
             return Err(DecodeError::TrailingBytes);
@@ -231,9 +237,17 @@ mod tests {
         assert!(Signed::try_sign(&r, &signing_key(2)).is_err());
     }
 
+    /// The bytes after `FIXED_LEN` with `count` and the entries replaced.
+    fn with_count(good: &[u8], count: u32, entries: &[u8]) -> Vec<u8> {
+        let mut bytes = good[..FIXED_LEN].to_vec();
+        bijoux::u32::encode(count, &mut bytes);
+        bytes.extend_from_slice(entries);
+        bytes
+    }
+
     #[test]
     fn encoded_length_without_retain() {
-        assert_eq!(sample().encode().len(), BASE_LEN);
+        assert_eq!(sample().encode().len(), FIXED_LEN + 1);
     }
 
     #[test]
@@ -247,14 +261,38 @@ mod tests {
             Revocation::<Watermark>::decode(encoded.as_bytes()),
             Ok(r.clone())
         );
-        // 2 entries: (id + len + 3) + (id + len + 0)
-        assert_eq!(encoded.len(), BASE_LEN + (Id::LEN + 4 + 3) + (Id::LEN + 4));
+        // count, then 2 entries: (id + len + 3) + (id + len + 0)
+        assert_eq!(
+            encoded.len(),
+            FIXED_LEN + 1 + (Id::LEN + 1 + 3) + (Id::LEN + 1)
+        );
         assert_ne!(
             sample().digest(),
             r.digest(),
             "`retain` is covered by the digest"
         );
     }
+
+    /// Pins the wire encoding and the domain-separated digest of one fixed
+    /// revocation with a watermark. Changing the codec or the context must
+    /// change this test on purpose.
+    #[test]
+    fn known_answer() {
+        let hex = |bytes: &[u8]| -> alloc::string::String {
+            bytes.iter().map(|b| alloc::format!("{b:02x}")).collect()
+        };
+        let r = sample().retaining(BTreeMap::from([(id(2), alloc::vec![7, 8])]));
+        let encoded = hex(r.encode().as_bytes());
+        let issuer = hex(id(1).as_bytes());
+        let subject = hex(id(2).as_bytes());
+        assert_eq!(
+            encoded,
+            alloc::format!("{issuer}{}01{subject}020708", "03".repeat(32))
+        );
+        assert_eq!(hex(r.digest().as_slice()), KNOWN_DIGEST);
+    }
+
+    const KNOWN_DIGEST: &str = "0d58712e2502462cc7b5320db755ce508547a9bd8953e831aa3587fd32aef271";
 
     #[test]
     fn rejects_wrong_lengths() {
@@ -280,48 +318,57 @@ mod tests {
             (id(3), alloc::vec![8]),
         ]));
         let good = r.encode().into_bytes();
+        let entries = &good[FIXED_LEN + 1..];
+        let entry = Id::LEN + 1 + 1;
+        let (first, second) = entries.split_at(entry);
 
         // Entries transposed: descending rather than ascending.
-        let entry = Id::LEN + 4 + 1;
-        let mut swapped = good[..BASE_LEN].to_vec();
-        swapped.extend_from_slice(&good[BASE_LEN + entry..BASE_LEN + 2 * entry]);
-        swapped.extend_from_slice(&good[BASE_LEN..BASE_LEN + entry]);
+        let swapped = with_count(&good, 2, &[second, first].concat());
         assert_eq!(
             Revocation::<Watermark>::decode(&swapped),
             Err(DecodeError::UnsortedKeys)
         );
 
         // The same subject twice.
-        let mut repeated = good[..BASE_LEN].to_vec();
-        repeated.extend_from_slice(&good[BASE_LEN..BASE_LEN + entry]);
-        repeated.extend_from_slice(&good[BASE_LEN..BASE_LEN + entry]);
+        let repeated = with_count(&good, 2, &[first, first].concat());
         assert_eq!(
             Revocation::<Watermark>::decode(&repeated),
             Err(DecodeError::UnsortedKeys)
         );
 
         // A count that disagrees with the entries present.
-        let mut miscounted = good.clone();
-        miscounted[BASE_LEN - 1] = 1;
+        let miscounted = with_count(&good, 1, entries);
         assert_eq!(
             Revocation::<Watermark>::decode(&miscounted),
             Err(DecodeError::TrailingBytes)
         );
     }
 
-    /// A declared entry length past the end of input is truncation, not a panic.
+    /// A declared entry length past the end of input is truncation, not a
+    /// panic, and a length past `u32::MAX` is an invalid field.
     #[test]
     fn rejects_oversized_entry_length() {
         let r = sample().retaining(BTreeMap::from([(id(2), alloc::vec![7])]));
-        let mut bytes = r.encode().into_bytes();
-        let len_at = BASE_LEN + Id::LEN;
-        bytes[len_at..len_at + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+        let good = r.encode().into_bytes();
+        let len_at = FIXED_LEN + 1 + Id::LEN;
+
+        let mut huge = good[..len_at].to_vec();
+        bijoux::u32::encode(u32::MAX, &mut huge);
+        huge.push(7);
         assert_eq!(
-            Revocation::<Watermark>::decode(&bytes),
+            Revocation::<Watermark>::decode(&huge),
             Err(DecodeError::UnexpectedEnd)
         );
+
+        let mut overflowing = good[..len_at].to_vec();
+        overflowing.extend_from_slice(&[0xFF; 5]);
         assert_eq!(
-            slice_at(&bytes, usize::MAX, 1),
+            Revocation::<Watermark>::decode(&overflowing),
+            Err(DecodeError::InvalidField("length"))
+        );
+
+        assert_eq!(
+            slice_at(&good, usize::MAX, 1),
             Err(DecodeError::UnexpectedEnd),
             "the end offset overflows"
         );
@@ -333,14 +380,13 @@ mod tests {
     fn rejects_a_count_the_input_cannot_hold() {
         let r = sample().retaining(BTreeMap::from([(id(2), Vec::new()), (id(3), Vec::new())]));
         let bytes = r.encode().into_bytes();
-        assert_eq!(bytes.len(), BASE_LEN + 2 * MIN_ENTRY_LEN);
+        assert_eq!(bytes.len(), FIXED_LEN + 1 + 2 * MIN_ENTRY_LEN);
         assert_eq!(Revocation::<Watermark>::decode(&bytes), Ok(r));
 
+        let entries = &bytes[FIXED_LEN + 1..];
         for count in [3, u32::MAX] {
-            let mut claimed = bytes.clone();
-            claimed[BASE_LEN - 4..BASE_LEN].copy_from_slice(&count.to_be_bytes());
             assert_eq!(
-                Revocation::<Watermark>::decode(&claimed),
+                Revocation::<Watermark>::decode(&with_count(&bytes, count, entries)),
                 Err(DecodeError::UnexpectedEnd),
                 "count {count}"
             );

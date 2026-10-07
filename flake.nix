@@ -221,9 +221,9 @@
             cargo clippy --workspace --all-targets --features test_utils,debug_events -- -D warnings
           '';
 
-          # `--features test_utils` is load-bearing: without it `keyline`'s
-          # conformance laws and every crate's property tests are compiled out,
-          # and the suite still reports green.
+          # `--features test_utils` is load-bearing: without it the conformance
+          # laws and every crate's property tests are compiled out, and the
+          # suite still reports green.
           ci-test = mkCheck "ci-test" ''
             cargo test --workspace --exclude keyhive_wasm --features test_utils
           '';
@@ -260,15 +260,16 @@
           # `std`, so they are compiled out and `beekem` cannot do without
           # them. Add `-p beekem` here once `bincode` is replaced.
           ci-no-std = mkCheck "ci-no-std" ''
-            cargo check -p keyhive_codec -p keyhive_crypto -p keyline --no-default-features
+            cargo check -p keyhive_codec -p keyhive_crypto -p keyline -p keyline_memory --no-default-features
             # Browser Wasm. This target ships `std`, so it does not prove
             # no_std either. It does reject `getrandom` without its `js`
             # feature, which is what kept `keyline` off Wasm until the
             # workspace turned off `chacha20poly1305`'s default features.
-            cargo check -p keyhive_codec -p keyhive_crypto -p keyline --no-default-features --target wasm32-unknown-unknown
-            # keyline's unit tests against the no_std crate code: the harness is
-            # std, the crate never links it.
-            cargo test -p keyline --no-default-features
+            cargo check -p keyhive_codec -p keyhive_crypto -p keyline -p keyline_memory --no-default-features --target wasm32-unknown-unknown
+            # Unit tests, and every conformance scenario against MemoryKeyline,
+            # on the no_std crate code: the harness is std, the crates never
+            # link it.
+            cargo test -p keyline -p keyline_memory --no-default-features
           '';
 
           ci-deny = mkCheck "ci-deny" ''

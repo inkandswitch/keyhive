@@ -11,6 +11,7 @@ rust-version.workspace = true
 
 [dependencies]
 arbitrary = { workspace = true, optional = true }
+bijoux = { version = "0.3", default-features = false, features = ["u32"] }
 bolero = { workspace = true, optional = true }
 ed25519-dalek = { version = "2.1", default-features = false }
 keyhive_codec = { version = "0.1.0", path = "../keyhive_codec", default-features = false }
@@ -31,7 +32,6 @@ tracing = { version = "0.1.40", default-features = false, features = [
 arbitrary = { workspace = true }
 bolero = { workspace = true }
 curve25519-dalek = "4.1"
-divan = "0.1.15"
 ed25519-dalek = { version = "2.1", features = ["hazmat", "rand_core"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 sha2 = "0.10"
@@ -49,10 +49,9 @@ std = [
 # `derive(Arbitrary)` needs `std` (see keyhive_crypto).
 arbitrary = ["dep:arbitrary", "std"]
 serde = ["dep:serde", "ed25519-dalek/serde", "keyhive_codec/serde"]
-# Everything the full test suite needs, including the serde round-trip tests.
-test_utils = ["arbitrary", "dep:bolero", "dep:sha2", "ed25519-dalek/hazmat", "serde"]
-
-[[bench]]
-name = "bench_evaluate"
-harness = false
-required-features = ["test_utils"]
+# The fixtures and conformance scenarios, without `std`: what a backend needs to
+# run the scenarios in a `no_std` build.
+conformance = ["dep:sha2", "ed25519-dalek/hazmat"]
+# Everything the full test suite needs: the scenarios plus the generator, the
+# oracles, the `bolero` laws, and the serde round-trip tests.
+test_utils = ["arbitrary", "conformance", "dep:bolero", "serde"]

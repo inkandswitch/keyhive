@@ -7,18 +7,18 @@
 //! - `revocation_spree`: one ex-admin revokes `k` certificates; with context
 //!   dedup this should scale like one dispute, not `k`.
 //!
-//! Run with `cargo bench -p keyline --features test_utils`.
+//! Run with `cargo bench -p keyline_memory`.
 
 use divan::Bencher;
 use keyline::{
     contract::Keyline,
     delegation::Delegation,
     id::Id,
-    memory::MemoryKeyline,
     power::Power,
     revocation::Revocation,
     test_utils::{assume_verified, conformance::build, id, Statement},
 };
+use keyline_memory::MemoryKeyline;
 
 fn main() {
     divan::main();

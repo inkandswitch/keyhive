@@ -14,13 +14,14 @@
 //! }
 //! ```
 
-// The generator and the `bolero` laws need `Arbitrary`, which needs `std`;
-// the scenarios need nothing beyond the crate, so `cargo test` runs them.
-#[cfg(feature = "arbitrary")]
+// The generator, oracles and `bolero` laws need `Arbitrary` and `bolero`
+// (the `test_utils` feature, which implies `std`). The scenarios need only the
+// `conformance` feature, so a backend can run them without `std`.
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 pub mod gen;
-#[cfg(feature = "arbitrary")]
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 pub mod laws;
-#[cfg(feature = "arbitrary")]
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 pub mod oracle;
 pub mod scenarios;
 
@@ -32,6 +33,7 @@ use crate::{
     test_utils::{assume_verified, id, Statement},
 };
 use alloc::collections::BTreeSet;
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 use keyhive_codec::traits::{Decode, Encode};
 
 // The cast, as small integers for `test_utils::id`. Roles first, then people
@@ -63,11 +65,13 @@ pub fn r<W>(issuer: u8, target: &Delegation) -> Revocation<W> {
 /// [`crate::revocation::Revocation::retain`]. The laws generate whole
 /// certificate sets, so the watermark type has to be generatable and
 /// comparable as well as encodable.
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 pub trait TestWatermark:
     'static + for<'a> arbitrary::Arbitrary<'a> + Clone + core::fmt::Debug + Eq + Ord + Encode + Decode
 {
 }
 
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 impl<
         T: 'static
             + for<'a> arbitrary::Arbitrary<'a>
@@ -161,9 +165,8 @@ macro_rules! keyline_conformance {
 }
 
 /// The law half of [`keyline_conformance!`](crate::keyline_conformance).
-/// The laws need `arbitrary`, which `test_utils` enables; this crate's own
-/// `cfg(test)` build may lack it.
-#[cfg(feature = "arbitrary")]
+/// The laws need `test_utils`; with only `conformance`, the scenarios run alone.
+#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __keyline_conformance_laws {
@@ -183,7 +186,7 @@ macro_rules! __keyline_conformance_laws {
     };
 }
 
-#[cfg(not(feature = "arbitrary"))]
+#[cfg(not(all(feature = "arbitrary", any(test, feature = "test_utils"))))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __keyline_conformance_laws {

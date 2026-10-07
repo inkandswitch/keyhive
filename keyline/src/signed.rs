@@ -183,7 +183,7 @@ impl<T> Verified<T> {
 
     /// Construct without checking anything. Test fixtures only: lets the
     /// conformance suite build certificates without paying for signing.
-    #[cfg(any(test, feature = "test_utils"))]
+    #[cfg(any(test, feature = "conformance"))]
     pub(crate) fn assume(signed: Signed<T>) -> Self
     where
         T: Decode,

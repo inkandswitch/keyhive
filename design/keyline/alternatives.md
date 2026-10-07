@@ -12,7 +12,7 @@ _Would buy._ Narrow revocation with one key (ban in room A, keep in room B). Leg
 
 _Rejected because._ Rotation would re-sign the deny list. A revocation pinned to `Members` does not cover `Members′` after rotation, so every standing revocation must be re-issued after every rotation, forever. Under admin-reach scoping a surviving admin's admin reach grows as they are re-rostered, and their old revocations follow automatically; the griefer's admin reach froze, so theirs do not. The explicit field taxes the honest admin on the routine path (rotation is the recommended hygiene) to buy flexibility on a rare one. It also introduces an inert-by-mistake state (naming a node the target never routes through) that admin-reach scoping cannot produce, and it picks the narrower of the two possible scopes for a revocation, where the design resolves ambiguity toward less authority. Narrow revocation is available today by signing with a capacity key per role administered.
 
-_Reopen if._ Narrow revocation turns out to be common. The compatible extension is `subject: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the one-encoding invariant ([README, Delegations](README.md#delegations)) carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations--collapsed-into-the-issuer).
+_Reopen if._ Narrow revocation turns out to be common. The compatible extension is `subject: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the one-encoding invariant ([README, Delegations](README.md#delegations)) carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations-collapsed-into-the-issuer).
 
 ### A random nonce instead of `citation`
 
@@ -40,7 +40,7 @@ _Reopen if._ Verification without the set becomes a hard requirement (e.g. a con
 
 _Proposal._ Name the capacity a delegation is exercised in.
 
-_Rejected because._ Every job it did is an arrangement of nodes: scoping is `subject`, acting in a capacity is a dedicated key per capacity, pinning is a subject-scoped intermediary, and revocation narrowed to one role is signing with that role's capacity key. An optional field whose absence aliased "the issuer" produced two encodings for one act, two hashes, and a revocation that killed one twin and missed the other. Long form: [edge-cases, `from` on delegations](edge-cases.md#from-on-delegations--eliminated).
+_Rejected because._ Every job it did is an arrangement of nodes: scoping is `subject`, acting in a capacity is a dedicated key per capacity, pinning is a sub-scoped intermediary, and revocation narrowed to one role is signing with that role's capacity key. An optional field whose absence aliased "the issuer" produced two encodings for one act, two hashes, and a revocation that killed one twin and missed the other. Long form: [edge-cases, `from` on delegations](edge-cases.md#from-on-delegations-eliminated).
 
 _Reopen if._ A capacity cannot be expressed as a node. None found so far.
 
@@ -182,13 +182,15 @@ _Rejected because._ Verification is `Signed::verify`'s job. `insert` takes a `Ve
 
 _Reopen if._ A backend needs a verification policy `Signed::verify` does not implement (another signature scheme, say). Then add a verifying constructor, not a trait change.
 
-### Splitting `keyline` into a traits crate and an implementation crate
+### One crate for the trait and the reference evaluator
 
-_Proposal._ `keyline_core` (types, trait, semantics) and `keyline_memory` (the reference evaluator).
+_Proposal._ Keep `MemoryKeyline` in `keyline`, next to the types, the `Keyline` trait, and the conformance suite, instead of in its own `keyline_memory` crate.
 
-_Rejected because._ One trait plus one implementation in one crate is the minimum that still lets a second backend exist. The types and the semantics (the trait and its conformance suite) must live together regardless, and the in-memory evaluator has no dependencies worth isolating. The conformance suite, exported behind `test_utils`, is what actually lets a second backend prove itself.
+_Would buy._ One crate to version.
 
-_Reopen if._ A second backend appears.
+_Rejected because._ A second backend is planned, and a separate crate checks that a backend can be written against `keyline`'s public API alone: `keyline_memory` has no access to anything a second backend would not also have.
+
+_Reopen if._ The second backend is abandoned.
 
 ### Parallel evaluation with `rayon`
 

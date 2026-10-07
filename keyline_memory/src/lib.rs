@@ -43,22 +43,37 @@
 //! `search` is one procedure: a bucketed widest-path pass per root, iterated to
 //! a fixed point across every root it discovers, because `subject` composes (a
 //! node's members inherit what the node reaches).
+//!
+//! # `no_std` support
+//!
+//! `no_std` with `alloc`. The `std` feature (default) switches the evaluator's
+//! maps to `HashMap`/`HashSet`.
 
-use crate::{
-    certificate::{Certificate, CertificateId, VerifiedCertificate},
-    collections::{Map, Set},
-    contract::{set_digest, CertificateSet, Keyline},
-    delegation::Delegation,
-    id::Id,
-    power::Power,
-    revocation::{Revocation, RevocationId},
-};
+#![no_std]
+#![forbid(unsafe_code)]
+
+extern crate alloc;
+
+#[cfg(feature = "std")]
+extern crate std;
+
+mod collections;
+
+use crate::collections::{Map, Set};
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::digest::Digest;
+use keyline::{
+    certificate::{Certificate, CertificateId, VerifiedCertificate},
+    contract::{set_digest, CertificateSet, Keyline},
+    delegation::Delegation,
+    id::Id,
+    power::Power,
+    revocation::{Revocation, RevocationId},
+};
 use tracing::{debug, instrument, trace};
 
 /// The in-memory reference [`Keyline`].
@@ -638,40 +653,40 @@ fn pop_highest(buckets: &mut [Vec<Id>; Power::ALL.len()]) -> Option<(Id, Power)>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{
+    use keyline::test_utils::{
         assume_verified,
         conformance::{d, scenarios::standard, DOC, OWNERS},
     };
 
-    #[cfg(feature = "arbitrary")]
-    use crate::test_utils::conformance::laws;
+    #[cfg(feature = "test_utils")]
+    use keyline::test_utils::conformance::laws;
 
-    crate::keyline_conformance!(MemoryKeyline<()>);
+    keyline::keyline_conformance!(MemoryKeyline<()>);
 
     /// A watermark type with a variable-length encoding.
     ///
     /// At `W = ()` a `retain` entry carries a subject and an empty watermark,
     /// so the laws above never see watermark bytes. The tests below re-run
     /// the laws about `retain` with watermarks that carry bytes.
-    #[cfg(feature = "arbitrary")]
+    #[cfg(feature = "test_utils")]
     type Watermark = Vec<u8>;
 
     /// Both oracles keep only `(issuer, revoke)`, so neither can read a
     /// watermark even by accident; agreement checks that the evaluator
     /// ignores watermarks too.
-    #[cfg(feature = "arbitrary")]
+    #[cfg(feature = "test_utils")]
     #[test]
     fn naive_oracle_ignores_watermarks() {
         laws::matches_naive_oracle_with_revocations::<MemoryKeyline<Watermark>>();
     }
 
-    #[cfg(feature = "arbitrary")]
+    #[cfg(feature = "test_utils")]
     #[test]
     fn threshold_oracle_ignores_watermarks() {
         laws::matches_threshold_oracle::<MemoryKeyline<Watermark>>();
     }
 
-    #[cfg(feature = "arbitrary")]
+    #[cfg(feature = "test_utils")]
     #[test]
     fn retain_with_bytes_is_inert() {
         laws::retain_is_inert::<MemoryKeyline<Watermark>>();
@@ -679,7 +694,7 @@ mod tests {
 
     /// The converse: `retain` is covered by the certificate digest, so two
     /// revocations differing only there are two certificates, not one.
-    #[cfg(feature = "arbitrary")]
+    #[cfg(feature = "test_utils")]
     #[test]
     fn retain_is_part_of_set_identity() {
         laws::digest_identifies_the_set::<MemoryKeyline<Watermark>>();
