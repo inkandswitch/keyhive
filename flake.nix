@@ -296,13 +296,14 @@
           # Property tests. BOLERO_RANDOM_ITERATIONS bounds each harness (bolero
           # also reads BOLERO_RANDOM_TEST_TIME_MS); hosted CI runs this quick
           # sweep per PR and a thorough one nightly (see test-bolero.yml).
-          # Harnesses live in `keyline`: codec round-trip and canonicality, and
-          # the conformance laws, which check `MemoryKeyline` against two
-          # independent oracles.
+          # Harnesses live in `keyline` (codec round-trip and canonicality) and
+          # `keyline_memory` (the conformance laws, which check `MemoryKeyline`
+          # against two independent oracles). The `bolero` profile is optimized
+          # with debug assertions and overflow checks on.
           ci-bolero = mkCheck "ci-bolero" ''
             export BOLERO_RANDOM_ITERATIONS="''${BOLERO_RANDOM_ITERATIONS:-1000}"
             export RUST_BACKTRACE=1
-            cargo test --workspace --exclude keyhive_wasm --features test_utils --tests
+            cargo test --profile bolero --workspace --exclude keyhive_wasm --features test_utils --tests
           '';
 
         };

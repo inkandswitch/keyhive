@@ -59,7 +59,7 @@ jobs:
         env:
           BOLERO_RANDOM_ITERATIONS: ${{ matrix.iterations }}
           RUST_BACKTRACE: 1
-        # Release: the conformance oracle is ~40x faster optimised, which is
-        # what makes a 50k-iteration sweep affordable. The harnesses assert
-        # with `assert_eq!`, not `debug_assert!`, so nothing is compiled out.
-        run: cargo test --release --workspace --exclude keyhive_wasm --features test_utils --tests
+        # The `bolero` profile (workspace Cargo.toml) is optimized, which is
+        # what makes a 50k-iteration sweep affordable, and keeps debug
+        # assertions and overflow checks on, unlike `--release`.
+        run: cargo test --profile bolero --workspace --exclude keyhive_wasm --features test_utils --tests
