@@ -22,9 +22,11 @@
 //! A backend never checks signatures: [`contract::Keyline::insert`] takes a
 //! [`certificate::VerifiedCertificate`], which outside the `conformance` and
 //! `test_utils` features only signature verification
-//! ([`signed::Signed::verify`], [`certificate::Certificate::verify`]) can make.
-//! The crate knows nothing of prekeys, CGKA, documents, or groups, and is
-//! synchronous: concurrency is the wrapper's job. A wrapper holds an
+//! ([`signed::Signed::verify`], [`certificate::Certificate::verify`]) or
+//! signing ([`signed::Verified::sign`], which verifies what it signs) can make.
+//! The crate knows nothing of prekeys, CGKA, documents, or groups. Its trait is
+//! synchronous; only signing is async, because the key may sit behind
+//! WebCrypto or an HSM. Concurrency is the wrapper's job. A wrapper holds an
 //! implementation behind a lock and converts its typed handles to [`id::Id`]s at
 //! the boundary.
 //!

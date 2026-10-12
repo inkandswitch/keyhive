@@ -66,7 +66,7 @@ pub trait Keyline {
     /// is explaining a silent collision: an issuer who re-mints a delegation
     /// byte-identical to a revoked one gets `insert == false`, and this tells
     /// them why and that a re-issue with `citation` is needed.
-    fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>>;
+    fn revocations_of(&self, delegation: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>>;
 
     /// `audience`'s effective power over `subject`: the maximum over live routes of the
     /// minimum along each. `None` if no live route exists.
@@ -79,11 +79,10 @@ pub trait Keyline {
     /// with its effective power.
     fn members(&self, subject: Id) -> BTreeMap<Id, Power>;
 
-    /// Whether the named delegation is live: its issuer has standing over its
-    /// subject on a derivation that avoids every node its revocations cover,
-    /// and its audience has not revoked it. `false` for digests not in the
-    /// set.
-    fn is_live(&self, cert: &Digest<Delegation>) -> bool;
+    /// Whether `delegation` is live: its issuer has standing over its subject
+    /// on a derivation that avoids every node its revocations cover, and its
+    /// audience has not revoked it. `false` for digests not in the set.
+    fn is_live(&self, delegation: &Digest<Delegation>) -> bool;
 
     /// A digest of the whole set. Same set (in any order), same digest; usable
     /// as a cache key for every other query. Backends compute it with
@@ -155,6 +154,6 @@ mod tests {
     #[test]
     fn set_digest_ignores_repetition() {
         let [a, b, _] = ids();
-        assert_eq!(set_digest([a, b, a, a]), set_digest([b, a]));
+        assert_eq!(set_digest([a, b, a, a]), set_digest([a, b]));
     }
 }

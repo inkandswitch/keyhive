@@ -10,16 +10,24 @@
 //!
 //! [`Verified<T>`] is a witness that a `Signed<T>` has had its bytes decoded
 //! canonically and its signature checked against the decoded issuer. Outside
-//! the `test_utils` feature its only public constructor is [`Signed::verify`],
-//! so an unchecked certificate cannot reach [`crate::contract::Keyline::insert`].
+//! the `conformance` and `test_utils` features it is built only by
+//! [`Signed::verify`], or by [`Verified::sign`] / [`Verified::sign_sync`],
+//! which verify what they sign. An unchecked certificate cannot reach
+//! [`crate::contract::Keyline::insert`].
+//!
+//! Signing goes through `keyhive_crypto`'s signer traits, so the key can live
+//! in WebCrypto, an HSM, or a KMS: [`AsyncSigner`] for those, and
+//! [`SyncSignerBasic`] for an in-memory key.
 //!
 //! `keyhive_crypto` has a serde-based `Signed<T>` that `keyhive_core` uses; this
 //! type is its `Encoded`-based counterpart.
 
 // TODO(keyhive_types): lift `Signed` and `Verified` out of keyline once beekem migrates.
 
+use alloc::vec::Vec;
 use core::fmt;
-use ed25519_dalek::{Signature, Signer, SigningKey};
+use ed25519_dalek::Signature;
+use future_form::FutureForm;
 use keyhive_codec::{
     encoded::Encoded,
     error::DecodeError,
@@ -28,6 +36,8 @@ use keyhive_codec::{
 use keyhive_crypto::{
     digest::Digest,
     domain_separator::{message, Domain},
+    signed::SigningError,
+    signer::{async_signer::AsyncSigner, sync_signer::SyncSignerBasic},
     verifiable::Verifiable,
 };
 
@@ -50,7 +60,8 @@ pub struct Signed<T> {
 
 impl<T> Signed<T> {
     /// Assemble from parts received over a transport. Nothing is checked;
-    /// call [`Signed::verify`] before trusting the payload.
+    /// call [`Signed::verify`] before trusting the payload. To produce a
+    /// certificate, use [`Verified::sign`], which applies the domain context.
     pub fn from_parts(encoded: Encoded<T>, signature: Signature) -> Self {
         Signed { encoded, signature }
     }
@@ -70,21 +81,6 @@ impl<T: Domain> Signed<T> {
     /// Content address of the payload: BLAKE3 over the same bytes the signature covers.
     pub fn digest(&self) -> Digest<T> {
         Digest::of(&self.encoded)
-    }
-}
-
-impl<T: Domain + Encode + Verifiable> Signed<T> {
-    /// Encode and sign a value with the key it names as issuer.
-    ///
-    /// Fails if `key` is not the payload's issuer; `verify` would reject the
-    /// result.
-    pub fn try_sign(value: &T, key: &SigningKey) -> Result<Self, SignError> {
-        if key.verifying_key() != value.verifying_key() {
-            return Err(SignError::NotTheIssuer);
-        }
-        let encoded = value.encode();
-        let signature = key.sign(&message::<T>(encoded.as_bytes()));
-        Ok(Signed { encoded, signature })
     }
 }
 
@@ -162,8 +158,9 @@ impl<T: Domain> fmt::Debug for Signed<T> {
 }
 
 /// A [`Signed<T>`] whose bytes decoded canonically and whose signature was
-/// checked against the issuer the payload names. Constructed only by
-/// [`Signed::verify`].
+/// checked against the issuer the payload names. Constructed by
+/// [`Signed::verify`], [`Verified::sign`] and [`Verified::sign_sync`] (and,
+/// under the `conformance` feature, by `test_utils::assume_verified`).
 pub struct Verified<T> {
     payload: T,
     signed: Signed<T>,
@@ -183,6 +180,34 @@ impl<T> Verified<T> {
     /// The payload and the signed form it came from.
     pub fn into_parts(self) -> (T, Signed<T>) {
         (self.payload, self.signed)
+    }
+}
+
+impl<T: Decode + Domain + Encode + Verifiable> Verified<T> {
+    /// Sign `value` with its issuer's signer, then verify the result.
+    ///
+    /// The signer may hold its key anywhere (WebCrypto, an HSM, a KMS); it
+    /// sees only the domain-separated bytes. Verifying the output catches a
+    /// signer that returns a bad signature here, not on a peer that receives
+    /// the certificate.
+    pub async fn sign<F: FutureForm, S: AsyncSigner<F>>(
+        value: &T,
+        signer: &S,
+    ) -> Result<Self, SignError> {
+        let (encoded, bytes) = signing_input(value, signer)?;
+        let signature = signer.try_sign_bytes_async(&bytes).await?;
+        Ok(Signed { encoded, signature }.verify()?)
+    }
+
+    /// [`Verified::sign`] for a signer that answers synchronously, such as an
+    /// in-memory `ed25519_dalek::SigningKey`.
+    pub fn sign_sync<S: SyncSignerBasic + Verifiable>(
+        value: &T,
+        signer: &S,
+    ) -> Result<Self, SignError> {
+        let (encoded, bytes) = signing_input(value, signer)?;
+        let signature = signer.try_sign_bytes_sync_basic(&bytes)?;
+        Ok(Signed { encoded, signature }.verify()?)
     }
 }
 
@@ -241,12 +266,20 @@ impl<T> core::hash::Hash for Verified<T> {
     }
 }
 
-/// Why [`Signed::try_sign`] refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+/// Why [`Verified::sign`] or [`Verified::sign_sync`] failed.
+#[derive(Debug, thiserror::Error)]
 pub enum SignError {
-    /// The signing key is not the issuer the payload names.
-    #[error("signing key is not the payload's issuer")]
+    /// The signer's key is not the issuer the payload names.
+    #[error("signer is not the payload's issuer")]
     NotTheIssuer,
+
+    /// The signer failed.
+    #[error(transparent)]
+    Signer(#[from] SigningError),
+
+    /// The signer returned a signature that does not verify.
+    #[error("signed certificate does not verify: {0}")]
+    Unverifiable(#[from] VerifyError),
 }
 
 /// Why a [`Signed<T>`] did not verify.
@@ -261,6 +294,21 @@ pub enum VerifyError {
     Decode(#[from] DecodeError),
 }
 
+/// The canonical encoding of `value`, and the domain-separated bytes to sign.
+/// Refuses a signer that is not the payload's issuer, since `verify` would
+/// reject its signature.
+fn signing_input<T: Domain + Encode + Verifiable, S: Verifiable>(
+    value: &T,
+    signer: &S,
+) -> Result<(Encoded<T>, Vec<u8>), SignError> {
+    if signer.verifying_key() != value.verifying_key() {
+        return Err(SignError::NotTheIssuer);
+    }
+    let encoded = value.encode();
+    let bytes = message::<T>(encoded.as_bytes());
+    Ok((encoded, bytes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,14 +319,108 @@ mod tests {
         revocation::Revocation,
         test_utils::{id, signing_key},
     };
+    use core::{
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+    use future_form::{Local, Sendable};
+    use keyhive_crypto::signer::memory::MemorySigner;
 
     fn sample() -> Delegation {
         Delegation::new(id(1), id(2), id(3), Power::Edit)
     }
 
+    fn signed_by<T: Decode + Domain + Encode + Verifiable>(
+        value: &T,
+        key: &SigningKey,
+    ) -> Signed<T> {
+        let (_, signed) = Verified::sign_sync(value, key)
+            .expect("key is the issuer")
+            .into_parts();
+        signed
+    }
+
+    /// Drive a future whose signer answers at once, as `MemorySigner` does.
+    fn ready<T, Fut: Future<Output = T>>(future: Fut) -> T {
+        match pin!(future).poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("signer is synchronous"),
+        }
+    }
+
+    /// Signs the bytes after the domain context, as a signer written for
+    /// another protocol might.
+    struct Unprefixed(SigningKey);
+
+    impl Verifiable for Unprefixed {
+        fn verifying_key(&self) -> VerifyingKey {
+            self.0.verifying_key()
+        }
+    }
+
+    impl SyncSignerBasic for Unprefixed {
+        fn try_sign_bytes_sync_basic(&self, bytes: &[u8]) -> Result<Signature, SigningError> {
+            let start = bytes
+                .iter()
+                .position(|b| *b == 0)
+                .expect("the context is NUL-terminated");
+            Ok(self.0.sign(&bytes[start + 1..]))
+        }
+    }
+
+    struct Broken(SigningKey);
+
+    impl Verifiable for Broken {
+        fn verifying_key(&self) -> VerifyingKey {
+            self.0.verifying_key()
+        }
+    }
+
+    impl SyncSignerBasic for Broken {
+        fn try_sign_bytes_sync_basic(&self, _: &[u8]) -> Result<Signature, SigningError> {
+            Err(ed25519_dalek::SignatureError::new().into())
+        }
+    }
+
+    #[test]
+    fn async_signer_matches_sync() {
+        fn assert_send<T: Send>(value: T) -> T {
+            value
+        }
+        let signer = MemorySigner(signing_key(1));
+        let expected = Verified::sign_sync(&sample(), &signing_key(1)).expect("key is the issuer");
+        let local =
+            ready(Verified::sign::<Local, _>(&sample(), &signer)).expect("key is the issuer");
+        let sendable = ready(assert_send(Verified::sign::<Sendable, _>(
+            &sample(),
+            &signer,
+        )))
+        .expect("key is the issuer");
+        assert_eq!(local, expected);
+        assert_eq!(sendable, expected);
+    }
+
+    #[test]
+    fn signer_that_drops_the_domain_context_is_caught() {
+        assert!(matches!(
+            Verified::sign_sync(&sample(), &Unprefixed(signing_key(1))),
+            Err(SignError::Unverifiable(VerifyError::BadSignature))
+        ));
+    }
+
+    #[test]
+    fn signer_failure_is_reported() {
+        assert!(matches!(
+            Verified::sign_sync(&sample(), &Broken(signing_key(1))),
+            Err(SignError::Signer(_))
+        ));
+    }
+
     #[test]
     fn sign_then_verify() {
-        let signed = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
+        let signed = signed_by(&sample(), &signing_key(1));
         let verified = signed.clone().verify().expect("verifies");
         assert_eq!(verified.payload(), &sample());
         assert_eq!(verified.payload().issuer, id(1));
@@ -288,7 +430,7 @@ mod tests {
 
     #[test]
     fn signature_and_digest_cover_the_same_bytes() {
-        let signed = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
+        let signed = signed_by(&sample(), &signing_key(1));
         assert_eq!(signed.digest(), Digest::of(&sample().encode()));
         assert!(sample()
             .verifying_key()
@@ -365,10 +507,10 @@ mod tests {
     /// compares as the `Signed` it was built from.
     #[test]
     fn identity_is_bytes_and_signature() {
-        let a = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
+        let a = signed_by(&sample(), &signing_key(1));
         let forged = Signed::from_parts(a.encoded().clone(), Signature::from_bytes(&[0u8; 64]));
         let read = Delegation::new(id(1), id(2), id(3), Power::Read);
-        let other = Signed::try_sign(&read, &signing_key(1)).expect("key is the issuer");
+        let other = signed_by(&read, &signing_key(1));
         assert_ne!(a, forged);
         assert_ne!(a, other);
 
@@ -392,8 +534,8 @@ mod tests {
         }
 
         // `Hash` promises only that equal values hash equal.
-        let a = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
-        let b = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
+        let a = signed_by(&sample(), &signing_key(1));
+        let b = signed_by(&sample(), &signing_key(1));
         assert_eq!(hash(&a), hash(&b));
 
         let va = a.verify().expect("verifies");
@@ -403,10 +545,17 @@ mod tests {
 
     #[test]
     fn signing_with_a_key_that_is_not_the_issuer_is_refused() {
-        assert_eq!(
-            Signed::try_sign(&sample(), &signing_key(2)).unwrap_err(),
-            SignError::NotTheIssuer
-        );
+        assert!(matches!(
+            Verified::sign_sync(&sample(), &signing_key(2)),
+            Err(SignError::NotTheIssuer)
+        ));
+        assert!(matches!(
+            ready(Verified::sign::<Local, _>(
+                &sample(),
+                &MemorySigner(signing_key(2))
+            )),
+            Err(SignError::NotTheIssuer)
+        ));
     }
 
     /// The forgery `verify` must catch: a well-formed signature by Bob over a
@@ -424,7 +573,7 @@ mod tests {
     fn tampered_bytes_fail() {
         // Edit → Read: still a canonical delegation, so only the signature
         // check can reject it.
-        let signed = Signed::try_sign(&sample(), &signing_key(1)).expect("key is the issuer");
+        let signed = signed_by(&sample(), &signing_key(1));
         let mut bytes = signed.encoded().clone().into_bytes();
         bytes[Id::LEN * 3] = Power::Read as u8;
         assert!(Delegation::decode(&bytes).is_ok());
@@ -454,10 +603,8 @@ mod tests {
     fn works_for_revocations() {
         let revocation: Revocation<alloc::vec::Vec<u8>> =
             Revocation::new(id(1), sample().digest()).retaining([(id(3), alloc::vec![7])].into());
-        let verified = Signed::try_sign(&revocation, &signing_key(1))
-            .expect("key is the issuer")
-            .verify()
-            .expect("verifies");
+        let verified =
+            Verified::sign_sync(&revocation, &signing_key(1)).expect("key is the issuer");
         assert_eq!(verified.payload(), &revocation);
     }
 
@@ -471,20 +618,14 @@ mod tests {
                 let key = SigningKey::from(*seed);
                 let issuer = Id::from(&key);
                 let d = Delegation { issuer, ..*d };
-                let verified = Signed::try_sign(&d, &key)
-                    .expect("key is the issuer")
-                    .verify()
-                    .expect("verifies");
+                let verified = Verified::sign_sync(&d, &key).expect("key is the issuer");
                 assert_eq!(verified.payload(), &d);
 
                 let r = Revocation {
                     issuer,
                     ..r.clone()
                 };
-                let verified = Signed::try_sign(&r, &key)
-                    .expect("key is the issuer")
-                    .verify()
-                    .expect("verifies");
+                let verified = Verified::sign_sync(&r, &key).expect("key is the issuer");
                 assert_eq!(verified.payload(), &r);
             });
     }

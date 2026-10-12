@@ -1,6 +1,6 @@
 //! Evaluation cost of `MemoryKeyline` on three shapes:
 //!
-//! - `realistic`: one document, an apex role, three member roles with `n`
+//! - `realistic`: one document, a root role, three member roles with `n`
 //!   humans each, a handful of revocations. What a query costs in the common case.
 //! - `club_ladder`: `k` roles, each administered by the previous: the quadratic
 //!   fact-space shape from `design/keyline/evaluation-notes.md` §7.

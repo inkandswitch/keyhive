@@ -106,15 +106,18 @@ pub fn assume_verified<W: Encode + Decode, X: Into<Statement<W>>>(
 ///
 /// The issuer must be one of the fixture identities (`id(n)`), so its signing
 /// key is `signing_key(n)`.
+///
+/// # Panics
+///
+/// If the issuer is not a fixture identity, or if `W`'s `Encode`/`Decode` is
+/// not canonical: the signed revocation then fails to verify.
 pub fn signed<W: Encode + Decode, X: Into<Statement<W>>>(statement: X) -> VerifiedCertificate<W> {
     fn sign<T: Decode + Domain + Encode + Verifiable>(
         payload: &T,
         key: &SigningKey,
     ) -> Verified<T> {
-        Signed::try_sign(payload, key)
-            .expect("key is the issuer")
-            .verify()
-            .expect("freshly signed certificate verifies")
+        Verified::sign_sync(payload, key)
+            .expect("signed by its issuer, so only a non-canonical `W` codec fails to verify")
     }
     let statement = statement.into();
     let key = issuer_key(statement.issuer());

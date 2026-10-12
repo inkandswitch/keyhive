@@ -215,7 +215,7 @@ impl<'a, W: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Revocation<W>
 mod tests {
     use super::*;
     use crate::{
-        signed::Signed,
+        signed::Verified,
         test_utils::{id, signing_key},
     };
 
@@ -233,12 +233,9 @@ mod tests {
     fn signs_and_verifies_only_as_its_issuer() {
         let r = sample();
         assert_eq!(Verifiable::verifying_key(&r), id(1).verifying_key());
-        let verified = Signed::try_sign(&r, &signing_key(1))
-            .expect("the issuer's key signs")
-            .verify()
-            .expect("and verifies");
+        let verified = Verified::sign_sync(&r, &signing_key(1)).expect("the issuer's key signs");
         assert_eq!(verified.payload(), &r);
-        assert!(Signed::try_sign(&r, &signing_key(2)).is_err());
+        assert!(Verified::sign_sync(&r, &signing_key(2)).is_err());
     }
 
     /// The bytes after `FIXED_LEN` with `count` and the entries replaced.

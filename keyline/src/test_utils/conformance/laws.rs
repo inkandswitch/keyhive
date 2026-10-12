@@ -332,7 +332,7 @@ where
                     .filter(|r| r.revoke == target)
                     .map(|r| r.digest())
                     .collect();
-                assert_eq!(k.revocations_naming(&target), expected);
+                assert_eq!(k.revocations_of(&target), expected);
             }
         });
 }

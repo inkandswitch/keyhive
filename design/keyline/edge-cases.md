@@ -89,10 +89,10 @@ The reason is structural and shared: revocation validity must ignore other revoc
 
 Peer admins of `mods1` can revoke each other's memberships, and mutual invisibility guarantees the _second strike_: Bob's revocation of Mallory still validates after his own membership is revoked, because validity is judged on the revocation-free graph. Symmetric capability plus assured retaliation is Mutual Assured Destruction (MAD): the equilibrium, not merely the possibility of a duel. A first strike gains nothing durable.
 
-But below the apex, MAD is _adjudicated_: destruction is survivable by rotation, and the senior decides the re-roster. This changes the game in three ways:
+But below the root role, MAD is _adjudicated_: destruction is survivable by rotation, and the senior decides the re-roster. This changes the game in three ways:
 
-- _Deterrence is diluted._ An admin who expects the senior's favor may strike deliberately: the duel is an appeal to authority, trial by combat with Alice as judge. Apex MAD is absolute precisely because there is no judge.
-- _Flatness disarms the judge's scalpel._ Under constitutional flatness Alice holds supply over `doc1`, not `subject: mods1`, so she _cannot re-add anyone_ to a bricked `mods1`. Under flatness the senior cannot adjudicate by re-adding; the only repair is rotation (the main document now says so). A total duel bricks the node exactly like apex MAD, one layer down.
+- _Deterrence is diluted._ An admin who expects the senior's favor may strike deliberately: the duel is an appeal to authority, trial by combat with Alice as judge. Root-role MAD is absolute precisely because there is no judge.
+- _Flatness disarms the judge's scalpel._ Under constitutional flatness Alice holds supply over `doc1`, not `subject: mods1`, so she _cannot re-add anyone_ to a bricked `mods1`. Under flatness the senior cannot adjudicate by re-adding; the only repair is rotation (the main document now says so). A total duel bricks the node exactly like root-role MAD, one layer down.
 - _Any single admin can force a rotation at will:_ revoke all peers, absorb the retaliation, node bricked. Deny-only and attributable, but it makes rotation frequency partly adversary-controlled.
 
 ## Finding 7: Offline and Adversarial Are Indistinguishable
@@ -172,7 +172,7 @@ Revocation by the issuer (issuer kills their own certificate) and revocation by 
 - _Local validation._ Anchorability at N is checkable against N's own membership certificates (under flatness, roster membership) with no global path search. Partial-visibility friendly.
 
 > [!NOTE]
-> The root-safety claim above depends on the root edge's level, not on a rule. Admin reach is composed (Admin standing over a node through a role puts the node in reach), so an Admin-rooted document is in every apex admin's reach and its root edge is revocable by any of them. This is accepted: bricking is not a new power ([README, Griefing](README.md#griefing)). An Edit-rooted document is in nobody's reach and its root edge is irrevocable. The same holds one layer down: `#s1` gives `mods1` Admin over `doc1`, so under composed reach Mallory holds `doc1` itself in her reach, and rotating `mods1` does not contain her. Containment by rotation needs the role to hold at most Edit over the document ([patterns, Rotating a Role](patterns.md#rotating-a-role)). See [README, Who Can Revoke the Root Edge](README.md#who-can-revoke-the-root-edge) and [patterns, Rooting Level](patterns.md#rooting-level).
+> The root-safety claim above depends on the root edge's level, not on a rule. Admin reach is composed (Admin standing over a node through a role puts the node in reach), so an Admin-rooted document is in every root-role admin's reach and its root edge is revocable by any of them. This is accepted: bricking is not a new power ([README, Griefing](README.md#griefing)). An Edit-rooted document is in nobody's reach and its root edge is irrevocable. The same holds one layer down: `#s1` gives `mods1` Admin over `doc1`, so under composed reach Mallory holds `doc1` itself in her reach, and rotating `mods1` does not contain her. Containment by rotation needs the role to hold at most Edit over the document ([patterns, Rotating a Role](patterns.md#rotating-a-role)). See [README, Who Can Revoke the Root Edge](README.md#who-can-revoke-the-root-edge) and [patterns, Rooting Level](patterns.md#rooting-level).
 
 #### Stratification
 
@@ -180,7 +180,7 @@ The two-strata semantics survives unchanged in shape and gets slightly cleaner. 
 
 #### Residue
 
-Within-epoch grief is unchanged: Mallory blocks routes through `mods1` until the rotation lands; rotation remains the response. MAD at flat roles is unchanged (Finding 6). Anyone who ever held apex Admin can block everything, since every route transits Owners; keep the apex minimal. Nesting expands anchorability transitively, so [constitutional flatness][keyline-flat] stays essential, but the failure is bounded even then: contamination reaches nested child roles and, for an Admin-rooted document, the subject itself (see the NOTE under _Against the Prior Failures_); an Edit-rooted document keeps `doc1` out of everyone's reach.
+Within-epoch grief is unchanged: Mallory blocks routes through `mods1` until the rotation lands; rotation remains the response. MAD at flat roles is unchanged (Finding 6). Anyone who ever held root-role Admin can block everything, since every route transits Owners; keep the root role minimal. Nesting expands anchorability transitively, so [constitutional flatness][keyline-flat] stays essential, but the failure is bounded even then: contamination reaches nested child roles and, for an Admin-rooted document, the subject itself (see the NOTE under _Against the Prior Failures_); an Edit-rooted document keeps `doc1` out of everyone's reach.
 
 ## The Junction
 
@@ -193,7 +193,7 @@ Every path through the scenario arrives at the same choice about third-party rev
 | Option 1 | conditional on live topology | ends at rotation | yes, until the path rotates | timeless, 3 strata | fail-open windows; revival lever; perpetual re-signing |
 | Option 2 | ordered (pre-removal only) | one bounded backdated sweep | yes | causal DAGs per pair | ordering metadata; purity lost |
 | Issuer revocation & rotate (Design B) | none | zero | no: via Dan or rotation | timeless, semipositive | coarse removal collectively punishes (Finding 7); peer-removal gap |
-| Jurisdiction-scoped blocks (option 3) | permanent in validity, scoped in effect | contained to her admin reach, by construction | yes: re-scoped per rotation | timeless, 2 strata | re-scope on rotation (moot, not void); apex block power; epoch grief until rotation |
+| Jurisdiction-scoped blocks (option 3) | permanent in validity, scoped in effect | contained to her admin reach, by construction | yes: re-scoped per rotation | timeless, 2 strata | re-scope on rotation (moot, not void); root-role block power; epoch grief until rotation |
 
 Unconditional revocations buy durable removal and cost permanent grief. Conditional revocations cost fail-open revival. Ordered revocations cost the timeless core. No revocations cost removal ergonomics. Option 1 is not a stable point; it decomposes into a mix of the first and last. Option 3 is the genuine fourth point, reached by scoping a revocation's _effect_ rather than its _validity_: revocations stay unconditional (monotone, permanent) while their reach is confined to a jurisdiction. It preserves the timeless core, deep revocations, revival with provenance, and spatial containment as a theorem. Option 3 was adopted, and then simplified further by the second convergence below, which eliminated the explicit jurisdiction field in favor of the issuer's admin reach and dissolved option 3's one residual cost (re-scoping blocks on rotation).
 

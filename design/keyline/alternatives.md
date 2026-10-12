@@ -20,7 +20,7 @@ _Proposal._ Replace `citation: Option<Digest<RevocationId>>` with random bytes s
 
 _Would buy._ No silent-collision UX; no dependency on having synced the revocation.
 
-_Rejected because._ It flips the fail direction. Two accidental issuances of one delegation become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering delegation (fails open). With `citation`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take (fails closed). The collision is detectable: `insert` returns `false` and `revocations_naming` reports what named the duplicate. A heal that does mean to re-issue past a revocation names it in `citation`, which makes the heal an accountable act. "Ambiguity resolves toward less authority" decides it.
+_Rejected because._ It flips the fail direction. Two accidental issuances of one delegation become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering delegation (fails open). With `citation`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take (fails closed). The collision is detectable: `insert` returns `false` and `revocations_of` reports what named the duplicate. A heal that does mean to re-issue past a revocation names it in `citation`, which makes the heal an accountable act. "Ambiguity resolves toward less authority" decides it.
 
 Why `citation` is optional, carries no semantics, and names the revocation rather than the revoked delegation is in [README, The `citation` Field](README.md#the-citation-field).
 
@@ -148,9 +148,9 @@ _Reopen if._ A polynomial algorithm for the ordered forbidden-pairs case turns u
 
 _Proposal._ `admin_reach(k, n)` only when the last hop of `k`'s Admin standing over `n` is an edge _about_ `n` (`subject: n`); Admin inherited through a role does not count.
 
-_Would buy._ An Admin-rooted document's root edge is irrevocable by construction: apex admins hold `Owners`, never `Doc`. Reach is answerable from a node's own certificates.
+_Would buy._ An Admin-rooted document's root edge is irrevocable by construction: root-role admins hold `Owners`, never `Doc`. Reach is answerable from a node's own certificates.
 
-_Rejected because._ Nested roles stop working as governance expects: an Admin of `Owners`, where `Owners` is Admin over `Members`, could not revoke delegations inside `Members` without a separate `subject: Members` delegation. And the protection it buys is one self-signed certificate from false: an apex admin signs `{issuer: me, audience: me, subject: Doc, power: Admin}` (their standing over `Doc` is Admin, so the delegation is direct) and `Doc` is in their reach permanently. Composed reach makes the rule uniform, and the same protection is available as a pattern with no rule: root the document at Edit ([patterns, Rooting Level](patterns.md#rooting-level)). Bricking an Admin-rooted document is not a new power ([README, Griefing](README.md#griefing)).
+_Rejected because._ Nested roles stop working as governance expects: an Admin of `Owners`, where `Owners` is Admin over `Members`, could not revoke delegations inside `Members` without a separate `subject: Members` delegation. And the protection it buys is one self-signed certificate from false: an root-role admin signs `{issuer: me, audience: me, subject: Doc, power: Admin}` (their standing over `Doc` is Admin, so the delegation is direct) and `Doc` is in their reach permanently. Composed reach makes the rule uniform, and the same protection is available as a pattern with no rule: root the document at Edit ([patterns, Rooting Level](patterns.md#rooting-level)). Bricking an Admin-rooted document is not a new power ([README, Griefing](README.md#griefing)).
 
 _Reopen if._ Never on the protection argument; possibly if a use case needs reach to be locally computable per node.
 
@@ -160,7 +160,7 @@ _Proposal._ Keep composed reach but exempt root edges (`issuer = subject`) from 
 
 _Would buy._ Irrevocable root edges for every rooting level; re-rooting with a retained key always escapes old admins.
 
-_Rejected because._ It is a special case in a design that has none, and it buys nothing that Edit-rooting does not: a document that wants an irrevocable root edge is rooted at Edit at creation. The power it would remove from the apex admins of an Admin-rooted document, ending the document with one certificate, is not a new power ([README, Griefing](README.md#griefing)).
+_Rejected because._ It is a special case in a design that has none, and it buys nothing that Edit-rooting does not: a document that wants an irrevocable root edge is rooted at Edit at creation. The power it would remove from the root-role admins of an Admin-rooted document, ending the document with one certificate, is not a new power ([README, Griefing](README.md#griefing)).
 
 _Reopen if._ Never.
 

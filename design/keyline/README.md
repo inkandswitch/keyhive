@@ -69,7 +69,7 @@ A delegation is a signed statement extending the issuer's own authority over a s
 | signature  | Ed25519 signature              | Over all of the above                                   |
 
 - A delegation reads: _`issuer` asserts that `audience` may exercise `power` over `subject`._
-- When `issuer = subject`: a _root edge_: the subject bootstrapping its own authority (see [Root Edges and the Apex][apex]).
+- When `issuer = subject`: a _root edge_: the subject bootstrapping its own authority (see [Root Edges and the Root Role][root role]).
 
 A _route_ is a derivation of that standing from the subject through live delegations (a tree once roles compose; see [Two Graphs, One Stored](#two-graphs-one-stored)).
 
@@ -93,7 +93,7 @@ Ed25519 is deterministic and certificates are content-addressed, so re-issuing a
 
 `citation` does a nonce's job with a fail-closed default: a re-issuance points at the _revocation_ the issuer has seen and is re-issuing past, changing the hash and documenting the heal ("re-granted, knowing of the revocation"). First issuances omit the field.
 
-It names the revocation rather than the revoked delegation. The revoked delegation's hash is a function of the fields being re-issued, so pointing at it adds no information and a second heal of the same delegation would collide with the first; each revocation is a distinct certificate, so each heal gets a fresh hash. The only event that ever poisons a hash is a revocation (an implicitly dead delegation revives on its own when its issuer regains standing), so the thing one must have seen to heal is always a revocation. `revocations_naming` reports the collision, and its output is the value to put in `citation`.
+It names the revocation rather than the revoked delegation. The revoked delegation's hash is a function of the fields being re-issued, so pointing at it adds no information and a second heal of the same delegation would collide with the first; each revocation is a distinct certificate, so each heal gets a fresh hash. The only event that ever poisons a hash is a revocation (an implicitly dead delegation revives on its own when its issuer regains standing), so the thing one must have seen to heal is always a revocation. `revocations_of` reports the collision, and its output is the value to put in `citation`.
 
 1. _Optional, absence = first issuance._ Absent means "no revocation acknowledged"; present means one named revocation.
 2. _No semantics, ever._ Evaluation ignores `citation` entirely. It is not supersession, not ordering, not a causal claim anyone verifies, and it does not cancel or un-apply the revocation it names. Issuer-supplied predecessors must never carry trust, or backdating-by-omission returns.
@@ -202,46 +202,46 @@ The AND/OR view shows directly:
 
 The two-feed AND-node is also the reason evaluation is a fixed point rather than a graph search: which edges _exist_ in the authority graph is an output of the computation, not an input. See [implementation, Evaluation](implementation.md#evaluation) for the program.
 
-## Root Edges and the Apex
+## Root Edges and the Root Role
 
-Subjects bootstrap their own authority. At creation, the subject key signs exactly one delegation, to a freshly minted _apex_ role: `{issuer: Doc, audience: Owners, subject: Doc, power: Admin}` (or `power: Edit`; see [Who Can Revoke the Root Edge][who can revoke the root edge]). The subject's signing key is then destroyed (cf. Keyhive's `EphemeralSigner`). The subject's _identity_ is its verifying key, permanent; its _authority_ immediately lives elsewhere.
+Subjects bootstrap their own authority. At creation, the subject key signs exactly one delegation, to a freshly minted _root role_: `{issuer: Doc, audience: Owners, subject: Doc, power: Admin}` (or `power: Edit`; see [Who Can Revoke the Root Edge][who can revoke the root edge]). The subject's signing key is then destroyed (cf. Keyhive's `EphemeralSigner`). The subject's _identity_ is its verifying key, permanent; its _authority_ immediately lives elsewhere.
 
 ```
 ┌─────┐  Admin (sole root edge)  ┌────────┐         ┌─────────┐
 │ Doc ├─────────────────────────►│ Owners ├───...──►│ Members ├──► ...
 └─────┘  key destroyed after     └────────┘         └─────────┘
-         signing this one cert   apex: append-only  rotatable, all the way down
+         signing this one cert   append-only        rotatable, all the way down
 ```
 
 ### Who Can Revoke the Root Edge
 
 The route of `Doc → Owners` is itself, grounded at Doc. A third party's revocation covers it only if Doc is in the revoker's admin reach, and the level chosen at creation decides whether it is in anyone's. Rooted at Admin, Doc is in the reach of everyone who ever held Admin in Owners, and any of them can brick the document with one revocation. Rooted at Edit, Doc is in nobody's reach.
 
-The root edge's two parties can always revoke it ([Revocation by the Audience][revocation by the audience]). Its issuer is the subject key, destroyed at creation. Its audience is the apex role's own key. An Edit-rooted root edge is therefore revocable by nobody _provided the apex role's key was discarded after creation_, as the [roles][roles] convention prescribes. A retained apex key can brick the document under either level.
+The root edge's two parties can always revoke it ([Revocation by the Audience][revocation by the audience]). Its issuer is the subject key, destroyed at creation. Its audience is the root role's own key. An Edit-rooted root edge is therefore revocable by nobody _provided the root role's key was discarded after creation_, as the [roles][roles] convention prescribes. A retained root-role key can brick the document under either level.
 
-Admin over a document gates nothing except reach over it, so Edit-rooting costs no capability ([patterns, Rooting Level][rooting level] has the argument and the comparison table). A retained subject key can re-root an Edit-rooted document out from under old admins ([below](#the-apex-is-append-only-unless-the-subject-key-survives)). Admin-rooting gives every apex admin the power to destroy the document, which is not a new power ([Griefing](#griefing)); it is the right shape when the owners _are_ the document.
+Admin over a document gates nothing except reach over it, so Edit-rooting costs no capability ([patterns, Rooting Level][rooting level] has the argument and the comparison table). A retained subject key can re-root an Edit-rooted document out from under old admins ([below](#the-root-role-is-append-only-unless-the-subject-key-survives)). Admin-rooting gives every root-role admin the power to destroy the document, which is not a new power ([Griefing](#griefing)); it is the right shape when the owners _are_ the document.
 
 > [!IMPORTANT]
 > Destroy the subject key after creation, or guard it as the recovery instrument it is: a retained subject key can revoke the root edge and re-root the document (below).
 
-### The Apex is Append-Only (Unless the Subject Key Survives)
+### The Root Role is Append-Only (Unless the Subject Key Survives)
 
-Rotation works at every layer except the top. Rotating Owners requires a new root edge, and with the subject key destroyed, none can ever be minted. Meanwhile everyone who ever held Admin in Owners has Owners in their admin reach, and every route in the document transits Owners, so apex removal is never durable. There is no surviving senior to appeal to: the apex's parent destroyed itself at creation.
+Rotation works at every layer except the top. Rotating Owners requires a new root edge, and with the subject key destroyed, none can ever be minted. Meanwhile everyone who ever held Admin in Owners has Owners in their admin reach, and every route in the document transits Owners, so root-role removal is never durable. There is no surviving senior to appeal to: the root role's parent destroyed itself at creation.
 
 | Layer              | Removal semantics                                                |
 |--------------------|------------------------------------------------------------------|
-| Apex role (Owners) | Append-only trust: membership can grow; removal is never durable |
+| Root role (Owners) | Append-only trust: membership can grow; removal is never durable |
 | Every layer below  | Fully rotatable: durable removal via mint-and-re-roster          |
 
-A _retained_ subject key (cold storage, threshold-split) changes this for an Edit-rooted document: it can revoke the old root edge and mint `Doc → Owners′`, and the old apex admins' admin reach contains Owners, which the new hierarchy's routes never transit. This is a true apex rotation, durable removal included, but the retained key can do the same to the new owners. For an Admin-rooted document the retained key buys nothing durable: the old admins' reach contains Doc itself, so `Doc → Owners′` is as revocable as its predecessor. The choices made at creation are rooting level and key custody.
+A _retained_ subject key (cold storage, threshold-split) changes this for an Edit-rooted document: it can revoke the old root edge and mint `Doc → Owners′`, and the old root-role admins' admin reach contains Owners, which the new hierarchy's routes never transit. This is a true root-role rotation, durable removal included, but the retained key can do the same to the new owners. For an Admin-rooted document the retained key buys nothing durable: the old admins' reach contains Doc itself, so `Doc → Owners′` is as revocable as its predecessor. The choices made at creation are rooting level and key custody.
 
-### Mutual Assured Destruction at the Apex
+### Mutual Assured Destruction in the Root Role
 
-Apex peers can revoke each other's memberships (Owners is in every apex admin's admin reach), and both revocations of a concurrent duel are independently covered, so under [permanence] both stand. Mutual destruction is deterministic, not prevented.[^mad] Below the apex this is survivable. The _senior_ (whoever supplies the role) holds a supply into the role, not a membership in it ([constitutional flatness]), so it resolves the duel by rotation: mint a successor node, and re-roster whichever party (or neither) with fresh keys. Rotation shuts the duelists out only if the role holds at most Edit over the subject ([The Ex-Admin Sharp Edge][the ex-admin sharp edge]).
+Root-role peers can revoke each other's memberships (Owners is in every root-role admin's admin reach), and both revocations of a concurrent duel are independently covered, so under [permanence] both stand. Mutual destruction is deterministic, not prevented.[^mad] Below the root role this is survivable. The _senior_ (whoever supplies the role) holds a supply into the role, not a membership in it ([constitutional flatness]), so it resolves the duel by rotation: mint a successor node, and re-roster whichever party (or neither) with fresh keys. Rotation shuts the duelists out only if the role holds at most Edit over the subject ([The Ex-Admin Sharp Edge][the ex-admin sharp edge]).
 
-At the apex there is no senior. If all apex members revoke one another, every human's standing dies in the cascade, and no one can ever mint new apex members (that requires _live_ Admin over the apex). The graph is permanently bricked: replicas keep their data, but no new delegation will ever be live again.
+In the root role there is no senior. If all root-role members revoke one another, every human's standing dies in the cascade, and no one can ever mint new root-role members (that requires _live_ Admin over the root role). The graph is permanently bricked: replicas keep their data, but no new delegation will ever be live again.
 
-Mitigations: a single-owner apex has no peers and therefore no duel. Memberships signed by the apex role's own key at creation never die by cascade, because the role key stands over itself, but any apex admin can still revoke them explicitly, whatever the rooting level, so they do not survive a duel. A retained subject key enables repair (or re-rooting), at its custody cost. Keep the apex minimal (one key per human owner, or just the creator), with all churn conducted in second-layer roles, where rotation works. Treat the apex like a root CA: set it up once and use it rarely.
+Mitigations: a single-owner root role has no peers and therefore no duel. Memberships signed by the root role's own key at creation never die by cascade, because the role key stands over itself, but any root-role admin can still revoke them explicitly, whatever the rooting level, so they do not survive a duel. A retained subject key enables repair (or re-rooting), at its custody cost. Keep the root role minimal (one key per human owner, or just the creator), with all churn conducted in second-layer roles, where rotation works. Treat the root role like a root CA: set it up once and use it rarely.
 
 [^mad]: "Mutual assured destruction," from Cold War deterrence theory.
 
@@ -313,15 +313,15 @@ Route geometry alone gives both of the following:
 
 An audience may always revoke a delegation that names it, totally and unconditionally: no senior sign-off, no preconditions.
 
-- _Key compromise._ When a key leaks, it is the only signer guaranteed available at the moment it matters. Requiring an appeal upward imposes an unbounded, partition-shaped delay during which the thief acts freely. At a sole-owner apex there is no upward at all. (The thief can also revoke what names the key; that is the least dangerous thing they can do with the key, and deny-only besides.)
+- _Key compromise._ When a key leaks, it is the only signer guaranteed available at the moment it matters. Requiring an appeal upward imposes an unbounded, partition-shaped delay during which the thief acts freely. At a sole-owner root role there is no upward at all. (The thief can also revoke what names the key; that is the least dangerous thing they can do with the key, and deny-only besides.)
 - _It follows from the fail-closed axiom._ Shedding authority can never grant, escalate, or touch a third party's independent standing.
 - _Prohibition would not prevent the harms attributed to it._ A node others depend on can strand its downstream anyway: revoke every delegation it issued, or simply lose the key. Banning revocation by the audience removes only the legitimate exit.
 
 A caveat: revocation by the audience is _not_ the pure ocap capability drop. In ocap, dropping your reference leaves the copies you introduced intact; here, liveness is issuer-recursive, so revoking your own membership also unwinds everything you issued through it: a drop _plus retroactive unwinding of your introductions_. The externalities are answered by _stewardship_ at the protocol layer while keeping the semantics unconditional:
 
-- _Succession discipline._ Revoking your own membership in a position others depend on should be preceded by a handoff: confirm a successor, let peers re-issue what needs re-issuing, _then_ revoke it. Because the apex is append-only-growable, an orderly succession path always exists before the exit, and never after.
-- _Stranding is repairable below the apex._ A leaf revoking its own membership strands nothing; when a member others depend on leaves, survivors re-issue its dead delegations; a severed subtree is re-supplied from above. The unrecoverable case is the _last_ apex member revoking their own membership.
-- _Sole-apex exit._ A sole apex member revoking their own membership destroys the document, irreversibly. Tooling should warn. Prohibiting revocation by the audience would not prevent it: sole-apex fragility is inherent to sole-apex.
+- _Succession discipline._ Revoking your own membership in a position others depend on should be preceded by a handoff: confirm a successor, let peers re-issue what needs re-issuing, _then_ revoke it. Because the root role is append-only-growable, an orderly succession path always exists before the exit, and never after.
+- _Stranding is repairable below the root role._ A leaf revoking its own membership strands nothing; when a member others depend on leaves, survivors re-issue its dead delegations; a severed subtree is re-supplied from above. The unrecoverable case is the _last_ root-role member revoking their own membership.
+- _Sole-owner exit._ A sole root-role member revoking their own membership destroys the document, irreversibly. Tooling should warn. Prohibiting revocation by the audience would not prevent it: sole-owner fragility is inherent to having one owner.
 
 #### Permanence
 
@@ -391,7 +391,7 @@ Under admin-reach scoping, the place rotation moves to is well-defined:
 
 - _The boundary is frozen, by construction._ A fresh node post-dates the ex-admin on every graph; no fact will ever put it in his admin reach. Rotation escapes him for good, at the cost of one roster, not a subtree, provided the rotated role held at most Edit over every subject it was supplied into. Admin over a subject puts the subject itself in every role admin's reach, and no rotation of the role takes it out (next point).
 - _Visibility does not matter._ He can sync every certificate ever minted; revocations covering only dead routes are inert. (Hash-visibility is no bound: set-reconciliation sync enumerates missing hashes to any peer; see [edge-cases, Finding 3](edge-cases.md#finding-3-the-visibility-bound-does-not-hold).)
-- _The subject is the one node that cannot rotate, and it is in reach._ Everyone who ever held Admin over the subject, directly, through the apex role, or through any role holding Admin over it, has the subject in their frozen admin reach and can cover every certificate on it, the root edge included. That is a permanent whole-document kill, and it is accepted because it is not a new power ([Griefing](#griefing)). A document that wants its root edge irrevocable roots at Edit instead ([Root Edges and the Apex][apex]); nothing about Admin over a document is needed for anything but this.
+- _The subject is the one node that cannot rotate, and it is in reach._ Everyone who ever held Admin over the subject, directly, through the root role, or through any role holding Admin over it, has the subject in their frozen admin reach and can cover every certificate on it, the root edge included. That is a permanent whole-document kill, and it is accepted because it is not a new power ([Griefing](#griefing)). A document that wants its root edge irrevocable roots at Edit instead ([Root Edges and the Root Role][root role]); nothing about Admin over a document is needed for anything but this.
 - _Survivors' revocations need no maintenance._ Because admin reach grows with its holder's career, a surviving admin's old revocations automatically cover the successor nodes they are re-rostered into. Their revocations follow them through every rotation; the griefer's stay pinned to dead nodes.
 - _The removed admin's revocations lapse, wanted or not._ Rotation moots every revocation the removed admin signed, including deep revocations the survivors agree with: a target that admin revoked deep below the role revives once the role's routes run through the successor. Survivors re-sign the ones worth keeping. They are enumerable from the set: revocations signed by that key whose targets are live after the rotation. Roster removals that admin made need nothing, because the rotator simply does not re-roster those members.
 
@@ -494,8 +494,8 @@ Why this is survivable:
 - _Only admins are in the set._ Under [memberships as the only shape][memberships], non-admin members never hold Admin over a role, so their revocations reach only their own hop and their own signatures.
 - _Bounded by local-first._ Revocation confiscates nothing: the audience keeps its replica and everything already decrypted. Griefing severs new content keys and authorized sync. That is real, but it is not data loss.
 - _Attributable and repairable._ Revocations are signed; a spree is a self-incriminating audit trail.
-- _Blast radius and griefer count are inversely related._ Upstream revocations kill whole subtrees, but upstream roles have fewer people who ever held Admin in them, and route geometry bars everyone standing on an edge from revoking it. The apex can grief everything, but that is ownership.
-- _Bricking is not a new power._ In an Admin-rooted document, anyone who ever held Admin in the apex can kill the whole document with one revocation of the root edge. A root admin could already revoke every peer's membership and then lose their own key, with the same result. One certificate instead of many changes the ergonomics, not the trust model. A document that wants an irrevocable root edge roots at Edit ([Who Can Revoke the Root Edge][who can revoke the root edge]).
+- _Blast radius and griefer count are inversely related._ Upstream revocations kill whole subtrees, but upstream roles have fewer people who ever held Admin in them, and route geometry bars everyone standing on an edge from revoking it. The root role can grief everything, but that is ownership.
+- _Bricking is not a new power._ In an Admin-rooted document, anyone who ever held Admin in the root role can kill the whole document with one revocation of the root edge. A root admin could already revoke every peer's membership and then lose their own key, with the same result. One certificate instead of many changes the ergonomics, not the trust model. A document that wants an irrevocable root edge roots at Edit ([Who Can Revoke the Root Edge][who can revoke the root edge]).
 - _Rotation ends it._ A griefer's admin reach froze at removal; rotating the roles in it moots every revocation they ever signed and every one they ever will, provided none of those roles held Admin over the subject ([The Ex-Admin Sharp Edge][the ex-admin sharp edge]).
 
 Revocation power is the power to deny access, so the tension cannot be removed. Any design with decentralized durable removal hands every remover a griefing capability. Keyline chose durable (fail-closed); admin-reach scoping and rotation hygiene shrink the surface, and no semantics tweak eliminates it.
@@ -520,7 +520,7 @@ Setup, the shape of [patterns, Roles][roles]:
 
 ```
 {issuer: Doc,     audience: Owners,  subject: Doc,     power: Edit}    root edge
-{issuer: Owners,  audience: Dan,     subject: Owners,  power: Admin}   Dan in the apex role
+{issuer: Owners,  audience: Dan,     subject: Owners,  power: Admin}   Dan in the root role
 {issuer: Dan,     audience: Members, subject: Doc,     power: Edit}    supply
 {issuer: Members, audience: Dan,     subject: Members, power: Admin}   creation edge of Members
 ```
@@ -592,7 +592,6 @@ The canonical vocabulary for Keyline. The other documents in this directory use 
 | Term                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                   |
 |-----------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Admin reach           | The nodes a key ever held `Admin` over, plus its own node. Computed with every revocation ignored, so it only grows. It scopes the effect of that key's revocations.                                                                                                                                                                                                                      |
-| Apex                  | The top role: the audience of the root edge. Its membership can grow, but removal from it is never durable unless the subject key survives ([Root Edges and the Apex][apex]).                                                                                                                                                                                                             |
 | Audience              | The key a delegation is issued to. It gains `min(power, issuer's standing)` over the subject.                                                                                                                                                                                                                                                                                             |
 | Authority graph       | Who actually holds standing over what, derived from the message graph at every evaluation and stored nowhere ([Two Graphs, One Stored](#two-graphs-one-stored)).                                                                                                                                                                                                                          |
 | Cascade               | Implicit death downstream: when a delegation dies, every delegation whose standing depended on it dies too, though no certificate names them.                                                                                                                                                                                                                                             |
@@ -625,6 +624,7 @@ The canonical vocabulary for Keyline. The other documents in this directory use 
 | Revocation            | The negative certificate, `{issuer, revoke, retain}`. It names one delegation (a certificate, never a key), it is always valid, and it can never grant. Its effect is scoped by who signs it, relative to the delegation it revokes: _by the issuer_ (total), _by the audience_ (total), or _by a third party_ (covers routes through the signer's admin reach).                          |
 | Role                  | A key that stands for a group. Keys hold memberships in it, and supplies connect it to subjects.                                                                                                                                                                                                                                                                                          |
 | Root edge             | A delegation with `issuer == subject`: the subject bootstrapping its own authority.                                                                                                                                                                                                                                                                                                       |
+| Root role             | The audience of the root edge. Unlike Unix `root`, it bypasses nothing: its power is what the root edge delegates. Its membership can grow, but removal from it is never durable unless the subject key survives ([Root Edges and the Root Role][root role]).                                                                                                                             |
 | Roster                | The set of memberships in a role. To _re-roster_ is to re-issue them into a successor role during rotation.                                                                                                                                                                                                                                                                               |
 | Rotation              | Replacing a role with a fresh key and re-adding the members who stay, to escape a removed admin's frozen admin reach. It escapes only if the role holds at most Edit over each subject it reaches: Admin over a subject puts the subject itself in that reach, and rotating the role does not take it out.                                                                                |
 | Route                 | A derivation of a key's standing over a subject through live delegations. When roles compose it is a tree, not a chain; a route _transits_ every node in it.                                                                                                                                                                                                                              |
@@ -636,7 +636,6 @@ The canonical vocabulary for Keyline. The other documents in this directory use 
 <!-- Links -->
 
 [admin reach]: #admin-reach
-[apex]: #root-edges-and-the-apex
 [arbac]: https://doi.org/10.1145/300830.300839
 [binder]: https://doi.org/10.1109/SECPRI.2002.1004365
 [caretakers]: patterns.md#caretakers
@@ -655,6 +654,7 @@ The canonical vocabulary for Keyline. The other documents in this directory use 
 [revocation semantics]: #revocation-semantics
 [roles]: patterns.md#roles
 [rooting level]: patterns.md#rooting-level
+[root role]: #root-edges-and-the-root-role
 [rotating a role]: patterns.md#rotating-a-role
 [rt]: https://doi.org/10.1109/SECPRI.2002.1004366
 [sdsi discovery]: https://doi.org/10.3233/JCS-2001-9402

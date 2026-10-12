@@ -11,7 +11,7 @@ Companion to the [Keyline design][keyline]. None of the following require mechan
 A "role" is just a node: mint a key, grant authority _to_ it (supplies), and grant authority _over_ it to its members (memberships). Because nodes are undifferentiated keys, a role participates in the graph exactly like an individual.
 
 ```
-┌─────┐ root edge ┌────────┐   apex    ┌─────┐    supply    ┌─────────┐
+┌─────┐ root edge ┌────────┐ root role ┌─────┐    supply    ┌─────────┐
 │ Doc ├──────────►│ Owners ├──────────►│ Dan ├─────────────►│ Members │
 └─────┘           └────────┘           │     │◄─────────────┤         │
                                        └──┬──┘   creation   └─────────┘
@@ -20,14 +20,14 @@ A "role" is just a node: mint a key, grant authority _to_ it (supplies), and gra
                                           └──► Bob
 
 root edge    {issuer: Doc,     audience: Owners,  subject: Doc,     power: Edit}
-apex         {issuer: Owners,  audience: Dan,     subject: Owners,  power: Admin}
+root role    {issuer: Owners,  audience: Dan,     subject: Owners,  power: Admin}
 creation     {issuer: Members, audience: Dan,     subject: Members, power: Admin}
 supply       {issuer: Dan,     audience: Members, subject: Doc,     power: Edit}
 memberships  {issuer: Dan,     audience: Alice,   subject: Members, power: Admin}
              {issuer: Dan,     audience: Bob,     subject: Members, power: Admin}
 ```
 
-The root edge and the supply are at Edit, which is as much as humans need over a document. If `Members` held Admin over Doc (an Admin supply in an Admin-rooted document), Doc itself would be in the admin reach of every Admin member of `Members`, ever, and no rotation of `Members` would take it out again ([Rotating a Role](#rotating-a-role)). Owners' membership for Dan is the apex role's creation edge.
+The root edge and the supply are at Edit, which is as much as humans need over a document. If `Members` held Admin over Doc (an Admin supply in an Admin-rooted document), Doc itself would be in the admin reach of every Admin member of `Members`, ever, and no rotation of `Members` would take it out again ([Rotating a Role](#rotating-a-role)). Owners' membership for Dan is the root role's creation edge.
 
 The role's signing key is ephemeral: create the key, sign the creation edges, discard it. The role never signs again. Authority flows _into_ it via supplies (signed by whoever holds the supplied authority) and _through_ it via memberships. Members at Admin manage the roster; members at Edit or Read merely transit ([`subject` is a scope][subject is a scope, not an endpoint]). "Invite at a level" is just a membership with a `power` ceiling, and attenuation does the rest.
 
@@ -111,7 +111,7 @@ Admin reach is composed: it contains every node its holder ever held Admin over,
 > [!TIP]
 > Nest when the parent's admins should be able to revoke memberships inside the child. Keep the child flat when it should be governable only wholesale: parents then control the supply (revoke and re-grant to a successor) and never enter the child's roster. Nesting is permanent; supply control is not.
 
-Transit-level nesting (a child role holding an Edit-level membership in a parent) is safe either way: only holding Admin over a node enters reach, so an Edit membership adds nothing. When roles are flat and hold at most Edit over every subject they are supplied into, an ex-admin's reach is exactly the rosters they sat on. A role holding Admin over a subject adds that subject to the reach of each of its admins, and rotating the role does not remove it ([Rotating a Role](#rotating-a-role)). The same choice applied at the top is the [rooting level][rooting level]: a document rooted at Admin puts itself in every apex admin's reach; rooted at Edit, it is in nobody's.
+Transit-level nesting (a child role holding an Edit-level membership in a parent) is safe either way: only holding Admin over a node enters reach, so an Edit membership adds nothing. When roles are flat and hold at most Edit over every subject they are supplied into, an ex-admin's reach is exactly the rosters they sat on. A role holding Admin over a subject adds that subject to the reach of each of its admins, and rotating the role does not remove it ([Rotating a Role](#rotating-a-role)). The same choice applied at the top is the [rooting level][rooting level]: a document rooted at Admin puts itself in every root-role admin's reach; rooted at Edit, it is in nobody's.
 
 ## Rooting Level
 
@@ -122,7 +122,7 @@ Admin over a document gates exactly one thing: reach over the document's routes.
 | `{issuer: Doc, audience: Owners, subject: Doc, power: Admin}` | every Admin member of Owners, ever | any of them; one revocation bricks the document               | cannot escape: old admins' reach covers `Doc → Owners′` too                              |
 | `{issuer: Doc, audience: Owners, subject: Doc, power: Edit}`  | nobody                             | nobody, provided Owners' own key was discarded after creation | re-roots cleanly: old admins' reach holds Owners, which the new hierarchy never transits |
 
-The root edge's parties can always revoke it, whatever the level: the subject key as issuer, and the apex role's key as audience ([README, Who Can Revoke the Root Edge](README.md#who-can-revoke-the-root-edge)). Discarding the role key after creation, as [Roles](#roles) prescribes, leaves only a retained subject key.
+The root edge's parties can always revoke it, whatever the level: the subject key as issuer, and the root role's key as audience ([README, Who Can Revoke the Root Edge](README.md#who-can-revoke-the-root-edge)). Discarding the role key after creation, as [Roles](#roles) prescribes, leaves only a retained subject key.
 
 Edit-rooting costs nothing in capability: humans reach the document at Edit, which is as much as any route can carry, and govern it through Admin over its roles. It is the shape for a document whose owners should be able to leave without taking it with them. Admin-rooting is the shape when the owners _are_ the document (a personal document, a two-party agreement) and being able to end it unilaterally is the point. The power to brick it is not new ([README, Griefing](README.md#griefing)).
 

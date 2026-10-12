@@ -184,8 +184,8 @@ impl<W> MemoryKeyline<W> {
     ///
     /// A route for `h` transits only nodes with standing over `subject(h)`, so
     /// if no covered node has that standing, `h` behaves exactly as an
-    /// uncovered edge and is dropped: a revocation by a key with no reach over
-    /// `h`'s subject costs no context. The set itself is kept whole, not
+    /// uncovered edge and is dropped: a revocation by a key with no standing
+    /// over `h`'s subject costs no context. The set itself is kept whole, not
     /// trimmed to those nodes, so that it still depends only on who revoked
     /// `h` and a one-key spree still shares one context. Excluding a node
     /// without standing over a search's root changes nothing, since the search
@@ -539,9 +539,9 @@ impl<W: Encode + Decode> Keyline for MemoryKeyline<W> {
         self.certificates.contains_key(cert)
     }
 
-    fn revocations_naming(&self, cert: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>> {
+    fn revocations_of(&self, delegation: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>> {
         self.revocations_of
-            .get(cert)
+            .get(delegation)
             .map(|ids| ids.iter().copied().collect())
             .unwrap_or_default()
     }
@@ -559,9 +559,9 @@ impl<W: Encode + Decode> Keyline for MemoryKeyline<W> {
             .collect()
     }
 
-    #[instrument(level = "trace", skip(self), fields(%cert))]
-    fn is_live(&self, cert: &Digest<Delegation>) -> bool {
-        self.delegations.contains_key(cert) && self.evaluate().live.contains(cert)
+    #[instrument(level = "trace", skip(self), fields(%delegation))]
+    fn is_live(&self, delegation: &Digest<Delegation>) -> bool {
+        self.delegations.contains_key(delegation) && self.evaluate().live.contains(delegation)
     }
 
     fn digest(&self) -> Digest<CertificateSet> {

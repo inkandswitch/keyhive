@@ -291,12 +291,18 @@ mod tests {
     #[test]
     fn identity_is_the_payload_digest() {
         let d = Delegation::new(id(1), id(2), id(3), Power::Read);
-        let signed = Signed::try_sign(&d, &signing_key(1)).expect("key is the issuer");
+        let signed = Verified::sign_sync(&d, &signing_key(1))
+            .expect("key is the issuer")
+            .into_parts()
+            .1;
         let cert: Certificate<Watermark> = Certificate::Delegation(signed);
         assert_eq!(cert.id(), CertificateId::Delegation(d.digest()));
 
         let r: Revocation<Watermark> = Revocation::new(id(4), d.digest());
-        let signed = Signed::try_sign(&r, &signing_key(4)).expect("key is the issuer");
+        let signed = Verified::sign_sync(&r, &signing_key(4))
+            .expect("key is the issuer")
+            .into_parts()
+            .1;
         let cert = Certificate::Revocation(signed);
         assert_eq!(cert.id(), CertificateId::Revocation(r.digest()));
 
@@ -311,7 +317,10 @@ mod tests {
     #[test]
     fn wire_form_round_trips_and_verifies() {
         let d = Delegation::new(id(1), id(2), id(3), Power::Read);
-        let signed = Signed::try_sign(&d, &signing_key(1)).expect("key is the issuer");
+        let signed = Verified::sign_sync(&d, &signing_key(1))
+            .expect("key is the issuer")
+            .into_parts()
+            .1;
         let cert: Certificate<Watermark> = Certificate::Delegation(signed.clone());
         let bytes = cert.encode().into_bytes();
         assert_eq!(bytes[0], TAG_DELEGATION);

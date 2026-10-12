@@ -204,14 +204,14 @@ pub fn mutual_revocations_both_take_effect<K: Keyline + Default>() {
     g.insert(assume_verified(r(CAROL, &bob_owner)));
     assert_eq!(power(&g, DOC, BOB), None);
     assert_eq!(power(&g, DOC, CAROL), None);
-    // The apex is bricked: nothing below survives.
+    // The root role is bricked: nothing below survives.
     assert!(g.members(id(DOC)).into_keys().eq([id(OWNERS)]));
 }
 
 /// `standard()` roots Doc at Admin, so Doc is in every Owners admin's reach
 /// and any of them can revoke the root edge. One certificate bricks the
 /// document; nothing below survives.
-pub fn apex_admin_can_revoke_the_root_edge<K: Keyline + Default>() {
+pub fn root_role_admin_can_revoke_the_root_edge<K: Keyline + Default>() {
     let (mut g, _, _) = standard::<K>();
     let root = d(DOC, OWNERS, DOC, Power::Admin);
     assert_eq!(power(&g, DOC, BOB), Some(Power::Admin));
@@ -399,7 +399,7 @@ pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
     g.insert(assume_verified(revocation));
     assert!(!g.insert(assume_verified(alice_member)));
     assert!(g
-        .revocations_naming(&alice_member.digest())
+        .revocations_of(&alice_member.digest())
         .into_iter()
         .eq([revocation_digest]));
 }
@@ -598,7 +598,7 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
     // An identical re-gift is the revoked certificate.
     assert!(!g.insert(assume_verified(gift)));
     assert!(g
-        .revocations_naming(&gift.digest())
+        .revocations_of(&gift.digest())
         .into_iter()
         .eq([alice_revocation_digest]));
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Read));
@@ -612,7 +612,7 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
 }
 
 /// The fixtures skip signing (`Verified::assume`). This scenario goes through
-/// `Signed::try_sign` and `Signed::verify` for every certificate, so the
+/// `Verified::sign_sync`, which signs and verifies, for every certificate, so the
 /// production path runs at least once, and checks that the signed set gives
 /// the same answers and the same digest as the fixtures.
 pub fn signed_certificates_agree_with_fixtures<K: Keyline + Default>() {
@@ -661,9 +661,9 @@ pub fn second_signature_is_the_same_certificate<K: Keyline + Default>() {
 }
 
 /// Edit-rooting protects only the root edge. Memberships the role key signed
-/// at creation are grounded at the role, which is in every apex admin's reach,
-/// so two apex admins who revoke each other both lose their standing.
-pub fn apex_duel_kills_creation_memberships_even_when_edit_rooted<K: Keyline + Default>() {
+/// at creation are grounded at the role, which is in every root-role admin's reach,
+/// so two root-role admins who revoke each other both lose their standing.
+pub fn root_role_duel_kills_creation_memberships_even_when_edit_rooted<K: Keyline + Default>() {
     let root = d(DOC, OWNERS, DOC, Power::Edit);
     let alice_owner = d(OWNERS, ALICE, OWNERS, Power::Admin);
     let bob_owner = d(OWNERS, BOB, OWNERS, Power::Admin);
