@@ -34,39 +34,6 @@ pub enum KeyOp {
 }
 
 impl KeyOp {
-    pub fn topsort(key_ops: &CaMap<KeyOp>) -> Vec<Arc<KeyOp>> {
-        let mut heads: Vec<Arc<KeyOp>> = vec![];
-        let mut rotate_key_ops: HashMap<ShareKey, Vec<Arc<KeyOp>>> = HashMap::new();
-
-        for key_op in key_ops.values() {
-            match key_op.as_ref() {
-                KeyOp::Add(_add) => {
-                    heads.push(key_op.dupe());
-                }
-                KeyOp::Rotate(rot) => {
-                    rotate_key_ops
-                        .entry(rot.payload.old)
-                        .or_default()
-                        .push(key_op.dupe());
-                }
-            }
-        }
-
-        let mut topsorted = vec![];
-
-        while let Some(head) = heads.pop() {
-            if let Some(ops) = rotate_key_ops.get(head.new_key()) {
-                for op in ops.iter() {
-                    heads.push(op.dupe());
-                }
-            }
-
-            topsorted.push(head.dupe());
-        }
-
-        topsorted
-    }
-
     pub fn new_key(&self) -> &ShareKey {
         match self {
             KeyOp::Add(add) => &add.payload.share_key,
@@ -105,14 +72,55 @@ impl Verifiable for KeyOp {
     }
 }
 
+/// Key ops grouped by the identifier they belong to.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyOps(HashMap<Identifier, Vec<Arc<KeyOp>>>);
+
+impl KeyOps {
+    /// The ops belonging to `id`.
+    pub fn get(&self, id: &Identifier) -> Option<&[Arc<KeyOp>]> {
+        self.0.get(id).map(Vec::as_slice)
+    }
+
+    /// The identifiers that have ops.
+    pub fn keys(&self) -> impl Iterator<Item = &Identifier> {
+        self.0.keys()
+    }
+
+    /// The ops for each identifier.
+    pub fn values(&self) -> impl Iterator<Item = &[Arc<KeyOp>]> {
+        self.0.values().map(Vec::as_slice)
+    }
+}
+
+impl From<HashMap<Identifier, CaMap<KeyOp>>> for KeyOps {
+    fn from(by_id: HashMap<Identifier, CaMap<KeyOp>>) -> Self {
+        KeyOps(
+            by_id
+                .into_iter()
+                .map(|(id, ops)| (id, ops.into_values().collect()))
+                .collect(),
+        )
+    }
+}
+
+impl IntoIterator for KeyOps {
+    type Item = (Identifier, Vec<Arc<KeyOp>>);
+    type IntoIter = std::collections::hash_map::IntoIter<Identifier, Vec<Arc<KeyOp>>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 /// Reachable prekey ops for all agents, with shared storage.
 ///
-/// Instead of duplicating topsorted key ops across agents, the ops are stored
+/// Instead of duplicating key ops across agents, the ops are stored
 /// once in `ops` and each agent has an index into that shared map.
 #[derive(Debug)]
 pub struct AllReachablePrekeyOps {
-    /// Topsorted key ops per identifier (agent, group, or doc), computed once.
-    pub ops: HashMap<Identifier, Vec<Arc<KeyOp>>>,
+    /// Key ops per identifier, computed once.
+    pub ops: KeyOps,
 
     /// For each agent: the set of identifiers whose ops in `ops` are reachable, plus
     /// members it can no longer reach whose keys still help verify the history it is
@@ -133,10 +141,8 @@ impl AllReachablePrekeyOps {
         &self,
         agent_id: &Identifier,
     ) -> Option<impl Iterator<Item = &Arc<KeyOp>>> {
-        self.index.get(agent_id).map(|ids| {
-            ids.iter()
-                .filter_map(|id| self.ops.get(id))
-                .flat_map(|ops| ops.iter())
-        })
+        self.index
+            .get(agent_id)
+            .map(|ids| ids.iter().filter_map(|id| self.ops.get(id)).flatten())
     }
 }
