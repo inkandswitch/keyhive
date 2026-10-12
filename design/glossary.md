@@ -39,7 +39,7 @@ Terms used across the Keyhive design documents and code. Where the design docume
 | _Whiteout_ | Operations whose authority was later revoked are retained (to preserve causality) but excluded from materialisation. | |
 | _Back-dating_ | A revoked agent fabricating operations that claim causal predecessors from before the revocation. Detected against the causal frontier (`after_content`) the revocation records. | `Delegation::after_content` |
 | _Convergent capabilities_ (_concap_) | Keyhive's capability model: certificate capabilities whose authority is evaluated over a CRDT of delegations and revocations, so all replicas converge on the same view. See [Convergent Capabilities](./convergent_capabilities.md). | |
-| _Keyline_ | The next iteration of the authority model: a uniform graph over keys with jurisdiction-scoped revocation. Design in progress on the `keyline` branch. | |
+| _Keyline_ | The successor authority model: a uniform graph over keys, with revocation scoped by the issuer's admin reach. See [Keyline](./keyline/README.md). | `keyline` |
 
 ## Encryption
 

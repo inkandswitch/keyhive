@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 360" width="520" height="360" role="img" aria-labelledby="title desc">
+  <title id="title">The Granovetter diagram</title>
+  <desc id="desc">Alice holds references to Bob and to Carol. She sends Bob a delegation message along her reference to Bob, and the message carries a copy of her reference to Carol.</desc>
+  <style>
+    text { font-family: Georgia, "Times New Roman", serif; fill: #1f2328; }
+    .name { font-size: 24px; text-anchor: middle; dominant-baseline: central; }
+    .msg-label { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 13px; text-anchor: middle; }
+    .alice { fill: #a8e6e1; stroke: #5fb3ad; stroke-width: 1.5; }
+    .bob { fill: #f7b9ad; stroke: #d98576; stroke-width: 1.5; }
+    .carol { fill: #f5ee86; stroke: #c9bf3a; stroke-width: 1.5; }
+    .ref { stroke: #9b1238; stroke-width: 2.5; fill: none; }
+    .dot { fill: #5a0b22; }
+    .head { fill: #9b1238; }
+    .message { fill: #c99af5; stroke: #6a2aa8; stroke-width: 1.5; }
+    @media (prefers-color-scheme: dark) {
+      .ref { stroke: #ff7b93; }
+      .head { fill: #ff7b93; }
+    }
+  </style>
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <circle class="alice" cx="110" cy="95" r="72"/>
+  <circle class="bob" cx="410" cy="95" r="72"/>
+  <circle class="carol" cx="262" cy="275" r="72"/>
+
+  <!-- Alice's reference to Bob -->
+  <line class="ref" x1="152" y1="70" x2="337" y2="70" marker-end="url(#head)"/>
+
+  <!-- Alice's reference to Carol -->
+  <path class="ref" d="M132,124 Q196,150 214,222" marker-end="url(#head)"/>
+
+  <!-- The message, sent along Alice's reference to Bob -->
+  <polygon class="message" points="200,46 276,46 276,32 312,70 276,108 276,94 200,94"/>
+  <text class="msg-label" x="245" y="63">delegation</text>
+
+  <!-- The copy of Alice's reference to Carol, carried in the message -->
+  <path class="ref" d="M236,82 C 222,130 238,170 252,202" marker-end="url(#head)"/>
+
+  <!-- Held references start at a dot inside the holder -->
+  <circle class="dot" cx="152" cy="70" r="5"/>
+  <circle class="dot" cx="132" cy="124" r="5"/>
+  <circle class="dot" cx="236" cy="82" r="5"/>
+
+  <text class="name" x="92" y="95">Alice</text>
+  <text class="name" x="420" y="95">Bob</text>
+  <text class="name" x="262" y="285">Carol</text>
+</svg>

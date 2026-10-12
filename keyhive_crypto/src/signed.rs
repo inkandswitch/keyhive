@@ -1,6 +1,8 @@
 //! Wrap data in signatures.
 
-use super::{digest::Digest, verifiable::Verifiable};
+#[cfg(feature = "std")]
+use super::digest::Digest;
+use super::verifiable::Verifiable;
 #[cfg(feature = "std")]
 use alloc::vec::Vec;
 use core::{
@@ -318,6 +320,11 @@ impl fmt::Display for SigningError {
         }
     }
 }
+
+// No `source`: `signature::Error` implements `Error` only under `std`.
+// `Display` includes it.
+#[cfg(not(feature = "std"))]
+impl core::error::Error for SigningError {}
 
 #[cfg(not(feature = "std"))]
 impl From<ed25519_dalek::SignatureError> for SigningError {
