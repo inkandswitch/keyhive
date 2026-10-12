@@ -2,7 +2,10 @@
 
 use keyhive_core::{
     access::Access::{self, Admin, Edit, Read, Relay},
-    principal::document::AddMemberError,
+    crypto::digest::Digest,
+    principal::{
+        document::AddMemberError, group::revocation::StaticRevocation, identifier::Identifier,
+    },
     test_utils::{TestContext, TestError, TestResult as Result},
 };
 
@@ -679,6 +682,44 @@ async fn a_revoked_member_cannot_delegate_or_revoke() -> Result<()> {
         Err(TestError::NoAuthority) => {}
         other => panic!("nor a revocation, got {other:?}"),
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_revocation_citing_someone_elses_delegation_as_proof_is_refused() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let mallory = ctx.individual("mallory").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let bobs: [u8; 32] = alice
+        .add_member(bob.id(), design_doc, Read, &[])
+        .await?
+        .delegation
+        .digest()
+        .into();
+    let alices: [u8; 32] = alice
+        .get_document(design_doc)
+        .await
+        .expect("alice has the document")
+        .lock()
+        .await
+        .get_capability(&Identifier::from(alice.id()))
+        .expect("alice's founding delegation")
+        .digest()
+        .into();
+
+    // Bob's delegation descends from Alice's, which Mallory cites as her proof.
+    let forged = mallory
+        .try_sign(StaticRevocation::<[u8; 32]> {
+            revoke: Digest::from(bobs),
+            proof: Some(Digest::from(alices)),
+            after_content: Default::default(),
+        })
+        .await?;
+
+    assert!(alice.receive_revocation(&forged).await.is_err());
+    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await, Some(Read));
     Ok(())
 }
 
