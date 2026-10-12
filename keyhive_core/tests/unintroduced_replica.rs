@@ -272,3 +272,40 @@ async fn a_replica_takes_in_a_delegation_to_a_member_known_by_contact_card() -> 
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_member_decrypts_what_it_receives_from_a_relay_known_by_contact_card() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let relay = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let relay_id = introduce_by_contact_card(&alice, &relay).await?;
+    let bob_id = introduce_by_contact_card(&alice, &bob).await?;
+
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    alice
+        .add_member(relay_id, doc_id, Access::Relay, &[])
+        .await?;
+    alice.add_member(bob_id, doc_id, Access::Edit, &[]).await?;
+    let encrypted = alice
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"from alice")
+        .await?;
+
+    assert_eq!(
+        sync_to(&alice, &relay).await,
+        0,
+        "the relay received everything"
+    );
+    // Bob never hears from alice directly.
+    assert_eq!(
+        sync_to(&relay, &bob).await,
+        0,
+        "bob received everything from the relay"
+    );
+    assert_eq!(
+        bob.try_decrypt_content(doc_id, encrypted.encrypted_content())
+            .await?,
+        b"from alice".to_vec(),
+        "bob decrypts what alice wrote"
+    );
+    Ok(())
+}
