@@ -33,7 +33,9 @@ use crate::{
         identifier::Identifier,
         individual::{
             id::IndividualId,
-            op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, AllReachablePrekeyOps, KeyOp},
+            op::{
+                add_key::AddKeyOp, rotate_key::RotateKeyOp, AllReachablePrekeyOps, KeyOp, KeyOps,
+            },
             Individual, ReceivePrekeyOpError,
         },
         membered::{id::MemberedId, Membered},
@@ -1244,10 +1246,7 @@ impl<
 
     /// Every prekey op `who` needs, grouped by the identifier they belong to.
     #[instrument(skip_all)]
-    pub async fn reachable_prekey_ops_for_agent(
-        &self,
-        who: impl Into<Identifier>,
-    ) -> HashMap<Identifier, Vec<Arc<KeyOp>>> {
+    pub async fn reachable_prekey_ops_for_agent(&self, who: impl Into<Identifier>) -> KeyOps {
         let who = who.into();
         fn add_many_keys(
             map: &mut HashMap<Identifier, CaMap<KeyOp>>,
@@ -1336,9 +1335,7 @@ impl<
             }
         }
 
-        map.into_iter()
-            .map(|(id, keys)| (id, keys.into_values().collect()))
-            .collect()
+        map.into()
     }
 
     /// Compute reachable prekey ops for all agents in a single pass.
@@ -1453,10 +1450,7 @@ impl<
             }
         }
 
-        let ops: HashMap<Identifier, Vec<Arc<KeyOp>>> = key_ops_cache
-            .into_iter()
-            .map(|(id, ca_map)| (id, ca_map.into_values().collect()))
-            .collect();
+        let ops = KeyOps::from(key_ops_cache);
 
         // Phase 3: Build per-agent index (just sets of identifiers, no data cloning)
         let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
