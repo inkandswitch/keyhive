@@ -18,7 +18,8 @@ async fn changing_owner_records_an_invitation_addressed_to_the_new_one() {
     let op = group.rotate(0, &mut rng).await;
     let op_hash = Digest::hash(op.as_ref());
     let root = group.replicas[0]
-        .root_secret_for(&op_hash)
+        .root_secrets
+        .get(&op_hash)
         .expect("the author records the secret its own update produced");
 
     // Carol is added after the rotation, so her invitation wraps its secret.
@@ -28,13 +29,13 @@ async fn changing_owner_records_an_invitation_addressed_to_the_new_one() {
     // Drop what the inviter derived for itself so the invitation is the only
     // route left to that secret.
     let mut from_alice = group.replicas[0].clone();
-    from_alice.pcs_keys_by_update.clear();
+    from_alice.root_secrets.clear();
     let mut carol_sks = ShareKeyMap::new();
     carol_sks.insert(carol.pk, carol.sk);
 
     let carol_view = from_alice.with_new_owner(carol.id, carol_sks).unwrap();
     assert_eq!(
-        carol_view.root_secret_for(&op_hash),
+        carol_view.root_secrets.get(&op_hash),
         Some(root),
         "changing ownership should record the invitation secret for the new owner"
     );
@@ -48,7 +49,8 @@ async fn an_invitation_addressed_to_public_is_recorded_by_a_reader_that_is_not_p
     let op = group.rotate(0, &mut rng).await;
     let op_hash = Digest::hash(op.as_ref());
     let root = group.replicas[0]
-        .root_secret_for(&op_hash)
+        .root_secrets
+        .get(&op_hash)
         .expect("the author records the secret its own update produced");
 
     // Public joins after the rotation, so its invitation is the only route to
@@ -59,7 +61,7 @@ async fn an_invitation_addressed_to_public_is_recorded_by_a_reader_that_is_not_p
     // Drop what the inviter derived for itself so the invitation is the only
     // route left to that secret.
     let mut from_alice = group.replicas[0].clone();
-    from_alice.pcs_keys_by_update.clear();
+    from_alice.root_secrets.clear();
     let mut reader_sks = ShareKeyMap::new();
     reader_sks.insert(public.pk, public.sk);
 
@@ -68,7 +70,7 @@ async fn an_invitation_addressed_to_public_is_recorded_by_a_reader_that_is_not_p
     let reader = member(&mut rng);
     let reader_view = from_alice.with_new_owner(reader.id, reader_sks).unwrap();
     assert_eq!(
-        reader_view.root_secret_for(&op_hash),
+        reader_view.root_secrets.get(&op_hash),
         Some(root),
         "an invitation addressed to Public should be recorded whoever reads it"
     );
@@ -86,13 +88,15 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
     let op1 = group.rotate(0, &mut rng).await;
     group.broadcast(&op1);
     let root1 = group.replicas[0]
-        .root_secret_for(&Digest::hash(op1.as_ref()))
+        .root_secrets
+        .get(&Digest::hash(op1.as_ref()))
         .expect("the author records the secret its own update produced");
     let op2 = group.rotate(0, &mut rng).await;
     group.broadcast(&op2);
     let op2_hash = Digest::hash(op2.as_ref());
     let root2 = group.replicas[0]
-        .root_secret_for(&op2_hash)
+        .root_secrets
+        .get(&op2_hash)
         .expect("the author records the secret its own update produced");
     assert_ne!(root1, root2, "the two rotations produce different secrets");
 
@@ -130,23 +134,23 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
     // Bob recorded op2's secret from the tree when it arrived, so drop it to
     // leave the invitation as the only thing under test.
     let bob = &mut group.replicas[1];
-    bob.pcs_keys_by_update.remove(&op2_hash);
+    bob.root_secrets.remove(&op2_hash);
     assert_eq!(
-        bob.root_secret_for(&op2_hash),
+        bob.root_secrets.get(&op2_hash),
         None,
         "precondition: nothing is recorded for op2"
     );
 
     bob.record_secrets_from_invitation(&sign(create_add_with_invitation_wrapping(root1)).await);
     assert_eq!(
-        bob.root_secret_for(&op2_hash),
+        bob.root_secrets.get(&op2_hash),
         None,
         "an invitation pairing op2 with a secret it did not produce should be ignored"
     );
 
     bob.record_secrets_from_invitation(&sign(create_add_with_invitation_wrapping(root2)).await);
     assert_eq!(
-        bob.root_secret_for(&op2_hash),
+        bob.root_secrets.get(&op2_hash),
         Some(root2),
         "an invitation pairing op2 with the secret it did produce should be used"
     );
@@ -171,7 +175,7 @@ async fn an_invitation_wraps_every_concurrent_update_head() {
     // reach one head out of four.
     let recorded = heads
         .iter()
-        .filter(|h| group.replicas[0].root_secret_for(h).is_some())
+        .filter(|h| group.replicas[0].root_secrets.get(h).is_some())
         .count();
     assert!(
         recorded < heads.len(),

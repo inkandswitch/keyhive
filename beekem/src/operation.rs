@@ -6,6 +6,7 @@ use crate::{
     encrypted::EncryptedSecret,
     error::CgkaError,
     id::{MemberId, TreeId},
+    keys::NodeKey,
     transact::{Fork, Merge},
     tree::PathChange,
 };
@@ -219,6 +220,24 @@ impl CgkaOperationGraph {
         self.cgka_ops.contains_key(op_hash)
     }
 
+    /// The sole share key at the root of the update `op_hash`'s path.
+    ///
+    /// Returns `None` if we do not have the operation, it is not an update, or
+    /// its path does not end in a single share key.
+    pub(crate) fn update_root_share_key(
+        &self,
+        op_hash: &Digest<Signed<CgkaOperation>>,
+    ) -> Option<ShareKey> {
+        let CgkaOperation::Update { new_path, .. } = &self.cgka_ops.get(op_hash)?.payload else {
+            return None;
+        };
+        let (_, root_node) = new_path.path.last()?;
+        match root_node.node_key() {
+            NodeKey::ShareKey(root_pk) => Some(root_pk),
+            NodeKey::ConflictKeys(_) => None,
+        }
+    }
+
     pub fn contains_predecessors(&self, preds: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
         preds.iter().all(|hash| self.cgka_ops.contains_key(hash))
     }
@@ -343,42 +362,20 @@ impl CgkaOperationGraph {
         updates
     }
 
-    /// Which of `targets` have a [`CgkaOperation::Add`] of `member` or of Public
-    /// in their causal past, counting the target itself.
-    pub(crate) fn targets_with_add_for(
+    /// Whether a [`CgkaOperation::Add`] of `member` or of Public is in the
+    /// causal past of `op_hash`, counting `op_hash` itself.
+    pub(crate) fn has_add_before(
         &self,
         member: MemberId,
-        targets: &[Digest<Signed<CgkaOperation>>],
-    ) -> Set<Digest<Signed<CgkaOperation>>> {
-        let mut without_add = Set::new();
-        targets
-            .iter()
-            .filter(|target| self.past_adds(member, **target, &mut without_add))
-            .copied()
-            .collect()
-    }
-
-    /// Whether `start`'s past adds `member` or Public.
-    ///
-    /// `without_add` is a cache of operations determined not to have such an
-    /// add in their past.
-    fn past_adds(
-        &self,
-        member: MemberId,
-        start: Digest<Signed<CgkaOperation>>,
-        without_add: &mut Set<Digest<Signed<CgkaOperation>>>,
+        op_hash: Digest<Signed<CgkaOperation>>,
     ) -> bool {
         let mut seen = Set::new();
-        let mut frontier = Vec::new();
-        frontier.push(start);
-        while let Some(op_hash) = frontier.pop() {
-            if without_add.contains(&op_hash) {
+        let mut frontier = Vec::from_iter([op_hash]);
+        while let Some(current) = frontier.pop() {
+            if !seen.insert(current) {
                 continue;
             }
-            if !seen.insert(op_hash) {
-                continue;
-            }
-            let Some(op) = self.cgka_ops.get(&op_hash) else {
+            let Some(op) = self.cgka_ops.get(&current) else {
                 continue;
             };
             if matches!(
@@ -390,7 +387,6 @@ impl CgkaOperationGraph {
             }
             frontier.extend(op.payload.predecessor_list().iter().copied());
         }
-        without_add.extend(seen);
         false
     }
 
@@ -1034,14 +1030,15 @@ mod causal_graph_tests {
         }
 
         let all = [&root, &before, &join, &after].map(Digest::hash);
+        let rebuildable = |member| all.map(|op_hash| graph.has_add_before(member, op_hash));
         assert_eq!(
-            graph.targets_with_add_for(joiner, &all),
-            Set::from_iter([Digest::hash(&join), Digest::hash(&after)]),
+            rebuildable(joiner),
+            [false, false, true, true],
             "the operations before the joiner was added have no leaf for it to start from"
         );
         assert_eq!(
-            graph.targets_with_add_for(founder, &all),
-            Set::from_iter(all),
+            rebuildable(founder),
+            [true; 4],
             "the founder's add precedes every operation"
         );
     }
@@ -1058,9 +1055,10 @@ mod causal_graph_tests {
             graph.add_op(op).expect("predecessors are added first");
         }
 
+        let reader = member_id();
         assert_eq!(
-            graph.targets_with_add_for(member_id(), &[&root, &public, &after].map(Digest::hash)),
-            Set::from_iter([Digest::hash(&public), Digest::hash(&after)]),
+            [&root, &public, &after].map(|op| graph.has_add_before(reader, Digest::hash(op))),
+            [false, true, true],
             "a rebuild falls back to Public's leaf, so adding Public covers what follows"
         );
     }

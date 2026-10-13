@@ -317,7 +317,7 @@ impl Group {
         for i in 0..self.replicas.len() {
             let owner = self.replicas[i].owner_id;
             let is_member = self.replicas[i].tree.contains_id(&owner);
-            let key = self.replicas[i].pcs_key_from_tree_root();
+            let key = self.replicas[i].decrypt_tree_root_secret();
             let name = self.label(&owner);
             if !is_member {
                 assert!(
@@ -364,10 +364,10 @@ impl Group {
     ) {
         let mut replica = self.replica_for(id, sks);
         let key = replica
-            .pcs_key_from_tree_root()
+            .decrypt_tree_root_secret()
             .unwrap_or_else(|e| panic!("{context}: {on_failure} {e:?}"));
         let group_key = self.replicas[0]
-            .pcs_key_from_tree_root()
+            .decrypt_tree_root_secret()
             .expect("replica 0's owner is a member");
         assert!(
             key == group_key,
@@ -380,4 +380,29 @@ impl Group {
 /// A one-letter name for member `i`. Panics for `i` above 7.
 pub fn name_for(i: usize) -> String {
     ["a", "b", "c", "d", "e", "f", "g", "h"][i].to_string()
+}
+
+/// How many seeds [`for_each_seed`] runs a test on.
+#[cfg(test)]
+const SEED_ITERATIONS: usize = 32;
+
+/// Run `test` with a [`StdRng`] seeded from each of [`SEED_ITERATIONS`] generated seeds.
+///
+/// The keys a test generates determine its operation hashes and thus the order of
+/// any set or map keyed by them. Varying the seed checks that the test passes
+/// regardless of those orders.
+#[cfg(test)]
+pub(crate) fn for_each_seed<F: core::future::Future<Output = ()>>(
+    test: impl Fn(StdRng) -> F + core::panic::RefUnwindSafe,
+) {
+    use rand::SeedableRng;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("building a runtime succeeds");
+    bolero::check!()
+        .with_iterations(SEED_ITERATIONS)
+        .with_generator(bolero::gen::<u64>())
+        .cloned()
+        .for_each(|seed| runtime.block_on(test(StdRng::seed_from_u64(seed))));
 }
