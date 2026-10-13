@@ -381,3 +381,28 @@ impl Group {
 pub fn name_for(i: usize) -> String {
     ["a", "b", "c", "d", "e", "f", "g", "h"][i].to_string()
 }
+
+/// How many seeds [`for_each_seed`] runs a test on.
+#[cfg(test)]
+const SEED_ITERATIONS: usize = 32;
+
+/// Run `test` with a [`StdRng`] seeded from each of [`SEED_ITERATIONS`] generated seeds.
+///
+/// The keys a test generates determine its operation hashes and thus the order of
+/// any set or map keyed by them. Varying the seed checks that the test passes
+/// regardless of those orders.
+#[cfg(test)]
+pub(crate) fn for_each_seed<F: core::future::Future<Output = ()>>(
+    test: impl Fn(StdRng) -> F + core::panic::RefUnwindSafe,
+) {
+    use rand::SeedableRng;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("building a runtime succeeds");
+    bolero::check!()
+        .with_iterations(SEED_ITERATIONS)
+        .with_generator(bolero::gen::<u64>())
+        .cloned()
+        .for_each(|seed| runtime.block_on(test(StdRng::seed_from_u64(seed))));
+}
