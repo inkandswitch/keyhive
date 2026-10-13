@@ -40,4 +40,5 @@ mod tests {
     mod concurrent_membership_changes;
     mod concurrent_updates;
     mod group_lifecycle;
+    mod invitations;
 }

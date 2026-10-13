@@ -61,11 +61,11 @@ async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
     Ok(())
 }
 
-/// A later member reads earlier content by walking back from a write made after they
-/// joined. This is the shape `automerge-repo-keyhive` uses to admit someone to a document
-/// that already has history. Rotate, then write something that lists what came before.
+/// A later member reads earlier content by traversing back from a write made after they
+/// joined. Alice rotates before adding bob, so his invitation does not wrap the earlier key
+/// and the traversal is his only route to it.
 #[tokio::test]
-async fn a_later_member_recovers_earlier_content_by_walking_back() -> Result<()> {
+async fn traversing_from_a_write_reports_its_ancestors() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -74,10 +74,10 @@ async fn a_later_member_recovers_earlier_content_by_walking_back() -> Result<()>
     let history = ctx
         .encrypt_in_envelope(&alice, design_doc, &[], b"written before bob")
         .await?;
+    alice.force_pcs_update(design_doc).await?;
 
     alice.add_member(bob.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
-    alice.force_pcs_update(design_doc).await?;
 
     let entry_point = ctx
         .encrypt_in_envelope(&alice, design_doc, &[&history], b"written after bob")
@@ -85,33 +85,33 @@ async fn a_later_member_recovers_earlier_content_by_walking_back() -> Result<()>
     ctx.sync_all_unsent().await?;
 
     assert!(
-        !bob.can_decrypt_content(design_doc, &history).await?,
-        "bob cannot derive the key for content written before he joined"
-    );
-    assert!(
         bob.can_decrypt_content(design_doc, &entry_point).await?,
         "he can open the write that came after"
+    );
+    assert!(
+        !bob.can_decrypt_content(design_doc, &history).await?,
+        "but not the write before he joined, whose key his invitation does not wrap"
     );
 
     ctx.give_content(&bob, &history).await?;
     ctx.give_content(&bob, &entry_point).await?;
-    let walked = bob
+    let traversed = bob
         .try_causal_decrypt_content(design_doc, &entry_point)
         .await?;
 
     assert_eq!(
-        walked.recovered(),
+        traversed.recovered(),
         contents(&[b"written before bob"]),
-        "and the write he can open carries the key to the one he cannot"
+        "and traversing back from it reports the earlier write"
     );
     Ok(())
 }
 
-/// Every other test here has one writer, who holds the key to each ancestor from having
-/// encrypted it. This one has the second writer name content they only ever read, which is
-/// the only way an ancestor key can reach an envelope written by anyone but the author.
+/// Every other test here has one writer, who has the key to each ancestor from having
+/// encrypted it. This one has a second writer reference content they only ever read, so the key
+/// in their envelope is one they got by decrypting.
 #[tokio::test]
-async fn a_reader_can_name_an_ancestor_they_decrypted_rather_than_wrote() -> Result<()> {
+async fn a_reader_can_reference_an_ancestor_they_decrypted_rather_than_wrote() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -132,12 +132,12 @@ async fn a_reader_can_name_an_ancestor_they_decrypted_rather_than_wrote() -> Res
         "bob can open the genesis write"
     );
 
-    // Carol joins afterwards, so she cannot derive that key for herself.
+    // Rotating before the add keeps the genesis key out of carol's invitation.
+    alice.force_pcs_update(design_doc).await?;
     alice.add_member(carol.id(), design_doc, Read, &[]).await?;
     ctx.sync_all_unsent().await?;
-    alice.force_pcs_update(design_doc).await?;
 
-    // Bob writes a successor naming the genesis, which means putting its key in the envelope.
+    // Bob writes a successor referencing the genesis, which means putting its key in the envelope.
     let head = ctx
         .encrypt_in_envelope(&bob, design_doc, &[&genesis], b"head")
         .await?;
@@ -147,21 +147,20 @@ async fn a_reader_can_name_an_ancestor_they_decrypted_rather_than_wrote() -> Res
     ctx.give_content(&carol, &head).await?;
     assert!(
         !carol.can_decrypt_content(design_doc, &genesis).await?,
-        "carol cannot open the genesis write on her own"
+        "carol joined after the genesis write and cannot open it directly"
     );
-
-    let walked = carol.try_causal_decrypt_content(design_doc, &head).await?;
+    let traversed = carol.try_causal_decrypt_content(design_doc, &head).await?;
     assert_eq!(
-        walked.recovered(),
+        traversed.recovered(),
         contents(&[b"genesis"]),
-        "so the key can only have come from the envelope bob wrote"
+        "the traversal reports the ancestor bob's write refers to"
     );
-    assert_eq!(walked.missing(), 0);
+    assert_eq!(traversed.missing(), 0);
     Ok(())
 }
 
 #[tokio::test]
-async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Result<()> {
+async fn an_ancestor_that_is_not_present_is_reported_rather_than_failing() -> Result<()> {
     let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
     let genesis = ctx
@@ -178,21 +177,21 @@ async fn an_ancestor_that_is_not_held_is_reported_rather_than_failing() -> Resul
     // Everything except the root of the chain.
     ctx.give_content(&bob, &head).await?;
     ctx.give_content(&bob, &middle).await?;
-    let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
+    let traversed = bob.try_causal_decrypt_content(design_doc, &head).await?;
 
     assert_eq!(
-        walked.recovered(),
+        traversed.recovered(),
         contents(&[b"middle"]),
-        "the walk gets as far as it can"
+        "the traversal gets as far as it can"
     );
     assert_eq!(
-        walked.missing(),
+        traversed.missing(),
         1,
         "and says something is outstanding rather than failing"
     );
-    let key = walked
+    let key = traversed
         .key_for_missing(&genesis)
-        .ok_or("the walk did not say which content is outstanding")?;
+        .ok_or("the traversal did not say which content is outstanding")?;
     assert!(
         decrypt_with_key(&genesis, key).is_ok(),
         "and the key it reported for it is the one that opens it, so fetching is enough"
