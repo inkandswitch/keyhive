@@ -12,7 +12,7 @@ use beekem::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaEpoch, CgkaOperation},
+    operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
     pcs_key::{ApplicationSecret, PcsKey},
 };
 use future_form::FutureForm;
@@ -198,7 +198,7 @@ impl Cgka {
         self.0.merge_concurrent_operation(op)
     }
 
-    pub fn ops(&self) -> Result<NonEmpty<CgkaEpoch>, CgkaError> {
+    pub fn ops(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
         self.0.ops()
     }
 
