@@ -91,9 +91,28 @@ pub struct Invitation {
     /// each secret via Diffie-Hellman.
     pub inviter_pk: ShareKey,
 
-    /// The root secrets of this add's nearest update ancestors that the inviter
-    /// could derive when it built this invitation.
-    pub head_secrets: Vec<InvitationSecret>,
+    /// The root secrets the inviter could derive when it built this invitation,
+    /// for this add's nearest update ancestors and for every chainable update
+    /// whose root secret it had not yet decrypted from a later update.
+    pub ancestor_secrets: Vec<InvitationSecret>,
+}
+
+/// An earlier update's root secret, wrapped by a later update.
+///
+/// A member added after an update cannot derive that update's root secret from the
+/// tree, so each update encrypts earlier root secrets under a key derived from its
+/// own. A member who can derive a later update's secret can then work back to the
+/// earlier ones.
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct PredecessorSecret {
+    /// The update operation that produced the secret in
+    /// [`PredecessorSecret::encrypted_root_secret`].
+    pub update_op_hash: Digest<Signed<CgkaOperation>>,
+
+    /// The root secret, encrypted under a key derived from the root secret of the
+    /// update that contains this entry.
+    pub encrypted_root_secret: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
@@ -123,6 +142,11 @@ pub enum CgkaOperation {
     Update {
         id: MemberId,
         new_path: Box<PathChange>,
+        /// The root secrets this update's author could derive for its nearest
+        /// update ancestors and for every chainable update whose root secret it
+        /// had not yet decrypted from a later update, each encrypted under a key
+        /// derived from this update's root secret.
+        predecessor_secrets: Vec<PredecessorSecret>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
@@ -170,6 +194,11 @@ pub struct CgkaOperationGraph {
     /// The length of the longest chain of predecessors before each operation.
     /// An operation with no predecessors has depth 0.
     depths: Map<Digest<Signed<CgkaOperation>>, u64>,
+
+    /// The latest update on each branch. These are updates that no later update
+    /// has as a nearest update ancestor yet. Every other update is chainable,
+    /// meaning a later update could have wrapped its root secret.
+    latest_updates: Set<Digest<Signed<CgkaOperation>>>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -182,7 +211,8 @@ impl Hash for CgkaOperationGraph {
             .collect::<BTreeSet<_>>()
             .hash(state);
 
-        // `depths` is derived from the operations hashed above.
+        // `depths` and `latest_updates` are both derived from the operations
+        // hashed above.
     }
 }
 
@@ -196,6 +226,17 @@ impl Fork for CgkaOperationGraph {
 
 impl Merge for CgkaOperationGraph {
     fn merge(&mut self, fork: Self::Forked) {
+        // An update is still the latest on its branch if the other side lacks
+        // it or also records it as latest.
+        self.latest_updates.retain(|update| {
+            !fork.cgka_ops.contains_key(update) || fork.latest_updates.contains(update)
+        });
+        self.latest_updates.extend(
+            fork.latest_updates
+                .iter()
+                .filter(|update| !self.cgka_ops.contains_key(update))
+                .copied(),
+        );
         self.cgka_ops.merge(fork.cgka_ops);
         self.cgka_op_heads.extend(fork.cgka_op_heads);
         let ops = &self.cgka_ops;
@@ -213,11 +254,21 @@ impl CgkaOperationGraph {
             cgka_ops: CaMap::new(),
             cgka_op_heads: Set::new(),
             depths: Map::new(),
+            latest_updates: Set::new(),
         }
     }
 
     pub fn contains_op_hash(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> bool {
         self.cgka_ops.contains_key(op_hash)
+    }
+
+    /// Whether `op_hash` is an update that some later update has as a nearest
+    /// update ancestor.
+    pub(crate) fn is_chainable(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> bool {
+        self.cgka_ops
+            .get(op_hash)
+            .is_some_and(|op| matches!(op.payload, CgkaOperation::Update { .. }))
+            && !self.latest_updates.contains(op_hash)
     }
 
     /// The sole share key at the root of the update `op_hash`'s path.
@@ -263,14 +314,18 @@ impl CgkaOperationGraph {
         Ok(())
     }
 
-    /// Add an operation to the graph.
+    /// Add an operation to the graph, returning the updates it made chainable
+    /// for the first time.
     ///
     /// Does nothing if the operation is already in the graph. Returns an
     /// error if it cannot be added or a predecessor has no recorded depth.
-    pub fn add_op(&mut self, op: &Signed<CgkaOperation>) -> Result<(), CgkaError> {
+    pub fn add_op(
+        &mut self,
+        op: &Signed<CgkaOperation>,
+    ) -> Result<Set<Digest<Signed<CgkaOperation>>>, CgkaError> {
         let op_hash = Digest::hash(op);
         if self.cgka_ops.contains_key(&op_hash) {
-            return Ok(());
+            return Ok(Set::new());
         }
         self.check_can_add(&op.payload)?;
         let op_predecessors = op.payload.predecessor_list();
@@ -284,7 +339,16 @@ impl CgkaOperationGraph {
         }
         self.cgka_op_heads.insert(op_hash);
         self.depths.insert(op_hash, depth);
-        Ok(())
+        if !matches!(op.payload, CgkaOperation::Update { .. }) {
+            return Ok(Set::new());
+        }
+        let newly_chainable = self
+            .nearest_update_ancestors(&op.payload.predecessors())
+            .into_iter()
+            .filter(|update| self.latest_updates.remove(update))
+            .collect();
+        self.latest_updates.insert(op_hash);
+        Ok(newly_chainable)
     }
 
     /// Whether a replay would put an operation with `predecessors` in the same
@@ -828,6 +892,7 @@ mod causal_graph_tests {
         let op = CgkaOperation::Update {
             id: MemberId(signer.verifying_key()),
             new_path,
+            predecessor_secrets: Vec::new(),
             predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
             doc_id,
         };
@@ -959,6 +1024,24 @@ mod causal_graph_tests {
             "a root that is not an add would be retried"
         );
         assert_eq!(graph, before, "a rejected operation changed the graph");
+    }
+
+    #[tokio::test]
+    async fn an_update_is_chainable_once_a_later_update_follows_it() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let doc_id = TreeId::from(signer.verifying_key());
+        let mut graph = CgkaOperationGraph::new();
+        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let u1 = signed_update(&signer, doc_id, &[&root]).await;
+        let u2 = signed_update(&signer, doc_id, &[&u1]).await;
+        for op in [&root, &u1, &u2] {
+            graph.add_op(op).expect("predecessors are added first");
+        }
+
+        // Only u1 has a later update to wrap it. u2 has none yet, and the root is
+        // not an update.
+        let chainable = [&root, &u1, &u2].map(|op| graph.is_chainable(&Digest::hash(op)));
+        assert_eq!(chainable, [false, true, false]);
     }
 
     #[tokio::test]

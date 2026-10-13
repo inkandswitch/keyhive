@@ -304,7 +304,7 @@ fn a_merge_records_the_root_secret_for_a_reader_outside_the_tree_through_public(
 }
 
 #[test]
-fn an_earlier_secret_that_was_not_recorded_is_rebuilt() {
+fn an_earlier_secret_that_was_not_recorded_is_found() {
     for_each_seed(|mut rng| async move {
         let mut group = Group::new(1, &mut rng).await;
         let first = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
@@ -315,15 +315,14 @@ fn an_earlier_secret_that_was_not_recorded_is_rebuilt() {
             .get(&first)
             .expect("the author records the secret its own update produced");
         // A secret applied while the root was conflicted is not recorded. The tree
-        // has moved on to a later update, so that secret can only be derived via a
-        // rebuild.
+        // has moved on to a later update, so that secret has to be derived again.
         cgka.root_secrets.remove(&first);
 
         assert_eq!(
             cgka.root_secret_from_hashes(&Digest::hash(&earlier), &first)
                 .ok(),
             Some(earlier),
-            "the earlier update's secret should be rebuilt, not derived from the current tree"
+            "the earlier update's secret should be derived again, not taken from the current tree"
         );
     });
 }

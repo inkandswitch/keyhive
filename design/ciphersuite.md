@@ -8,7 +8,7 @@
 | Symmetric AEAD     | [XChaCha20-Poly1305] with a BLAKE3-derived synthetic nonce | `keyhive_crypto::symmetric_key`, `siv`             |
 | Content addressing | BLAKE3, 32-byte output, typed as `Digest<T>`               | `keyhive_crypto::digest`                           |
 
-All identifiers in Keyhive (individuals, groups, documents) are Ed25519 verifying keys. Read access is carried by X25519 "share keys" (prekeys and BeeKEM leaf/inner-node keys). Content and BeeKEM node secrets are encrypted with XChaCha20-Poly1305 under keys that are either derived from an X25519 exchange (BeeKEM) or from a BeeKEM application secret (document content).
+All identifiers in Keyhive (individuals, groups, documents) are Ed25519 verifying keys. Read access comes from X25519 "share keys" (prekeys and BeeKEM leaf/inner-node keys). Content, BeeKEM node secrets, and the earlier root secrets an update wraps are encrypted with XChaCha20-Poly1305. The key is derived from an X25519 exchange (BeeKEM node secrets), from a BeeKEM root secret (wrapped root secrets), or from a BeeKEM application secret (document content).
 
 ## Domain Separation
 
@@ -18,7 +18,7 @@ The byte string `/keyhive/` (`keyhive_crypto::domain_separator::SEPARATOR`) is u
 - the AEAD associated data on every encryption;
 - the `derive_key` context in `Separable::derive_from_bytes`, which turns raw key material into a `SymmetricKey` or `ShareSecretKey`. Every BeeKEM node key (`ShareSecretKey::derive_symmetric_key`) and every application secret passes through it.
 
-Application secrets additionally use the context `/keyhive/beekem/app_secret/` for their first derivation stage (see below).
+Application secrets additionally use the context `/keyhive/beekem/app_secret/` for their first derivation stage, and the key an update wraps earlier root secrets under uses `/keyhive/beekem/predecessor_secrets/` (see below).
 
 Content-addressing digests (`Digest::hash`) and signing digests (`Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level.
 
@@ -74,6 +74,12 @@ key      = derive_key("/keyhive/", material)
 ```
 
 Each content chunk therefore gets a distinct key bound to the CGKA epoch and to its causal position; see [`causal_encryption.md`](./causal_encryption.md).
+
+Each update also encrypts the root secrets of earlier updates under a key derived from its own root secret, with the BeeKEM tree ID as `doc_id`:
+
+```
+key = derive_key("/keyhive/", derive_key("/keyhive/beekem/predecessor_secrets/", root_secret))
+```
 
 ## Sub-Protocols
 

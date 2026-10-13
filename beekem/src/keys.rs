@@ -12,6 +12,15 @@ use serde::{Deserialize, Serialize};
 /// A key pair at a BeeKEM leaf.
 pub type LeafKeyPair = (ShareKey, ShareSecretKey);
 
+/// Converts a decrypted secret to a `ShareSecretKey`. Returns `None` unless
+/// `decrypted_secret` is 32 bytes.
+pub(crate) fn share_secret_key_from_decrypted_secret(
+    decrypted_secret: Vec<u8>,
+) -> Option<ShareSecretKey> {
+    let bytes: [u8; 32] = decrypted_secret.try_into().ok()?;
+    Some(ShareSecretKey::force_from_bytes(bytes))
+}
+
 /// A [`ShareKeyMap`] stores the secret keys for all of the public keys
 /// on your path that you have encountered so far (either because you added them
 /// to your path as part of an update or decrypted them when decrypting your path).
