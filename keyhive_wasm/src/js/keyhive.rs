@@ -405,44 +405,10 @@ impl JsKeyhive {
     ) -> Result<js_sys::Map, JsSerializationError> {
         init_span!("JsKeyhive::events_for_agent");
 
-        let who = agent.0.id();
-        let membership_ops = self.0.membership_ops_for_agent(who).await;
-        let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(who).await;
-        let cgka_ops = self.0.cgka_ops_reachable_by_agent(who).await;
-
         let map = js_sys::Map::new();
-
-        // Add membership operations as serialized bytes
-        for (digest, op) in membership_ops {
+        for (digest, event) in self.0.events_for_agent(agent.0.id()).await {
             let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = op.into();
-            let static_event = StaticEvent::from(event);
-            let bytes = bincode::serialize(&static_event)?;
-            let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-            map.set(&hash.into(), &js_bytes.into());
-        }
-
-        // Add prekey operations as serialized bytes
-        for key_ops in reachable_prekey_ops.values() {
-            for key_op in key_ops.iter() {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                    Event::from(key_op.as_ref().dupe());
-                let digest = Digest::hash(&event);
-                let hash = js_sys::Uint8Array::from(digest.as_slice());
-                let static_event = StaticEvent::from(event);
-                let bytes = bincode::serialize(&static_event)?;
-                let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-                map.set(&hash.into(), &js_bytes.into());
-            }
-        }
-
-        // Add CGKA operations as serialized bytes
-        for cgka_op in cgka_ops {
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = Event::from(cgka_op);
-            let digest = Digest::hash(&event);
-            let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let static_event = StaticEvent::from(event);
-            let bytes = bincode::serialize(&static_event)?;
+            let bytes = bincode::serialize(&StaticEvent::from(event))?;
             let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
             map.set(&hash.into(), &js_bytes.into());
         }
