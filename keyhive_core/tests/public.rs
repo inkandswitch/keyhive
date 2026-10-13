@@ -289,6 +289,7 @@ async fn the_public_leaf_keeps_its_well_known_key() -> Result<()> {
         id,
         new_path,
         predecessor_secrets,
+        root_secret_hash,
         predecessors,
         doc_id,
     } = written
@@ -314,6 +315,7 @@ async fn the_public_leaf_keeps_its_well_known_key() -> Result<()> {
                 id,
                 new_path: swapped,
                 predecessor_secrets,
+                root_secret_hash,
                 predecessors,
                 doc_id,
             })

@@ -4,6 +4,7 @@ use beekem::{
     id::{MemberId, TreeId},
     keys::NodeKey,
     operation::CgkaOperation,
+    pcs_key::PcsKey,
     tree::PathChange,
 };
 use keyhive_core::{
@@ -34,14 +35,19 @@ async fn cgka_heads(observer: &Instance, doc: DocumentId) -> Vec<Digest<Signed<C
         .collect()
 }
 
-async fn an_update(who: &Instance, doc: DocumentId) -> (MemberId, Box<PathChange>) {
+async fn an_update(who: &Instance, doc: DocumentId) -> (MemberId, Box<PathChange>, Digest<PcsKey>) {
     who.cgka_ops_for_doc(&doc)
         .await
         .unwrap()
         .unwrap()
         .iter()
         .find_map(|op| match op.payload() {
-            CgkaOperation::Update { id, new_path, .. } => Some((*id, new_path.clone())),
+            CgkaOperation::Update {
+                id,
+                new_path,
+                root_secret_hash,
+                ..
+            } => Some((*id, new_path.clone(), *root_secret_hash)),
             _ => None,
         })
         .expect("an update was produced")
@@ -75,7 +81,7 @@ async fn doc_with_a_second_instance(
 async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
-    let (id, mut new_path) = an_update(&alice, design_doc).await;
+    let (id, mut new_path, root_secret_hash) = an_update(&alice, design_doc).await;
 
     // A peer can put whatever it likes in a signed `PathChange`, including a key that
     // does not displace the one already at the leaf.
@@ -85,6 +91,7 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
         id,
         new_path,
         predecessor_secrets: Vec::new(),
+        root_secret_hash,
         predecessors: cgka_heads(&bob, design_doc).await,
         doc_id: TreeId(design_doc.verifying_key()),
     };

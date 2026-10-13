@@ -515,6 +515,7 @@ impl Cgka {
                 id: update_id,
                 new_path: Box::new(new_path),
                 predecessor_secrets,
+                root_secret_hash: Digest::hash(&pcs_key),
                 predecessors,
                 doc_id: self.doc_id,
             };

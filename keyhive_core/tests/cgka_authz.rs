@@ -2,6 +2,7 @@ use beekem::{
     id::{MemberId, TreeId},
     keys::{ConflictKeys, NodeKey},
     operation::{CgkaAuthorization, CgkaOperation},
+    pcs_key::PcsKey,
     tree::PathChange,
 };
 use keyhive_core::{
@@ -87,8 +88,9 @@ async fn doc_with_alice_and_bob() -> TestResult<(Kh, Kh, DocumentId)> {
     Ok((alice, bob, doc_id))
 }
 
-/// A legitimate `PathChange` from a document of `who`'s, for retargeting elsewhere.
-async fn intercepted_path(who: &Kh) -> Box<PathChange> {
+/// The path and root secret hash of a legitimate update to a document of
+/// `who`'s, for retargeting elsewhere.
+async fn intercepted_update(who: &Kh) -> (Box<PathChange>, Digest<PcsKey>) {
     let doc_id = who
         .generate_doc(vec![], nonempty![[7u8; 32]])
         .await
@@ -102,7 +104,11 @@ async fn intercepted_path(who: &Kh) -> Box<PathChange> {
         .unwrap()
         .iter()
         .find_map(|op| match op.payload() {
-            CgkaOperation::Update { new_path, .. } => Some(new_path.clone()),
+            CgkaOperation::Update {
+                new_path,
+                root_secret_hash,
+                ..
+            } => Some((new_path.clone(), *root_secret_hash)),
             _ => None,
         })
         .expect("an update op was produced")
@@ -212,12 +218,13 @@ async fn a_non_member_cannot_update_another_members_leaf() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
 
-    let mut path = intercepted_path(&mallory).await;
+    let (mut path, root_secret_hash) = intercepted_update(&mallory).await;
     path.leaf_id = MemberId(bob.id().verifying_key());
     let op = CgkaOperation::Update {
         id: MemberId(bob.id().verifying_key()),
         new_path: path,
         predecessor_secrets: Vec::new(),
+        root_secret_hash,
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };
@@ -387,12 +394,13 @@ async fn a_remove_citing_a_revocation_over_another_resource_is_pending() -> Test
 async fn the_creator_cannot_update_another_members_leaf() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
-    let mut path = intercepted_path(&alice).await;
+    let (mut path, root_secret_hash) = intercepted_update(&alice).await;
     path.leaf_id = MemberId(bob.id().verifying_key());
     let op = CgkaOperation::Update {
         id: MemberId(bob.id().verifying_key()),
         new_path: path,
         predecessor_secrets: Vec::new(),
+        root_secret_hash,
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };
@@ -827,12 +835,13 @@ async fn a_remove_through_an_individual_is_applied_once_the_individual_is_promot
 async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
-    let mut path = intercepted_path(&alice).await;
+    let (mut path, root_secret_hash) = intercepted_update(&alice).await;
     path.leaf_id = MemberId(bob.id().verifying_key());
     let op = CgkaOperation::Update {
         id: MemberId(bob.id().verifying_key()),
         new_path: path,
         predecessor_secrets: Vec::new(),
+        root_secret_hash,
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };
@@ -847,10 +856,12 @@ async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
 async fn a_rotation_whose_id_differs_from_its_path_leaf_is_denied() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
+    let (path, root_secret_hash) = intercepted_update(&bob).await;
     let op = CgkaOperation::Update {
         id: MemberId(alice.id().verifying_key()),
-        new_path: intercepted_path(&bob).await,
+        new_path: path,
         predecessor_secrets: Vec::new(),
+        root_secret_hash,
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };
@@ -864,7 +875,7 @@ async fn a_rotation_whose_id_differs_from_its_path_leaf_is_denied() -> TestResul
 async fn a_member_cannot_rotate_their_leaf_to_the_public_key() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
-    let mut path = intercepted_path(&bob).await;
+    let (mut path, root_secret_hash) = intercepted_update(&bob).await;
     path.leaf_pk = NodeKey::ConflictKeys(ConflictKeys {
         first: Public.share_key(),
         second: path.leaf_pk.lowest(),
@@ -874,6 +885,7 @@ async fn a_member_cannot_rotate_their_leaf_to_the_public_key() -> TestResult {
         id: MemberId(bob.id().verifying_key()),
         new_path: path,
         predecessor_secrets: Vec::new(),
+        root_secret_hash,
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
     };

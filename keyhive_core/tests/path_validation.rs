@@ -3,6 +3,7 @@
 use beekem::{
     id::{MemberId, TreeId},
     operation::CgkaOperation,
+    pcs_key::PcsKey,
     secret_store::SecretStore,
     tree::PathChange,
 };
@@ -37,14 +38,19 @@ async fn cgka_heads(observer: &Instance, doc: DocumentId) -> Vec<Digest<Signed<C
 }
 
 /// The first update `who` produced for `doc`.
-async fn an_update(who: &Instance, doc: DocumentId) -> (MemberId, Box<PathChange>) {
+async fn an_update(who: &Instance, doc: DocumentId) -> (MemberId, Box<PathChange>, Digest<PcsKey>) {
     who.cgka_ops_for_doc(&doc)
         .await
         .unwrap()
         .unwrap()
         .iter()
         .find_map(|op| match op.payload() {
-            CgkaOperation::Update { id, new_path, .. } => Some((*id, new_path.clone())),
+            CgkaOperation::Update {
+                id,
+                new_path,
+                root_secret_hash,
+                ..
+            } => Some((*id, new_path.clone(), *root_secret_hash)),
             _ => None,
         })
         .expect("an update was produced")
@@ -67,7 +73,7 @@ async fn doc_shared_with_bob(
 async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult {
     let mut ctx = TestContext::new().await;
     let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
-    let (id, mut new_path) = an_update(&alice, design_doc).await;
+    let (id, mut new_path, root_secret_hash) = an_update(&alice, design_doc).await;
 
     let junk = own_prekey(&alice, design_doc).await;
     new_path.path = vec![7u32, 9]
@@ -78,6 +84,7 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
         id,
         new_path,
         predecessor_secrets: Vec::new(),
+        root_secret_hash,
         predecessors: cgka_heads(&bob, design_doc).await,
         doc_id: TreeId(design_doc.verifying_key()),
     };

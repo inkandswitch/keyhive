@@ -16,16 +16,18 @@ pub(crate) struct VerifiedRootSecret {
 
 impl VerifiedRootSecret {
     /// Check that `secret` is the root secret the update `op_hash` produced. Its
-    /// public key must be the sole share key at the root of that update's path.
+    /// public key must be the sole share key at the root of that update's path
+    /// and its hash must be the one that update's author signed.
     ///
-    /// Returns `None` if `graph` has no such key for `op_hash` or `secret` does
-    /// not match it.
+    /// Returns `None` unless `graph` has that update with a single root share
+    /// key and `secret` matches both that key and the hash.
     pub(crate) fn verify(
         graph: &CgkaOperationGraph,
         op_hash: Digest<Signed<CgkaOperation>>,
         secret: PcsKey,
     ) -> Option<Self> {
-        (graph.update_root_share_key(&op_hash)? == secret.0.share_key())
+        let (root_pk, root_secret_hash) = graph.update_root(&op_hash)?;
+        (Digest::hash(&secret) == root_secret_hash && secret.0.share_key() == root_pk)
             .then_some(Self { op_hash, secret })
     }
 }
@@ -81,5 +83,79 @@ impl RootSecrets {
     #[cfg(test)]
     pub(crate) fn remove(&mut self, op_hash: &Digest<Signed<CgkaOperation>>) {
         self.0.remove(op_hash);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{for_each_seed, Group};
+    use future_form::Local;
+    use keyhive_crypto::{
+        share_key::ShareSecretKey,
+        signer::{async_signer, memory::MemorySigner},
+    };
+    use rand::rngs::StdRng;
+
+    /// A two-member group's operation graph after one update by its first
+    /// member, with that update, its root secret and the member's signer.
+    async fn an_update(
+        rng: &mut StdRng,
+    ) -> (
+        CgkaOperationGraph,
+        Signed<CgkaOperation>,
+        PcsKey,
+        MemorySigner,
+    ) {
+        let mut group = Group::new(2, rng).await;
+        let sk = ShareSecretKey::generate(rng);
+        let signer = group.members[0].signer.clone();
+        let (secret, op, _) = group.replicas[0]
+            .update::<Local, _, _>(sk.share_key(), sk, &signer, rng)
+            .await
+            .expect("the owner can update");
+        (group.replicas[0].ops_graph.clone(), op, secret, signer)
+    }
+
+    #[test]
+    fn a_secret_with_the_updates_public_key_and_other_bytes_is_not_verified() {
+        for_each_seed(|mut rng| async move {
+            let (graph, op, secret, _) = an_update(&mut rng).await;
+            let op_hash = Digest::hash(&op);
+
+            // X25519 clamping clears the low three bits of byte 0, so flipping bit 0
+            // keeps the public key.
+            let mut bytes = secret.0.to_bytes();
+            bytes[0] ^= 1;
+            let other = PcsKey::new(ShareSecretKey::force_from_bytes(bytes));
+            assert_eq!(other.0.share_key(), secret.0.share_key());
+
+            assert!(VerifiedRootSecret::verify(&graph, op_hash, secret).is_some());
+            assert!(VerifiedRootSecret::verify(&graph, op_hash, other).is_none());
+        });
+    }
+
+    #[test]
+    fn a_secret_with_the_signed_hash_and_another_public_key_is_not_verified() {
+        for_each_seed(|mut rng| async move {
+            let (mut graph, op, _, signer) = an_update(&mut rng).await;
+            let other = PcsKey::new(ShareSecretKey::generate(&mut rng));
+            let mut payload = op.payload;
+            let CgkaOperation::Update {
+                root_secret_hash, ..
+            } = &mut payload
+            else {
+                unreachable!("an update")
+            };
+            *root_secret_hash = Digest::hash(&other);
+            let forged = async_signer::try_sign_async::<Local, _, _>(&signer, payload)
+                .await
+                .expect("signing succeeds");
+            graph
+                .add_op(&forged)
+                .expect("its predecessors are in the graph");
+
+            assert!(VerifiedRootSecret::verify(&graph, Digest::hash(&forged), other).is_none());
+        });
     }
 }

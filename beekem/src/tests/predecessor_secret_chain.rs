@@ -69,6 +69,7 @@ async fn with_entries(
     let CgkaOperation::Update {
         id,
         ref new_path,
+        root_secret_hash,
         ref predecessors,
         ..
     } = op.payload
@@ -79,6 +80,7 @@ async fn with_entries(
         id,
         new_path: new_path.clone(),
         predecessor_secrets: entries,
+        root_secret_hash,
         predecessors: predecessors.clone(),
         doc_id: *op.payload.doc_id(),
     };

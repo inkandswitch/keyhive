@@ -7,6 +7,7 @@ use crate::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::NodeKey,
+    pcs_key::PcsKey,
     transact::{Fork, Merge},
     tree::PathChange,
 };
@@ -147,6 +148,12 @@ pub enum CgkaOperation {
         /// had not yet decrypted from a later update, each encrypted under a key
         /// derived from this update's root secret.
         predecessor_secrets: Vec<PredecessorSecret>,
+        /// The hash of this update's root secret. Because of X25519 clamping,
+        /// different secrets can share one public key, but every key
+        /// derived from the root secret depends on its exact bytes. A root
+        /// secret is accepted only if it matches both this hash and the public
+        /// key at `new_path`'s root.
+        root_secret_hash: Digest<PcsKey>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
     },
@@ -271,20 +278,26 @@ impl CgkaOperationGraph {
             && !self.latest_updates.contains(op_hash)
     }
 
-    /// The sole share key at the root of the update `op_hash`'s path.
+    /// The sole share key at the root of the update `op_hash`'s path and the
+    /// root secret hash its author signed.
     ///
     /// Returns `None` if we do not have the operation, it is not an update, or
     /// its path does not end in a single share key.
-    pub(crate) fn update_root_share_key(
+    pub(crate) fn update_root(
         &self,
         op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Option<ShareKey> {
-        let CgkaOperation::Update { new_path, .. } = &self.cgka_ops.get(op_hash)?.payload else {
+    ) -> Option<(ShareKey, Digest<PcsKey>)> {
+        let CgkaOperation::Update {
+            new_path,
+            root_secret_hash,
+            ..
+        } = &self.cgka_ops.get(op_hash)?.payload
+        else {
             return None;
         };
         let (_, root_node) = new_path.path.last()?;
         match root_node.node_key() {
-            NodeKey::ShareKey(root_pk) => Some(root_pk),
+            NodeKey::ShareKey(root_pk) => Some((root_pk, *root_secret_hash)),
             NodeKey::ConflictKeys(_) => None,
         }
     }
@@ -893,6 +906,7 @@ mod causal_graph_tests {
             id: MemberId(signer.verifying_key()),
             new_path,
             predecessor_secrets: Vec::new(),
+            root_secret_hash: Digest::from([0; 32]),
             predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
             doc_id,
         };
