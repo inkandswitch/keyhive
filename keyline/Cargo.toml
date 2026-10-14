@@ -11,7 +11,7 @@ rust-version.workspace = true
 
 [dependencies]
 arbitrary = { workspace = true, optional = true }
-bijoux = { version = "0.3", default-features = false, features = ["u32"] }
+bijoux = { workspace = true }
 bolero = { workspace = true, optional = true }
 # `zeroize` clears signing keys on drop and is `no_std`. `fast` (precomputed
 # tables) is left to the consumer: it speeds up verification but grows Wasm

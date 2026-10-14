@@ -14,7 +14,9 @@ rust-version.workspace = true
 
 # Keyhive
 beekem = { version = "0.5.0", path = "../beekem" }
+keyhive_codec = { version = "0.1.0", path = "../keyhive_codec" }
 keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto" }
+keyline = { version = "0.1.0", path = "../keyline" }
 
 # Docs
 aquamarine = { version = "0.6", optional = true }
@@ -57,6 +59,7 @@ keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", features = ["a
 test-utils = { path = "../test-utils" }
 
 arbitrary.workspace = true
+bolero.workspace = true
 lazy_static = "1.5"
 tokio = { version = "1.43", features = [
     "macros",

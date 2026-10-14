@@ -2,6 +2,7 @@
 
 use dupe::Dupe;
 use keyhive_crypto::verifiable::Verifiable;
+use keyline::id::{Id, InvalidId};
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(feature = "test_utils", test))]
@@ -133,5 +134,64 @@ impl From<Identifier> for ed25519_dalek::VerifyingKey {
 impl From<ed25519_dalek::SigningKey> for Identifier {
     fn from(sk: ed25519_dalek::SigningKey) -> Self {
         sk.verifying_key().into()
+    }
+}
+
+/// Into Keyline: fallible, because Keyline's [`Id`] rejects keys that are not
+/// canonical encodings of prime-order points. A signing key never produces
+/// one, but a peer could send one, and it is refused here.
+impl TryFrom<Identifier> for Id {
+    type Error = InvalidId;
+
+    fn try_from(id: Identifier) -> Result<Id, InvalidId> {
+        Id::try_from(id.0)
+    }
+}
+
+impl From<Id> for Identifier {
+    fn from(id: Id) -> Self {
+        Identifier(id.verifying_key())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::principal::{
+        document::id::DocumentId, group::id::GroupId, individual::id::IndividualId,
+    };
+    use ed25519_dalek::{SigningKey, VerifyingKey};
+
+    /// Every identifier a signing key produces converts to a Keyline [`Id`]
+    /// and back unchanged, whichever typed identifier carries it.
+    #[test]
+    fn signing_keys_round_trip_through_keyline() {
+        bolero::check!().with_type::<[u8; 32]>().for_each(|seed| {
+            let id: Identifier = SigningKey::from_bytes(seed).verifying_key().into();
+            let keyline = Id::try_from(id).expect("a signing key's identifier is a valid Id");
+            assert_eq!(Identifier::from(keyline), id);
+            assert_eq!(keyline.as_bytes(), id.as_bytes());
+
+            assert_eq!(Id::try_from(IndividualId::from(id)), Ok(keyline));
+            assert_eq!(Id::try_from(GroupId::from(id)), Ok(keyline));
+            assert_eq!(Id::try_from(DocumentId::from(id)), Ok(keyline));
+            assert_eq!(Identifier::from(IndividualId::from(keyline)), id);
+            assert_eq!(Identifier::from(GroupId::from(keyline)), id);
+            assert_eq!(Identifier::from(DocumentId::from(keyline)), id);
+        });
+    }
+
+    /// The identity point decompresses, so `ed25519_dalek` accepts it as a
+    /// verifying key, but it has small order: Keyline refuses it.
+    #[test]
+    fn small_order_keys_are_refused_by_keyline() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let weak = VerifyingKey::from_bytes(&identity).expect("the identity point decompresses");
+        assert_eq!(Id::try_from(Identifier(weak)), Err(InvalidId::SmallOrder));
+        assert_eq!(
+            Id::try_from(GroupId::from(Identifier(weak))),
+            Err(InvalidId::SmallOrder)
+        );
     }
 }

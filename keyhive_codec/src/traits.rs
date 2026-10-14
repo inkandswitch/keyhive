@@ -36,6 +36,34 @@ pub trait Decode: Sized {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError>;
 }
 
+/// A [`Decode`] whose canonical encodings are prefix-free: no encoding is a
+/// prefix of another, so one value can be read off the front of a longer
+/// input.
+///
+/// This is what lets a composite type write fields back to back without
+/// framing them: a fixed-width field, or a field that knows where it ends
+/// (as a bijou varint does), needs no length. A type with no natural end,
+/// such as raw `Vec<u8>`, does not implement it; wrap it in a framed type.
+///
+/// Laws, beyond [`Decode`]'s, for every value `x` and every `rest`:
+///
+/// 1. `decode_next(encode(x) ‖ rest) == Ok((x, rest))`.
+/// 2. If `decode_next(b) == Ok((x, rest))`, then `b == encode(x) ‖ rest`.
+pub trait StreamDecode: Decode {
+    /// Decode one value from the front of `bytes`. Returns it and the bytes
+    /// after it.
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError>;
+}
+
+/// Decode a prefix-free value that must fill `bytes` exactly: the [`Decode`]
+/// implementation of every [`StreamDecode`] type.
+pub fn decode_exact<T: StreamDecode>(bytes: &[u8]) -> Result<T, DecodeError> {
+    match T::decode_next(bytes)? {
+        (value, []) => Ok(value),
+        _ => Err(DecodeError::TrailingBytes),
+    }
+}
+
 /// The empty encoding, for types parameterized by a payload they do not use.
 ///
 /// Canonical by construction: one value, one encoding, and `decode` accepts
@@ -67,6 +95,61 @@ impl Decode for alloc::vec::Vec<u8> {
     }
 }
 
+/// A fixed-size array encodes as its bytes. Every value has the same length,
+/// so the encoding is prefix-free.
+impl<const N: usize> Encode for [u8; N] {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self);
+    }
+}
+
+impl<const N: usize> Decode for [u8; N] {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl<const N: usize> StreamDecode for [u8; N] {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (value, rest) = bytes
+            .split_first_chunk::<N>()
+            .ok_or(DecodeError::UnexpectedEnd)?;
+        Ok((*value, rest))
+    }
+}
+
+/// Integers encode as bijou varints: prefix-free, with exactly one encoding
+/// per number.
+macro_rules! bijou {
+    ($int:ty, $module:ident, $name:literal) => {
+        impl Encode for $int {
+            fn encode_into(&self, out: &mut Vec<u8>) {
+                bijoux::$module::encode(*self, out);
+            }
+        }
+
+        impl Decode for $int {
+            fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+                decode_exact(bytes)
+            }
+        }
+
+        impl StreamDecode for $int {
+            fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+                let (value, consumed) = bijoux::$module::decode(bytes).map_err(|e| match e {
+                    bijoux::$module::DecodeError::BufferTooShort => DecodeError::UnexpectedEnd,
+                    bijoux::$module::DecodeError::Overflow => DecodeError::InvalidField($name),
+                })?;
+                let rest = bytes.get(consumed..).ok_or(DecodeError::UnexpectedEnd)?;
+                Ok((value, rest))
+            }
+        }
+    };
+}
+
+bijou!(u32, u32, "bijou32");
+bijou!(u64, u64, "bijou64");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +169,71 @@ mod tests {
         assert_eq!(value.encode().as_bytes(), value.as_slice());
         assert_eq!(Vec::<u8>::decode(&value), Ok(value.clone()));
         assert_eq!(Vec::<u8>::decode(&[]), Ok(Vec::new()));
+    }
+
+    /// Every law of a prefix-free codec, over generated values and suffixes,
+    /// and over arbitrary input for canonicality.
+    fn stream_laws<T>()
+    where
+        T: 'static
+            + for<'a> arbitrary::Arbitrary<'a>
+            + StreamDecode
+            + Encode
+            + core::fmt::Debug
+            + PartialEq,
+    {
+        bolero::check!()
+            .with_arbitrary::<(T, Vec<u8>)>()
+            .for_each(|(value, rest)| {
+                let mut bytes = value.encode().into_bytes();
+                assert_eq!(T::decode(&bytes).as_ref(), Ok(value), "round trip");
+                bytes.extend_from_slice(rest);
+                let (next, after) = T::decode_next(&bytes).expect("the next value decodes");
+                assert_eq!(&next, value, "stream round trip");
+                assert_eq!(after, rest.as_slice(), "the rest is untouched");
+            });
+        bolero::check!()
+            .with_arbitrary::<Vec<u8>>()
+            .for_each(|bytes| {
+                if let Ok((value, rest)) = T::decode_next(bytes) {
+                    let mut again = value.encode().into_bytes();
+                    again.extend_from_slice(rest);
+                    assert_eq!(&again, bytes, "canonical");
+                }
+            });
+    }
+
+    #[test]
+    fn arrays_stream() {
+        stream_laws::<[u8; 0]>();
+        stream_laws::<[u8; 2]>();
+        stream_laws::<[u8; 32]>();
+    }
+
+    #[test]
+    fn integers_stream() {
+        stream_laws::<u32>();
+        stream_laws::<u64>();
+    }
+
+    /// Exact decoding rejects anything after the value.
+    #[test]
+    fn decode_rejects_trailing_bytes() {
+        assert_eq!(
+            <[u8; 2]>::decode(&[1, 2, 3]),
+            Err(DecodeError::TrailingBytes)
+        );
+        assert_eq!(<[u8; 2]>::decode(&[1]), Err(DecodeError::UnexpectedEnd));
+        assert_eq!(u32::decode(&[0, 0]), Err(DecodeError::TrailingBytes));
+        assert_eq!(u64::decode(&[]), Err(DecodeError::UnexpectedEnd));
+    }
+
+    /// Pins the bijou encodings at the tier boundaries the integer impls rely on.
+    #[test]
+    fn integer_known_answers() {
+        assert_eq!(0u32.encode().as_bytes(), &[0]);
+        assert_eq!(127u64.encode().as_bytes(), &[127]);
+        assert!(u64::MAX.encode().len() > 8);
+        assert_eq!(u64::decode(u64::MAX.encode().as_bytes()), Ok(u64::MAX));
     }
 }

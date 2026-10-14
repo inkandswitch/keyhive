@@ -25,6 +25,7 @@ rust-version = "1.90.0"
 version = "0.0.0-alpha.3"
 
 [workspace.dependencies]
+bijoux = { version = "0.3", default-features = false, features = ["u32", "u64"] }
 bincode = "1.3"
 blake3 = "1.5"
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }

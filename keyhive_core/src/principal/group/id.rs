@@ -2,6 +2,7 @@ use crate::principal::identifier::Identifier;
 use derive_more::{From, Into};
 use dupe::Dupe;
 use keyhive_crypto::verifiable::Verifiable;
+use keyline::id::{Id, InvalidId};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
@@ -51,5 +52,19 @@ impl Verifiable for GroupId {
 impl Display for GroupId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+impl TryFrom<GroupId> for Id {
+    type Error = InvalidId;
+
+    fn try_from(id: GroupId) -> Result<Id, InvalidId> {
+        Identifier::from(id).try_into()
+    }
+}
+
+impl From<Id> for GroupId {
+    fn from(id: Id) -> Self {
+        Identifier::from(id).into()
     }
 }

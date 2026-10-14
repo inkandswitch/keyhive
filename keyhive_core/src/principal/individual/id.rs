@@ -2,6 +2,7 @@ use crate::principal::identifier::Identifier;
 use derive_more::Display;
 use dupe::Dupe;
 use keyhive_crypto::verifiable::Verifiable;
+use keyline::id::{Id, InvalidId};
 use serde::{Deserialize, Serialize};
 
 #[derive(
@@ -66,5 +67,19 @@ impl From<beekem::id::MemberId> for IndividualId {
 impl Verifiable for IndividualId {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.0.verifying_key()
+    }
+}
+
+impl TryFrom<IndividualId> for Id {
+    type Error = InvalidId;
+
+    fn try_from(id: IndividualId) -> Result<Id, InvalidId> {
+        Identifier::from(id).try_into()
+    }
+}
+
+impl From<Id> for IndividualId {
+    fn from(id: Id) -> Self {
+        Identifier::from(id).into()
     }
 }

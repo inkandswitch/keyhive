@@ -10,6 +10,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bijoux = { workspace = true }
 serde = { version = "1.0", default-features = false, features = [
   "alloc",
 ], optional = true }
@@ -18,6 +19,8 @@ serde = { version = "1.0", default-features = false, features = [
 thiserror = { version = "2", default-features = false }
 
 [dev-dependencies]
+arbitrary = { workspace = true }
+bolero = { workspace = true }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 
 [features]
