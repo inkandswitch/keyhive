@@ -51,8 +51,6 @@ const delegation = await keyhive.addMember(
 );
 ```
 
-See [CHANGELOG.md](./CHANGELOG.md) for what changed since the last release.
-
 `Keyhive` carries the operations: `generateGroup` / `generateDocument`, `addMember` / `revokeMember`, `tryEncrypt` / `tryDecrypt`, `reachableDocs`, `forcePcsUpdate`, and event ingestion for sync. `getDocument`, `getGroup`, `getIndividual` and `getPrincipal` return handles: `Document` and `Group` have `members` and `transitiveMembers`, `Document` adds `cgkaMembers`, and each has `toPrincipal`. See [`e2e/`](./e2e) for complete examples and `dist/index.d.ts` (after a build) for signatures.
 
 ## Building

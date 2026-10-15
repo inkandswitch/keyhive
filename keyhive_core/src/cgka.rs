@@ -1,7 +1,7 @@
 //! Thin wrapper around [`beekem::cgka::Cgka`] that converts between
 //! keyhive_core domain IDs ([`IndividualId`] / [`DocumentId`]) and
-//! beekem IDs ([`MemberId`](beekem::id::MemberId) /
-//! [`TreeId`](beekem::id::TreeId)) at the API boundary.
+//! beekem IDs ([`beekem::id::MemberId`] /
+//! [`beekem::id::TreeId`]) at the API boundary.
 
 pub mod store;
 

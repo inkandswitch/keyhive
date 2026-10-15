@@ -18,7 +18,7 @@ use tracing::instrument;
 
 /// A unique identifier for a principal: an individual, group, or document.
 ///
-/// This is a newtype for a [`VerifyingKey`](ed25519_dalek::VerifyingKey). Since a
+/// This is a newtype for a [`VerifyingKey`]. Since a
 /// signing key is held by one principal and never shared, this identifier is
 /// provably unique.
 #[derive(Copy, Serialize, Deserialize)]

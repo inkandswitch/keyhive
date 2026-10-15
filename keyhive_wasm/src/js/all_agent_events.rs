@@ -1,7 +1,8 @@
 use wasm_bindgen::prelude::*;
 
-/// Result of [`JsKeyhive::all_agent_events`], containing all events for all agents
-/// with deduplicated storage and two-tier indirection for membership, prekey, and CGKA ops.
+/// Result of [`JsKeyhive::all_agent_events`](crate::js::keyhive::JsKeyhive::all_agent_events),
+/// containing all events for all principals with deduplicated storage and
+/// two-tier indirection for membership, prekey, and CGKA ops.
 ///
 /// The consumer follows: agent -> source IDs -> hashes -> event bytes.
 #[wasm_bindgen(js_name = AllAgentEvents)]

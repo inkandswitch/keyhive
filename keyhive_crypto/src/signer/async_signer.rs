@@ -21,7 +21,7 @@ use {crate::signed::Signed, alloc::vec::Vec, serde::Serialize};
 /// [`Local`](future_form::Local) for the latter.
 ///
 /// Synchronous signers (like [`MemorySigner`]) implement this for
-/// _both_ `Sendable` and `Local` using [`F::ready`], so they work
+/// _both_ `Sendable` and `Local` using [`F::ready`](FutureForm::ready), so they work
 /// in any context.
 ///
 /// [Ed25519]: https://en.wikipedia.org/wiki/EdDSA#Ed25519

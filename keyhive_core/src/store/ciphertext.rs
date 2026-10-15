@@ -23,8 +23,8 @@ use thiserror::Error;
 /// An async storage interface for ciphertexts.
 ///
 /// The `F: FutureForm` parameter determines whether the returned
-/// futures are `Send` ([`Sendable`](future_form::Sendable)) or
-/// `!Send` ([`Local`](future_form::Local)).
+/// futures are `Send` ([`Sendable`]) or
+/// `!Send` ([`Local`]).
 ///
 /// This includes functionality for "causal decryption":
 /// the ability to decrypt a set of causally-related ciphertexts.
@@ -332,11 +332,6 @@ impl<F: FutureForm, T: Clone + 'static, Cr: ContentRef + 'static> CiphertextStor
             Ok(())
         })
     }
-}
-
-pub trait Isomorphic<T> {
-    fn pure(inner: T) -> Self;
-    fn extract(self) -> T;
 }
 
 #[derive(Debug, Error)]
