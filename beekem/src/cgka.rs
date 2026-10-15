@@ -159,28 +159,23 @@ impl Cgka {
     ) -> Result<
         (
             ApplicationSecret<T>,
-            Option<Signed<CgkaOperation>>,
-            Option<LeafKeyPair>,
+            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
         ),
         CgkaError,
     > {
-        let mut op = None;
-        let mut new_key_pair = None;
-        let (current_pcs_key, current_op_hash) = if !self.has_tree_root_secret() {
+        let (current_pcs_key, current_op_hash, rotation) = if !self.has_tree_root_secret() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
-            let (pcs_key, update_op, sampled_key_pair) = self
+            let (pcs_key, update_op, key_pair) = self
                 .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
-            new_key_pair = Some(sampled_key_pair);
             let op_hash = Digest::hash(&update_op);
-            op = Some(update_op);
-            (pcs_key, op_hash)
+            (pcs_key, op_hash, Some((update_op, key_pair)))
         } else {
             // `has_tree_root_secret()` above guarantees a single head.
             debug_assert!(self.ops_graph.has_single_head());
             match self.record_tree_root_secret() {
-                Some((op_hash, pcs_key)) => (pcs_key, op_hash),
+                Some((op_hash, pcs_key)) => (pcs_key, op_hash, None),
                 None => {
                     // If there is a decryption error, return it. Otherwise, return
                     // `UnknownPcsKey`.
@@ -197,8 +192,7 @@ impl Cgka {
                 &Digest::hash(pred_refs),
                 &current_op_hash,
             ),
-            op,
-            new_key_pair,
+            rotation,
         ))
     }
 
