@@ -8,13 +8,13 @@ use super::{
     Backend, Harness, TestWatermark,
 };
 use crate::{
-    contract::set_digest, delegation::Delegation, id::Id, power::Power, test_utils::assume_verified,
+    contract::set_digest, delegation::Delegation, power::Power, test_utils::assume_verified,
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, id::Id};
 
 /// Every `(subject, node)` level a backend reports over the pool, plus the
 /// live status of every delegation: what the laws compare.

@@ -1,6 +1,6 @@
 //! Delegations: signed edges granting a power level over a subject.
 
-use crate::{id::Id, power::Power, revocation::RevocationId};
+use crate::{power::Power, revocation::RevocationId};
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use ed25519_dalek::VerifyingKey;
@@ -10,6 +10,7 @@ use keyhive_codec::{
 };
 use keyhive_crypto::{
     digest::Digest,
+    id::Id,
     signable::{Kind, Kinded},
     verifiable::Verifiable,
 };

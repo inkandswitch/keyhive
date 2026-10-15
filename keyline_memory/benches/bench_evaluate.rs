@@ -14,9 +14,9 @@
 //! Run with `cargo bench -p keyline_memory`.
 
 use divan::Bencher;
+use keyhive_crypto::id::Id;
 use keyline::{
     delegation::Delegation,
-    id::Id,
     power::Power,
     revocation::Revocation,
     test_utils::{assume_verified, id, Statement},

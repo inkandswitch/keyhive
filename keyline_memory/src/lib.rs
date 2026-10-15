@@ -42,12 +42,11 @@ use async_lock::RwLock;
 use core::convert::Infallible;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use keyhive_codec::traits::{Decode, Encode};
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, id::Id};
 use keyline::{
     certificate::{Certificate, CertificateId, VerifiedCertificate},
     contract::{CertificateSet, Keyline, Query, Version, Versioned},
     delegation::Delegation,
-    id::Id,
     power::Power,
     revocation::RevocationId,
 };

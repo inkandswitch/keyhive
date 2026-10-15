@@ -12,7 +12,6 @@
 
 use crate::{
     delegation::Delegation,
-    id::Id,
     revocation::{Revocation, RevocationId},
 };
 use alloc::{sync::Arc, vec::Vec};
@@ -26,6 +25,7 @@ use keyhive_codec::{
 };
 use keyhive_crypto::{
     digest::Digest,
+    id::Id,
     signable::Kind,
     verified::{header, Signed, Verified, VerifyError},
 };
@@ -387,6 +387,6 @@ mod tests {
     #[test]
     #[cfg(feature = "arbitrary")]
     fn decode_is_canonical() {
-        crate::test_utils::decode_is_canonical_near::<Certificate<Watermark>>();
+        keyhive_codec::laws::canonical_near::<Certificate<Watermark>>();
     }
 }

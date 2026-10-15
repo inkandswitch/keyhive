@@ -51,7 +51,6 @@ extern crate std;
 pub mod certificate;
 pub mod contract;
 pub mod delegation;
-pub mod id;
 pub mod power;
 pub mod revocation;
 

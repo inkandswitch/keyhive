@@ -6,7 +6,6 @@
 use super::Levels;
 use crate::{
     delegation::Delegation,
-    id::Id,
     power::Power,
     test_utils::{
         conformance::gen::{ids, CertSet},
@@ -17,7 +16,7 @@ use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, id::Id};
 
 /// What the oracle derives from a set.
 #[derive(Debug, Clone, PartialEq, Eq)]

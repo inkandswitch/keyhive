@@ -14,7 +14,6 @@
 
 use crate::{
     delegation::Delegation,
-    id::Id,
     power::Power,
     revocation::Revocation,
     test_utils::{id, Statement},
@@ -22,6 +21,7 @@ use crate::{
 use alloc::{collections::BTreeMap, vec::Vec};
 use arbitrary::{Arbitrary, Result, Unstructured};
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_crypto::id::Id;
 
 /// Number of identities in the pool; [`ids`] yields them.
 pub const POOL: u8 = 8;

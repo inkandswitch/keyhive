@@ -7,7 +7,11 @@ use core::{
     hash::{Hash, Hasher},
     marker::PhantomData,
 };
-use keyhive_codec::encoded::Encoded;
+use keyhive_codec::{
+    encoded::Encoded,
+    error::DecodeError,
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use serde::{Deserialize, Serialize};
 
 /// A [`blake3::Hash`] tagged with which type it is a hash of.
@@ -277,6 +281,27 @@ impl<T> From<Digest<T>> for Vec<u8> {
     }
 }
 
+/// A digest encodes as its 32 bytes. Every byte string of that length is a
+/// digest, so the encoding is canonical and prefix-free.
+impl<T> Encode for Digest<T> {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.raw.as_bytes());
+    }
+}
+
+impl<T> Decode for Digest<T> {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl<T> StreamDecode for Digest<T> {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (raw, rest) = <[u8; 32]>::decode_next(bytes)?;
+        Ok((Digest::from(raw), rest))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,6 +317,14 @@ mod tests {
     #[test]
     fn message_is_prefix_version_kind_payload() {
         assert_eq!(message::<Example>(b"x"), b"keyhive\0\x07\x03x");
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn codec_laws() {
+        keyhive_codec::laws::round_trip::<Digest<Vec<u8>>>();
+        keyhive_codec::laws::canonical_near::<Digest<Vec<u8>>>();
+        keyhive_codec::laws::stream::<Digest<Vec<u8>>>();
     }
 
     #[test]

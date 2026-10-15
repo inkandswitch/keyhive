@@ -12,12 +12,11 @@
 
 pub mod conformance;
 
-use crate::{
-    certificate::VerifiedCertificate, delegation::Delegation, id::Id, revocation::Revocation,
-};
+use crate::{certificate::VerifiedCertificate, delegation::Delegation, revocation::Revocation};
 use ed25519_dalek::{Signature, SigningKey};
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{
+    id::Id,
     signable::{message, Signable},
     verifiable::Verifiable,
     verified::{Signed, Verified},
@@ -156,60 +155,4 @@ fn issuer_key(issuer: Id) -> SigningKey {
         .map(signing_key)
         .find(|k| Id::from(k) == issuer)
         .expect("issuer is a fixture identity")
-}
-
-/// One edit to a byte string. Positions wrap modulo the current length, so
-/// every mutation applies to any input.
-#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
-#[derive(Debug, Clone, arbitrary::Arbitrary)]
-pub enum Mutation {
-    Flip { at: usize, mask: u8 },
-    Insert { at: usize, byte: u8 },
-    Remove { at: usize },
-    Truncate { len: usize },
-}
-
-#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
-impl Mutation {
-    pub fn apply(&self, bytes: &mut alloc::vec::Vec<u8>) {
-        match *self {
-            Mutation::Flip { at, mask } if !bytes.is_empty() => {
-                let i = at % bytes.len();
-                bytes[i] ^= mask;
-            }
-            Mutation::Insert { at, byte } => bytes.insert(at % (bytes.len() + 1), byte),
-            Mutation::Remove { at } if !bytes.is_empty() => {
-                bytes.remove(at % bytes.len());
-            }
-            Mutation::Truncate { len } => bytes.truncate(len % (bytes.len() + 1)),
-            Mutation::Flip { .. } | Mutation::Remove { .. } => {}
-        }
-    }
-}
-
-/// Canonicality near valid encodings: mutate the encoding of an arbitrary
-/// `T`, and whatever still decodes must re-encode to exactly those bytes.
-///
-/// Random byte strings almost never decode (bolero's `Vec<u8>` generator
-/// yields at most 64 bytes, below every certificate's minimum), so a
-/// raw-bytes harness would never reach its assertion. Starting from a valid
-/// encoding keeps the mutated input near the inputs that matter: tags,
-/// counts, lengths, and trailing bytes. At least one mutation is drawn (it may
-/// be a no-op); the unmutated round trip is the codec laws' job.
-#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
-pub fn decode_is_canonical_near<T>()
-where
-    T: for<'a> arbitrary::Arbitrary<'a> + Encode + Decode + core::fmt::Debug + 'static,
-{
-    bolero::check!()
-        .with_arbitrary::<(T, Mutation, alloc::vec::Vec<Mutation>)>()
-        .for_each(|(value, first, rest)| {
-            let mut bytes = value.encode().into_bytes();
-            for m in core::iter::once(first).chain(rest) {
-                m.apply(&mut bytes);
-            }
-            if let Ok(decoded) = T::decode(&bytes) {
-                assert_eq!(decoded.encode().as_bytes(), bytes.as_slice());
-            }
-        });
 }

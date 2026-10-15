@@ -38,7 +38,6 @@ use crate::{
     certificate::{Certificate, CertificateId, VerifiedCertificate},
     contract::{CertificateSet, Keyline, Query, Version},
     delegation::Delegation,
-    id::Id,
     power::Power,
     revocation::{Revocation, RevocationId},
     test_utils::{assume_verified, id, Statement},
@@ -55,7 +54,7 @@ use core::{
 };
 use future_form::FutureForm;
 use keyhive_codec::traits::{Decode, Encode};
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, id::Id};
 
 // The cast, as small integers for `test_utils::id`. Roles first, then people
 // in the usual order (Alice, Bob, Carol, Dan, Eve, Frank).

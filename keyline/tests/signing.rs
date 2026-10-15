@@ -10,6 +10,7 @@ use keyhive_codec::{
 };
 use keyhive_crypto::{
     digest::Digest,
+    id::Id,
     signable::{message, Kinded, Signable, PREFIX},
     signed::SigningError,
     signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSignerBasic},
@@ -18,7 +19,6 @@ use keyhive_crypto::{
 };
 use keyline::{
     delegation::Delegation,
-    id::Id,
     power::Power,
     revocation::Revocation,
     test_utils::{id, signing_key},
