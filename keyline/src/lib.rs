@@ -25,10 +25,10 @@
 //! ([`signed::Signed::verify`], [`certificate::Certificate::verify`]) or
 //! signing ([`signed::Verified::sign`], which verifies what it signs) can make.
 //! The crate knows nothing of prekeys, CGKA, documents, or groups. Its trait is
-//! synchronous; only signing is async, because the key may sit behind
-//! WebCrypto or an HSM. Concurrency is the wrapper's job. A wrapper holds an
-//! implementation behind a lock and converts its typed handles to [`id::Id`]s at
-//! the boundary.
+//! async, fallible and versioned so that a database or an incremental engine
+//! can implement it (see [`contract`]); each backend owns its concurrency
+//! control. Signing is async too, because the key may sit behind WebCrypto or
+//! an HSM. A caller converts its typed handles to [`id::Id`]s at the boundary.
 //!
 //! # `no_std` support
 //!

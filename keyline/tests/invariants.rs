@@ -2,6 +2,7 @@
 
 use keyhive_crypto::domain_separator::Domain;
 use keyline::{contract::CertificateSet, delegation::Delegation, revocation::Revocation};
+use std::path::Path;
 
 /// The domain context of every signed or hashed type. Each type declares its
 /// own next to its definition.
@@ -29,7 +30,7 @@ fn domain_contexts_are_distinct_and_versioned() {
 /// the list would escape the check above.
 #[test]
 fn every_domain_impl_is_listed() {
-    fn count(dir: &std::path::Path) -> usize {
+    fn count(dir: &Path) -> usize {
         std::fs::read_dir(dir)
             .expect("source directory is readable")
             .map(|entry| entry.expect("directory entry").path())
@@ -48,6 +49,6 @@ fn every_domain_impl_is_listed() {
             })
             .sum()
     }
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     assert_eq!(count(&src), CONTEXTS.len());
 }

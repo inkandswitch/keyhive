@@ -3,6 +3,7 @@
 use crate::{id::Id, power::Power, revocation::RevocationId};
 use alloc::vec::Vec;
 use core::cmp::Ordering;
+use ed25519_dalek::VerifyingKey;
 use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
@@ -83,7 +84,7 @@ impl Domain for Delegation {
 }
 
 impl Verifiable for Delegation {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.issuer.verifying_key()
     }
 }
@@ -176,6 +177,7 @@ impl<'a> arbitrary::Arbitrary<'a> for Delegation {
 mod tests {
     use super::*;
     use crate::test_utils::id;
+    use alloc::string::String;
 
     #[test]
     fn citation_changes_hash_and_nothing_else() {
@@ -252,9 +254,8 @@ mod tests {
     /// on purpose.
     #[test]
     fn known_answer() {
-        let hex = |bytes: &[u8]| -> alloc::string::String {
-            bytes.iter().map(|b| alloc::format!("{b:02x}")).collect()
-        };
+        let hex =
+            |bytes: &[u8]| -> String { bytes.iter().map(|b| alloc::format!("{b:02x}")).collect() };
         let d = Delegation::new(id(1), id(2), id(3), Power::Edit);
         assert_eq!(
             hex(d.encode().as_bytes()),

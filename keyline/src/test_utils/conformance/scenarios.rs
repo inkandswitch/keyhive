@@ -5,10 +5,10 @@
 //! role in the clamping example; the rest are people.
 
 use super::{
-    build, d, power, r, ALICE, BOB, CAROL, DAN, DOC, EVE, FRANK, MEMBERS, MODS, OTHER_DOC, OWNERS,
+    build, d, power, r, Backend, Harness, ALICE, BOB, CAROL, DAN, DOC, EVE, FRANK, MEMBERS, MODS,
+    OTHER_DOC, OWNERS,
 };
 use crate::{
-    contract::Keyline,
     delegation::Delegation,
     power::Power,
     revocation::{Revocation, RevocationId},
@@ -21,7 +21,7 @@ use keyhive_crypto::digest::Digest;
 /// Owners; Members has Edit over Doc; Alice is a Member, added by Carol.
 ///
 /// Returns the graph, Carol's Owners membership, and Alice's Members membership.
-pub fn standard<K: Keyline + Default>() -> (K, Delegation, Delegation) {
+pub fn standard<C: Backend>() -> (Harness<C>, Delegation, Delegation) {
     let carol_owner = d(OWNERS, CAROL, OWNERS, Power::Admin);
     let alice_member = d(CAROL, ALICE, MEMBERS, Power::Admin);
     let g = build([
@@ -35,15 +35,15 @@ pub fn standard<K: Keyline + Default>() -> (K, Delegation, Delegation) {
     (g, carol_owner, alice_member)
 }
 
-pub fn empty_graph<K: Keyline + Default>() {
-    let g = K::default();
+pub fn empty_graph<C: Backend>() {
+    let g = Harness::<C>::default();
     assert_eq!(power(&g, DOC, DOC), Some(Power::Admin));
     assert_eq!(power(&g, DOC, ALICE), None);
     assert!(g.members(id(DOC)).is_empty());
 }
 
-pub fn attenuation_and_widest_path<K: Keyline + Default>() {
-    let g: K = build([
+pub fn attenuation_and_widest_path<C: Backend>() {
+    let g: Harness<C> = build([
         d(DOC, ALICE, DOC, Power::Admin).into(),
         d(ALICE, BOB, DOC, Power::Read).into(),
         d(BOB, CAROL, DOC, Power::Admin).into(),
@@ -55,22 +55,22 @@ pub fn attenuation_and_widest_path<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, CAROL), Some(Power::Read));
 }
 
-pub fn ungrounded_edges_are_dead<K: Keyline + Default>() {
+pub fn ungrounded_edges_are_dead<C: Backend>() {
     let stray = d(ALICE, BOB, DOC, Power::Admin);
-    let g: K = build([stray.into(), d(BOB, CAROL, DOC, Power::Admin).into()]);
+    let g: Harness<C> = build([stray.into(), d(BOB, CAROL, DOC, Power::Admin).into()]);
     assert!(!g.is_live(&stray.digest()));
     assert!(g.members(id(DOC)).is_empty());
 
     // An ungrounded cycle does not certify itself.
-    let g: K = build([
+    let g: Harness<C> = build([
         d(ALICE, BOB, DOC, Power::Admin).into(),
         d(BOB, ALICE, DOC, Power::Admin).into(),
     ]);
     assert!(g.members(id(DOC)).is_empty());
 }
 
-pub fn membership_composes<K: Keyline + Default>() {
-    let (g, _, _) = standard::<K>();
+pub fn membership_composes<C: Backend>() {
+    let (g, _, _) = standard::<C>();
     assert_eq!(power(&g, DOC, OWNERS), Some(Power::Admin));
     assert_eq!(power(&g, DOC, BOB), Some(Power::Admin));
     assert_eq!(power(&g, DOC, MEMBERS), Some(Power::Edit));
@@ -85,8 +85,8 @@ pub fn membership_composes<K: Keyline + Default>() {
     assert!(!members.contains(&id(DOC)));
 }
 
-pub fn late_binding_grants_new_documents_to_members<K: Keyline + Default>() {
-    let (mut g, _, _) = standard::<K>();
+pub fn late_binding_grants_new_documents_to_members<C: Backend>() {
+    let (mut g, _, _) = standard::<C>();
     assert_eq!(power(&g, OTHER_DOC, ALICE), None);
     g.insert(assume_verified(d(
         OTHER_DOC,
@@ -100,9 +100,9 @@ pub fn late_binding_grants_new_documents_to_members<K: Keyline + Default>() {
 /// Revocation by the issuer needs no admin reach: Dan holds only Read over
 /// Doc, so his reach is his own node, yet his revocation of what he issued
 /// kills it.
-pub fn issuer_revocation_is_total<K: Keyline + Default>() {
+pub fn issuer_revocation_is_total<C: Backend>() {
     let dan_delegation = d(DAN, ALICE, DOC, Power::Read);
-    let (mut g, _, _) = standard::<K>();
+    let (mut g, _, _) = standard::<C>();
     g.insert(assume_verified(d(DOC, DAN, DOC, Power::Read)));
     g.insert(assume_verified(dan_delegation));
     assert!(g.is_live(&dan_delegation.digest()));
@@ -116,9 +116,9 @@ pub fn issuer_revocation_is_total<K: Keyline + Default>() {
 /// revocation of it is still total. (Were she an Admin member, her admin
 /// reach would cover Members and kill the membership even without the
 /// audience clause.)
-pub fn audience_revocation_without_admin_reach_is_total<K: Keyline + Default>() {
+pub fn audience_revocation_without_admin_reach_is_total<C: Backend>() {
     let alice_reader = d(CAROL, ALICE, MEMBERS, Power::Read);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         d(DOC, OWNERS, DOC, Power::Admin).into(),
         d(OWNERS, CAROL, OWNERS, Power::Admin).into(),
         d(MEMBERS, OWNERS, MEMBERS, Power::Admin).into(),
@@ -138,9 +138,9 @@ pub fn audience_revocation_without_admin_reach_is_total<K: Keyline + Default>() 
 /// Owners is only an Edit member of Members. But Owners is in his reach, and
 /// the membership's only route, from Members to its issuer Carol, transits
 /// Owners. So his revocation covers it.
-pub fn admin_reach_covers_a_transited_node<K: Keyline + Default>() {
+pub fn admin_reach_covers_a_transited_node<C: Backend>() {
     let alice_member = d(CAROL, ALICE, MEMBERS, Power::Edit);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         d(DOC, OWNERS, DOC, Power::Admin).into(),
         d(OWNERS, BOB, OWNERS, Power::Admin).into(),
         d(OWNERS, CAROL, OWNERS, Power::Admin).into(),
@@ -164,9 +164,9 @@ pub fn admin_reach_covers_a_transited_node<K: Keyline + Default>() {
 /// revokes Eve's delegation to Frank: the derivation through Dan is excluded,
 /// even though Dan sits inside Mods' row rather than on the path from Doc, so
 /// Frank keeps only what Eve's own Read seat conveys. Eve is untouched.
-pub fn non_admin_revocation_is_confined_to_own_node<K: Keyline + Default>() {
+pub fn non_admin_revocation_is_confined_to_own_node<C: Backend>() {
     let h = d(EVE, FRANK, DOC, Power::Admin);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         d(DOC, MODS, DOC, Power::Edit).into(),
         d(MODS, DAN, MODS, Power::Edit).into(),
         d(DAN, EVE, MODS, Power::Edit).into(),
@@ -183,8 +183,8 @@ pub fn non_admin_revocation_is_confined_to_own_node<K: Keyline + Default>() {
 
 /// Bob removes Carol; Carol was Alice's sponsor, so Alice dies implicitly.
 /// Carol's admin reach still holds Owners, so she can revoke Bob's re-sponsor.
-pub fn ex_admin_reach_is_frozen<K: Keyline + Default>() {
-    let (mut g, carol_owner, alice_member) = standard::<K>();
+pub fn ex_admin_reach_is_frozen<C: Backend>() {
+    let (mut g, carol_owner, alice_member) = standard::<C>();
     g.insert(assume_verified(r(BOB, &carol_owner)));
     assert_eq!(power(&g, DOC, CAROL), None);
     assert_eq!(power(&g, DOC, ALICE), None);
@@ -197,8 +197,8 @@ pub fn ex_admin_reach_is_frozen<K: Keyline + Default>() {
     assert!(!g.is_live(&alice_member.digest()));
 }
 
-pub fn mutual_revocations_both_take_effect<K: Keyline + Default>() {
-    let (mut g, carol_owner, _) = standard::<K>();
+pub fn mutual_revocations_both_take_effect<C: Backend>() {
+    let (mut g, carol_owner, _) = standard::<C>();
     let bob_owner = d(OWNERS, BOB, OWNERS, Power::Admin);
     g.insert(assume_verified(r(BOB, &carol_owner)));
     g.insert(assume_verified(r(CAROL, &bob_owner)));
@@ -211,8 +211,8 @@ pub fn mutual_revocations_both_take_effect<K: Keyline + Default>() {
 /// `standard()` roots Doc at Admin, so Doc is in every Owners admin's reach
 /// and any of them can revoke the root edge. One certificate bricks the
 /// document; nothing below survives.
-pub fn root_role_admin_can_revoke_the_root_edge<K: Keyline + Default>() {
-    let (mut g, _, _) = standard::<K>();
+pub fn root_role_admin_can_revoke_the_root_edge<C: Backend>() {
+    let (mut g, _, _) = standard::<C>();
     let root = d(DOC, OWNERS, DOC, Power::Admin);
     assert_eq!(power(&g, DOC, BOB), Some(Power::Admin));
     g.insert(assume_verified(r(BOB, &root)));
@@ -226,10 +226,10 @@ pub fn root_role_admin_can_revoke_the_root_edge<K: Keyline + Default>() {
 /// Root Doc at Edit instead and nobody ever holds Admin over Doc, so Doc is in
 /// nobody's reach: the root edge is irrevocable, and Owners' admins keep every
 /// power they had over the roles below.
-pub fn edit_rooted_root_edge_is_irrevocable<K: Keyline + Default>() {
+pub fn edit_rooted_root_edge_is_irrevocable<C: Backend>() {
     let root = d(DOC, OWNERS, DOC, Power::Edit);
     let alice_member = d(CAROL, ALICE, MEMBERS, Power::Admin);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         root.into(),
         d(OWNERS, BOB, OWNERS, Power::Admin).into(),
         d(OWNERS, CAROL, OWNERS, Power::Admin).into(),
@@ -252,11 +252,11 @@ pub fn edit_rooted_root_edge_is_irrevocable<K: Keyline + Default>() {
 /// Bob is an Owner and Owners is Admin over Members, but Bob holds no
 /// `subject: Members` grant of his own. Composed reach still puts Members in his
 /// reach, so his revocations cover delegations inside it.
-pub fn senior_role_admin_revokes_inside_junior_role<K: Keyline + Default>() {
+pub fn senior_role_admin_revokes_inside_junior_role<C: Backend>() {
     // Members is rooted at Dan, who then makes Owners an admin of Members via
     // an ordinary (non-root) edge. Bob's only path to Members is through Owners.
     let alice_member = d(DAN, ALICE, MEMBERS, Power::Admin);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         d(DOC, OWNERS, DOC, Power::Admin).into(),
         d(OWNERS, BOB, OWNERS, Power::Admin).into(),
         d(MEMBERS, DAN, MEMBERS, Power::Admin).into(),
@@ -277,10 +277,10 @@ pub fn senior_role_admin_revokes_inside_junior_role<K: Keyline + Default>() {
 /// every Member off from Doc) but not Members' roster, which never routes
 /// through him. Dan reaches Doc at Admin through Mods, but Members is not in
 /// his reach.
-pub fn supply_is_daisy_chained<K: Keyline + Default>() {
+pub fn supply_is_daisy_chained<C: Backend>() {
     let supply = d(DAN, MEMBERS, DOC, Power::Edit);
     let alice_member = d(CAROL, ALICE, MEMBERS, Power::Admin);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         d(DOC, OWNERS, DOC, Power::Admin).into(),
         d(OWNERS, BOB, OWNERS, Power::Admin).into(),
         d(BOB, MODS, DOC, Power::Admin).into(),
@@ -311,9 +311,9 @@ pub fn supply_is_daisy_chained<K: Keyline + Default>() {
 /// Read over Doc from Owners. Eve grants Frank Admin; Dan revokes it. The edge
 /// stays live via Eve's independent route, but conveys only what Eve holds
 /// independently of Mods: Read, not Edit.
-pub fn covered_edges_are_clamped_not_just_gated<K: Keyline + Default>() {
+pub fn covered_edges_are_clamped_not_just_gated<C: Backend>() {
     let h = d(EVE, FRANK, DOC, Power::Admin);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         d(DOC, OWNERS, DOC, Power::Admin).into(),
         d(OWNERS, MODS, DOC, Power::Edit).into(),
         d(MODS, DAN, MODS, Power::Admin).into(),
@@ -344,11 +344,11 @@ const GUS: u8 = 13;
 /// Eve's only grounded standing is Read, so h1 conveys Read; avoiding Mods′,
 /// Frank's only standing comes through h1, so h3 conveys Read too. Gus gets
 /// Read. Edit would require h1 and h2 to certify each other.
-pub fn mutually_covered_edges_cannot_lift_each_other<K: Keyline + Default>() {
+pub fn mutually_covered_edges_cannot_lift_each_other<C: Backend>() {
     let h1 = d(EVE, FRANK, DOC, Power::Admin);
     let h2 = d(FRANK, EVE, DOC, Power::Admin);
     let h3 = d(FRANK, GUS, DOC, Power::Admin);
-    let g: K = build([
+    let g: Harness<C> = build([
         d(DOC, EVE, DOC, Power::Read).into(),
         d(DOC, MODS, DOC, Power::Edit).into(),
         d(MODS, EVE, MODS, Power::Admin).into(),
@@ -367,9 +367,9 @@ pub fn mutually_covered_edges_cannot_lift_each_other<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, GUS), Some(Power::Read));
 }
 
-pub fn revocation_may_arrive_before_its_target<K: Keyline + Default>() {
-    let (mut g, _, alice_member) = standard::<K>();
-    let mut early = K::default();
+pub fn revocation_may_arrive_before_its_target<C: Backend>() {
+    let (mut g, _, alice_member) = standard::<C>();
+    let mut early = Harness::<C>::default();
     assert!(early.insert(assume_verified(r(CAROL, &alice_member))));
     assert!(early.members(id(DOC)).is_empty());
     for c in [
@@ -388,13 +388,13 @@ pub fn revocation_may_arrive_before_its_target<K: Keyline + Default>() {
     assert_eq!(power(&early, DOC, ALICE), None);
 }
 
-pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
-    let (mut g, _, alice_member) = standard::<K>();
+pub fn insert_is_idempotent_and_reports_duplicates<C: Backend>() {
+    let (mut g, _, alice_member) = standard::<C>();
     let before = g.digest();
     assert!(!g.insert(assume_verified(alice_member)));
     assert_eq!(g.digest(), before);
 
-    let revocation: Revocation<K::RetentionWatermark> = r(CAROL, &alice_member);
+    let revocation: Revocation<C::Watermark> = r(CAROL, &alice_member);
     let revocation_digest = revocation.digest();
     g.insert(assume_verified(revocation));
     assert!(!g.insert(assume_verified(alice_member)));
@@ -404,14 +404,14 @@ pub fn insert_is_idempotent_and_reports_duplicates<K: Keyline + Default>() {
         .eq([revocation_digest]));
 }
 
-pub fn reissue_with_citation_heals<K: Keyline + Default>() {
-    let (mut g, _, alice_member) = standard::<K>();
+pub fn reissue_with_citation_heals<C: Backend>() {
+    let (mut g, _, alice_member) = standard::<C>();
     // Alice sponsors Eve, so the heal has something downstream to revive.
     let eve_member = d(ALICE, EVE, MEMBERS, Power::Edit);
     g.insert(assume_verified(eve_member));
     assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
 
-    let revocation: Revocation<K::RetentionWatermark> = r(CAROL, &alice_member);
+    let revocation: Revocation<C::Watermark> = r(CAROL, &alice_member);
     let healed = alice_member.reissue(revocation.digest());
     g.insert(assume_verified(revocation));
     assert_eq!(power(&g, DOC, ALICE), None);
@@ -434,10 +434,10 @@ pub fn reissue_with_citation_heals<K: Keyline + Default>() {
 /// reach forever and his revocations inside it stand. Minting a successor role,
 /// supplying it and re-rostering into it puts the survivors somewhere his
 /// frozen reach does not name: his revocations there are inert.
-pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
+pub fn rotation_escapes_frozen_reach<C: Backend>() {
     let supply = d(BOB, MEMBERS, DOC, Power::Edit);
     let alice_member = d(MEMBERS, ALICE, MEMBERS, Power::Admin);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         d(DOC, OWNERS, DOC, Power::Admin).into(),
         d(OWNERS, BOB, OWNERS, Power::Admin).into(),
         supply.into(),
@@ -482,8 +482,8 @@ pub fn rotation_escapes_frozen_reach<K: Keyline + Default>() {
 }
 
 /// A revocation naming a hash nobody holds is stored and changes no answer.
-pub fn unknown_revocation_is_inert<K: Keyline + Default>() {
-    let (mut g, _, _) = standard::<K>();
+pub fn unknown_revocation_is_inert<C: Backend>() {
+    let (mut g, _, _) = standard::<C>();
     let before = g.members(id(DOC));
     let phantom = d(DAN, EVE, FRANK, Power::Relay);
     let revocation = assume_verified(r(BOB, &phantom));
@@ -494,7 +494,7 @@ pub fn unknown_revocation_is_inert<K: Keyline + Default>() {
     assert_eq!(g.members(id(DOC)), before);
     assert!(!g.is_live(&phantom.digest()));
     // The target itself was never inserted.
-    assert!(!g.contains(&assume_verified::<K::RetentionWatermark, _>(phantom).id()));
+    assert!(!g.contains(&assume_verified::<C::Watermark, _>(phantom).id()));
 }
 
 /// First role of the gift-cert ladder; the ladder is `LADDER..LADDER + RUNGS`.
@@ -520,7 +520,7 @@ const RUNGS: u8 = 4;
 ///
 /// The cost phases (paid once, not walked after the removal) are obligations for
 /// demand-driven backends and are not observable through the trait.
-pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
+pub fn gift_cert_attack_follows_liveness<C: Backend>() {
     let rung = |i: u8| LADDER + i;
     let top = rung(0);
     let bottom = rung(RUNGS - 1);
@@ -529,8 +529,8 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
     let gift = d(EVE, ALICE, bottom, Power::Admin);
     let inner = d(EVE, rung(1), top, Power::Admin);
 
-    let after_removal = || -> (K, Digest<RevocationId>) {
-        let mut g: K = build([
+    let after_removal = || -> (Harness<C>, Digest<RevocationId>) {
+        let mut g: Harness<C> = build([
             d(DOC, OWNERS, DOC, Power::Admin).into(),
             d(OWNERS, BOB, OWNERS, Power::Admin).into(),
             d(BOB, ALICE, DOC, Power::Read).into(),
@@ -553,7 +553,7 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
         assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
         // Remove Eve: the ladder's standing over Doc rides her membership.
-        let removal: Revocation<K::RetentionWatermark> = r(BOB, &eve_member);
+        let removal: Revocation<C::Watermark> = r(BOB, &eve_member);
         let removal_digest = removal.digest();
         g.insert(assume_verified(removal));
         assert_eq!(power(&g, DOC, EVE), None);
@@ -588,7 +588,7 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
     // Alice's revocation of the gift is total, and leaves her own route alone.
-    let alice_revocation: Revocation<K::RetentionWatermark> = r(ALICE, &gift);
+    let alice_revocation: Revocation<C::Watermark> = r(ALICE, &gift);
     let alice_revocation_digest = alice_revocation.digest();
     g.insert(assume_verified(alice_revocation));
     assert!(!g.is_live(&gift.digest()));
@@ -615,9 +615,9 @@ pub fn gift_cert_attack_follows_liveness<K: Keyline + Default>() {
 /// `Verified::sign_sync`, which signs and verifies, for every certificate, so the
 /// production path runs at least once, and checks that the signed set gives
 /// the same answers and the same digest as the fixtures.
-pub fn signed_certificates_agree_with_fixtures<K: Keyline + Default>() {
-    let (fixtures, carol_owner, alice_member) = standard::<K>();
-    let mut real = K::default();
+pub fn signed_certificates_agree_with_fixtures<C: Backend>() {
+    let (fixtures, carol_owner, alice_member) = standard::<C>();
+    let mut real = Harness::<C>::default();
     for c in [
         d(DOC, OWNERS, DOC, Power::Admin),
         d(OWNERS, BOB, OWNERS, Power::Admin),
@@ -645,15 +645,15 @@ pub fn signed_certificates_agree_with_fixtures<K: Keyline + Default>() {
 /// Two valid signatures over one payload are two `Signed` values but one
 /// certificate: the set is keyed by digest, so the second insert is a
 /// duplicate.
-pub fn second_signature_is_the_same_certificate<K: Keyline + Default>() {
+pub fn second_signature_is_the_same_certificate<C: Backend>() {
     let root = d(DOC, ALICE, DOC, Power::Admin);
-    let first = signed::<K::RetentionWatermark, _>(root);
-    let second = resigned::<K::RetentionWatermark, _>(root, 1);
+    let first = signed::<C::Watermark, _>(root);
+    let second = resigned::<C::Watermark, _>(root, 1);
     assert!(first != second, "different signatures");
     assert_eq!(first.id(), second.id());
 
     let digest = first.id();
-    let mut g = K::default();
+    let mut g = Harness::<C>::default();
     assert!(g.insert(first));
     assert!(!g.insert(second));
     assert!(g.contains(&digest));
@@ -663,11 +663,11 @@ pub fn second_signature_is_the_same_certificate<K: Keyline + Default>() {
 /// Edit-rooting protects only the root edge. Memberships the role key signed
 /// at creation are grounded at the role, which is in every root-role admin's reach,
 /// so two root-role admins who revoke each other both lose their standing.
-pub fn root_role_duel_kills_creation_memberships_even_when_edit_rooted<K: Keyline + Default>() {
+pub fn root_role_duel_kills_creation_memberships_even_when_edit_rooted<C: Backend>() {
     let root = d(DOC, OWNERS, DOC, Power::Edit);
     let alice_owner = d(OWNERS, ALICE, OWNERS, Power::Admin);
     let bob_owner = d(OWNERS, BOB, OWNERS, Power::Admin);
-    let mut g: K = build([root.into(), alice_owner.into(), bob_owner.into()]);
+    let mut g: Harness<C> = build([root.into(), alice_owner.into(), bob_owner.into()]);
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
     g.insert(assume_verified(r(ALICE, &bob_owner)));
@@ -681,15 +681,15 @@ pub fn root_role_duel_kills_creation_memberships_even_when_edit_rooted<K: Keylin
 /// `retain` is part of a revocation's identity but not of its effect: two
 /// revocations of one delegation that differ only there are two certificates,
 /// and the set answers exactly as with either one.
-pub fn retain_distinguishes_certificates_not_authority<K: Keyline + Default>()
+pub fn retain_distinguishes_certificates_not_authority<C: Backend>()
 where
-    K::RetentionWatermark: Clone + Default,
+    C::Watermark: Clone + Default,
 {
-    let (mut g, _, alice_member) = standard::<K>();
-    let plain: Revocation<K::RetentionWatermark> = r(CAROL, &alice_member);
+    let (mut g, _, alice_member) = standard::<C>();
+    let plain: Revocation<C::Watermark> = r(CAROL, &alice_member);
     let retaining = plain
         .clone()
-        .retaining([(id(DOC), K::RetentionWatermark::default())].into());
+        .retaining([(id(DOC), C::Watermark::default())].into());
     assert_ne!(plain.digest(), retaining.digest());
 
     assert!(g.insert(assume_verified(plain)));
@@ -710,9 +710,9 @@ const OFFICERS_B: u8 = 16;
 /// Admin over a document or the steward. Rotating the officers' role is one
 /// revocation by the steward, after which a former officer has no standing
 /// and no reach over anything still routed.
-pub fn steward_rotation_leaves_former_officers_nothing<K: Keyline + Default>() {
+pub fn steward_rotation_leaves_former_officers_nothing<C: Backend>() {
     let officers = d(STEWARD, OFFICERS, STEWARD, Power::Edit);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         d(DOC, STEWARD, DOC, Power::Edit).into(),
         d(OTHER_DOC, STEWARD, OTHER_DOC, Power::Edit).into(),
         officers.into(),
@@ -749,9 +749,9 @@ const CARETAKER: u8 = 18;
 /// so Members is in her reach, but the supply into Members is grounded at Doc
 /// through Owners and Bob and never transits Members: her revocation of it
 /// covers nothing.
-pub fn role_admin_cannot_revoke_the_supply_into_the_role<K: Keyline + Default>() {
+pub fn role_admin_cannot_revoke_the_supply_into_the_role<C: Backend>() {
     let supply = d(BOB, MEMBERS, DOC, Power::Edit);
-    let g: K = build([
+    let g: Harness<C> = build([
         d(DOC, OWNERS, DOC, Power::Admin).into(),
         d(OWNERS, BOB, OWNERS, Power::Admin).into(),
         supply.into(),
@@ -767,9 +767,9 @@ pub fn role_admin_cannot_revoke_the_supply_into_the_role<K: Keyline + Default>()
 /// over Doc through Mods and through Members; Dan administers Mods and Carol
 /// administers Members. Either revocation of Eve's delegation to Frank alone
 /// leaves the other derivation; both together leave none.
-pub fn revocations_of_one_delegation_cover_jointly<K: Keyline + Default>() {
+pub fn revocations_of_one_delegation_cover_jointly<C: Backend>() {
     let h = d(EVE, FRANK, DOC, Power::Admin);
-    let base = || -> K {
+    let base = || -> Harness<C> {
         build([
             d(DOC, OWNERS, DOC, Power::Admin).into(),
             d(OWNERS, MODS, DOC, Power::Edit).into(),
@@ -803,10 +803,10 @@ pub fn revocations_of_one_delegation_cover_jointly<K: Keyline + Default>() {
 /// standing over it. Eve's access dies with Alice's Members standing, even
 /// though Alice keeps an independent route to Doc, and any Members admin can
 /// cut it before that.
-pub fn pinned_delegation_answers_to_the_role<K: Keyline + Default>() {
+pub fn pinned_delegation_answers_to_the_role<C: Backend>() {
     let alice_member = d(CAROL, ALICE, MEMBERS, Power::Admin);
     let pinned = d(ALICE, PIN, MEMBERS, Power::Edit);
-    let base = || -> K {
+    let base = || -> Harness<C> {
         build([
             d(DOC, OWNERS, DOC, Power::Admin).into(),
             d(OWNERS, BOB, OWNERS, Power::Admin).into(),
@@ -837,10 +837,10 @@ pub fn pinned_delegation_answers_to_the_role<K: Keyline + Default>() {
 /// Admin over Members or Doc, yet can sever Carol by revoking her roster edge.
 /// He cannot revoke the supply into the caretaker: its audience is not on its
 /// route. As an admin of the caretaker he also reaches what it reaches.
-pub fn caretaker_admin_severs_downstream_but_not_the_supply<K: Keyline + Default>() {
+pub fn caretaker_admin_severs_downstream_but_not_the_supply<C: Backend>() {
     let supply = d(BOB, CARETAKER, MEMBERS, Power::Edit);
     let carol_roster = d(CARETAKER, CAROL, CARETAKER, Power::Edit);
-    let mut g: K = build([
+    let mut g: Harness<C> = build([
         d(DOC, OWNERS, DOC, Power::Admin).into(),
         d(OWNERS, BOB, OWNERS, Power::Admin).into(),
         d(MEMBERS, OWNERS, MEMBERS, Power::Admin).into(),
@@ -858,4 +858,51 @@ pub fn caretaker_admin_severs_downstream_but_not_the_supply<K: Keyline + Default
 
     g.insert(assume_verified(r(DAN, &carol_roster)));
     assert_eq!(power(&g, DOC, CAROL), None);
+}
+
+/// The closure of a document holds every node that has had standing over it,
+/// the delegations about those nodes, and the revocations naming them, and
+/// nothing about unrelated subjects. A revoked member stays in it, because
+/// standing in the positive graph ignores revocations.
+pub fn closure_holds_what_a_document_needs<C: Backend>() {
+    let (mut g, _, alice_member) = standard::<C>();
+    let revocation: Revocation<C::Watermark> = r(CAROL, &alice_member);
+    let revoked = revocation.digest();
+    let unrelated = d(OTHER_DOC, DAN, OTHER_DOC, Power::Admin);
+    g.insert(assume_verified(revocation));
+    g.insert(assume_verified(unrelated));
+
+    let closure: Vec<_> = g.closure(id(DOC)).iter().map(|c| c.id()).collect();
+    assert_eq!(
+        closure.len(),
+        7,
+        "the six standard certificates and the revocation"
+    );
+    assert!(closure.contains(&alice_member.digest().into()));
+    assert!(closure.contains(&revoked.into()));
+    assert!(!closure.contains(&unrelated.digest().into()));
+    assert!(closure.windows(2).all(|w| w[0] < w[1]), "in id order");
+
+    assert_eq!(g.positive_power(id(DOC), id(ALICE)), Some(Power::Edit));
+    assert_eq!(power(&g, DOC, ALICE), None);
+}
+
+/// `delegations_to` names every delegation from a subject to an audience,
+/// dead ones included: revoking an audience's access must name them all.
+pub fn delegations_to_lists_dead_delegations_too<C: Backend>() {
+    let (mut g, _, alice_member) = standard::<C>();
+    let alice_reader = d(BOB, ALICE, MEMBERS, Power::Read);
+    g.insert(assume_verified(alice_reader));
+    g.insert(assume_verified(r(CAROL, &alice_member)));
+
+    let to_alice = g.delegations_to(id(MEMBERS), id(ALICE));
+    assert_eq!(
+        to_alice.keys().copied().collect::<Vec<_>>().len(),
+        2,
+        "Carol's revoked membership and Bob's live one"
+    );
+    assert_eq!(to_alice.get(&alice_member.digest()), Some(&alice_member));
+    assert!(!g.is_live(&alice_member.digest()));
+    assert!(g.is_live(&alice_reader.digest()));
+    assert!(g.delegations_to(id(DOC), id(ALICE)).is_empty());
 }
