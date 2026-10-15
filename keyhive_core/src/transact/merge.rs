@@ -16,10 +16,9 @@ pub trait Merge: Fork {
     /// Consume the fork and merge it back into the original data structure.
     ///
     /// In general, this should not be used directly,
-    /// but rather via the [`transact_blocking`] and [`transact_nonblocking`] methods.
+    /// but rather via [`transact_blocking`].
     ///
-    /// [`transact_blocking`]: keyhive_core::transact::transact_blocking
-    /// [`transact_nonblocking`]: keyhive_core::transact::transact_nonblocking
+    /// [`transact_blocking`]: crate::transact::transact_blocking
     fn merge(&mut self, fork: Self::Forked);
 }
 
@@ -30,7 +29,7 @@ pub trait MergeAsync: ForkAsync {
     /// In general, this should not be used directly,
     /// but rather via the [`transact_async`].
     ///
-    /// [`transact_async`]: keyhive_core::transact::transact_async
+    /// [`transact_async`]: crate::transact::transact_async
     fn merge_async(&self, fork: Self::AsyncForked) -> impl Future<Output = ()>;
 }
 

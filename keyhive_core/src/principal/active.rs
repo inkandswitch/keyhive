@@ -5,7 +5,6 @@ pub mod archive;
 use self::archive::ActiveArchive;
 use super::{
     document::id::DocumentId,
-    identifier::Identifier,
     individual::{
         id::IndividualId,
         op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
@@ -34,8 +33,7 @@ use keyhive_crypto::{
 };
 use rand::{CryptoRng, RngCore};
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt, fmt::Debug, marker::PhantomData, sync::Arc};
-use thiserror::Error;
+use std::{collections::BTreeMap, fmt, marker::PhantomData, sync::Arc};
 
 /// This replica's own individual, which can sign and encrypt.
 #[derive(Derivative)]
@@ -379,30 +377,6 @@ where
 
         self.individual.lock().await.merge(forked_individual);
     }
-}
-
-/// Errors when sharing encrypted content.
-#[derive(Debug, Error)]
-pub enum ShareError {
-    /// the active individual cannot find a public [`ShareKey`] for themselves.
-    #[error("the active individual cannot find a public ShareKey for themselves")]
-    MissingYourSharePublicKey,
-
-    /// the active individual cannot find a [`ShareSecretKey`] for themselves.
-    #[error("the active individual cannot find a secret ShareKey for themselves")]
-    MissingYourShareSecretKey,
-
-    /// the active individual does not know the [`ShareKey`] for the recipient.
-    #[error("the active individual does not know the ShareKey for the recipient: {0}")]
-    MissingRecipientShareKey(Identifier),
-
-    /// Encryption failed.
-    #[error("Encryption failed: {0}")]
-    EncryptionFailed(chacha20poly1305::Error),
-
-    /// [`Siv`][keyhive_crypto::siv::Siv] construction failed with an IO error.
-    #[error("Siv error: {0}")]
-    SivError(std::io::Error),
 }
 
 #[cfg(test)]

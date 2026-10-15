@@ -1,6 +1,6 @@
 //! Keyline: Keyhive's convergent authority graph.
 //!
-//! A flat namespace of Ed25519 verifying keys ([`id::Id`]) and a set of signed
+//! A flat namespace of Ed25519 verifying keys ([`Id`](keyhive_crypto::id::Id)) and a set of signed
 //! certificates over them: [`delegation::Delegation`]s that grant a [`power::Power`] level over
 //! a subject, and [`revocation::Revocation`]s that withdraw a delegation by hash. Authority
 //! is reachability over that graph, attenuated to the minimum along a route and
@@ -28,7 +28,7 @@
 //! async, fallible and versioned so that a database or an incremental engine
 //! can implement it (see [`contract`]); each backend owns its concurrency
 //! control. Signing is async too, because the key may sit behind WebCrypto or
-//! an HSM. A caller converts its typed handles to [`id::Id`]s at the boundary.
+//! an HSM. A caller converts its typed handles to [`Id`](keyhive_crypto::id::Id)s at the boundary.
 //!
 //! # `no_std` support
 //!

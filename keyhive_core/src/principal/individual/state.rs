@@ -39,11 +39,11 @@ impl PrekeyState {
         Self { ops }
     }
 
-    /// Extend a [`PrekeyState`] with elements of an iterator of [`Signed<KeyOp>`]s.
+    /// Extend a [`PrekeyState`] with elements of an iterator of [`Signed<KeyOp>`](keyhive_crypto::signed::Signed)s.
     ///
     /// # Arguments
     ///
-    /// * `iter` - An iterator of [`Signed<KeyOp>`]s.
+    /// * `iter` - An iterator of [`Signed<KeyOp>`](keyhive_crypto::signed::Signed)s.
     ///
     /// # Returns
     ///
@@ -110,7 +110,7 @@ impl PrekeyState {
         self.ops.values().map(|op| *op.new_key()).collect()
     }
 
-    /// Insert a new [`Signed<KeyOp>`] into the [`PrekeyState`].
+    /// Insert a new [`Signed<KeyOp>`](keyhive_crypto::signed::Signed) into the [`PrekeyState`].
     pub fn insert_op(&mut self, op: KeyOp) -> Result<(), VerificationError> {
         op.try_verify()?;
         self.ops.insert(Arc::new(op));
