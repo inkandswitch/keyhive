@@ -26,11 +26,17 @@ sha2 = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }
 
+[[test]]
+name = "signing"
+required-features = ["test_utils"]
+
 [dev-dependencies]
 arbitrary = { workspace = true }
 bolero = { workspace = true }
 curve25519-dalek = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["fast", "hazmat", "rand_core", "std", "zeroize"] }
+futures = { workspace = true }
+keyhive_crypto = { workspace = true, features = ["unchecked"] }
 postcard = { workspace = true, features = ["alloc"] }
 sha2 = { workspace = true, features = ["std"] }
 
@@ -46,10 +52,10 @@ std = [
 ]
 # `derive(Arbitrary)` needs `std` (see keyhive_crypto).
 arbitrary = ["dep:arbitrary", "std"]
-serde = ["dep:serde", "ed25519-dalek/serde", "keyhive_codec/serde"]
+serde = ["dep:serde", "ed25519-dalek/serde", "keyhive_codec/serde", "keyhive_crypto/serde"]
 # The fixtures and conformance scenarios, without `std`: what a backend needs to
 # run the scenarios in a `no_std` build.
-conformance = ["dep:sha2", "ed25519-dalek/hazmat"]
+conformance = ["dep:sha2", "ed25519-dalek/hazmat", "keyhive_crypto/unchecked"]
 # Everything the full test suite needs: the scenarios plus the generator, the
 # oracles, the `bolero` laws, and the serde round-trip tests.
 test_utils = ["arbitrary", "conformance", "dep:bolero", "serde"]

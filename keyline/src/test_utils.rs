@@ -13,17 +13,14 @@
 pub mod conformance;
 
 use crate::{
-    certificate::VerifiedCertificate,
-    delegation::Delegation,
-    id::Id,
-    revocation::Revocation,
-    signed::{Signed, Verified},
+    certificate::VerifiedCertificate, delegation::Delegation, id::Id, revocation::Revocation,
 };
 use ed25519_dalek::{Signature, SigningKey};
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{
-    domain_separator::{message, Domain},
+    signable::{message, Signable},
     verifiable::Verifiable,
+    verified::{Signed, Verified},
 };
 
 /// An unsigned statement: what the generator, the oracles and the fixtures
@@ -89,7 +86,7 @@ pub fn id(n: u8) -> Id {
 pub fn assume_verified<W: Encode + Decode, X: Into<Statement<W>>>(
     statement: X,
 ) -> VerifiedCertificate<W> {
-    fn assume<T: Decode + Domain + Encode>(payload: &T) -> Verified<T> {
+    fn assume<T: Signable>(payload: &T) -> Verified<T> {
         Verified::assume(Signed::from_parts(
             payload.encode(),
             Signature::from_bytes(&[0u8; 64]),
@@ -112,10 +109,7 @@ pub fn assume_verified<W: Encode + Decode, X: Into<Statement<W>>>(
 /// If the issuer is not a fixture identity, or if `W`'s `Encode`/`Decode` is
 /// not canonical: the signed revocation then fails to verify.
 pub fn signed<W: Encode + Decode, X: Into<Statement<W>>>(statement: X) -> VerifiedCertificate<W> {
-    fn sign<T: Decode + Domain + Encode + Verifiable>(
-        payload: &T,
-        key: &SigningKey,
-    ) -> Verified<T> {
+    fn sign<T: Signable + Verifiable>(payload: &T, key: &SigningKey) -> Verified<T> {
         Verified::sign_sync(payload, key)
             .expect("signed by its issuer, so only a non-canonical `W` codec fails to verify")
     }
@@ -136,11 +130,7 @@ pub fn resigned<W: Encode + Decode, X: Into<Statement<W>>>(
     statement: X,
     salt: u8,
 ) -> VerifiedCertificate<W> {
-    fn sign<T: Decode + Domain + Encode + Verifiable>(
-        payload: &T,
-        key: &SigningKey,
-        salt: u8,
-    ) -> Verified<T> {
+    fn sign<T: Signable + Verifiable>(payload: &T, key: &SigningKey, salt: u8) -> Verified<T> {
         use ed25519_dalek::hazmat::{raw_sign, ExpandedSecretKey};
 
         let mut expanded = ExpandedSecretKey::from(key.as_bytes());

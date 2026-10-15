@@ -62,7 +62,7 @@ use alloc::{
     vec::Vec,
 };
 use core::fmt;
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, verified::Verified};
 use keyline::{
     certificate::{Certificate, CertificateId, VerifiedCertificate},
     contract::{set_digest, CertificateSet, Version},
@@ -70,7 +70,6 @@ use keyline::{
     id::Id,
     power::Power,
     revocation::{Revocation, RevocationId},
-    signed::Verified,
 };
 use once_cell::race::OnceBox;
 use tracing::{debug, instrument, trace};

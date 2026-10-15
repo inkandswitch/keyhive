@@ -15,6 +15,14 @@ pub enum DecodeError {
     #[error("invalid tag {0}")]
     InvalidTag(u8),
 
+    /// A frame's kind is not one this decoder reads.
+    #[error("unexpected kind {0:#04x}")]
+    UnexpectedKind(u8),
+
+    /// A frame's kind is known, but not at this version.
+    #[error("kind {kind:#04x} at version {version} is not supported")]
+    UnsupportedVersion { kind: u8, version: u8 },
+
     /// A field's bytes were not a valid value of its type (e.g. not a curve point).
     #[error("invalid value for field `{0}`")]
     InvalidField(&'static str),

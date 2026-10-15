@@ -22,8 +22,8 @@
 //! A backend never checks signatures: [`contract::Keyline::insert`] takes a
 //! [`certificate::VerifiedCertificate`], which outside the `conformance` and
 //! `test_utils` features only signature verification
-//! ([`signed::Signed::verify`], [`certificate::Certificate::verify`]) or
-//! signing ([`signed::Verified::sign`], which verifies what it signs) can make.
+//! ([`Signed::verify`](keyhive_crypto::verified::Signed::verify), [`certificate::Certificate::verify`]) or
+//! signing ([`Verified::sign`](keyhive_crypto::verified::Verified::sign), which verifies what it signs) can make.
 //! The crate knows nothing of prekeys, CGKA, documents, or groups. Its trait is
 //! async, fallible and versioned so that a database or an incremental engine
 //! can implement it (see [`contract`]); each backend owns its concurrency
@@ -54,7 +54,6 @@ pub mod delegation;
 pub mod id;
 pub mod power;
 pub mod revocation;
-pub mod signed;
 
 #[cfg(any(test, feature = "conformance"))]
 pub mod test_utils;
