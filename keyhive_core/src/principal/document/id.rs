@@ -1,9 +1,15 @@
 use crate::principal::{identifier::Identifier, membered::id::MemberedId};
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
-use keyhive_crypto::verifiable::Verifiable;
+use keyhive_crypto::{
+    id::{Id, InvalidId},
+    verifiable::Verifiable,
+};
 use serde::{Deserialize, Serialize};
-use std::fmt::{Debug, Display, Formatter};
+use std::{
+    fmt,
+    fmt::{Debug, Display, Formatter},
+};
 
 #[derive(Copy, Dupe, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
@@ -59,13 +65,27 @@ impl Verifiable for DocumentId {
 }
 
 impl Debug for DocumentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "DocumentId({})", self.0)
     }
 }
 
 impl Display for DocumentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.0, f)
+    }
+}
+
+impl TryFrom<DocumentId> for Id {
+    type Error = InvalidId;
+
+    fn try_from(id: DocumentId) -> Result<Id, InvalidId> {
+        Identifier::from(id).try_into()
+    }
+}
+
+impl From<Id> for DocumentId {
+    fn from(id: Id) -> Self {
+        Identifier::from(id).into()
     }
 }
