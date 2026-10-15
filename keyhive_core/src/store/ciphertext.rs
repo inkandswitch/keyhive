@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
+    fmt,
     fmt::{Debug, Display},
     sync::Arc,
 };
@@ -348,7 +349,7 @@ pub struct CausalDecryptionError<F: FutureForm, Cr: ContentRef, T, S: Ciphertext
 impl<F: FutureForm, Cr: ContentRef + Debug, T: Debug, S: CiphertextStore<F, Cr, T>> Display
     for CausalDecryptionError<F, Cr, T, S>
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let x = self.cannot.iter().collect::<Vec<_>>();
         write!(f, "CausalDecryptionError({:?})", x)
     }
