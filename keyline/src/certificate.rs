@@ -16,7 +16,11 @@ use crate::{
     revocation::{Revocation, RevocationId},
     signed::{Signed, Verified, VerifyError},
 };
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
+use core::{
+    fmt,
+    hash::{Hash, Hasher},
+};
 use ed25519_dalek::Signature;
 use keyhive_codec::{
     encoded::Encoded,
@@ -34,12 +38,15 @@ use keyhive_crypto::digest::Digest;
 /// `Serialize`/`Deserialize`, for a caller that wants a format of its own.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(bound = ""))]
+///
+/// Each variant shares its [`Signed`] form, so a store hands out certificates
+/// without copying their bytes.
 pub enum Certificate<W> {
     /// A signed delegation.
-    Delegation(Signed<Delegation>),
+    Delegation(Arc<Signed<Delegation>>),
 
     /// A signed revocation.
-    Revocation(Signed<Revocation<W>>),
+    Revocation(Arc<Signed<Revocation<W>>>),
 }
 
 impl<W> Certificate<W> {
@@ -81,14 +88,14 @@ impl<W> Decode for Certificate<W> {
             .ok_or(DecodeError::UnexpectedEnd)?;
         let signature = Signature::from_bytes(signature);
         match *tag {
-            TAG_DELEGATION => Ok(Certificate::Delegation(Signed::from_parts(
+            TAG_DELEGATION => Ok(Certificate::Delegation(Arc::new(Signed::from_parts(
                 Encoded::from_bytes_unchecked(payload.to_vec()),
                 signature,
-            ))),
-            TAG_REVOCATION => Ok(Certificate::Revocation(Signed::from_parts(
+            )))),
+            TAG_REVOCATION => Ok(Certificate::Revocation(Arc::new(Signed::from_parts(
                 Encoded::from_bytes_unchecked(payload.to_vec()),
                 signature,
-            ))),
+            )))),
             other => Err(DecodeError::InvalidTag(other)),
         }
     }
@@ -100,20 +107,23 @@ impl<'a, W: arbitrary::Arbitrary<'a> + Encode> arbitrary::Arbitrary<'a> for Cert
         let signature = Signature::from_bytes(&u.arbitrary()?);
         Ok(if u.arbitrary()? {
             let d: Delegation = u.arbitrary()?;
-            Certificate::Delegation(Signed::from_parts(d.encode(), signature))
+            Certificate::Delegation(Arc::new(Signed::from_parts(d.encode(), signature)))
         } else {
             let r: Revocation<W> = u.arbitrary()?;
-            Certificate::Revocation(Signed::from_parts(r.encode(), signature))
+            Certificate::Revocation(Arc::new(Signed::from_parts(r.encode(), signature)))
         })
     }
 }
 
 impl<W: Decode + Encode> Certificate<W> {
     /// Verify whichever kind this is; see [`Signed::verify`].
+    ///
+    /// A freshly decoded certificate holds the only reference to its signed
+    /// form, so nothing is copied.
     pub fn verify(self) -> Result<VerifiedCertificate<W>, VerifyError> {
         Ok(match self {
-            Certificate::Delegation(d) => VerifiedCertificate::Delegation(d.verify()?),
-            Certificate::Revocation(r) => VerifiedCertificate::Revocation(r.verify()?),
+            Certificate::Delegation(d) => Arc::unwrap_or_clone(d).verify()?.into(),
+            Certificate::Revocation(r) => Arc::unwrap_or_clone(r).verify()?.into(),
         })
     }
 }
@@ -121,13 +131,16 @@ impl<W: Decode + Encode> Certificate<W> {
 /// A certificate whose bytes decoded canonically and whose signature checked
 /// against the issuer it names: what [`crate::contract::Keyline::insert`]
 /// takes. Equality is the [`Certificate`]'s it was verified from.
-#[derive(Debug, Clone)]
+///
+/// Each variant shares its [`Verified`] value, so cloning is a reference
+/// count, and a store keeps the value it is given.
+#[derive(Debug)]
 pub enum VerifiedCertificate<W> {
     /// A verified delegation.
-    Delegation(Verified<Delegation>),
+    Delegation(Arc<Verified<Delegation>>),
 
     /// A verified revocation.
-    Revocation(Verified<Revocation<W>>),
+    Revocation(Arc<Verified<Revocation<W>>>),
 }
 
 impl<W> VerifiedCertificate<W> {
@@ -148,10 +161,21 @@ impl<W> VerifiedCertificate<W> {
     }
 
     /// The certificate as received, for forwarding without re-encoding.
+    /// Shares the signed form.
     pub fn into_certificate(self) -> Certificate<W> {
         match self {
-            VerifiedCertificate::Delegation(d) => Certificate::Delegation(d.into_parts().1),
-            VerifiedCertificate::Revocation(r) => Certificate::Revocation(r.into_parts().1),
+            VerifiedCertificate::Delegation(d) => Certificate::Delegation(Arc::clone(d.signed())),
+            VerifiedCertificate::Revocation(r) => Certificate::Revocation(Arc::clone(r.signed())),
+        }
+    }
+}
+
+// Manual: the derive would bound `W: Clone`, which sharing does not need.
+impl<W> Clone for VerifiedCertificate<W> {
+    fn clone(&self) -> Self {
+        match self {
+            VerifiedCertificate::Delegation(d) => VerifiedCertificate::Delegation(Arc::clone(d)),
+            VerifiedCertificate::Revocation(r) => VerifiedCertificate::Revocation(Arc::clone(r)),
         }
     }
 }
@@ -179,8 +203,8 @@ impl<W> PartialEq for Certificate<W> {
 
 impl<W> Eq for Certificate<W> {}
 
-impl<W> core::hash::Hash for Certificate<W> {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+impl<W> Hash for Certificate<W> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
         match self {
             Certificate::Delegation(d) => d.hash(state),
@@ -189,8 +213,8 @@ impl<W> core::hash::Hash for Certificate<W> {
     }
 }
 
-impl<W> core::fmt::Debug for Certificate<W> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl<W> fmt::Debug for Certificate<W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Certificate::Delegation(d) => f.debug_tuple("Delegation").field(d).finish(),
             Certificate::Revocation(r) => f.debug_tuple("Revocation").field(r).finish(),
@@ -210,8 +234,8 @@ impl<W> PartialEq for VerifiedCertificate<W> {
 
 impl<W> Eq for VerifiedCertificate<W> {}
 
-impl<W> core::hash::Hash for VerifiedCertificate<W> {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+impl<W> Hash for VerifiedCertificate<W> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         core::mem::discriminant(self).hash(state);
         match self {
             VerifiedCertificate::Delegation(d) => d.hash(state),
@@ -222,13 +246,13 @@ impl<W> core::hash::Hash for VerifiedCertificate<W> {
 
 impl<W> From<Verified<Delegation>> for VerifiedCertificate<W> {
     fn from(d: Verified<Delegation>) -> Self {
-        VerifiedCertificate::Delegation(d)
+        VerifiedCertificate::Delegation(Arc::new(d))
     }
 }
 
 impl<W> From<Verified<Revocation<W>>> for VerifiedCertificate<W> {
     fn from(r: Verified<Revocation<W>>) -> Self {
-        VerifiedCertificate::Revocation(r)
+        VerifiedCertificate::Revocation(Arc::new(r))
     }
 }
 
@@ -282,9 +306,10 @@ mod tests {
         power::Power,
         test_utils::{id, signing_key},
     };
+    use alloc::vec::Vec;
 
     /// Variable-length, to exercise the `retain` codec.
-    type Watermark = alloc::vec::Vec<u8>;
+    type Watermark = Vec<u8>;
 
     /// The set key, the `revoke` pointer and the signed form's digest are one
     /// value.

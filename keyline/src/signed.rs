@@ -24,9 +24,12 @@
 
 // TODO(keyhive_types): lift `Signed` and `Verified` out of keyline once beekem migrates.
 
-use alloc::vec::Vec;
-use core::fmt;
-use ed25519_dalek::Signature;
+use alloc::{sync::Arc, vec::Vec};
+use core::{
+    fmt,
+    hash::{Hash, Hasher},
+};
+use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::FutureForm;
 use keyhive_codec::{
     encoded::Encoded,
@@ -118,7 +121,8 @@ impl<T: Decode + Domain + Encode + Verifiable> Signed<T> {
             })?;
         Ok(Verified {
             payload,
-            signed: self,
+            digest: self.digest(),
+            signed: Arc::new(self),
         })
     }
 }
@@ -142,8 +146,8 @@ impl<T> PartialEq for Signed<T> {
 
 impl<T> Eq for Signed<T> {}
 
-impl<T> core::hash::Hash for Signed<T> {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+impl<T> Hash for Signed<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.encoded.hash(state);
         self.signature.to_bytes().hash(state);
     }
@@ -161,9 +165,17 @@ impl<T: Domain> fmt::Debug for Signed<T> {
 /// checked against the issuer the payload names. Constructed by
 /// [`Signed::verify`], [`Verified::sign`] and [`Verified::sign_sync`] (and,
 /// under the `conformance` feature, by `test_utils::assume_verified`).
+///
+/// Shares its [`Signed<T>`] (an [`Arc`]), so a store can hand out the signed
+/// form without copying it, and remembers its digest, so identifying it costs
+/// no hashing.
 pub struct Verified<T> {
     payload: T,
-    signed: Signed<T>,
+    signed: Arc<Signed<T>>,
+
+    /// `signed.digest()`, computed once at verification: the value is
+    /// immutable, and stores look it up on every step of a search.
+    digest: Digest<T>,
 }
 
 impl<T> Verified<T> {
@@ -173,13 +185,18 @@ impl<T> Verified<T> {
     }
 
     /// The signed form as received, for forwarding without re-encoding.
-    pub fn signed(&self) -> &Signed<T> {
+    pub fn signed(&self) -> &Arc<Signed<T>> {
         &self.signed
     }
 
     /// The payload and the signed form it came from.
-    pub fn into_parts(self) -> (T, Signed<T>) {
+    pub fn into_parts(self) -> (T, Arc<Signed<T>>) {
         (self.payload, self.signed)
+    }
+
+    /// Content address of the payload, computed when it was verified.
+    pub fn digest(&self) -> Digest<T> {
+        self.digest
     }
 }
 
@@ -212,24 +229,21 @@ impl<T: Decode + Domain + Encode + Verifiable> Verified<T> {
 }
 
 #[cfg(any(test, feature = "conformance"))]
-impl<T: Decode> Verified<T> {
+impl<T: Decode + Domain> Verified<T> {
     /// Decode without verifying the signature. Test fixtures only: lets the
     /// conformance suite build certificates without paying for signing.
     pub(crate) fn assume(signed: Signed<T>) -> Self {
         let payload = signed.encoded.decode().expect("test fixture must decode");
-        Verified { payload, signed }
-    }
-}
-
-impl<T: Domain> Verified<T> {
-    /// Content address of the payload.
-    pub fn digest(&self) -> Digest<T> {
-        self.signed.digest()
+        Verified {
+            payload,
+            digest: signed.digest(),
+            signed: Arc::new(signed),
+        }
     }
 }
 
 impl<T: Verifiable> Verifiable for Verified<T> {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.payload.verifying_key()
     }
 }
@@ -238,7 +252,8 @@ impl<T: Clone> Clone for Verified<T> {
     fn clone(&self) -> Self {
         Verified {
             payload: self.payload.clone(),
-            signed: self.signed.clone(),
+            signed: Arc::clone(&self.signed),
+            digest: self.digest,
         }
     }
 }
@@ -260,8 +275,8 @@ impl<T> PartialEq for Verified<T> {
 
 impl<T> Eq for Verified<T> {}
 
-impl<T> core::hash::Hash for Verified<T> {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+impl<T> Hash for Verified<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.signed.hash(state)
     }
 }
@@ -319,12 +334,13 @@ mod tests {
         revocation::Revocation,
         test_utils::{id, signing_key},
     };
+    use alloc::vec::Vec;
     use core::{
         future::Future,
         pin::pin,
         task::{Context, Poll, Waker},
     };
-    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+    use ed25519_dalek::{SignatureError, Signer, SigningKey, VerifyingKey};
     use future_form::{Local, Sendable};
     use keyhive_crypto::signer::memory::MemorySigner;
 
@@ -339,7 +355,7 @@ mod tests {
         let (_, signed) = Verified::sign_sync(value, key)
             .expect("key is the issuer")
             .into_parts();
-        signed
+        Arc::unwrap_or_clone(signed)
     }
 
     /// Drive a future whose signer answers at once, as `MemorySigner` does.
@@ -380,7 +396,7 @@ mod tests {
 
     impl SyncSignerBasic for Broken {
         fn try_sign_bytes_sync_basic(&self, _: &[u8]) -> Result<Signature, SigningError> {
-            Err(ed25519_dalek::SignatureError::new().into())
+            Err(SignatureError::new().into())
         }
     }
 
@@ -425,7 +441,7 @@ mod tests {
         assert_eq!(verified.payload(), &sample());
         assert_eq!(verified.payload().issuer, id(1));
         assert_eq!(verified.digest(), signed.digest());
-        assert_eq!(verified.signed(), &signed);
+        assert_eq!(**verified.signed(), signed);
     }
 
     #[test]
@@ -601,7 +617,7 @@ mod tests {
 
     #[test]
     fn works_for_revocations() {
-        let revocation: Revocation<alloc::vec::Vec<u8>> =
+        let revocation: Revocation<Vec<u8>> =
             Revocation::new(id(1), sample().digest()).retaining([(id(3), alloc::vec![7])].into());
         let verified =
             Verified::sign_sync(&revocation, &signing_key(1)).expect("key is the issuer");
@@ -612,7 +628,7 @@ mod tests {
     #[cfg(feature = "arbitrary")]
     fn sign_verify_round_trip_property() {
         bolero::check!()
-            .with_arbitrary::<(Delegation, Revocation<alloc::vec::Vec<u8>>, [u8; 32])>()
+            .with_arbitrary::<(Delegation, Revocation<Vec<u8>>, [u8; 32])>()
             .for_each(|(d, r, seed)| {
                 // Re-issue both under the generated key so they are signable.
                 let key = SigningKey::from(*seed);

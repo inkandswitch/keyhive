@@ -20,7 +20,8 @@ ed25519-dalek = { workspace = true, features = ["zeroize"] }
 future_form = { workspace = true }
 keyhive_codec = { workspace = true }
 keyhive_crypto = { workspace = true }
-serde = { workspace = true, features = ["alloc", "derive"], optional = true }
+# `rc` because `Certificate` shares its signed form in an `Arc`.
+serde = { workspace = true, features = ["alloc", "derive", "rc"], optional = true }
 sha2 = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }

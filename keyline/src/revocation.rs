@@ -2,6 +2,7 @@
 
 use crate::{delegation::Delegation, id::Id};
 use alloc::{collections::BTreeMap, vec::Vec};
+use ed25519_dalek::VerifyingKey;
 use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
@@ -94,7 +95,7 @@ impl<W> Domain for Revocation<W> {
 }
 
 impl<W> Verifiable for Revocation<W> {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.issuer.verifying_key()
     }
 }
@@ -218,6 +219,7 @@ mod tests {
         signed::Verified,
         test_utils::{id, signing_key},
     };
+    use alloc::string::String;
 
     /// A watermark type with a variable-length encoding, so the `retain` codec is
     /// exercised on values of differing size rather than a fixed stand-in.
@@ -279,9 +281,8 @@ mod tests {
     /// change this test on purpose.
     #[test]
     fn known_answer() {
-        let hex = |bytes: &[u8]| -> alloc::string::String {
-            bytes.iter().map(|b| alloc::format!("{b:02x}")).collect()
-        };
+        let hex =
+            |bytes: &[u8]| -> String { bytes.iter().map(|b| alloc::format!("{b:02x}")).collect() };
         let r = sample().retaining(BTreeMap::from([(id(2), alloc::vec![7, 8])]));
         let encoded = hex(r.encode().as_bytes());
         let issuer = hex(id(1).as_bytes());

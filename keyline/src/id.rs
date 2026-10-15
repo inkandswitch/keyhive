@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 use core::{cmp::Ordering, fmt};
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
@@ -70,8 +70,8 @@ impl Id {
 }
 
 /// A signing key's verifying key is always canonical and of prime order.
-impl From<&ed25519_dalek::SigningKey> for Id {
-    fn from(key: &ed25519_dalek::SigningKey) -> Self {
+impl From<&SigningKey> for Id {
+    fn from(key: &SigningKey) -> Self {
         Id(key.verifying_key().to_bytes())
     }
 }

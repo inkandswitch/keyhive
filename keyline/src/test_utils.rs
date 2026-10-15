@@ -89,7 +89,7 @@ pub fn id(n: u8) -> Id {
 pub fn assume_verified<W: Encode + Decode, X: Into<Statement<W>>>(
     statement: X,
 ) -> VerifiedCertificate<W> {
-    fn assume<T: Decode + Encode>(payload: &T) -> Verified<T> {
+    fn assume<T: Decode + Domain + Encode>(payload: &T) -> Verified<T> {
         Verified::assume(Signed::from_parts(
             payload.encode(),
             Signature::from_bytes(&[0u8; 64]),
