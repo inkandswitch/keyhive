@@ -7,6 +7,7 @@ use self::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
 use crate::{principal::identifier::Identifier, util::content_addressed_map::CaMap};
 use derive_more::{From, TryInto};
 use dupe::Dupe;
+use ed25519_dalek::{Signature, VerifyingKey};
 use keyhive_crypto::{
     share_key::ShareKey,
     signed::{Signed, VerificationError},
@@ -48,14 +49,14 @@ impl KeyOp {
         }
     }
 
-    pub fn issuer(&self) -> &ed25519_dalek::VerifyingKey {
+    pub fn issuer(&self) -> &VerifyingKey {
         match self {
             KeyOp::Add(add) => &add.issuer,
             KeyOp::Rotate(rot) => &rot.issuer,
         }
     }
 
-    pub fn signature(&self) -> &ed25519_dalek::Signature {
+    pub fn signature(&self) -> &Signature {
         match self {
             KeyOp::Add(add) => &add.signature,
             KeyOp::Rotate(rot) => &rot.signature,
@@ -64,7 +65,7 @@ impl KeyOp {
 }
 
 impl Verifiable for KeyOp {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         match self {
             KeyOp::Add(add) => add.verifying_key(),
             KeyOp::Rotate(rot) => rot.verifying_key(),
@@ -113,29 +114,29 @@ impl IntoIterator for KeyOps {
     }
 }
 
-/// Reachable prekey ops for all agents, with shared storage.
+/// Reachable prekey ops for all principals, with shared storage.
 ///
-/// Instead of duplicating key ops across agents, the ops are stored
-/// once in `ops` and each agent has an index into that shared map.
+/// Instead of duplicating key ops across principals, the ops are stored
+/// once in `ops` and each principal has an index into that shared map.
 #[derive(Debug)]
 pub struct AllReachablePrekeyOps {
     /// Key ops per identifier, computed once.
     pub ops: KeyOps,
 
-    /// For each agent: the set of identifiers whose ops in `ops` are reachable, plus
+    /// For each principal: the set of identifiers whose ops in `ops` are reachable, plus
     /// members it can no longer reach whose keys still help verify the history it is
     /// sent.
     pub index: HashMap<Identifier, HashSet<Identifier>>,
 }
 
 impl AllReachablePrekeyOps {
-    /// Returns the set of agent identifiers that have reachable ops.
+    /// Returns the set of principal identifiers that have reachable ops.
     pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
         self.index.keys()
     }
 
-    /// Returns an iterator over all reachable [`KeyOp`]s for the given agent
-    /// (flattened across all source identifiers), or `None` if the agent is not
+    /// Returns an iterator over all reachable [`KeyOp`]s for the given principal
+    /// (flattened across all source identifiers), or `None` if the principal is not
     /// in the index.
     pub fn ops_for_agent(
         &self,
