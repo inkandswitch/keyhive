@@ -4,10 +4,7 @@ use keyhive_core::{
     content::heads::ContentHeads,
     keyhive::Keyhive,
     listener::no_listener::NoListener,
-    principal::{
-        individual::{id::IndividualId, op::KeyOp},
-        public::Public,
-    },
+    principal::individual::{id::IndividualId, op::KeyOp},
     store::ciphertext::memory::MemoryCiphertextStore,
     test_utils::make_simple_keyhive,
 };
@@ -72,7 +69,7 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
 
     // doc1: all peers are direct members
     let doc1_id = alice
-        .generate_doc(vec![Public.id()], nonempty![[0u8; 32]])
+        .generate_doc(vec![], nonempty![[0u8; 32]])
         .await
         .unwrap();
     for peer_id in &peers_on_alice {
@@ -84,7 +81,7 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
 
     // doc2: first half are direct members
     let doc2_id = alice
-        .generate_doc(vec![Public.id()], nonempty![[1u8; 32]])
+        .generate_doc(vec![], nonempty![[1u8; 32]])
         .await
         .unwrap();
     let half = n_peers / 2;

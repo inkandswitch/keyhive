@@ -11,7 +11,6 @@ Terms used across the Keyhive design documents and code. Where the design docume
 | _Group_ | A key that stands for a set of members: a Keyline subject other keys hold delegations about. Keyline's _role_. | `Group`, `GroupId` |
 | _Document_ | A subject that also owns encrypted content and a BeeKEM tree. A replica knows a document from its authorized CGKA operations. | `Document`, `DocumentState`, `DocumentId` |
 | _Active_ | The individual whose signing key this replica controls. | `Active` |
-| _Public_ | A well-known individual whose keys everyone holds; used to encrypt "to anyone" as a fallback. | `Public` |
 | _Membered_ | A group or a document: anything with members. | `MemberedId` |
 | _Root_ / _Genesis key_ | The key pair whose verifying key _is_ a group's or document's identifier. It signs the subject's root edges (`Admin` to each creator) and is then discarded. | `certificate::root_edges` |
 

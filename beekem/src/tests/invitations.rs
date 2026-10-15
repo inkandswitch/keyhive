@@ -1,6 +1,5 @@
 use crate::{
     encrypted::encrypt_secret,
-    id::MemberId,
     keys::ShareKeyMap,
     operation::{CgkaOperation, Invitation, InvitationSecret},
     pcs_key::PcsKey,
@@ -39,41 +38,6 @@ async fn changing_owner_records_an_invitation_addressed_to_the_new_one() {
         carol_view.root_secrets.get(&op_hash),
         Some(root),
         "changing ownership should record the invitation secret for the new owner"
-    );
-}
-
-#[tokio::test]
-async fn an_invitation_addressed_to_public_is_recorded_by_a_reader_that_is_not_public() {
-    let mut rng = StdRng::seed_from_u64(0x5ec0_0002);
-    let mut group = Group::new(2, &mut rng).await;
-
-    let op = group.rotate(0, &mut rng).await;
-    let op_hash = Digest::hash(op.as_ref());
-    let root = group.replicas[0]
-        .root_secrets
-        .get(&op_hash)
-        .expect("the author records the secret its own update produced");
-
-    // Public joins after the rotation, so its invitation is the only route to
-    // that secret from outside the tree.
-    let public = member(&mut rng);
-    group.add(0, MemberId::public(), public.pk).await;
-
-    // Drop what the inviter derived for itself so the invitation is the only
-    // route left to that secret.
-    let mut from_alice = group.replicas[0].clone();
-    from_alice.root_secrets.clear();
-    let mut reader_sks = ShareKeyMap::new();
-    reader_sks.insert(public.pk, public.sk);
-
-    // The reader is neither Public nor in the tree, so the invitation is
-    // recorded for it only because the add is addressed to Public.
-    let reader = member(&mut rng);
-    let reader_view = from_alice.with_new_owner(reader.id, reader_sks).unwrap();
-    assert_eq!(
-        reader_view.root_secrets.get(&op_hash),
-        Some(root),
-        "an invitation addressed to Public should be recorded whoever reads it"
     );
 }
 

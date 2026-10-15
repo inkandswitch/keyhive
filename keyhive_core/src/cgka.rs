@@ -61,20 +61,12 @@ impl Hash for Cgka {
 }
 
 impl Cgka {
-    fn insert_public_sks(cgka: &mut beekem::cgka::Cgka) {
-        use crate::principal::public::Public;
-        cgka.owner_sks
-            .insert(Public.share_key(), Public.share_secret_key());
-    }
-
     pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
-        let mut inner = beekem::cgka::Cgka::new(
+        Cgka(beekem::cgka::Cgka::new(
             TreeId(doc_id.verifying_key()),
             MemberId(owner_id.verifying_key()),
             owner_sks,
-        );
-        Self::insert_public_sks(&mut inner);
-        Cgka(inner)
+        ))
     }
 
     pub fn with_new_owner(
@@ -82,11 +74,10 @@ impl Cgka {
         my_id: IndividualId,
         owner_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
-        let mut inner = self
-            .0
-            .with_new_owner(MemberId(my_id.verifying_key()), owner_sks)?;
-        Self::insert_public_sks(&mut inner);
-        Ok(Cgka(inner))
+        Ok(Cgka(self.0.with_new_owner(
+            MemberId(my_id.verifying_key()),
+            owner_sks,
+        )?))
     }
 
     pub fn ops_count(&self) -> usize {
@@ -180,7 +171,7 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>, Option<LeafKeyPair>), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>, LeafKeyPair), CgkaError> {
         self.0.update(new_pk, new_sk, signer, csprng).await
     }
 
@@ -213,8 +204,7 @@ impl Cgka {
     }
 
     /// Merge an add of a leaf whose secret `sk` this replica holds: an
-    /// invitation to it, or to Public. The added member becomes the owner,
-    /// holding `sk`.
+    /// invitation to it. The added member becomes the owner, holding `sk`.
     pub fn merge_invite(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,
@@ -236,12 +226,6 @@ impl Cgka {
         owner_sks.insert(pk, *sk);
         *self = self.with_new_owner(added_id.into(), owner_sks)?;
         self.merge_concurrent_operation(op)
-    }
-
-    /// Make `owner` the owner, keeping the secrets the tree holds.
-    pub fn reset_owner(&mut self, owner: IndividualId) -> Result<(), CgkaError> {
-        *self = self.with_new_owner(owner, self.owner_sks().clone())?;
-        Ok(())
     }
 }
 

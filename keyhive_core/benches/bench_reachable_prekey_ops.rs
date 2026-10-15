@@ -1,9 +1,6 @@
 use divan::Bencher;
 use dupe::Dupe;
-use keyhive_core::{
-    principal::{individual::op::KeyOp, public::Public},
-    test_utils::make_simple_keyhive,
-};
+use keyhive_core::{principal::individual::op::KeyOp, test_utils::make_simple_keyhive};
 use keyline::power::Power;
 use nonempty::nonempty;
 use tokio::runtime::Runtime;
@@ -25,19 +22,16 @@ const PREKEY_ROTATIONS_PER_PEER: usize = 5;
     (20, 40),
     (30, 60),
 ])]
-fn reachable_prekey_ops_for_agent(bencher: Bencher, (n_peers, n_public_docs): (usize, usize)) {
+fn reachable_prekey_ops_for_agent(bencher: Bencher, (n_peers, n_docs): (usize, usize)) {
     let rt = Runtime::new().unwrap();
 
     let (keyhive, peer_id) = rt.block_on(async {
         let alice = make_simple_keyhive().await.unwrap();
 
-        let mut docs = Vec::with_capacity(n_public_docs);
-        for i in 0..n_public_docs {
+        let mut docs = Vec::with_capacity(n_docs);
+        for i in 0..n_docs {
             let hash: [u8; 32] = blake3::hash(&(i as u64).to_le_bytes()).into();
-            let doc = alice
-                .generate_doc(vec![Public.id()], nonempty![hash])
-                .await
-                .unwrap();
+            let doc = alice.generate_doc(vec![], nonempty![hash]).await.unwrap();
             docs.push(doc);
         }
 

@@ -172,7 +172,7 @@ impl Cgka {
             let (pcs_key, update_op, sampled_key_pair) = self
                 .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
-            new_key_pair = sampled_key_pair;
+            new_key_pair = Some(sampled_key_pair);
             let op_hash = Digest::hash(&update_op);
             op = Some(update_op);
             (pcs_key, op_hash)
@@ -364,8 +364,7 @@ impl Cgka {
             .find_map(|pk| self.owner_sks.get(&pk).map(|sk| (pk, *sk)))
     }
 
-    /// Record the root secrets of `op`'s invitation if it is addressed to us or
-    /// to Public.
+    /// Record the root secrets of `op`'s invitation if it is addressed to us.
     pub(crate) fn record_secrets_from_invitation(&mut self, op: &Signed<CgkaOperation>) {
         let CgkaOperation::Add {
             added_id,
@@ -375,7 +374,7 @@ impl Cgka {
         else {
             return;
         };
-        if *added_id != self.owner_id && !added_id.is_public() {
+        if *added_id != self.owner_id {
             return;
         }
 
@@ -411,7 +410,7 @@ impl Cgka {
                 matches!(
                     op.payload,
                     CgkaOperation::Add { added_id, invitation: Some(_), .. }
-                        if added_id == owner_id || added_id.is_public()
+                        if added_id == owner_id
                 )
             })
             .cloned()
@@ -467,12 +466,10 @@ impl Cgka {
         Ok(Some(signed_op))
     }
 
-    /// Update leaf key pair for this Identifier.
-    /// This also triggers a tree path update for that leaf.
-    /// If the owner is not in the tree but Public is, falls back to
-    /// encrypting from Public's leaf using Public's well-known keys.
+    /// Rotate the owner's leaf to `new_pk` and encrypt a new path from it.
     ///
-    /// Returns a [`CgkaError::NoMembers`] error if the group is empty.
+    /// Returns [`CgkaError::NoMembers`] if the group is empty, and
+    /// [`CgkaError::IdentifierNotFound`] if the owner is not in the tree.
     #[instrument(skip_all)]
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
@@ -480,39 +477,26 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>, Option<LeafKeyPair>), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>, LeafKeyPair), CgkaError> {
         self.replay_if_pending()?;
         if self.group_size() == 0 {
             return Err(CgkaError::NoMembers);
         }
-        let mut is_public = false;
-        let (update_id, update_pk, update_sk) = if self.tree.contains_id(&self.owner_id) {
-            (self.owner_id, new_pk, new_sk)
-        } else {
-            let public_id = MemberId::public();
-            let NodeKey::ShareKey(pk) = self
-                .tree
-                .node_key_for_id(public_id)
-                .map_err(|_| CgkaError::IdentifierNotFound)?
-            else {
-                return Err(CgkaError::ShareKeyNotFound);
-            };
-            let sk = *self.owner_sks.get(&pk).ok_or(CgkaError::ShareKeyNotFound)?;
-            is_public = true;
-            (public_id, pk, sk)
-        };
-        self.owner_sks.insert(update_pk, update_sk);
+        if !self.tree.contains_id(&self.owner_id) {
+            return Err(CgkaError::IdentifierNotFound);
+        }
+        self.owner_sks.insert(new_pk, new_sk);
         // Get our reachable ancestors before `encrypt_path` changes the tree so the
         // tree's root still corresponds to the current heads.
         let ancestors = self.reachable_ancestor_secrets();
         let maybe_key_and_path =
             self.tree
-                .encrypt_path(update_id, update_pk, &mut self.owner_sks, csprng)?;
+                .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
             let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().copied());
             let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestors);
             let op = CgkaOperation::Update {
-                id: update_id,
+                id: self.owner_id,
                 new_path: Box::new(new_path),
                 predecessor_secrets,
                 predecessors,
@@ -522,12 +506,7 @@ impl Cgka {
             let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
             self.record_op(&signed_op)?;
             self.record_root_secret_for(pcs_key, Digest::hash(&signed_op));
-            let new_key_pair = if is_public {
-                None
-            } else {
-                Some((update_pk, update_sk))
-            };
-            Ok((pcs_key, signed_op, new_key_pair))
+            Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
             Err(CgkaError::IdentifierNotFound)
         }
@@ -713,23 +692,11 @@ impl Cgka {
         Ok(())
     }
 
-    /// Decrypt the current tree's root secret as the owner or as Public if
-    /// that fails and Public is a member.
+    /// Decrypt the current tree's root secret as the owner.
     pub fn decrypt_tree_root_secret(&mut self) -> Result<PcsKey, CgkaError> {
-        let key = match self
+        let key = self
             .tree
-            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)
-        {
-            Ok(k) => k,
-            Err(e) => {
-                let public = MemberId::public();
-                if self.owner_id != public && self.tree.contains_id(&public) {
-                    self.tree.decrypt_tree_secret(public, &mut self.owner_sks)?
-                } else {
-                    return Err(e);
-                }
-            }
-        };
+            .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
         Ok(PcsKey::new(key))
     }
 
@@ -1008,7 +975,7 @@ impl Cgka {
     /// tree as it was after that update, and record it.
     ///
     /// Returns [`CgkaError::UnknownPcsKey`] if `op_hash` is not an update we
-    /// have, neither our add nor Public's precedes it, or we cannot derive the
+    /// have, our add does not precede it, or we cannot derive the
     /// rebuilt tree's root secret.
     #[instrument(skip_all)]
     pub(crate) fn rebuild_root_secret(
@@ -1020,7 +987,7 @@ impl Cgka {
         else {
             return Err(CgkaError::UnknownPcsKey);
         };
-        // Check there is an add of the owner or of Public before this update,
+        // Check there is an add of the owner before this update,
         // since otherwise the rebuilt tree has no leaf we can decrypt from.
         if !self.ops_graph.has_add_before(self.owner_id, *op_hash) {
             return Err(CgkaError::UnknownPcsKey);

@@ -16,28 +16,6 @@ use serde::{Deserialize, Serialize};
 pub struct MemberId(pub ed25519_dalek::VerifyingKey);
 
 impl MemberId {
-    /// The well-known `Public` member identity.
-    ///
-    /// This is the verifying key derived from the all-zeros signing key, the
-    /// shared identity used to grant access to anyone. Its secret key is
-    /// public knowledge by design, so it provides no confidentiality on its
-    /// own.
-    pub fn public() -> Self {
-        MemberId(ed25519_dalek::VerifyingKey::from(
-            &ed25519_dalek::SigningKey::from([0u8; 32]),
-        ))
-    }
-
-    /// Whether this is [`Self::public`].
-    pub fn is_public(&self) -> bool {
-        const PUBLIC: [u8; 32] = [
-            0x3b, 0x6a, 0x27, 0xbc, 0xce, 0xb6, 0xa4, 0x2d, 0x62, 0xa3, 0xa8, 0xd0, 0x2a, 0x6f,
-            0x0d, 0x73, 0x65, 0x32, 0x15, 0x77, 0x1d, 0xe2, 0x43, 0xa6, 0x3a, 0xc0, 0x48, 0xa1,
-            0x8b, 0x59, 0xda, 0x29,
-        ];
-        *self.as_bytes() == PUBLIC
-    }
-
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
@@ -219,17 +197,5 @@ impl<'a> arbitrary::Arbitrary<'a> for TreeId {
         let arr = <[u8; 32]>::try_from(bytes).expect("32 bytes");
         let sk = ed25519_dalek::SigningKey::from_bytes(&arr);
         Ok(Self(sk.verifying_key()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_the_public_id_is_public() {
-        assert!(MemberId::public().is_public());
-        let other = ed25519_dalek::SigningKey::from([1u8; 32]);
-        assert!(!MemberId(other.verifying_key()).is_public());
     }
 }

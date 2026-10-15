@@ -30,7 +30,6 @@ use crate::{
             Individual, IndividualState, ReceivePrekeyOpError,
         },
         membered::id::MemberedId,
-        public::Public,
         Principal,
     },
     stats::Stats,
@@ -45,8 +44,7 @@ use crate::{
 use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
-    id::MemberId,
-    keys::{LeafKeyPair, NodeKey, ShareKeyMap},
+    keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaAuthorization, CgkaOperation},
     pcs_key::PcsKey,
 };
@@ -241,13 +239,10 @@ where
         let active_id = inner_active.id();
 
         Ok(Keyhive(Arc::new(KeyhiveState {
-            individuals: Mutex::new(HashMap::from_iter([
-                (
-                    Public.id().into(),
-                    Arc::new(Mutex::new(Public.individual())),
-                ),
-                (active_id, inner_active.individual().dupe()),
-            ])),
+            individuals: Mutex::new(HashMap::from_iter([(
+                active_id,
+                inner_active.individual().dupe(),
+            )])),
             active: inner_active,
             documents: Mutex::new(HashMap::new()),
             cgka_ops: Mutex::new(CgkaOpStore::new()),
@@ -1337,7 +1332,7 @@ where
     pub async fn force_pcs_update(
         &self,
         doc: DocumentId,
-    ) -> Result<(Signed<CgkaOperation>, Option<LeafKeyPair>), EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, LeafKeyPair), EncryptError> {
         let handle = self.document_by_id(doc).await?;
         let signer = { self.active.signer.clone() };
         let (op, new_key_pair) = {
@@ -1348,7 +1343,7 @@ where
                 .pcs_update(&signer, &mut *locked_csprng)
                 .await?
         };
-        self.insert_rotated_secret(new_key_pair).await;
+        self.insert_rotated_secret(Some(new_key_pair)).await;
         self.record_cgka_ops([Arc::new(op.clone())]).await;
         Ok((op, new_key_pair))
     }
@@ -2071,11 +2066,6 @@ where
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = Identifier(*key_op.issuer());
-        // Drop any prekey op addressed to Public so its individual can never
-        // expand or rotate.
-        if id == Public.id() {
-            return Ok(());
-        }
         // Prekeys are an individual's, whatever else its identifier names.
         // The active individual is in the table too.
         match self.individual_state(IndividualId(id)).await {
@@ -2145,7 +2135,6 @@ where
         let Ok(signer) = Id::try_from(Identifier(signed_op.issuer)) else {
             return Ok(Err(Denied));
         };
-        let public = Id::try_from(Public.id()).ok();
 
         match &signed_op.payload {
             CgkaOperation::Add {
@@ -2163,7 +2152,7 @@ where
                 else {
                     return Ok(Err(Denied));
                 };
-                if Some(grant.issuer) == public || !grant.power.is_reader() {
+                if !grant.power.is_reader() {
                     return Ok(Err(Denied));
                 }
                 let founding = grant.issuer == doc && grant.subject == doc;
@@ -2202,7 +2191,7 @@ where
                 let Some(revocation) = self.stored_revocation(*digest).await? else {
                     return Ok(Err(Pending));
                 };
-                if Some(revocation.issuer) == public || revocation.issuer != signer {
+                if revocation.issuer != signer {
                     return Ok(Err(Denied));
                 }
                 let Some(revoked) = self.stored_delegation(revocation.revoke.into()).await? else {
@@ -2234,20 +2223,8 @@ where
                 if *id != new_path.leaf_id {
                     return Ok(Err(Denied));
                 }
-                if new_path.leaf_id == MemberId::public() {
-                    // Anyone can rotate Public's leaf, but it must reinstate the
-                    // well-known key, and only for a document already known.
-                    return Ok(ensure(
-                        new_path.leaf_pk == NodeKey::ShareKey(Public.share_key()),
-                        Denied,
-                    )
-                    .and(ensure(self.cgka_ops.lock().await.holds(doc_id), Pending)));
-                }
-                // An update must be signed by the owner of the leaf it rotates,
-                // and can't make a non-public leaf public.
-                if new_path.leaf_id.0 != signed_op.issuer
-                    || new_path.leaf_pk.contains_key(&Public.share_key())
-                {
+                // An update must be signed by the owner of the leaf it rotates.
+                if new_path.leaf_id.0 != signed_op.issuer {
                     return Ok(Err(Denied));
                 }
                 // Its leaf is checked against the tree on merge. A relay has no
@@ -2373,7 +2350,7 @@ where
     ///
     /// A member's tree takes every stored operation it can, in causal order.
     /// A replica with no tree builds one, as a value, once an invitation to it
-    /// (an add of itself or of Public) is stored, and holds the document only
+    /// (an add of itself) is stored, and holds the document only
     /// once that invitation has merged: a relay never builds one.
     ///
     /// Only `received`'s failure is reported, other than for arriving early;
@@ -2927,21 +2904,6 @@ where
         Ok(self.members_of(doc.into()).await?.get(&who.into()).copied())
     }
 
-    /// The higher of `who`'s access to `doc` and public's access to `doc`.
-    ///
-    /// `None` for a principal we have not heard of.
-    pub async fn best_access_for_doc(
-        &self,
-        who: impl Into<Identifier>,
-        doc: DocumentId,
-    ) -> Result<Option<Power>, KeylineStorageError<K::Error>> {
-        let members = self.reachable_members(doc).await?;
-        let direct = members.get(&who.into()).copied();
-        let public = members.get(&Public.id()).copied();
-        // `None` sorts below `Some`, so this is "the better of the two, if either".
-        Ok(direct.max(public))
-    }
-
     pub(crate) async fn document_by_id(
         &self,
         id: DocumentId,
@@ -3295,11 +3257,9 @@ fn applied(tree: &Cgka, op: &Arc<Signed<CgkaOperation>>) -> bool {
     tree.contains_predecessors(&HashSet::from([Digest::hash(op.as_ref())]))
 }
 
-/// Whether `op` invites `me`: an add of `me`, or of Public, whose secret every
-/// replica holds.
+/// Whether `op` invites `me`: an add of `me`.
 fn invites(op: &Signed<CgkaOperation>, me: IndividualId) -> bool {
-    matches!(op.payload, CgkaOperation::Add { added_id, .. }
-        if [me, Public.individual().id()].contains(&IndividualId::from(added_id)))
+    matches!(op.payload, CgkaOperation::Add { added_id, .. } if IndividualId::from(added_id) == me)
 }
 
 /// Apply `waiting` to `tree` in causal order, as far as it goes, adopting the
@@ -3340,8 +3300,8 @@ fn apply_in_causal_order<E: core::error::Error + 'static>(
     failure
 }
 
-/// Merge one operation. An invitation (an add of `me`, or of Public) carries
-/// the secret for its leaf; `me` stays the owner either way.
+/// Merge one operation. An invitation (an add of `me`) carries the secret for
+/// its leaf.
 fn apply_one<E: core::error::Error + 'static>(
     tree: &mut Cgka,
     op: Arc<Signed<CgkaOperation>>,
@@ -3355,11 +3315,6 @@ fn apply_one<E: core::error::Error + 'static>(
                 .get(&pk)
                 .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
             tree.merge_invite(op, sk)?;
-            return Ok(());
-        }
-        if added == Public.individual().id() {
-            tree.merge_invite(op, &Public.share_secret_key())?;
-            tree.reset_owner(me)?;
             return Ok(());
         }
     }
@@ -3508,9 +3463,8 @@ pub enum EncryptContentError {
 mod tests {
     use super::*;
     use crate::{
-        listener::no_listener::NoListener, principal::public::Public,
-        store::ciphertext::memory::MemoryCiphertextStore, test_utils::Hive,
-        transact::transact_async,
+        listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
+        test_utils::Hive, transact::transact_async,
     };
     use beekem::{id::MemberId, operation::CgkaOperation};
     use future_form::Sendable;
@@ -4112,7 +4066,11 @@ mod tests {
             .await?;
 
         assert!(!hive.active.key_pairs.lock().await.is_empty());
-        assert_eq!(hive.individuals.lock().await.len(), 3);
+        assert_eq!(
+            hive.individuals.lock().await.len(),
+            2,
+            "the active individual and indie"
+        );
         assert_eq!(hive.stats().await.groups, 1);
         assert_eq!(hive.documents.lock().await.len(), 1);
         assert_eq!(hive.stats().await.delegations, 4, "the root edges");
@@ -4121,7 +4079,7 @@ mod tests {
         let archive = hive.into_archive().await?;
 
         assert_eq!(hive.id(), archive.id());
-        assert_eq!(archive.individuals.len(), 3);
+        assert_eq!(archive.individuals.len(), 2);
         assert_eq!(archive.docs.len(), 1);
         assert_eq!(
             archive.certificates.len(),
@@ -4254,20 +4212,24 @@ mod tests {
         let left = make_keyhive().await;
         let middle = make_keyhive().await;
         let right = make_keyhive().await;
+        // Middle reads the document; Right only relays it.
+        let reader_card = middle.get_existing_contact_card().await;
+        let reader = Identifier::from(left.receive_contact_card(&reader_card).await?);
+        right.receive_contact_card(&reader_card).await?;
 
-        // Two root edges: to Left and to Public.
+        // Two root edges: to Left and to the reader.
         let left_doc = left
-            .generate_doc(vec![Public.id()], nonempty![[0u8; 32]])
+            .generate_doc(vec![reader], nonempty![[0u8; 32]])
             .await?;
         // One root edge: to Left.
         let left_group_id = left.generate_group(vec![]).await?;
 
-        let left_membered = left.membered_reachable_by_agent(Public.id()).await?;
+        let left_membered = left.membered_reachable_by_agent(reader).await?;
         assert_eq!(left_membered.len(), 1);
         assert!(left_membered.contains_key(&left_doc.into()));
         assert!(
             !left_membered.contains_key(&left_group_id.into()),
-            "Public is not a member of the group"
+            "the reader is not a member of the group"
         );
 
         let delegations = |ops: &HashMap<_, Event<[u8; 32]>>| {
@@ -4276,8 +4238,8 @@ mod tests {
                 .count()
         };
 
-        // Public is sent the document's closure, and nothing of the group.
-        let left_to_mid_ops = left.events_for_agent(Public.id()).await?;
+        // The reader is sent the document's closure, and nothing of the group.
+        let left_to_mid_ops = left.events_for_agent(reader).await?;
         assert_eq!(delegations(&left_to_mid_ops), 2);
         middle.ingest_event_table(left_to_mid_ops).await?;
 
@@ -4293,7 +4255,7 @@ mod tests {
         assert!(middle.reachable_members(left_group_id).await?.is_empty());
 
         // Middle forwards what it received.
-        let mid_to_right_ops = middle.events_for_agent(Public.id()).await?;
+        let mid_to_right_ops = middle.events_for_agent(reader).await?;
         assert_eq!(delegations(&mid_to_right_ops), 2);
         right.ingest_event_table(mid_to_right_ops).await?;
         assert_eq!(
@@ -4302,11 +4264,11 @@ mod tests {
             "Right agrees too"
         );
 
-        // Public reaches Right's new group through the document it names as a
+        // The reader reaches Right's new group through the document it names as a
         // creator, so it gets the group's closure: both root edges of the
         // group (to Right and to the document) and both of the document.
         let right_group = right.generate_group(vec![left_doc.into()]).await?;
-        let transitive_ops = right.events_for_agent(Public.id()).await?;
+        let transitive_ops = right.events_for_agent(reader).await?;
         assert_eq!(delegations(&transitive_ops), 4);
         middle.ingest_event_table(transitive_ops).await?;
         assert_eq!(
@@ -4322,14 +4284,16 @@ mod tests {
         test_utils::init_logging();
 
         let keyhive = make_keyhive().await;
+        let reader_card = make_keyhive().await.get_existing_contact_card().await;
+        let reader = keyhive
+            .receive_contact_card(&reader_card)
+            .await
+            .expect("a fresh contact card is valid");
         let doc = keyhive
-            .generate_doc(vec![Public.id()], nonempty![[0u8; 32]])
+            .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .unwrap();
-        let dlg = keyhive
-            .add_member(Public.id(), doc, Power::Read)
-            .await
-            .unwrap();
+        let dlg = keyhive.add_member(reader, doc, Power::Read).await.unwrap();
 
         assert_eq!(
             Identifier::from(dlg.delegation.payload().subject),
@@ -4988,8 +4952,9 @@ mod tests {
         for_bob.retain(|_, event| !matches!(event, Event::CgkaOperation(_)));
         bob.ingest_event_table(for_bob).await?;
 
-        let public = Public.individual();
-        let result = bob.add_member(public.id(), project_id, Power::Read).await;
+        let carol_card = make_keyhive().await.get_existing_contact_card().await;
+        let carol = bob.receive_contact_card(&carol_card).await?;
+        let result = bob.add_member(carol, project_id, Power::Read).await;
 
         assert!(
             matches!(

@@ -182,17 +182,14 @@ impl<T: ContentRef> DocumentState<T> {
         self.cgka.ops()
     }
 
-    /// Rotate our CGKA key.
-    ///
-    /// The second element of the return is the new key pair or [`None`] when the owner
-    /// is not in the tree and the update fell back to Public's existing key.
+    /// Rotate our CGKA key, returning the update and the new leaf key pair.
     #[instrument(skip_all)]
     #[allow(clippy::type_complexity)]
     pub async fn pcs_update<F: FutureForm, S: AsyncSigner<F>, R: RngCore + CryptoRng>(
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Signed<CgkaOperation>, Option<LeafKeyPair>), EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, LeafKeyPair), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op, new_key_pair) = self

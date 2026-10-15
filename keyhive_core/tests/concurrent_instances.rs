@@ -110,12 +110,8 @@ async fn the_instance_that_lost_the_leaf_reads_again_once_it_has_the_winning_sec
 
     // Neither rotation has seen the other, so both land on the shared leaf and only one
     // of the two keys survives the merge.
-    let (_, from_original_alice) = alice.force_pcs_update(design_doc).await?;
-    let (_, from_alice_replica) = alice_replica.force_pcs_update(design_doc).await?;
-    assert!(
-        from_original_alice.is_some() && from_alice_replica.is_some(),
-        "this test needs both instances to have rotated a key of their own"
-    );
+    let (_, (alice_key, _)) = alice.force_pcs_update(design_doc).await?;
+    let (_, (replica_key, _)) = alice_replica.force_pcs_update(design_doc).await?;
 
     // Bob merges both and writes, so his path encrypts to whichever key survived.
     ctx.sync(&alice, &bob).await?;
@@ -131,8 +127,6 @@ async fn the_instance_that_lost_the_leaf_reads_again_once_it_has_the_winning_sec
         .is_ok();
     // The merge keeps the lower of the two keys, so the instance that sampled it is the
     // one holding the secret bob's path encrypted to.
-    let (alice_key, _) = from_original_alice.expect("asserted above");
-    let (replica_key, _) = from_alice_replica.expect("asserted above");
     assert_eq!(
         alice_can_decrypt,
         alice_key < replica_key,

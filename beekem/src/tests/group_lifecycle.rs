@@ -1,7 +1,7 @@
 use crate::{
     cgka::Cgka,
     error::CgkaError,
-    id::{MemberId, TreeId},
+    id::TreeId,
     keys::ShareKeyMap,
     test_utils::{for_each_seed, member, Group, Member, ADD_AUTH, REMOVE_AUTH},
     transact::{Fork, Merge},
@@ -270,35 +270,6 @@ fn merging_a_fork_keeps_the_root_secrets_it_recorded() {
             trunk.root_secrets.get(&op_hash),
             Some(secret),
             "the secret recorded on the fork was lost in the merge"
-        );
-    });
-}
-
-#[test]
-fn a_merge_records_the_root_secret_for_a_reader_outside_the_tree_through_public() {
-    for_each_seed(|mut rng| async move {
-        let mut group = Group::new(1, &mut rng).await;
-        let public = member(&mut rng);
-        group.add(0, MemberId::public(), public.pk).await;
-        let mut reader_sks = ShareKeyMap::new();
-        reader_sks.insert(public.pk, public.sk);
-        let mut reader_view = group.replicas[0]
-            .with_new_owner(member(&mut rng).id, reader_sks)
-            .unwrap();
-        let op_hash = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
-        let secret = group.replicas[0]
-            .root_secrets
-            .get(&op_hash)
-            .expect("the author records the secret its own update produced");
-        let mut fork = group.replicas[0].fork();
-        fork.root_secrets.clear();
-
-        reader_view.merge(fork);
-
-        assert_eq!(
-            reader_view.root_secrets.get(&op_hash),
-            Some(secret),
-            "the replay after a merge should record the secret through Public's leaf"
         );
     });
 }

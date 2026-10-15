@@ -54,7 +54,7 @@ use keyhive_core::{
     crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
-    principal::{document::DecryptError, individual::ReceivePrekeyOpError, public::Public},
+    principal::{document::DecryptError, individual::ReceivePrekeyOpError},
 };
 use nonempty::NonEmpty;
 use rand::rngs::OsRng;
@@ -323,7 +323,6 @@ impl JsKeyhive {
     /// Force a PCS key rotation and return the new leaf secret, serialized as a
     /// one-entry `BTreeMap<ShareKey, ShareSecretKey>` (the exact format
     /// `importPrekeySecrets` accepts).
-    /// The map is empty if only Public's keys were used.
     /// The returned bytes are secret key material: do not log or persist unencrypted.
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub async fn force_pcs_update(&self, doc_id: &JsDocumentId) -> Result<Box<[u8]>, JsValue> {
@@ -334,7 +333,7 @@ impl JsKeyhive {
             .await
             .map_err(EncryptContentError::from)
             .map_err(JsEncryptError::from)?;
-        let map = BTreeMap::from_iter(new_key_pair);
+        let map = BTreeMap::from([new_key_pair]);
         let bytes = bincode::serialize(&map).map_err(JsSerializationError::from)?;
         Ok(bytes.into_boxed_slice())
     }
@@ -597,22 +596,6 @@ impl JsKeyhive {
         init_span!("JsKeyhive::access_for_doc");
         let members = self.0.reachable_members(doc_id.0).await?;
         Ok(members.get(&id.0).copied().map(JsPower))
-    }
-
-    /// The most permissive of `id`'s access and the document's public
-    /// access. Returns undefined if neither grants access (or the document
-    /// is unknown).
-    #[wasm_bindgen(js_name = bestAccessForDoc)]
-    pub async fn best_access_for_doc(
-        &self,
-        id: &JsIdentifier,
-        doc_id: &JsDocumentId,
-    ) -> Result<Option<JsPower>, JsKeylineStorageError> {
-        init_span!("JsKeyhive::best_access_for_doc");
-        let members = self.0.reachable_members(doc_id.0).await?;
-        let direct = members.get(&id.0).copied();
-        let public = members.get(&Public.id()).copied();
-        Ok(direct.max(public).map(JsPower))
     }
 
     #[wasm_bindgen(js_name = exportPrekeySecrets)]
