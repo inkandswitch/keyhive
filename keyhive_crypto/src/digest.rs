@@ -1,6 +1,6 @@
 //! Helpers for working with hashes.
 
-use crate::domain_separator::Domain;
+use crate::signable::{message, Kinded};
 use alloc::vec::Vec;
 use core::{
     fmt,
@@ -31,9 +31,9 @@ pub struct Digest<T> {
     pub _phantom: PhantomData<T>,
 }
 
-impl<T: Domain> Digest<T> {
+impl<T: Kinded> Digest<T> {
     /// The content address of an encoded value: BLAKE3 over
-    /// [`message`](crate::domain_separator::message), the same bytes a
+    /// [`message`], the same bytes a
     /// signature over it covers.
     pub fn of(encoded: &Encoded<T>) -> Self {
         Self::of_bytes(encoded.as_bytes())
@@ -42,7 +42,7 @@ impl<T: Domain> Digest<T> {
     /// [`Digest::of`] for bytes not wrapped in an [`Encoded<T>`], such as a
     /// composite that has no `T` value of its own.
     pub fn of_bytes(bytes: &[u8]) -> Self {
-        Self::from(blake3::hash(&crate::domain_separator::message::<T>(bytes)))
+        Self::from(blake3::hash(&message::<T>(bytes)))
     }
 }
 
@@ -280,17 +280,18 @@ impl<T> From<Digest<T>> for Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain_separator::message;
+    use crate::signable::Kind;
 
     struct Example;
 
-    impl Domain for Example {
-        const CONTEXT: &'static str = "test/v0/example";
+    impl Kinded for Example {
+        const KIND: Kind = Kind::CERTIFICATE_SET;
+        const VERSION: u8 = 7;
     }
 
     #[test]
-    fn message_is_context_nul_bytes() {
-        assert_eq!(message::<Example>(b"x"), b"test/v0/example\0x");
+    fn message_is_prefix_version_kind_payload() {
+        assert_eq!(message::<Example>(b"x"), b"keyhive\0\x07\x03x");
     }
 
     #[test]

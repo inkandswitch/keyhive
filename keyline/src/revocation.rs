@@ -7,7 +7,11 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verifiable};
+use keyhive_crypto::{
+    digest::Digest,
+    signable::{Kind, Kinded},
+    verifiable::Verifiable,
+};
 
 /// A signed statement that a delegation no longer holds.
 ///
@@ -90,8 +94,9 @@ impl<W: Encode> Revocation<W> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RevocationId {}
 
-impl<W> Domain for Revocation<W> {
-    const CONTEXT: &'static str = "keyline/v0/revocation";
+impl<W> Kinded for Revocation<W> {
+    const KIND: Kind = Kind::REVOCATION;
+    const VERSION: u8 = 0;
 }
 
 impl<W> Verifiable for Revocation<W> {
@@ -215,11 +220,9 @@ impl<'a, W: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Revocation<W>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        signed::Verified,
-        test_utils::{id, signing_key},
-    };
+    use crate::test_utils::{id, signing_key};
     use alloc::string::String;
+    use keyhive_crypto::verified::Verified;
 
     /// A watermark type with a variable-length encoding, so the `retain` codec is
     /// exercised on values of differing size rather than a fixed stand-in.
@@ -276,9 +279,9 @@ mod tests {
         );
     }
 
-    /// Pins the wire encoding and the domain-separated digest of one fixed
-    /// revocation with a watermark. Changing the codec or the context must
-    /// change this test on purpose.
+    /// Pins the wire encoding and the digest of one fixed revocation with a
+    /// watermark. Changing the codec, the version or the kind must change this
+    /// test on purpose.
     #[test]
     fn known_answer() {
         let hex =
@@ -294,7 +297,7 @@ mod tests {
         assert_eq!(hex(r.digest().as_slice()), KNOWN_DIGEST);
     }
 
-    const KNOWN_DIGEST: &str = "0d58712e2502462cc7b5320db755ce508547a9bd8953e831aa3587fd32aef271";
+    const KNOWN_DIGEST: &str = "05a15f2c11775f6a3f8366073d70c15844c72a2e9c89af7b5e79cbe520906b95";
 
     #[test]
     fn rejects_wrong_lengths() {

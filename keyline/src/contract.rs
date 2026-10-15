@@ -35,7 +35,10 @@ use alloc::{
 };
 use future_form::FutureForm;
 use keyhive_codec::traits::{Decode, Encode};
-use keyhive_crypto::{digest::Digest, domain_separator::Domain};
+use keyhive_crypto::{
+    digest::Digest,
+    signable::{Kind, Kinded},
+};
 
 /// A set of certificates and the authority they imply, behind whatever
 /// concurrency control its backend uses.
@@ -237,17 +240,17 @@ impl<T> Versioned<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CertificateSet {}
 
-impl Domain for CertificateSet {
-    const CONTEXT: &'static str = "keyline/v0/certificate_set";
+impl Kinded for CertificateSet {
+    const KIND: Kind = Kind::CERTIFICATE_SET;
+    const VERSION: u8 = 0;
 }
 
 /// Digest a certificate set from its members' identities, in any order and
 /// with any repetition.
 ///
-/// BLAKE3, under [`CertificateSet`]'s domain context, over the sorted and
-/// deduplicated digests, so the result depends only on the set. Delegation
-/// and revocation digests are domain-separated, so they never collide and
-/// need no kind tag here.
+/// BLAKE3, under [`CertificateSet`]'s kind, over the sorted and deduplicated
+/// digests, so the result depends only on the set. Delegation and revocation
+/// digests cover their kinds, so they never collide and need no tag here.
 pub fn set_digest<I: IntoIterator<Item = CertificateId>>(ids: I) -> Digest<CertificateSet> {
     let mut sorted: Vec<[u8; Digest::<Delegation>::LEN]> =
         ids.into_iter().map(|id| id.to_bytes()).collect();
@@ -276,8 +279,8 @@ mod tests {
         assert_ne!(set_digest([a, b]), set_digest([a, b, c]));
     }
 
-    /// Pins the set digest of fixed ids: the domain context, the sort, and the
-    /// concatenation. Changing any of them must change this test on purpose.
+    /// Pins the set digest of fixed ids: the version and kind, the sort, and
+    /// the concatenation. Changing any of them must change this test on purpose.
     #[test]
     fn set_digest_known_answer() {
         let hex: String = set_digest(ids())
@@ -289,7 +292,7 @@ mod tests {
     }
 
     const SET_KNOWN_DIGEST: &str =
-        "16812e35e58acf243711a745d30fe3de3902b99f2e7c35e0bca5ac870d04449e";
+        "7b31d7b7bef35ccfc308f06cd35dbc448ea383a8256fea3b4971b4db3425383b";
 
     #[test]
     fn set_digest_ignores_repetition() {

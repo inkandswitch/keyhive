@@ -8,7 +8,11 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verifiable};
+use keyhive_crypto::{
+    digest::Digest,
+    signable::{Kind, Kinded},
+    verifiable::Verifiable,
+};
 
 /// An edge in the authority graph.
 ///
@@ -79,8 +83,9 @@ impl Delegation {
     }
 }
 
-impl Domain for Delegation {
-    const CONTEXT: &'static str = "keyline/v0/delegation";
+impl Kinded for Delegation {
+    const KIND: Kind = Kind::DELEGATION;
+    const VERSION: u8 = 0;
 }
 
 impl Verifiable for Delegation {
@@ -249,9 +254,8 @@ mod tests {
             });
     }
 
-    /// Pins the wire encoding and the domain-separated digest of one fixed
-    /// delegation. Changing the codec or the context must change this test
-    /// on purpose.
+    /// Pins the wire encoding and the digest of one fixed delegation. Changing
+    /// the codec, the version or the kind must change this test on purpose.
     #[test]
     fn known_answer() {
         let hex =
@@ -266,7 +270,7 @@ mod tests {
         );
         assert_eq!(
             hex(d.digest().as_slice()),
-            "e90472356fc5650ce40a68ab372fe1f8236c2b58b1239fdb013b2c71b3747451"
+            "f65204aa9cf8ac53bc18f1531f4cd960061ba94814645b304e0ecc7e2baf9010"
         );
     }
 }

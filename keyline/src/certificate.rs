@@ -1,33 +1,34 @@
 //! The unit of the set: a signed delegation or a signed revocation.
 //!
-//! What gets signed is the delegation or the revocation itself, each under its
-//! own [`Domain`](keyhive_crypto::domain_separator::Domain) context. A
+//! What gets signed is the delegation or the revocation itself, each as its
+//! own [`Kinded`](keyhive_crypto::signable::Kinded) kind. A
 //! certificate is the sum of those two signed forms, not a signature over a
 //! sum, so each statement has exactly one identity: the digest of its signed
 //! payload. That is what the set is keyed by, and what `revoke` and `citation`
 //! name.
 //!
-//! On the wire a certificate is its kind, its signature, then its payload
-//! ([`Encode`] and [`Decode`] below).
+//! On the wire a certificate is its signed form's frame: version, kind,
+//! signature, then payload ([`Encode`] and [`Decode`] below).
 
 use crate::{
     delegation::Delegation,
     id::Id,
     revocation::{Revocation, RevocationId},
-    signed::{Signed, Verified, VerifyError},
 };
 use alloc::{sync::Arc, vec::Vec};
 use core::{
     fmt,
     hash::{Hash, Hasher},
 };
-use ed25519_dalek::Signature;
 use keyhive_codec::{
-    encoded::Encoded,
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{
+    digest::Digest,
+    signable::Kind,
+    verified::{header, Signed, Verified, VerifyError},
+};
 
 /// A signed statement, as received: either kind of certificate.
 ///
@@ -59,44 +60,26 @@ impl<W> Certificate<W> {
     }
 }
 
-// Wire framing: kind ‖ signature ‖ payload. The payload is last and runs to
-// the end of the input, so it needs no length; inside a larger message, frame
-// the whole certificate. `decode` checks the framing only: the payload is
-// kept as received, and `verify` decodes it, checks it is canonical, and
+// Wire framing: each signed form's own frame, `version ‖ kind ‖ signature ‖
+// payload`; the kind says which. `decode` checks the framing only: the payload
+// is kept as received, and `verify` decodes it, checks it is canonical, and
 // checks the signature.
-const TAG_DELEGATION: u8 = 0;
-const TAG_REVOCATION: u8 = 1;
-const SIGNATURE_LEN: usize = 64;
-
 impl<W> Encode for Certificate<W> {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        let (tag, signature, payload) = match self {
-            Certificate::Delegation(d) => (TAG_DELEGATION, d.signature(), d.encoded().as_bytes()),
-            Certificate::Revocation(r) => (TAG_REVOCATION, r.signature(), r.encoded().as_bytes()),
-        };
-        out.push(tag);
-        out.extend_from_slice(&signature.to_bytes());
-        out.extend_from_slice(payload);
+        match self {
+            Certificate::Delegation(d) => d.encode_into(out),
+            Certificate::Revocation(r) => r.encode_into(out),
+        }
     }
 }
 
 impl<W> Decode for Certificate<W> {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        let (tag, rest) = bytes.split_first().ok_or(DecodeError::UnexpectedEnd)?;
-        let (signature, payload) = rest
-            .split_first_chunk::<SIGNATURE_LEN>()
-            .ok_or(DecodeError::UnexpectedEnd)?;
-        let signature = Signature::from_bytes(signature);
-        match *tag {
-            TAG_DELEGATION => Ok(Certificate::Delegation(Arc::new(Signed::from_parts(
-                Encoded::from_bytes_unchecked(payload.to_vec()),
-                signature,
-            )))),
-            TAG_REVOCATION => Ok(Certificate::Revocation(Arc::new(Signed::from_parts(
-                Encoded::from_bytes_unchecked(payload.to_vec()),
-                signature,
-            )))),
-            other => Err(DecodeError::InvalidTag(other)),
+        let (_, kind) = header(bytes)?;
+        match Kind::from_u8(kind) {
+            Some(Kind::DELEGATION) => Ok(Certificate::Delegation(Arc::new(Signed::decode(bytes)?))),
+            Some(Kind::REVOCATION) => Ok(Certificate::Revocation(Arc::new(Signed::decode(bytes)?))),
+            _ => Err(DecodeError::UnexpectedKind(kind)),
         }
     }
 }
@@ -104,7 +87,7 @@ impl<W> Decode for Certificate<W> {
 #[cfg(feature = "arbitrary")]
 impl<'a, W: arbitrary::Arbitrary<'a> + Encode> arbitrary::Arbitrary<'a> for Certificate<W> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let signature = Signature::from_bytes(&u.arbitrary()?);
+        let signature = ed25519_dalek::Signature::from_bytes(&u.arbitrary()?);
         Ok(if u.arbitrary()? {
             let d: Delegation = u.arbitrary()?;
             Certificate::Delegation(Arc::new(Signed::from_parts(d.encode(), signature)))
@@ -258,7 +241,7 @@ impl<W> From<Verified<Revocation<W>>> for VerifiedCertificate<W> {
 
 /// A certificate's identity: the digest of its signed payload.
 ///
-/// The two kinds are hashed under different domain contexts, so their digests
+/// The two kinds are hashed under different registry kinds, so their digests
 /// never collide and a set can hold both under one key type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CertificateId {
@@ -307,6 +290,7 @@ mod tests {
         test_utils::{id, signing_key},
     };
     use alloc::vec::Vec;
+    use keyhive_crypto::signable::Kinded;
 
     /// Variable-length, to exercise the `retain` codec.
     type Watermark = Vec<u8>;
@@ -337,8 +321,8 @@ mod tests {
         assert_eq!(verified.into_certificate(), cert);
     }
 
-    /// The wire form is kind, signature, payload; it decodes back to the same
-    /// certificate, which still verifies.
+    /// The wire form is version, kind, signature, payload; it decodes back to
+    /// the same certificate, which still verifies.
     #[test]
     fn wire_form_round_trips_and_verifies() {
         let d = Delegation::new(id(1), id(2), id(3), Power::Read);
@@ -348,9 +332,9 @@ mod tests {
             .1;
         let cert: Certificate<Watermark> = Certificate::Delegation(signed.clone());
         let bytes = cert.encode().into_bytes();
-        assert_eq!(bytes[0], TAG_DELEGATION);
-        assert_eq!(&bytes[1..=SIGNATURE_LEN], &signed.signature().to_bytes());
-        assert_eq!(&bytes[1 + SIGNATURE_LEN..], d.encode().as_bytes());
+        assert_eq!(bytes[..2], [Delegation::VERSION, Kind::DELEGATION.to_u8()]);
+        assert_eq!(&bytes[2..66], &signed.signature().to_bytes());
+        assert_eq!(&bytes[66..], d.encode().as_bytes());
 
         let decoded = Certificate::<Watermark>::decode(&bytes).expect("decodes");
         assert_eq!(decoded, cert);
@@ -364,13 +348,25 @@ mod tests {
             Err(DecodeError::UnexpectedEnd)
         );
         assert_eq!(
-            Certificate::<Watermark>::decode(&[TAG_DELEGATION; SIGNATURE_LEN]),
+            Certificate::<Watermark>::decode(&[0, Kind::DELEGATION.to_u8(), 0]),
             Err(DecodeError::UnexpectedEnd),
             "shorter than a signature"
         );
         assert_eq!(
-            Certificate::<Watermark>::decode(&[7; 1 + SIGNATURE_LEN]),
-            Err(DecodeError::InvalidTag(7))
+            Certificate::<Watermark>::decode(&[0; 66]),
+            Err(DecodeError::UnexpectedKind(0))
+        );
+        assert_eq!(
+            Certificate::<Watermark>::decode(&[0, Kind::CERTIFICATE_SET.to_u8(), 0]),
+            Err(DecodeError::UnexpectedKind(Kind::CERTIFICATE_SET.to_u8())),
+            "a registered kind that is not a certificate"
+        );
+        assert_eq!(
+            Certificate::<Watermark>::decode(&[9, Kind::REVOCATION.to_u8(), 0]),
+            Err(DecodeError::UnsupportedVersion {
+                kind: Kind::REVOCATION.to_u8(),
+                version: 9
+            })
         );
     }
 
