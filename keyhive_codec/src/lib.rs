@@ -29,6 +29,13 @@
 
 extern crate alloc;
 
+// `derive(Arbitrary)` expands to a `thread_local!`, and `bolero` runs on `std`.
+#[cfg(feature = "laws")]
+extern crate std;
+
 pub mod encoded;
 pub mod error;
 pub mod traits;
+
+#[cfg(feature = "laws")]
+pub mod laws;

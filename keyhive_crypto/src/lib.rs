@@ -21,6 +21,7 @@ pub mod content;
 pub mod digest;
 pub mod domain_separator;
 pub mod hex;
+pub mod id;
 pub mod read_capability;
 pub mod separable;
 pub mod share_key;

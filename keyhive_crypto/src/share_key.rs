@@ -7,6 +7,10 @@ use alloc::vec::Vec;
 use core::fmt;
 #[cfg(feature = "std")]
 use dupe::Dupe;
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -17,9 +21,7 @@ pub struct ShareKey(x25519_dalek::PublicKey);
 #[cfg(any(test, feature = "arbitrary"))]
 impl<'a> arbitrary::Arbitrary<'a> for ShareKey {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let bytes = u.bytes(32)?;
-        let arr = <[u8; 32]>::try_from(bytes).unwrap();
-        Ok(Self(x25519_dalek::PublicKey::from(arr)))
+        Ok(ShareSecretKey::arbitrary(u)?.share_key())
     }
 }
 
@@ -185,5 +187,120 @@ impl fmt::Display for ShareSecretKey {
 impl fmt::Debug for ShareSecretKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ShareSecretKey(SECRET)")
+    }
+}
+
+/// A share key encodes as its 32-byte Montgomery u-coordinate in canonical
+/// form: below p = 2^255 − 19, so the top bit is clear.
+///
+/// Decoding refuses two kinds of input, as [`Id`](crate::id::Id) does for
+/// signing keys:
+///
+/// - _Other forms of a key._ X25519 accepts other byte strings for the same
+///   key (RFC 7748 masks the top bit and reduces mod p). Refusing them gives
+///   one key one encoding and one digest.
+/// - _Small-order points._ A Diffie-Hellman exchange with one gives the same
+///   shared secret whatever the other side's secret, so a key agreement
+///   update to such a key would encrypt to a secret anyone can compute.
+///
+/// Keys from [`ShareKey::generate`] and [`ShareSecretKey::share_key`] are
+/// canonical and of large order.
+impl Encode for ShareKey {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+}
+
+impl Decode for ShareKey {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for ShareKey {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (u, rest) = <[u8; 32]>::decode_next(bytes)?;
+        if is_canonical_u(&u) && !has_small_order(&u) {
+            Ok((ShareKey(x25519_dalek::PublicKey::from(u)), rest))
+        } else {
+            Err(DecodeError::InvalidField("share_key"))
+        }
+    }
+}
+
+/// Whether little-endian `u` is below p = 2^255 − 19 (`ed ff … ff 7f`).
+fn is_canonical_u(u: &[u8; 32]) -> bool {
+    let top_clear = u[31] & 0x80 == 0;
+    let at_least_p = u[31] == 0x7f && u[1..31].iter().all(|&b| b == 0xff) && u[0] >= 0xed;
+    top_clear && !at_least_p
+}
+
+/// Whether `u` has order dividing 8, on the curve or its twist.
+///
+/// X25519 clamps every scalar to a multiple of 8, so such a point maps to the
+/// identity, which encodes as zero, and no point of large order does.
+fn has_small_order(u: &[u8; 32]) -> bool {
+    x25519_dalek::x25519([1; 32], *u) == [0; 32]
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    /// A u-coordinate near p, little-endian: `low` first, `top` last, 0xff
+    /// between.
+    fn near_p(low: u8, top: u8) -> [u8; 32] {
+        let mut u = [0xff; 32];
+        u[0] = low;
+        u[31] = top;
+        u
+    }
+
+    #[test]
+    fn codec_laws() {
+        keyhive_codec::laws::round_trip::<ShareKey>();
+        keyhive_codec::laws::canonical_near::<ShareKey>();
+        keyhive_codec::laws::stream::<ShareKey>();
+    }
+
+    #[test]
+    fn accepts_keys_of_large_order() {
+        let mut base = [0; 32];
+        base[0] = 9;
+        let generated = ShareKey::generate(&mut rand::thread_rng()).to_bytes();
+        for u in [base, generated] {
+            assert_eq!(ShareKey::decode(&u).map(|k| k.to_bytes()), Ok(u));
+        }
+    }
+
+    /// The eight small-order points of the curve, in Montgomery form (the
+    /// identity is u = 0), and u = 1, of order 4.
+    #[test]
+    fn refuses_small_order_points() {
+        use curve25519_dalek::constants::EIGHT_TORSION;
+        let mut one = [0; 32];
+        one[0] = 1;
+        for u in EIGHT_TORSION
+            .iter()
+            .map(|p| p.to_montgomery().to_bytes())
+            .chain([one])
+        {
+            assert_eq!(
+                ShareKey::decode(&u),
+                Err(DecodeError::InvalidField("share_key"))
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_other_forms_of_a_key() {
+        let mut high = [9; 32];
+        high[31] |= 0x80;
+        for u in [near_p(0xed, 0x7f), near_p(0xff, 0x7f), high, [0xff; 32]] {
+            assert_eq!(
+                ShareKey::decode(&u),
+                Err(DecodeError::InvalidField("share_key"))
+            );
+        }
     }
 }

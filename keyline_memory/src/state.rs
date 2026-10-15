@@ -62,12 +62,11 @@ use alloc::{
     vec::Vec,
 };
 use core::fmt;
-use keyhive_crypto::{digest::Digest, verified::Verified};
+use keyhive_crypto::{digest::Digest, id::Id, verified::Verified};
 use keyline::{
     certificate::{Certificate, CertificateId, VerifiedCertificate},
     contract::{set_digest, CertificateSet, Version},
     delegation::Delegation,
-    id::Id,
     power::Power,
     revocation::{Revocation, RevocationId},
 };

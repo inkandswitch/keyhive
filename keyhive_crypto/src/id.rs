@@ -1,18 +1,18 @@
-//! Node identity: an Ed25519 verifying key.
+//! Identity: a validated Ed25519 verifying key, with a canonical codec.
 
+use crate::verifiable::Verifiable;
 use alloc::vec::Vec;
-use core::{cmp::Ordering, fmt};
+use core::fmt;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use keyhive_codec::{
     error::DecodeError,
-    traits::{Decode, Encode},
+    traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use keyhive_crypto::verifiable::Verifiable;
 
-/// A node in the authority graph.
+/// An Ed25519 verifying key that names a principal.
 ///
-/// Every principal, role, document, and group is an `Id`. Keyline attaches no
-/// meaning to which is which; the layer above does.
+/// Every principal, document, and group is an `Id`; so is every node of
+/// Keyline's authority graph. The type attaches no meaning to which is which.
 ///
 /// Stored as the 32-byte compressed key, not as [`VerifyingKey`] (which caches
 /// the decompressed point and is roughly 200 bytes). Every constructor checks
@@ -61,7 +61,7 @@ impl Id {
 
     /// [`Id::decode`] for a named field of a larger encoding, so that an
     /// invalid key reports which field it was.
-    pub(crate) fn decode_field(bytes: &[u8], field: &'static str) -> Result<Self, DecodeError> {
+    pub fn decode_field(bytes: &[u8], field: &'static str) -> Result<Self, DecodeError> {
         Id::decode(bytes).map_err(|e| match e {
             DecodeError::InvalidField(_) => DecodeError::InvalidField(field),
             other => other,
@@ -124,13 +124,17 @@ impl Encode for Id {
 
 impl Decode for Id {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        let arr: [u8; Id::LEN] = bytes
-            .try_into()
-            .map_err(|_| match bytes.len().cmp(&Id::LEN) {
-                Ordering::Less => DecodeError::UnexpectedEnd,
-                _ => DecodeError::TrailingBytes,
-            })?;
-        Id::from_bytes(arr).map_err(|_| DecodeError::InvalidField("id"))
+        decode_exact(bytes)
+    }
+}
+
+/// Fixed-width, so prefix-free.
+impl StreamDecode for Id {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (raw, rest) = <[u8; Id::LEN]>::decode_next(bytes)?;
+        Id::from_bytes(raw)
+            .map(|id| (id, rest))
+            .map_err(|_| DecodeError::InvalidField("id"))
     }
 }
 
@@ -318,6 +322,14 @@ mod tests {
 
         let not_a_point = Seq::new([0x02u8; 32].into_iter());
         assert!(Id::deserialize(not_a_point).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "arbitrary")]
+    fn codec_laws() {
+        keyhive_codec::laws::round_trip::<Id>();
+        keyhive_codec::laws::canonical_near::<Id>();
+        keyhive_codec::laws::stream::<Id>();
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Revocations: signed withdrawals of a delegation by hash.
 
-use crate::{delegation::Delegation, id::Id};
+use crate::delegation::Delegation;
 use alloc::{collections::BTreeMap, vec::Vec};
 use ed25519_dalek::VerifyingKey;
 use keyhive_codec::{
@@ -9,6 +9,7 @@ use keyhive_codec::{
 };
 use keyhive_crypto::{
     digest::Digest,
+    id::Id,
     signable::{Kind, Kinded},
     verifiable::Verifiable,
 };
@@ -413,6 +414,6 @@ mod tests {
     #[test]
     #[cfg(feature = "arbitrary")]
     fn decode_is_canonical() {
-        crate::test_utils::decode_is_canonical_near::<Revocation<Watermark>>();
+        keyhive_codec::laws::canonical_near::<Revocation<Watermark>>();
     }
 }

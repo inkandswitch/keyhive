@@ -32,6 +32,10 @@ arbitrary = { workspace = true, optional = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true }
+bolero = { workspace = true }
+curve25519-dalek = { workspace = true }
+keyhive_codec = { workspace = true, features = ["laws"] }
+postcard = { workspace = true, features = ["alloc"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]

@@ -25,7 +25,6 @@
 use crate::{
     certificate::{Certificate, CertificateId, VerifiedCertificate},
     delegation::Delegation,
-    id::Id,
     power::Power,
     revocation::RevocationId,
 };
@@ -37,6 +36,7 @@ use future_form::FutureForm;
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{
     digest::Digest,
+    id::Id,
     signable::{Kind, Kinded},
 };
 

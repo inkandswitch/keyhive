@@ -18,8 +18,9 @@
 pub mod naive;
 pub mod threshold;
 
-use crate::{id::Id, power::Power};
+use crate::power::Power;
 use alloc::collections::BTreeMap;
+use keyhive_crypto::id::Id;
 
 /// `(subject, node) -> level`.
 pub type Levels = BTreeMap<(Id, Id), Power>;
