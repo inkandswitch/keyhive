@@ -226,7 +226,6 @@ async fn a_delegation_beyond_the_weakest_link_is_attenuated() -> Result<()> {
     let dan = ctx.individual("dan").await?;
     let forged = carol
         .sign_certificate(&Delegation::new(
-            Id::try_from(Identifier::from(carol.id()))?,
             Id::try_from(Identifier::from(dan.id()))?,
             Id::try_from(Identifier::from(outer))?,
             Admin,

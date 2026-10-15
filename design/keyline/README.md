@@ -68,6 +68,8 @@ A delegation is a signed statement extending the issuer's own authority over a s
 | `citation` | `Option<Digest<RevocationId>>` | Freshness + heal provenance; zero semantics (see below) |
 | signature  | Ed25519 signature              | Over all of the above                                   |
 
+In the encoding, the issuer travels in the signed envelope beside the payload rather than inside it, the same for every signed type ([implementation, Domain Separation](implementation.md#domain-separation)).
+
 - A delegation reads: _`issuer` asserts that `audience` may exercise `power` over `subject`._
 - When `issuer = subject`: a _root edge_: the subject bootstrapping its own authority (see [Root Edges and the Root Role][root role]).
 

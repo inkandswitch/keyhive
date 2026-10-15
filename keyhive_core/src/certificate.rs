@@ -37,14 +37,14 @@ pub(crate) fn root_edges<I: IntoIterator<Item = Identifier>>(
     creators
         .into_iter()
         .map(|creator| {
-            let edge = Delegation::new(subject, Id::try_from(creator)?, subject, Power::Admin);
+            let edge = Delegation::new(Id::try_from(creator)?, subject, Power::Admin);
             Ok(Verified::sign_sync(&edge, &signer)?)
         })
         .collect()
 }
 
-/// Whether `who` has a route to `doc` through `delegation` in the positive
-/// graph.
+/// Whether `who` has a route to `doc` through `delegation`, issued by
+/// `issuer`, in the positive graph.
 ///
 /// The delegation must be grounded (its issuer stands over its subject), and
 /// its subject must be `doc` or stand over it. Its audience is then reached
@@ -62,25 +62,26 @@ pub(crate) fn root_edges<I: IntoIterator<Item = Identifier>>(
 pub(crate) async fn route_through<F: FutureForm, K: Keyline<F>>(
     keyline: &K,
     doc: Id,
+    issuer: Id,
     delegation: &Delegation,
     who: Id,
 ) -> Result<bool, K::Error> {
     let mut standing = Standing::new(keyline);
     let subject = delegation.subject;
-    if !standing.over(subject, delegation.issuer).await? || !standing.over(doc, subject).await? {
+    if !standing.over(subject, issuer).await? || !standing.over(doc, subject).await? {
         return Ok(false);
     }
 
     // `closure(doc)` holds every delegation about every subject with standing
     // over `doc`; keep those about subjects the route can pass through.
-    let mut edges: Vec<Delegation> = Vec::new();
+    let mut edges: Vec<(Id, Delegation)> = Vec::new();
     for cert in keyline.closure(doc).await?.value {
         let Certificate::Delegation(signed) = cert else {
             continue;
         };
-        let d = decode_stored(&signed);
+        let (edge_issuer, d) = decode_stored(&signed);
         if standing.over(d.subject, subject).await? && standing.over(doc, d.subject).await? {
-            edges.push(d);
+            edges.push((edge_issuer, d));
         }
     }
 
@@ -88,13 +89,13 @@ pub(crate) async fn route_through<F: FutureForm, K: Keyline<F>>(
     let mut reached: Vec<(Id, Id)> = vec![(delegation.audience, subject)];
     loop {
         let mut grew = false;
-        for edge in &edges {
+        for (edge_issuer, edge) in &edges {
             if reached.contains(&(edge.audience, edge.subject)) {
                 continue;
             }
             let mut carried = false;
             for (node, level) in reached.clone() {
-                if (node == edge.issuer || standing.over(node, edge.issuer).await?)
+                if (node == *edge_issuer || standing.over(node, *edge_issuer).await?)
                     && standing.over(edge.subject, level).await?
                 {
                     carried = true;
@@ -134,19 +135,22 @@ pub(crate) async fn explanation<F: FutureForm, K: Keyline<F>>(
     let mut revocations = Vec::new();
     for cert in keyline.closure(subject).await?.value {
         match &cert {
-            Certificate::Delegation(signed) => delegations.push((decode_stored(signed), cert)),
+            Certificate::Delegation(signed) => {
+                let (issuer, d) = decode_stored(signed);
+                delegations.push((issuer, d, signed.digest(), cert));
+            }
             Certificate::Revocation(signed) => {
-                let r: Revocation<K::RetentionWatermark> = decode_stored(signed);
-                revocations.push((r.issuer, r.revoke, cert));
+                let (issuer, r): (Id, Revocation<K::RetentionWatermark>) = decode_stored(signed);
+                revocations.push((issuer, r.revoke, cert));
             }
         }
     }
 
     let mut kept = BTreeMap::new();
     let mut routes = BTreeSet::new();
-    for (d, cert) in &delegations {
-        if route_through(keyline, subject, d, audience).await? {
-            routes.insert(d.digest());
+    for (issuer, d, digest, cert) in &delegations {
+        if route_through(keyline, subject, *issuer, d, audience).await? {
+            routes.insert(*digest);
             kept.insert(cert.id(), cert.clone());
         }
     }
@@ -158,8 +162,9 @@ pub(crate) async fn explanation<F: FutureForm, K: Keyline<F>>(
         }
     }
     for revoker in revokers {
-        for (d, cert) in &delegations {
-            if !kept.contains_key(&cert.id()) && route_through(keyline, subject, d, revoker).await?
+        for (issuer, d, _, cert) in &delegations {
+            if !kept.contains_key(&cert.id())
+                && route_through(keyline, subject, *issuer, d, revoker).await?
             {
                 kept.insert(cert.id(), cert.clone());
             }
@@ -237,13 +242,15 @@ pub enum CertificateError {
     Sign(#[from] SignError),
 }
 
-/// The payload of a certificate read from a store. A store holds only
-/// verified certificates, whose encoding is canonical, so this cannot fail.
-pub fn decode_stored<T: Decode>(signed: &Signed<T>) -> T {
-    signed
+/// The issuer and payload of a certificate read from a store. A store holds
+/// only verified certificates, whose encoding is canonical, so this cannot
+/// fail.
+pub fn decode_stored<T: Decode>(signed: &Signed<T>) -> (Id, T) {
+    let payload = signed
         .encoded()
         .decode()
-        .expect("a stored certificate decodes: the store verified it")
+        .expect("a stored certificate decodes: the store verified it");
+    (signed.issuer(), payload)
 }
 
 /// The `Keyline` store failed: its backend's own storage error `E`
@@ -290,7 +297,7 @@ mod tests {
         for (edge, creator) in edges.iter().zip(&creators) {
             let d = edge.payload();
             assert_eq!(
-                (d.issuer, d.subject, d.power),
+                (edge.issuer(), d.subject, d.power),
                 (subject_id, subject_id, Power::Admin)
             );
             assert_eq!(Identifier::from(d.audience), *creator);
@@ -327,7 +334,7 @@ mod tests {
         use keyline::test_utils::{
             assume_verified,
             conformance::gen::{CertSet, POOL},
-            id,
+            id, Issued,
         };
 
         let runtime = Builder::new_current_thread()
@@ -336,7 +343,7 @@ mod tests {
         bolero::check!()
             .with_arbitrary::<(CertSet<u64>, u8, u8, u8)>()
             .for_each(|(set, pick, doc, who)| {
-                let delegations: Vec<Delegation> = set.delegations().copied().collect();
+                let delegations: Vec<Issued<Delegation>> = set.delegations().copied().collect();
                 let Some(&through) = delegations.get(usize::from(*pick) % delegations.len().max(1))
                 else {
                     return;
@@ -344,7 +351,7 @@ mod tests {
                 let doc = id(1 + doc % POOL);
                 let who = id(1 + who % POOL);
                 runtime.block_on(async {
-                    let store = |without: Option<Delegation>| async move {
+                    let store = |without: Option<Issued<Delegation>>| async move {
                         let keyline = MemoryKeyline::<u64>::new();
                         let certs = set
                             .certs
@@ -368,7 +375,7 @@ mod tests {
                         .await
                         .expect("the memory store does not fail")
                         .value;
-                    let routed = route_through::<Sendable, _>(&full, doc, &through, who)
+                    let routed = route_through::<Sendable, _>(&full, doc, through.issuer, &through.payload, who)
                         .await
                         .expect("the memory store does not fail");
 
@@ -401,7 +408,7 @@ mod tests {
                             .expect("the memory store does not fail");
                         keyline
                     };
-                    if route_through::<Sendable, _>(&prefix, doc, &through, who)
+                    if route_through::<Sendable, _>(&prefix, doc, through.issuer, &through.payload, who)
                         .await
                         .expect("the memory store does not fail")
                     {

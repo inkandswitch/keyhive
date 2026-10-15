@@ -30,10 +30,8 @@ async fn a_revocation_issued_by_an_outsider_does_not_deadlock_the_receiver() -> 
 
     // An outsider, holding no power over the document, delegates and revokes.
     let outsider_key = SigningKey::from([9u8; 32]);
-    let outsider = Id::from(&outsider_key);
     let dlg = Verified::sign_sync(
         &Delegation::new(
-            outsider,
             Id::try_from(Identifier::from(bob.id()))?,
             Id::try_from(Identifier::from(design_doc))?,
             Read,
@@ -41,7 +39,7 @@ async fn a_revocation_issued_by_an_outsider_does_not_deadlock_the_receiver() -> 
         &outsider_key,
     )?;
     let rev: Verified<Revocation<ContentHeads<[u8; 32]>>> =
-        Verified::sign_sync(&Revocation::new(outsider, dlg.digest()), &outsider_key)?;
+        Verified::sign_sync(&Revocation::new(dlg.digest()), &outsider_key)?;
 
     let event = |cert: Certificate<ContentHeads<[u8; 32]>>| StaticEvent::from(Event::from(cert));
     alice

@@ -281,7 +281,7 @@ impl DebugEventRow {
                     index: idx,
                     event_type: "Delegated".to_string(),
                     event_hash,
-                    issuer: Hash::new(d.issuer.as_bytes(), nicknames),
+                    issuer: Hash::new(signed.issuer().as_bytes(), nicknames),
                     details: DebugEventDetails::Delegated {
                         subject: Hash::new(d.subject.as_bytes(), nicknames),
                         can_access: format!("{:?}", d.power),
@@ -300,7 +300,7 @@ impl DebugEventRow {
                     index: idx,
                     event_type: "Revoked".to_string(),
                     event_hash,
-                    issuer: Hash::new(r.issuer.as_bytes(), nicknames),
+                    issuer: Hash::new(signed.issuer().as_bytes(), nicknames),
                     details: DebugEventDetails::Revoked {
                         revoke: Hash::new(r.revoke.as_slice(), nicknames),
                         retain_count: r.retain.len(),

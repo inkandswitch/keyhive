@@ -21,7 +21,7 @@ use core::{
 };
 use keyhive_codec::{
     error::DecodeError,
-    traits::{Decode, Encode},
+    traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::{
     digest::Digest,
@@ -60,8 +60,9 @@ impl<W> Certificate<W> {
     }
 }
 
-// Wire framing: each signed form's own frame, `version ‖ kind ‖ signature ‖
-// payload`; the kind says which. `decode` checks the framing only: the payload
+// Wire framing: each signed form's own frame,
+// `version ‖ kind ‖ issuer ‖ payload_len ‖ payload ‖ signature`; the kind says
+// which. Frames are self-delimiting, so certificates can be read back to back. `decode` checks the framing only: the payload
 // is kept as received, and `verify` decodes it, checks it is canonical, and
 // checks the signature.
 impl<W> Encode for Certificate<W> {
@@ -75,10 +76,22 @@ impl<W> Encode for Certificate<W> {
 
 impl<W> Decode for Certificate<W> {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        let (_, kind) = header(bytes)?;
+        decode_exact(bytes)
+    }
+}
+
+impl<W> StreamDecode for Certificate<W> {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (kind, _) = header(bytes)?;
         match Kind::from_u8(kind) {
-            Some(Kind::DELEGATION) => Ok(Certificate::Delegation(Arc::new(Signed::decode(bytes)?))),
-            Some(Kind::REVOCATION) => Ok(Certificate::Revocation(Arc::new(Signed::decode(bytes)?))),
+            Some(Kind::DELEGATION) => {
+                let (signed, rest) = Signed::decode_next(bytes)?;
+                Ok((Certificate::Delegation(Arc::new(signed)), rest))
+            }
+            Some(Kind::REVOCATION) => {
+                let (signed, rest) = Signed::decode_next(bytes)?;
+                Ok((Certificate::Revocation(Arc::new(signed)), rest))
+            }
             _ => Err(DecodeError::UnexpectedKind(kind)),
         }
     }
@@ -90,10 +103,18 @@ impl<'a, W: arbitrary::Arbitrary<'a> + Encode> arbitrary::Arbitrary<'a> for Cert
         let signature = ed25519_dalek::Signature::from_bytes(&u.arbitrary()?);
         Ok(if u.arbitrary()? {
             let d: Delegation = u.arbitrary()?;
-            Certificate::Delegation(Arc::new(Signed::from_parts(d.encode(), signature)))
+            Certificate::Delegation(Arc::new(Signed::from_parts(
+                u.arbitrary()?,
+                d.encode(),
+                signature,
+            )))
         } else {
             let r: Revocation<W> = u.arbitrary()?;
-            Certificate::Revocation(Arc::new(Signed::from_parts(r.encode(), signature)))
+            Certificate::Revocation(Arc::new(Signed::from_parts(
+                u.arbitrary()?,
+                r.encode(),
+                signature,
+            )))
         })
     }
 }
@@ -135,11 +156,11 @@ impl<W> VerifiedCertificate<W> {
         }
     }
 
-    /// The key that signed it, as named by the payload.
+    /// The key that signed it.
     pub fn issuer(&self) -> Id {
         match self {
-            VerifiedCertificate::Delegation(d) => d.payload().issuer,
-            VerifiedCertificate::Revocation(r) => r.payload().issuer,
+            VerifiedCertificate::Delegation(d) => d.issuer(),
+            VerifiedCertificate::Revocation(r) => r.issuer(),
         }
     }
 
@@ -290,30 +311,33 @@ mod tests {
         test_utils::{id, signing_key},
     };
     use alloc::vec::Vec;
-    use keyhive_crypto::signable::Kinded;
 
     /// Variable-length, to exercise the `retain` codec.
     type Watermark = Vec<u8>;
 
     /// The set key, the `revoke` pointer and the signed form's digest are one
-    /// value.
+    /// value, over the issuer and the payload.
     #[test]
-    fn identity_is_the_payload_digest() {
-        let d = Delegation::new(id(1), id(2), id(3), Power::Read);
+    fn identity_is_the_digest_of_issuer_and_payload() {
+        let d = Delegation::new(id(2), id(3), Power::Read);
         let signed = Verified::sign_sync(&d, &signing_key(1))
             .expect("key is the issuer")
             .into_parts()
             .1;
         let cert: Certificate<Watermark> = Certificate::Delegation(signed);
-        assert_eq!(cert.id(), CertificateId::Delegation(d.digest()));
+        let d_digest = Digest::of(&id(1), &d.encode());
+        assert_eq!(cert.id(), CertificateId::Delegation(d_digest));
 
-        let r: Revocation<Watermark> = Revocation::new(id(4), d.digest());
+        let r: Revocation<Watermark> = Revocation::new(d_digest);
         let signed = Verified::sign_sync(&r, &signing_key(4))
             .expect("key is the issuer")
             .into_parts()
             .1;
         let cert = Certificate::Revocation(signed);
-        assert_eq!(cert.id(), CertificateId::Revocation(r.digest()));
+        assert_eq!(
+            cert.id(),
+            CertificateId::Revocation(Digest::of(&id(4), &r.encode()).coerce())
+        );
 
         let verified = cert.clone().verify().expect("verifies");
         assert_eq!(verified.id(), cert.id());
@@ -321,48 +345,83 @@ mod tests {
         assert_eq!(verified.into_certificate(), cert);
     }
 
-    /// The wire form is version, kind, signature, payload; it decodes back to
-    /// the same certificate, which still verifies.
+    /// The wire form is the `KH` tag, kind, version, issuer, payload length,
+    /// payload, signature; it decodes back to the same certificate, which still
+    /// verifies.
     #[test]
     fn wire_form_round_trips_and_verifies() {
-        let d = Delegation::new(id(1), id(2), id(3), Power::Read);
+        let d = Delegation::new(id(2), id(3), Power::Read);
         let signed = Verified::sign_sync(&d, &signing_key(1))
             .expect("key is the issuer")
             .into_parts()
             .1;
         let cert: Certificate<Watermark> = Certificate::Delegation(signed.clone());
         let bytes = cert.encode().into_bytes();
-        assert_eq!(bytes[..2], [Delegation::VERSION, Kind::DELEGATION.to_u8()]);
-        assert_eq!(&bytes[2..66], &signed.signature().to_bytes());
-        assert_eq!(&bytes[66..], d.encode().as_bytes());
+        assert_eq!(bytes[..4], *b"KHD\x00");
+        let payload = d.encode();
+        assert_eq!(&bytes[4..36], id(1).as_bytes());
+        assert_eq!(
+            usize::from(bytes[36]),
+            payload.len(),
+            "a one-byte bijou64 length"
+        );
+        assert_eq!(&bytes[37..37 + payload.len()], payload.as_bytes());
+        assert_eq!(&bytes[37 + payload.len()..], &signed.signature().to_bytes());
 
         let decoded = Certificate::<Watermark>::decode(&bytes).expect("decodes");
         assert_eq!(decoded, cert);
         assert!(decoded.verify().is_ok());
     }
 
+    /// Frames are self-delimiting: two certificates written back to back
+    /// read back one at a time.
+    #[test]
+    fn certificates_read_back_to_back() {
+        let first =
+            Verified::sign_sync(&Delegation::new(id(2), id(3), Power::Read), &signing_key(1))
+                .expect("any key signs");
+        let second: Verified<Revocation<Watermark>> =
+            Verified::sign_sync(&Revocation::new(first.digest()), &signing_key(1))
+                .expect("any key signs");
+        let a: Certificate<Watermark> = Certificate::Delegation(first.signed().clone());
+        let b = Certificate::Revocation(second.signed().clone());
+        let mut bytes = a.encode().into_bytes();
+        bytes.extend_from_slice(b.encode().as_bytes());
+
+        let (read_a, rest) = Certificate::<Watermark>::decode_next(&bytes).expect("first");
+        let (read_b, rest) = Certificate::<Watermark>::decode_next(rest).expect("second");
+        assert_eq!((read_a, read_b, rest), (a, b, &[][..]));
+    }
+
     #[test]
     fn rejects_bad_framing() {
+        let frame = |kind: Kind, version: u8, rest: &[u8]| {
+            let mut bytes = b"KH".to_vec();
+            bytes.extend_from_slice(&[kind.to_u8(), version]);
+            bytes.extend_from_slice(rest);
+            bytes
+        };
         assert_eq!(
             Certificate::<Watermark>::decode(&[]),
             Err(DecodeError::UnexpectedEnd)
         );
         assert_eq!(
-            Certificate::<Watermark>::decode(&[0, Kind::DELEGATION.to_u8(), 0]),
-            Err(DecodeError::UnexpectedEnd),
-            "shorter than a signature"
-        );
-        assert_eq!(
             Certificate::<Watermark>::decode(&[0; 66]),
-            Err(DecodeError::UnexpectedKind(0))
+            Err(DecodeError::NotKeyhive),
+            "no `KH` tag"
         );
         assert_eq!(
-            Certificate::<Watermark>::decode(&[0, Kind::CERTIFICATE_SET.to_u8(), 0]),
+            Certificate::<Watermark>::decode(&frame(Kind::DELEGATION, 0, &[0])),
+            Err(DecodeError::UnexpectedEnd),
+            "shorter than an issuer"
+        );
+        assert_eq!(
+            Certificate::<Watermark>::decode(&frame(Kind::CERTIFICATE_SET, 0, &[0])),
             Err(DecodeError::UnexpectedKind(Kind::CERTIFICATE_SET.to_u8())),
             "a registered kind that is not a certificate"
         );
         assert_eq!(
-            Certificate::<Watermark>::decode(&[9, Kind::REVOCATION.to_u8(), 0]),
+            Certificate::<Watermark>::decode(&frame(Kind::REVOCATION, 9, &[0])),
             Err(DecodeError::UnsupportedVersion {
                 kind: Kind::REVOCATION.to_u8(),
                 version: 9

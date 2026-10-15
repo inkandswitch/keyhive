@@ -205,19 +205,20 @@ impl<W> State<W> {
             .collect()
     }
 
-    /// Every delegation from `subject` to `audience`, live or not.
+    /// Every delegation from `subject` to `audience`, live or not, each with its
+    /// issuer.
     pub fn delegations_to(
         &self,
         subject: Id,
         audience: Id,
-    ) -> BTreeMap<Digest<Delegation>, Delegation> {
+    ) -> BTreeMap<Digest<Delegation>, (Id, Delegation)> {
         self.edges
             .get(&subject)
             .into_iter()
             .flat_map(Map::values)
             .flatten()
             .filter(|v| v.payload().audience == audience)
-            .map(|v| (v.digest(), *v.payload()))
+            .map(|v| (v.digest(), (v.issuer(), *v.payload())))
             .collect()
     }
 
@@ -324,7 +325,7 @@ impl<W> State<W> {
             VerifiedCertificate::Delegation(v) => {
                 let d = v.payload();
                 debug!(
-                    issuer = %d.issuer,
+                    issuer = %v.issuer(),
                     audience = %d.audience,
                     subject = %d.subject,
                     power = %d.power,
@@ -334,7 +335,7 @@ impl<W> State<W> {
                 self.edges
                     .entry(d.subject)
                     .or_default()
-                    .entry(d.issuer)
+                    .entry(v.issuer())
                     .or_default()
                     .push(Arc::clone(&v));
                 self.delegations.insert(v.digest(), v);
@@ -342,7 +343,7 @@ impl<W> State<W> {
             VerifiedCertificate::Revocation(v) => {
                 let r = v.payload();
                 debug!(
-                    issuer = %r.issuer,
+                    issuer = %v.issuer(),
                     revoke = %r.revoke,
                     target_known = self.delegations.contains_key(&r.revoke),
                     "revocation inserted"
@@ -448,7 +449,7 @@ impl<W> State<W> {
                 let on_routes = reaches.get(&target.payload().subject)?;
                 let nodes: Set<Id> = revocations
                     .iter()
-                    .map(|r| r.payload().issuer)
+                    .map(|r| r.issuer())
                     .flat_map(|k| {
                         core::iter::once(k).chain(reach.get(&k).into_iter().flatten().copied())
                     })
@@ -501,9 +502,9 @@ impl<W> State<W> {
                     .filter(|v| {
                         let d = v.payload();
                         !usable.contains(&v.digest())
-                            && !ctx.excludes_an_endpoint(d)
+                            && !ctx.excludes_an_endpoint(v)
                             && !self.revoked_by_audience(&v.digest(), d.audience)
-                            && reached(&base, d.subject, d.issuer)
+                            && reached(&base, d.subject, v.issuer())
                     })
                     .collect();
                 if candidates.is_empty() {
@@ -517,7 +518,7 @@ impl<W> State<W> {
                 newly_live.extend(
                     candidates
                         .iter()
-                        .filter(|v| reached(&levels, v.payload().subject, v.payload().issuer))
+                        .filter(|v| reached(&levels, v.payload().subject, v.issuer()))
                         .map(|v| v.digest()),
                 );
             }
@@ -531,9 +532,10 @@ impl<W> State<W> {
                     .into_iter()
                     .filter(|h| {
                         covered.contains(h)
-                            || self.delegations.get(h).is_some_and(|v| {
-                                reached(&base, v.payload().subject, v.payload().issuer)
-                            })
+                            || self
+                                .delegations
+                                .get(h)
+                                .is_some_and(|v| reached(&base, v.payload().subject, v.issuer()))
                     })
                     .collect();
             }
@@ -552,7 +554,7 @@ impl<W> State<W> {
     fn revoked_by_audience(&self, h: &Digest<Delegation>, audience: Id) -> bool {
         self.revocations_of
             .get(h)
-            .is_some_and(|rs| rs.iter().any(|r| r.payload().issuer == audience))
+            .is_some_and(|rs| rs.iter().any(|r| r.issuer() == audience))
     }
 
     /// Stratum 2, level: the least fixed point of covered-edge caps, rising
@@ -604,7 +606,7 @@ impl<W> State<W> {
                     let d = v.payload();
                     // Liveness found a grounded avoiding derivation, so the
                     // issuer is reached; a miss would leave the cap at `Relay`.
-                    if let Some(at_iss) = levels.get(&d.subject).and_then(|m| m.get(&d.issuer)) {
+                    if let Some(at_iss) = levels.get(&d.subject).and_then(|m| m.get(&v.issuer())) {
                         let raised = cap[&v.digest()].max(d.power.min(*at_iss));
                         next.insert(v.digest(), raised);
                     }
@@ -776,8 +778,8 @@ impl Context {
     /// so `d` could not be found live there. Skipping it saves a search root.
     /// Because the answer cannot change, mutation testing skips this function
     /// (`.cargo/mutants.toml`).
-    fn excludes_an_endpoint(&self, d: &Delegation) -> bool {
-        self.exclude.contains(&d.issuer) || self.exclude.contains(&d.subject)
+    fn excludes_an_endpoint(&self, v: &Verified<Delegation>) -> bool {
+        self.exclude.contains(&v.issuer()) || self.exclude.contains(&v.payload().subject)
     }
 }
 

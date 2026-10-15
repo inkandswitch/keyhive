@@ -40,7 +40,7 @@ use crate::{
     delegation::Delegation,
     power::Power,
     revocation::{Revocation, RevocationId},
-    test_utils::{assume_verified, id, Statement},
+    test_utils::{assume_verified, delegation, id, revocation, Issued, Statement},
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -71,12 +71,12 @@ pub const FRANK: u8 = 10;
 /// A second document, for scenarios that need a subject outside the cast.
 pub const OTHER_DOC: u8 = 11;
 
-pub fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Delegation {
-    Delegation::new(id(issuer), id(audience), id(subject), power)
+pub fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Issued<Delegation> {
+    delegation(id(issuer), id(audience), id(subject), power)
 }
 
-pub fn r<W>(issuer: u8, target: &Delegation) -> Revocation<W> {
-    Revocation::new(id(issuer), target.digest())
+pub fn r<W>(issuer: u8, target: &Issued<Delegation>) -> Issued<Revocation<W>> {
+    revocation(id(issuer), target.digest())
 }
 
 /// What a backend's watermark type must satisfy to run the generated laws.
@@ -230,7 +230,7 @@ impl<C: Backend> Harness<C> {
         &self,
         subject: Id,
         audience: Id,
-    ) -> BTreeMap<Digest<Delegation>, Delegation> {
+    ) -> BTreeMap<Digest<Delegation>, (Id, Delegation)> {
         self.answer(self.store.delegations_to(subject, audience))
     }
 

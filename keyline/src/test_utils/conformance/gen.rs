@@ -16,7 +16,7 @@ use crate::{
     delegation::Delegation,
     power::Power,
     revocation::Revocation,
-    test_utils::{id, Statement},
+    test_utils::{delegation, id, revocation, Issued, Statement},
 };
 use alloc::{collections::BTreeMap, vec::Vec};
 use arbitrary::{Arbitrary, Result, Unstructured};
@@ -39,11 +39,11 @@ pub struct CertSet<W> {
 }
 
 impl<W: Clone + Encode + Decode> CertSet<W> {
-    pub fn delegations(&self) -> impl Iterator<Item = &Delegation> {
+    pub fn delegations(&self) -> impl Iterator<Item = &Issued<Delegation>> {
         self.certs.iter().filter_map(Statement::as_delegation)
     }
 
-    pub fn revocations(&self) -> impl Iterator<Item = &Revocation<W>> {
+    pub fn revocations(&self) -> impl Iterator<Item = &Issued<Revocation<W>>> {
         self.certs.iter().filter_map(Statement::as_revocation)
     }
 
@@ -73,7 +73,7 @@ impl<W: Clone + Encode + Decode> CertSet<W> {
                 .certs
                 .iter()
                 .map(|c| match c {
-                    Statement::Revocation(r) => Revocation::new(r.issuer, r.revoke).into(),
+                    Statement::Revocation(r) => revocation(r.issuer, r.revoke).into(),
                     Statement::Delegation(d) => (*d).into(),
                 })
                 .collect(),
@@ -158,7 +158,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
             } else {
                 Power::Edit
             };
-            certs.push(Delegation::new(id(s), id(audience), id(s), rooting).into());
+            certs.push(delegation(id(s), id(audience), id(s), rooting).into());
         }
         // Planted shapes avoid their subject and its root audience, whose
         // independent standing would otherwise mask what the shape tests.
@@ -167,7 +167,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
         // Free-form delegations over any node in the pool as subject, so some
         // land on roles (composition) and some are ungrounded.
         for _ in 0..u.int_in_range(0..=10)? {
-            let d = Delegation::new(pick_id(u)?, pick_id(u)?, pick_id(u)?, u.arbitrary()?);
+            let d = delegation(pick_id(u)?, pick_id(u)?, pick_id(u)?, u.arbitrary()?);
             certs.push(d.into());
         }
 
@@ -197,14 +197,14 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
             } else {
                 Power::Relay
             };
-            let grant = Delegation::new(e, f, s, Power::Admin);
+            let grant = delegation(e, f, s, Power::Admin);
             certs.extend::<[Statement<W>; 6]>([
-                Delegation::new(s, m, s, via_role).into(),
-                Delegation::new(m, k, m, Power::Admin).into(),
-                Delegation::new(k, e, m, Power::Admin).into(),
-                Delegation::new(s, e, s, independent).into(),
+                delegation(s, m, s, via_role).into(),
+                delegation(m, k, m, Power::Admin).into(),
+                delegation(k, e, m, Power::Admin).into(),
+                delegation(s, e, s, independent).into(),
                 grant.into(),
-                Revocation::new(k, grant.digest()).into(),
+                revocation(k, grant.digest()).into(),
             ]);
         }
 
@@ -218,22 +218,22 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
             let s = id(s_n);
             let [m1, e, m2, f, g] = distinct(u, &clear_of(s_n))?;
             let (h1, h2, h3) = (
-                Delegation::new(e, f, s, Power::Admin),
-                Delegation::new(f, e, s, Power::Admin),
-                Delegation::new(f, g, s, Power::Admin),
+                delegation(e, f, s, Power::Admin),
+                delegation(f, e, s, Power::Admin),
+                delegation(f, g, s, Power::Admin),
             );
             certs.extend::<[Statement<W>; 11]>([
-                Delegation::new(s, e, s, Power::Read).into(),
-                Delegation::new(s, m1, s, Power::Edit).into(),
-                Delegation::new(m1, e, m1, Power::Admin).into(),
-                Delegation::new(s, m2, s, Power::Edit).into(),
-                Delegation::new(m2, f, m2, Power::Admin).into(),
+                delegation(s, e, s, Power::Read).into(),
+                delegation(s, m1, s, Power::Edit).into(),
+                delegation(m1, e, m1, Power::Admin).into(),
+                delegation(s, m2, s, Power::Edit).into(),
+                delegation(m2, f, m2, Power::Admin).into(),
                 h1.into(),
                 h2.into(),
                 h3.into(),
-                Revocation::new(m1, h1.digest()).into(),
-                Revocation::new(m2, h2.digest()).into(),
-                Revocation::new(m2, h3.digest()).into(),
+                revocation(m1, h1.digest()).into(),
+                revocation(m2, h2.digest()).into(),
+                revocation(m2, h3.digest()).into(),
             ]);
         }
 
@@ -254,17 +254,17 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
                 }
             };
             certs.extend::<[Statement<W>; 4]>([
-                Delegation::new(s, r1, s, hop(u)?).into(),
-                Delegation::new(r1, r2, r1, hop(u)?).into(),
-                Delegation::new(r2, r3, r2, hop(u)?).into(),
-                Delegation::new(r3, p, r3, hop(u)?).into(),
+                delegation(s, r1, s, hop(u)?).into(),
+                delegation(r1, r2, r1, hop(u)?).into(),
+                delegation(r2, r3, r2, hop(u)?).into(),
+                delegation(r3, p, r3, hop(u)?).into(),
             ]);
             if composed {
                 let root = certs[usize::from(s_n - 1)]
                     .as_delegation()
                     .expect("the first statements are the root edges")
                     .digest();
-                certs.push(Revocation::new(p, root).into());
+                certs.push(revocation(p, root).into());
             }
         }
 
@@ -277,27 +277,27 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
             let s_n = u.int_in_range(1..=subjects)?;
             let s = id(s_n);
             let [g, m, k, e, f] = distinct(u, &clear_of(s_n))?;
-            let grant = Delegation::new(e, f, g, Power::Admin);
+            let grant = delegation(e, f, g, Power::Admin);
             certs.extend::<[Statement<W>; 7]>([
-                Delegation::new(s, g, s, Power::Edit).into(),
-                Delegation::new(g, m, g, Power::Edit).into(),
-                Delegation::new(m, k, m, Power::Admin).into(),
-                Delegation::new(k, e, m, Power::Admin).into(),
-                Delegation::new(g, e, g, Power::Read).into(),
+                delegation(s, g, s, Power::Edit).into(),
+                delegation(g, m, g, Power::Edit).into(),
+                delegation(m, k, m, Power::Admin).into(),
+                delegation(k, e, m, Power::Admin).into(),
+                delegation(g, e, g, Power::Read).into(),
                 grant.into(),
-                Revocation::new(k, grant.digest()).into(),
+                revocation(k, grant.digest()).into(),
             ]);
         }
 
         // Occasionally, a revocation of a delegation that is not in the set.
         if u.ratio(1, 4)? {
-            let absent = Delegation::new(pick_id(u)?, pick_id(u)?, pick_id(u)?, pick_power(u)?);
-            certs.push(Revocation::new(pick_id(u)?, absent.digest()).into());
+            let absent = delegation(pick_id(u)?, pick_id(u)?, pick_id(u)?, pick_power(u)?);
+            certs.push(revocation(pick_id(u)?, absent.digest()).into());
         }
 
         // Revocations naming delegations already present.
         for _ in 0..u.int_in_range(0..=4)? {
-            let dels: Vec<Delegation> = certs
+            let dels: Vec<Issued<Delegation>> = certs
                 .iter()
                 .filter_map(Statement::as_delegation)
                 .copied()
@@ -311,7 +311,7 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
                 _ => pick_id(u)?,
             };
             certs.push(
-                Revocation::new(issuer, target.digest())
+                revocation(issuer, target.digest())
                     .retaining(watermarks(u)?)
                     .into(),
             );
@@ -319,9 +319,9 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
 
         // Re-issues past a revocation, so heals and `citation` collisions
         // happen, and sometimes a revocation of the re-issue.
-        let mut reissues: Vec<Delegation> = Vec::new();
+        let mut reissues: Vec<Issued<Delegation>> = Vec::new();
         for _ in 0..u.int_in_range(0..=2)? {
-            let revocations: Vec<Revocation<W>> = certs
+            let revocations: Vec<Issued<Revocation<W>>> = certs
                 .iter()
                 .filter_map(Statement::as_revocation)
                 .cloned()
@@ -329,22 +329,22 @@ impl<'a, W: Arbitrary<'a> + Clone + Encode + Decode> Arbitrary<'a> for CertSet<W
             if revocations.is_empty() {
                 break;
             }
-            let revocation = revocations[u.choose_index(revocations.len())?].clone();
+            let revoked = revocations[u.choose_index(revocations.len())?].clone();
             let Some(target) = certs
                 .iter()
                 .filter_map(Statement::as_delegation)
-                .find(|d| d.digest() == revocation.revoke)
+                .find(|d| d.digest() == revoked.revoke)
                 .copied()
             else {
                 continue;
             };
-            let reissue = target.reissue(revocation.digest());
+            let reissue = target.reissue(revoked.digest());
             reissues.push(reissue);
             certs.push(reissue.into());
         }
         if !reissues.is_empty() && u.arbitrary()? {
             let target = reissues[u.choose_index(reissues.len())?];
-            certs.push(Revocation::new(pick_id(u)?, target.digest()).into());
+            certs.push(revocation(pick_id(u)?, target.digest()).into());
         }
 
         Ok(CertSet { certs })

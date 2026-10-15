@@ -114,13 +114,14 @@ pub trait Keyline<F: FutureForm> {
         delegation: Digest<Delegation>,
     ) -> Query<'_, F, BTreeSet<Digest<RevocationId>>, Self::Error>;
 
-    /// Every delegation in the set from `subject` to `audience`, live or not:
-    /// what revoking `audience`'s access must name.
+    /// Every delegation in the set from `subject` to `audience`, live or not,
+    /// each with its issuer: what revoking `audience`'s access must name.
+    #[allow(clippy::type_complexity)]
     fn delegations_to(
         &self,
         subject: Id,
         audience: Id,
-    ) -> Query<'_, F, BTreeMap<Digest<Delegation>, Delegation>, Self::Error>;
+    ) -> Query<'_, F, BTreeMap<Digest<Delegation>, (Id, Delegation)>, Self::Error>;
 
     /// `audience`'s effective power over `subject`: the maximum over live
     /// routes of the minimum along each. `None` if no live route exists.
@@ -279,8 +280,8 @@ mod tests {
         assert_ne!(set_digest([a, b]), set_digest([a, b, c]));
     }
 
-    /// Pins the set digest of fixed ids: the version and kind, the sort, and
-    /// the concatenation. Changing any of them must change this test on purpose.
+    /// Pins the set digest of fixed ids: the tag, kind and version, the sort,
+    /// and the concatenation. Changing any of them must change this test on purpose.
     #[test]
     fn set_digest_known_answer() {
         let hex: String = set_digest(ids())
@@ -292,7 +293,7 @@ mod tests {
     }
 
     const SET_KNOWN_DIGEST: &str =
-        "7b31d7b7bef35ccfc308f06cd35dbc448ea383a8256fea3b4971b4db3425383b";
+        "bc00e6b141f8c293210bca3b8fd96d5994389b59f9bf6bf8e7859f229a370916";
 
     #[test]
     fn set_digest_ignores_repetition() {

@@ -12,26 +12,100 @@
 
 pub mod conformance;
 
-use crate::{certificate::VerifiedCertificate, delegation::Delegation, revocation::Revocation};
+use crate::{
+    certificate::VerifiedCertificate,
+    delegation::Delegation,
+    power::Power,
+    revocation::{Revocation, RevocationId},
+};
+use alloc::collections::BTreeMap;
+use core::ops::Deref;
 use ed25519_dalek::{Signature, SigningKey};
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{
+    digest::Digest,
     id::Id,
     signable::{message, Signable},
-    verifiable::Verifiable,
     verified::{Signed, Verified},
 };
+
+/// A payload and the key that will sign it: a certificate before it is
+/// signed. Signing moves the issuer into the signed envelope.
+///
+/// Derefs to the payload, so fixtures and oracles read `d.audience` and
+/// `d.issuer` alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Issued<T> {
+    pub issuer: Id,
+    pub payload: T,
+}
+
+impl<T> Deref for Issued<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.payload
+    }
+}
+
+impl Issued<Delegation> {
+    /// The identity the delegation has once signed.
+    pub fn digest(&self) -> Digest<Delegation> {
+        Digest::of(&self.issuer, &self.payload.encode())
+    }
+
+    /// Re-issue past a revocation, as [`Delegation::reissue`].
+    pub fn reissue(self, citation: Digest<RevocationId>) -> Self {
+        Issued {
+            issuer: self.issuer,
+            payload: self.payload.reissue(citation),
+        }
+    }
+}
+
+impl<W: Encode> Issued<Revocation<W>> {
+    /// The identity the revocation has once signed.
+    pub fn digest(&self) -> Digest<RevocationId> {
+        Digest::<Revocation<W>>::of(&self.issuer, &self.payload.encode()).coerce()
+    }
+}
+
+impl<W> Issued<Revocation<W>> {
+    /// The same revocation, carrying retention watermarks.
+    pub fn retaining(self, retain: BTreeMap<Id, W>) -> Self {
+        Issued {
+            issuer: self.issuer,
+            payload: self.payload.retaining(retain),
+        }
+    }
+}
+
+/// `issuer` delegates `power` over `subject` to `audience`.
+pub fn delegation(issuer: Id, audience: Id, subject: Id, power: Power) -> Issued<Delegation> {
+    Issued {
+        issuer,
+        payload: Delegation::new(audience, subject, power),
+    }
+}
+
+/// `issuer` revokes the delegation with digest `revoke`.
+pub fn revocation<W>(issuer: Id, revoke: Digest<Delegation>) -> Issued<Revocation<W>> {
+    Issued {
+        issuer,
+        payload: Revocation::new(revoke),
+    }
+}
 
 /// An unsigned statement: what the generator, the oracles and the fixtures
 /// work with before anything is signed.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Statement<W> {
-    Delegation(Delegation),
-    Revocation(Revocation<W>),
+    Delegation(Issued<Delegation>),
+    Revocation(Issued<Revocation<W>>),
 }
 
 impl<W> Statement<W> {
-    /// The signer either kind names.
+    /// Who will sign it.
     pub fn issuer(&self) -> Id {
         match self {
             Statement::Delegation(d) => d.issuer,
@@ -40,7 +114,7 @@ impl<W> Statement<W> {
     }
 
     /// The delegation, if this is one.
-    pub fn as_delegation(&self) -> Option<&Delegation> {
+    pub fn as_delegation(&self) -> Option<&Issued<Delegation>> {
         match self {
             Statement::Delegation(d) => Some(d),
             Statement::Revocation(_) => None,
@@ -48,7 +122,7 @@ impl<W> Statement<W> {
     }
 
     /// The revocation, if this is one.
-    pub fn as_revocation(&self) -> Option<&Revocation<W>> {
+    pub fn as_revocation(&self) -> Option<&Issued<Revocation<W>>> {
         match self {
             Statement::Delegation(_) => None,
             Statement::Revocation(r) => Some(r),
@@ -56,14 +130,14 @@ impl<W> Statement<W> {
     }
 }
 
-impl<W> From<Delegation> for Statement<W> {
-    fn from(d: Delegation) -> Self {
+impl<W> From<Issued<Delegation>> for Statement<W> {
+    fn from(d: Issued<Delegation>) -> Self {
         Statement::Delegation(d)
     }
 }
 
-impl<W> From<Revocation<W>> for Statement<W> {
-    fn from(r: Revocation<W>) -> Self {
+impl<W> From<Issued<Revocation<W>>> for Statement<W> {
+    fn from(r: Issued<Revocation<W>>) -> Self {
         Statement::Revocation(r)
     }
 }
@@ -85,9 +159,10 @@ pub fn id(n: u8) -> Id {
 pub fn assume_verified<W: Encode + Decode, X: Into<Statement<W>>>(
     statement: X,
 ) -> VerifiedCertificate<W> {
-    fn assume<T: Signable>(payload: &T) -> Verified<T> {
+    fn assume<T: Signable>(issued: &Issued<T>) -> Verified<T> {
         Verified::assume(Signed::from_parts(
-            payload.encode(),
+            issued.issuer,
+            issued.payload.encode(),
             Signature::from_bytes(&[0u8; 64]),
         ))
     }
@@ -108,15 +183,15 @@ pub fn assume_verified<W: Encode + Decode, X: Into<Statement<W>>>(
 /// If the issuer is not a fixture identity, or if `W`'s `Encode`/`Decode` is
 /// not canonical: the signed revocation then fails to verify.
 pub fn signed<W: Encode + Decode, X: Into<Statement<W>>>(statement: X) -> VerifiedCertificate<W> {
-    fn sign<T: Signable + Verifiable>(payload: &T, key: &SigningKey) -> Verified<T> {
+    fn sign<T: Signable>(payload: &T, key: &SigningKey) -> Verified<T> {
         Verified::sign_sync(payload, key)
             .expect("signed by its issuer, so only a non-canonical `W` codec fails to verify")
     }
     let statement = statement.into();
     let key = issuer_key(statement.issuer());
     match statement {
-        Statement::Delegation(d) => sign(&d, &key).into(),
-        Statement::Revocation(r) => sign(&r, &key).into(),
+        Statement::Delegation(d) => sign(&d.payload, &key).into(),
+        Statement::Revocation(r) => sign(&r.payload, &key).into(),
     }
 }
 
@@ -129,23 +204,24 @@ pub fn resigned<W: Encode + Decode, X: Into<Statement<W>>>(
     statement: X,
     salt: u8,
 ) -> VerifiedCertificate<W> {
-    fn sign<T: Signable + Verifiable>(payload: &T, key: &SigningKey, salt: u8) -> Verified<T> {
+    fn sign<T: Signable>(payload: &T, key: &SigningKey, salt: u8) -> Verified<T> {
         use ed25519_dalek::hazmat::{raw_sign, ExpandedSecretKey};
 
         let mut expanded = ExpandedSecretKey::from(key.as_bytes());
         expanded.hash_prefix = [salt; 32];
+        let issuer = Id::from(key);
         let encoded = payload.encode();
-        let message = message::<T>(encoded.as_bytes());
+        let message = message::<T>(&issuer, encoded.as_bytes());
         let signature = raw_sign::<sha2::Sha512>(&expanded, &message, &key.verifying_key());
-        Signed::from_parts(encoded, signature)
+        Signed::from_parts(issuer, encoded, signature)
             .verify()
             .expect("a signature with any nonce verifies")
     }
     let statement = statement.into();
     let key = issuer_key(statement.issuer());
     match statement {
-        Statement::Delegation(d) => sign(&d, &key, salt).into(),
-        Statement::Revocation(r) => sign(&r, &key, salt).into(),
+        Statement::Delegation(d) => sign(&d.payload, &key, salt).into(),
+        Statement::Revocation(r) => sign(&r.payload, &key, salt).into(),
     }
 }
 

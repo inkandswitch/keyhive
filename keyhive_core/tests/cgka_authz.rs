@@ -142,7 +142,7 @@ async fn keyline_twin(
     member: IndividualId,
 ) -> TestResult<Certificate<ContentHeads<[u8; 32]>>> {
     let id = |i: IndividualId| Id::try_from(Identifier::from(i)).expect("a valid id");
-    let delegation = Delegation::new(id(group_id), id(member), id(group_id), Power::Read);
+    let delegation = Delegation::new(id(member), id(group_id), Power::Read);
     let signed = group.sign_certificate(&delegation).await?;
     Ok(VerifiedCertificate::from(signed).into_certificate())
 }
@@ -167,7 +167,7 @@ async fn keyline_grant(
     .value;
     let digest = grants
         .iter()
-        .find(|(_, d)| d.issuer != subject_id)
+        .find(|(_, (issuer, _))| *issuer != subject_id)
         .or_else(|| grants.iter().next())
         .map(|(digest, _)| *digest)
         .expect("a Keyline delegation");
@@ -597,10 +597,9 @@ async fn a_remove_citing_a_revocation_that_covers_nothing_is_pending() -> TestRe
         .into_iter()
         .next()
         .expect("alice's root edge");
-    let id = |i: Identifier| Id::try_from(i).expect("a valid id");
-    let inert: Revocation<ContentHeads<[u8; 32]>> =
-        Revocation::new(id(relay.id().into()), root_edge);
+    let inert: Revocation<ContentHeads<[u8; 32]>> = Revocation::new(root_edge);
     let signed = relay.sign_certificate(&inert).await?;
+    let inert_digest = signed.digest();
     alice
         .receive_certificate(VerifiedCertificate::from(signed).into_certificate())
         .await?;
@@ -616,7 +615,7 @@ async fn a_remove_citing_a_revocation_that_covers_nothing_is_pending() -> TestRe
         removed_keys: vec![],
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId(doc_id.verifying_key()),
-        authorization: CgkaAuthorization::Revocation(inert.digest().into()),
+        authorization: CgkaAuthorization::Revocation(inert_digest.into()),
     };
     let result = alice.receive_cgka_op(relay.try_sign(op).await?).await;
 

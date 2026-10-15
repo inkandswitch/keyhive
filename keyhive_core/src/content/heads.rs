@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn rides_in_a_signed_revocation() {
         use ed25519_dalek::SigningKey;
-        use keyhive_crypto::{id::Id, verified::Verified};
+        use keyhive_crypto::{digest::Digest, id::Id, verified::Verified};
         use keyline::{
             certificate::{Certificate, VerifiedCertificate},
             delegation::Delegation,
@@ -210,10 +210,10 @@ mod tests {
         let key = SigningKey::from_bytes(&[7; 32]);
         let issuer = Id::from(&key);
         let document = Id::from(&SigningKey::from_bytes(&[8; 32]));
-        let target = Delegation::new(issuer, document, document, Power::Read);
+        let target = Delegation::new(document, document, Power::Read);
         let heads: ContentHeads<[u8; 32]> = [[3; 32], [4; 32]].into_iter().collect();
 
-        let revocation = Revocation::new(issuer, target.digest())
+        let revocation = Revocation::new(Digest::of(&issuer, &target.encode()))
             .retaining(BTreeMap::from([(document, heads.clone())]));
         let signed = Verified::sign_sync(&revocation, &key).expect("signed by its issuer");
         let wire = VerifiedCertificate::from(signed)

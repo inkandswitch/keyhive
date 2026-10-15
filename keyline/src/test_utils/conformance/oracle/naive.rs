@@ -9,7 +9,7 @@ use crate::{
     power::Power,
     test_utils::{
         conformance::gen::{ids, CertSet},
-        Statement,
+        Issued, Statement,
     },
 };
 use alloc::{
@@ -27,7 +27,7 @@ pub struct Evaluation {
 
 struct Facts {
     nodes: BTreeSet<Id>,
-    dels: BTreeMap<Digest<Delegation>, Delegation>,
+    dels: BTreeMap<Digest<Delegation>, Issued<Delegation>>,
     // Issuer and target only: `retain` has no bearing on authority, so the
     // oracle cannot read it even by accident.
     revocations: Vec<(Id, Digest<Delegation>)>,
@@ -50,7 +50,7 @@ fn level(
     f: &Facts,
     exclude: &BTreeSet<Id>,
     usable: &dyn Fn(&Digest<Delegation>) -> bool,
-    cap: &dyn Fn(&Digest<Delegation>, &Delegation) -> Power,
+    cap: &dyn Fn(&Digest<Delegation>, &Issued<Delegation>) -> Power,
 ) -> Levels {
     let mut m: Levels = f
         .nodes

@@ -3,10 +3,9 @@
 use keyhive_core::{
     content::heads::ContentHeads,
     event::{static_event::StaticEvent, Event},
-    principal::{document::AddMemberError, identifier::Identifier},
+    principal::document::AddMemberError,
     test_utils::{TestContext, TestError, TestResult as Result},
 };
-use keyhive_crypto::id::Id;
 use keyline::{
     certificate::Certificate,
     power::Power::{self, Admin, Edit, Read, Relay},
@@ -701,10 +700,7 @@ async fn a_revocation_by_someone_without_reach_is_inert() -> Result<()> {
     // Mallory has no standing over the document. Her revocation is admitted,
     // as every well-signed one is, and reaches no route.
     let forged = mallory
-        .sign_certificate(&Revocation::<ContentHeads<[u8; 32]>>::new(
-            Id::try_from(Identifier::from(mallory.id()))?,
-            bobs.digest(),
-        ))
+        .sign_certificate(&Revocation::<ContentHeads<[u8; 32]>>::new(bobs.digest()))
         .await?;
     alice
         .receive_static_event(StaticEvent::from(Event::from(Certificate::Revocation(

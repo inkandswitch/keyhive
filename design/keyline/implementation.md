@@ -46,7 +46,6 @@ Order and encoding are separate. The lattice is `Power::rank()`; the wire tag is
 
 ```rust
 pub struct Delegation {
-    pub issuer:   Id,
     pub audience: Id,
     pub subject:  Id,
     pub power:    Power,
@@ -56,11 +55,12 @@ pub struct Delegation {
 
 `RevocationId` is an uninhabited marker. `Revocation` is generic over its watermark type (below), and naming it as `Digest<Revocation<W>>` would make `Delegation` generic over a type it never uses.
 
+The issuer is not a field. It is the key that signs, carried in the signed envelope ([`Signed<T>`](#signedt-and-verifiedt)) and read as `Verified::issuer()`. The edge rides the issuer's standing over `subject`.
+
 | Field      | Meaning                                                                                                                             |
 |------------|-------------------------------------------------------------------------------------------------------------------------------------|
-| `issuer`   | Signer. The edge rides this key's standing over `subject`.                                                                          |
 | `audience` | Receives `min(power, issuer's effective power over subject)`.                                                                       |
-| `subject`  | Scope. `issuer == subject` is a root edge. A role key as `subject` is membership in that role.                                      |
+| `subject`  | Scope. A delegation the subject itself signs is a root edge. A role key as `subject` is membership in that role.                    |
 | `power`    | Requested level; clamped, never raised.                                                                                             |
 | `citation` | The revocation being re-issued past. Gives a delegation identical to a revoked one a fresh digest. Evaluation ignores it. Absent means first issuance. |
 
@@ -68,7 +68,7 @@ A delegation is the Granovetter introduction from object capabilities; the [mode
 
 Anyone may issue a delegation over any subject. The issuer's effective power over `subject` clamps the result; issuing needs no Admin.
 
-Admin matters for revocation, in two tiers. You can always revoke a delegation you issued: revocation by the issuer needs no standing. Holding Admin over a node lets you act as that node for revocation: your revocations cover anything on routes through it, all the way down. "Act as" is revocation-side only. Admin over `N` does not let you sign as `N`; you delegate authority _over_ `N` by issuing `{issuer: you, subject: N, …}`, clamped by your own level.
+Admin matters for revocation, in two tiers. You can always revoke a delegation you issued: revocation by the issuer needs no standing. Holding Admin over a node lets you act as that node for revocation: your revocations cover anything on routes through it, all the way down. "Act as" is revocation-side only. Admin over `N` does not let you sign as `N`; you delegate authority _over_ `N` by signing a delegation with `subject: N`, clamped by your own level.
 
 `citation` names a revocation rather than using a random nonce, so that an accidental duplicate issuance is one certificate, not two; see [alternatives](alternatives.md#a-random-nonce-instead-of-citation). It names the revocation, not the revoked delegation; see [The `citation` Field](README.md#the-citation-field).
 
@@ -76,16 +76,16 @@ Admin matters for revocation, in two tiers. You can always revoke a delegation y
 
 ```rust
 pub struct Revocation<W> {
-    pub issuer: Id,
     pub revoke: Digest<Delegation>,
     pub retain: BTreeMap<Id, W>,
 }
 ```
 
+As for a delegation, the issuer is the signer, carried in the envelope; its admin reach scopes the effect.
+
 | Field    | Meaning                                                                                          |
 |----------|--------------------------------------------------------------------------------------------------|
-| `issuer` | Signer. Its admin reach scopes the effect.                                                       |
-| `revoke` | The delegation being withdrawn, by payload digest.                                               |
+| `revoke` | The delegation being withdrawn, by its digest.                                                   |
 | `retain` | Per-subject retention watermarks for the content layer. Evaluation ignores it. Empty by default. |
 
 The type of `revoke` makes revoking a revocation unwritable. There is no `subject`: the effect is scoped by the issuer's admin reach, not by the issuer's choice. A `subject` field was considered and rejected because every rotation would moot every standing revocation; see [alternatives](alternatives.md#a-subject-field-on-revocation).
@@ -143,32 +143,34 @@ The type does not check the claim. `Encode::encode` produces canonical bytes fro
 
 ### `Digest<T>`
 
-`keyhive_crypto::digest::Digest<T>`: BLAKE3, 32 bytes, phantom-typed. `keyline` obtains it as `Digest::of(&Encoded<T>)`, which requires `T: Kinded` and hashes the [prefixed](#domain-separation) bytes, or as `Digest::of_bytes` for a composite with no `T` value of its own, such as the set digest. The `std`-gated `Digest::hash` (which needs `bincode`) is not used; its `T: Serialize` bound sits on `hash()` alone.
+`keyhive_crypto::digest::Digest<T>`: BLAKE3, 32 bytes, phantom-typed. `keyline` obtains a statement's digest as `Digest::of(&issuer, &Encoded<T>)`, which requires `T: Kinded` and hashes the same bytes its signature covers ([Domain Separation](#domain-separation)), or as `Digest::of_bytes` for a hash-only kind with no issuer, such as the set digest. The `std`-gated `Digest::hash` (which needs `bincode`) is not used; its `T: Serialize` bound sits on `hash()` alone.
 
 ### Domain Separation
 
-The keys that sign Keyline certificates also sign in other protocols, such as key agreement operations and prekey operations. If one byte string were valid in two formats, one signature would be valid in both. So every byte string Keyhive signs or hashes this way is
+The keys that sign Keyline certificates also sign in other protocols, such as key agreement operations and prekey operations. If one byte string were valid in two formats, one signature would be valid in both. So every signed statement travels as a frame that starts with Keyhive's tag, and its signature covers the frame up to the signature:
 
 ```
-"keyhive\0" ‖ version:u8 ‖ kind:u8 ‖ payload
+frame              "KH" ‖ kind:u8 ‖ version:u8 ‖ issuer:32 ‖ payload_len:bijou64 ‖ payload ‖ signature:64
+signed and hashed  the frame without its signature
 ```
 
-The kind is the type's permanent number in one registry for the whole workspace, `keyhive_crypto::signable::Kind`; a retired number is never reused. The version is the version of the type's encoding.
+The kind is the type's permanent number in one registry for the whole workspace, `keyhive_crypto::signable::Kind`; a retired number is never reused. Kinds are ASCII letters by convention, so a frame reads `KHD…` in a hexdump; any byte may be used once the letters run out. `I` is reserved, because an archive starts with `KHIV`. No common file format starts with `KH` at offset 0. The version is the version of the type's encoding, a byte starting at `0x00`.
 
-| Type             | Kind   | Used for                          |
-|------------------|--------|-----------------------------------|
-| `Delegation`     | `0x01` | signing, and its digest           |
-| `Revocation<W>`  | `0x02` | signing, and its digest           |
-| `CertificateSet` | `0x03` | the set digest only; never signed |
+| Type             | Kind      | Used for                          |
+|------------------|-----------|-----------------------------------|
+| `Delegation`     | `D` (`0x44`) | signing, and its digest           |
+| `Revocation<W>`  | `R` (`0x52`) | signing, and its digest           |
+| `CertificateSet` | `S` (`0x53`) | the set digest only; never signed: `"KH" ‖ kind ‖ version ‖ bytes` |
 
-A type with a kind implements `keyhive_crypto::signable::Kinded` (`KIND`, `VERSION`). `Signable` is `Kinded + Encode + Decode`, with a blanket impl: what can be signed and verified. `CertificateSet` is `Kinded` but has no codec, so it cannot be signed. The two kinds of certificate are separated by their kinds, which is also why their digests can share one key type without a tag. The free function `signable::message::<T>` builds the bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input; being a free function, no implementation can override it. The version and kind are also the first two bytes of the [wire frame](#encoding), so everything stored except the signature is signed: a frame whose version or kind was changed does not verify. Each type declares its kind next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core`'s serde payloads today, still relies on that protocol's formats.
+A type with a kind implements `keyhive_crypto::signable::Kinded` (`KIND`, `VERSION`). `Signable` is `Kinded + Encode + Decode`, with a blanket impl: what can be signed and verified. `CertificateSet` is `Kinded` but has no codec, so it cannot be signed. The two kinds of certificate are separated by their kinds, which is also why their digests can share one key type without a tag. The free function `signable::message::<T>` builds the bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input; being a free function, no implementation can override it. Because the tag, kind, version, issuer and length are part of the frame, everything stored except the signature is signed: a frame whose kind, version, issuer or length was changed does not verify. The signed bytes are one contiguous span from the frame's first byte, so a digest is BLAKE3 over that span. Each type declares its kind next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core`'s serde payloads today, still relies on that protocol's formats.
 
 ### `Signed<T>` and `Verified<T>`
 
 ```rust
 pub struct Signed<T> {
+    issuer:    Id,                         // who signed
     encoded:   Encoded<T>,
-    signature: ed25519_dalek::Signature,   // over message::<T>(encoded.as_bytes())
+    signature: ed25519_dalek::Signature,   // over message::<T>(&issuer, encoded.as_bytes())
 }
 
 pub struct Verified<T> {
@@ -176,31 +178,31 @@ pub struct Verified<T> {
     signed:  Signed<T>,  // retained so the certificate can be forwarded as received
 }
 
-impl<T: Signable + Verifiable> Signed<T> {
+impl<T: Signable> Signed<T> {
     pub fn verify(self) -> Result<Verified<T>, VerifyError>;
 }
 
-impl<T: Signable + Verifiable> Verified<T> {
+impl<T: Signable> Verified<T> {
     pub async fn sign<F: FutureForm, S: AsyncSigner<F>>(value: &T, signer: &S) -> Result<Self, SignError>;
     pub fn sign_sync<S: SyncSignerBasic + Verifiable>(value: &T, signer: &S) -> Result<Self, SignError>;
 }
 ```
 
-There is no issuer field. The payload names its own issuer (`Delegation.issuer`, `Revocation.issuer`), exposed through `keyhive_crypto::verifiable::Verifiable`, and `verify` checks the signature against that key and no other. In order, it:
+Who signed is part of the envelope, the same for every type, and the issuer is among the signed bytes. `verify` checks the signature against that key and no other. In order, it:
 
 1. decodes the payload;
 2. re-encodes it and requires exactly the received bytes, so a `Verified<T>` is always canonical;
-3. runs `verify_strict` over `message::<T>` of those bytes with `payload.verifying_key()`.
+3. runs `verify_strict` over `message::<T>(&issuer, bytes)` with the issuer's key.
 
-A certificate that names one issuer and is signed by another does not verify. Storing the signer separately would be a redundant field that the transport controls, and checking the signature against it instead of the payload would admit exactly that forgery. `sign` refuses a signer that is not the payload's issuer for the same reason. `verify_strict` rejects the small-order and malleable signatures that plain `verify` accepts; a unit test builds such a forgery and checks that it fails.
+A frame whose issuer was replaced does not verify, and neither does one signed by a key other than the issuer it names. Because the issuer is in the envelope rather than the payload, any reader can verify any entry, even one of a version it cannot decode. Signing makes the signer's key the issuer; a key that is not a valid `Id` (not canonical, or of small order) is refused with `SignError::InvalidIssuer`. `verify_strict` rejects the small-order and malleable signatures that plain `verify` accepts; a unit test builds such a forgery and checks that it fails.
 
-Signing goes through `keyhive_crypto`'s signer traits, the same ones `keyhive_core` uses, so the signing key can be non-extractable: WebCrypto, an HSM, or a KMS behind `AsyncSigner`, or an in-memory key behind `SyncSignerBasic`. The signer sees only `message::<T>`, so a caller cannot forget the prefix. `sign` returns a `Verified<T>` rather than a `Signed<T>`: it verifies what the signer returned, so a signer that produces a bad signature fails at the issuer, not at every peer that receives the certificate. Tests pin this with a signer that drops the prefix and header, and with a failing signer, through both the async (`Local` and `Sendable`) and the sync signer traits.
+Signing goes through `keyhive_crypto`'s signer traits, the same ones `keyhive_core` uses, so the signing key can be non-extractable: WebCrypto, an HSM, or a KMS behind `AsyncSigner`, or an in-memory key behind `SyncSignerBasic`. The signer sees only `message::<T>`, so a caller cannot forget the prefix. `sign` returns a `Verified<T>` rather than a `Signed<T>`: it verifies what the signer returned, so a signer that produces a bad signature fails at the issuer, not at every peer that receives the certificate. Tests pin this with a signer that drops the tag, kind and version, a failing signer, and one whose key cannot be an issuer, through both the async (`Local` and `Sendable`) and the sync signer traits.
 
 Outside the `conformance` and `test_utils` features, `verify`, `sign` and `sign_sync` are the only public constructors of `Verified<T>`, and all three check the signature. The digest is taken from the same bytes the signature covers, so nothing re-encodes a payload to identify it. A `Verified<T>` computes it once, at verification, and keeps it: the value is immutable, and a backend looks digests up on every step of a search. It shares its `Signed<T>` in an `Arc`, as `Certificate<W>` does, so a store hands out certificates without copying their bytes; `VerifiedCertificate<W>` shares its `Verified<T>` the same way, so a batch clones for the price of reference counts. `Verified::assume`, behind `keyhive_crypto`'s `unchecked` feature, lets `test_utils::assume_verified` build fixtures without paying for signing; `conformance` turns `unchecked` on. With either feature enabled the witness therefore proves nothing, so enable them only from dev-dependencies. One scenario goes through `sign_sync` for every certificate so the shortcut cannot hide a discrepancy.
 
-`Signed<T>` equality is by bytes _and_ signature. RFC 8032 signing is deterministic, so one key signing one payload twice yields equal values. A signer that picks its nonce another way produces a different, equally valid signature: a different `Signed<T>` with the same digest. A `Keyline` set is keyed by digest, so it holds such a pair as one certificate; the `second_signature_is_the_same_certificate` scenario pins this.
+`Signed<T>` equality is by issuer, bytes _and_ signature. RFC 8032 signing is deterministic, so one key signing one payload twice yields equal values. A signer that picks its nonce another way produces a different, equally valid signature: a different `Signed<T>` with the same digest. A `Keyline` set is keyed by digest, so it holds such a pair as one certificate; the `second_signature_is_the_same_certificate` scenario pins this.
 
-These two types live in `keyhive_crypto::verified`, with `Encode` / `Decode` for the wire frame `version ‖ kind ‖ signature ‖ payload`. `keyhive_crypto::signed`'s serde-based `Signed<T>` is still what `keyhive_core`'s other signed types use; the codec migration moves them over.
+These two types live in `keyhive_crypto::verified`, with `Encode`, `Decode` and `StreamDecode` for the wire frame above. `keyhive_crypto::signed`'s serde-based `Signed<T>` is still what `keyhive_core`'s other signed types use; the codec migration moves them over.
 
 ## The `Keyline` Trait
 
@@ -221,7 +223,7 @@ pub trait Keyline<F: FutureForm> {
     fn get(&self, cert: CertificateId) -> Query<'_, F, Option<Certificate<Self::RetentionWatermark>>, Self::Error>;
     fn certificates(&self) -> Query<'_, F, Vec<Certificate<Self::RetentionWatermark>>, Self::Error>;
     fn revocations_of(&self, delegation: Digest<Delegation>) -> Query<'_, F, BTreeSet<Digest<RevocationId>>, Self::Error>;
-    fn delegations_to(&self, subject: Id, audience: Id) -> Query<'_, F, BTreeMap<Digest<Delegation>, Delegation>, Self::Error>;
+    fn delegations_to(&self, subject: Id, audience: Id) -> Query<'_, F, BTreeMap<Digest<Delegation>, (Id, Delegation)>, Self::Error>;
     fn effective_power(&self, subject: Id, audience: Id) -> Query<'_, F, Option<Power>, Self::Error>;
     fn members(&self, subject: Id) -> Query<'_, F, BTreeMap<Id, Power>, Self::Error>;
     fn is_live(&self, delegation: Digest<Delegation>) -> Query<'_, F, bool, Self::Error>;
@@ -241,7 +243,7 @@ $1    fn subjects(&self) -> Query<'_, F, BTreeSet<Id>, Self::Error>;
 | `get`                | The certificate as received, for serving events and archives.                                                                   |
 | `certificates`       | Every certificate, in id order, for archives.                                                                                   |
 | `revocations_of`     | Revocations that name the delegation, covering or not. Explains a silent `citation` collision.                                  |
-| `delegations_to`     | Every delegation from `subject` to `audience`, live or not: what revoking `audience`'s access must name.                        |
+| `delegations_to`     | Every delegation from `subject` to `audience`, live or not, each with its issuer: what revoking `audience`'s access must name.   |
 | `effective_power`    | `audience`'s effective power over `subject`: max over live routes of min along each. `None` if unreachable.                     |
 | `members`            | Every `Id` other than `subject` itself with a live route to `subject`, with its effective power. The materialized view.         |
 | `is_live`            | Whether `delegation` survives evaluation.                                                                                       |
@@ -407,15 +409,16 @@ The second is a security requirement. Certificates travel as `Encoded<T>`, and t
 `keyline` implements the traits for its own types with a fixed-width layout:
 
 ```
-Delegation:  issuer ‖ audience ‖ subject ‖ power:u8 ‖ citation_tag:u8 ‖ citation?    power is one of L R E A
-Revocation:  issuer ‖ revoke ‖ count:bijou32 ‖ entry*
+Delegation:  audience ‖ subject ‖ power:u8 ‖ citation_tag:u8 ‖ citation?    power is one of L R E A
+Revocation:  revoke ‖ count:bijou32 ‖ entry*
   entry:     subject ‖ len:bijou32 ‖ W
-Certificate: version:u8 ‖ kind:u8 ‖ signature:64 ‖ payload                           kind is 0x01 (delegation) or 0x02 (revocation)
+Certificate: "KH" ‖ kind:u8 ‖ version:u8 ‖ issuer:32 ‖ payload_len:bijou64 ‖ payload ‖ signature:64
+             kind is D (delegation) or R (revocation)
 ```
 
 In `Delegation`, `citation_tag` is `0` with no following bytes when `citation` is absent, and `1` followed by 32 bytes when present. `power` is one of the four ASCII tags. Fixed-width layouts are canonical by construction, so `decode` only has to check length, tag membership, and that each `Id` is a valid point (an invalid one is reported by field name). `0x00` is not a valid `power`, so a zeroed buffer fails to decode.
 
-`Delegation` and `Revocation` encodings are the bytes that are signed and hashed, after the prefix, version and kind. `Certificate` is the wire form of a signed statement: its `Signed<T>` frame, version, kind, signature, then payload. The payload is last and runs to the end of the input, so it needs no length; a larger message that carries certificates frames each one. `Certificate::decode` checks the framing only (`UnexpectedKind` and `UnsupportedVersion` come from the header, before the payload is read) and keeps the payload as received; `Certificate::verify` decodes the payload, checks that it is canonical, and checks the signature. Encodings need not be self-delimiting, so any composite must frame its variable-length fields, as `Revocation` does. The `serde` feature also derives `Serialize`/`Deserialize` on the public types, for a caller that wants a format of its own; that is not Keyline's wire format.
+`Delegation` and `Revocation` encodings are the payloads of their frames. `Certificate` is the wire form of a signed statement: its `Signed<T>` frame. The payload length makes frames self-delimiting, so certificates can be written back to back and read with `StreamDecode`. `Certificate::decode` checks the framing only (`NotKeyhive`, `UnexpectedKind` and `UnsupportedVersion` come from the header, and an invalid issuer from the next 32 bytes, all before the payload is read) and keeps the payload as received; `Certificate::verify` decodes the payload, checks that it is canonical, and checks the signature. Encodings need not be self-delimiting, so any composite must frame its variable-length fields, as `Revocation` does. The `serde` feature also derives `Serialize`/`Deserialize` on the public types, for a caller that wants a format of its own; that is not Keyline's wire format.
 
 `retain` is the only variable-length field, so it is the only place where canonicality is not free. `decode` enforces it with four rules:
 
