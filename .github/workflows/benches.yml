@@ -27,11 +27,10 @@ jobs:
         include:
           - { package: keyhive_core, bench: bench_cgka }
           - { package: keyhive_core, bench: bench_cgka_propagation }
+          - { package: keyhive_core, bench: bench_event_selection }
           - { package: keyhive_core, bench: bench_ingest_unsorted_static_events }
-          - { package: keyhive_core, bench: bench_membership_ops_all }
           - { package: keyhive_core, bench: bench_reachable_prekey_ops }
           - { package: keyhive_core, bench: bench_reachable_prekey_ops_all }
-          - { package: keyhive_core, bench: bench_reverse_topsort }
           - { package: keyhive_core, bench: bench_toggling_delegate_revoke }
           - { package: keyline_memory, bench: bench_evaluate }
 
