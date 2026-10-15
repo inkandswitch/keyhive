@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::js::{event::JsEvent, identifier::JsIdentifier};
 
 use super::{individual_id::JsIndividualId, share_key::JsShareKey};
+use ed25519_dalek::VerifyingKey;
 
 #[wasm_bindgen(js_name = ContactCard)]
 #[derive(Debug, Clone, From, Into, Deref, Display)]
@@ -56,7 +57,7 @@ impl JsContactCard {
 }
 
 impl Verifiable for JsContactCard {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.0.verifying_key()
     }
 }

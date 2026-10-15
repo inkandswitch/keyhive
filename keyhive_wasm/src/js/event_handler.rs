@@ -1,18 +1,17 @@
-use super::{change_id::JsChangeId, event::JsEvent, signer::JsSigner};
+use super::{change_id::JsChangeId, event::JsEvent};
 use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
 use dupe::Dupe;
 use future_form::Local;
 use futures::future::LocalBoxFuture;
 use keyhive_core::{
+    content::heads::ContentHeads,
     event::Event,
     listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
-    principal::{
-        group::{delegation::Delegation, revocation::Revocation},
-        individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
-    },
+    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
-use keyhive_crypto::signed::Signed;
+use keyhive_crypto::{signed::Signed, verified::Verified};
+use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
@@ -46,19 +45,16 @@ impl PrekeyListener<Local> for JsEventHandler {
     }
 }
 
-impl MembershipListener<Local, JsSigner, JsChangeId> for JsEventHandler {
-    fn on_delegation<'a>(
-        &'a self,
-        data: &'a Arc<Signed<Delegation<Local, JsSigner, JsChangeId, Self>>>,
-    ) -> LocalBoxFuture<'a, ()> {
-        Box::pin(async move { self.call(Event::Delegated(data.dupe()).into()) })
+impl MembershipListener<Local, JsChangeId> for JsEventHandler {
+    fn on_delegation<'a>(&'a self, data: &'a Arc<Verified<Delegation>>) -> LocalBoxFuture<'a, ()> {
+        Box::pin(async move { self.call(Event::Delegated(data.signed().dupe()).into()) })
     }
 
     fn on_revocation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<Local, JsSigner, JsChangeId, Self>>>,
+        data: &'a Arc<Verified<Revocation<ContentHeads<JsChangeId>>>>,
     ) -> LocalBoxFuture<'a, ()> {
-        Box::pin(async move { self.call(Event::Revoked(data.dupe()).into()) })
+        Box::pin(async move { self.call(Event::Revoked(data.signed().dupe()).into()) })
     }
 }
 

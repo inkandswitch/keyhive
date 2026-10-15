@@ -16,6 +16,9 @@ crate-type = ["cdylib"]
 beekem = { workspace = true, features = ["std"] }
 from_js_ref = { workspace = true }
 keyhive_core = { workspace = true }
+keyhive_codec = { workspace = true, features = ["std"] }
+keyline = { workspace = true, features = ["std"] }
+keyline_memory = { workspace = true, features = ["std"] }
 keyhive_crypto = { workspace = true, features = ["std"] }
 wasm_refgen = { workspace = true }
 
