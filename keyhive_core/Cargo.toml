@@ -14,7 +14,9 @@ rust-version.workspace = true
 
 # Keyhive
 beekem = { workspace = true, features = ["std"] }
+keyhive_codec = { workspace = true, features = ["std"] }
 keyhive_crypto = { workspace = true, features = ["std"] }
+keyline = { workspace = true, features = ["serde", "std"] }
 
 # Docs
 aquamarine = { workspace = true, optional = true }
@@ -57,6 +59,7 @@ keyhive_crypto = { workspace = true, features = ["arbitrary", "std"] }
 test-utils = { workspace = true }
 
 arbitrary.workspace = true
+bolero.workspace = true
 lazy_static = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tokio-test = { workspace = true }
