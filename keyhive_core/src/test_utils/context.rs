@@ -30,7 +30,7 @@ use dupe::Dupe;
 use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef, share_key::ShareKey, signed::SigningError,
+    content::reference::ContentRef, id::Id, share_key::ShareKey, signed::SigningError,
     signer::memory::MemorySigner, symmetric_key::SymmetricKey,
 };
 use keyline::{delegation::Delegation, power::Power};
@@ -353,10 +353,11 @@ pub struct DelegationSummary {
     pub can: Power,
 }
 
-impl From<&Delegation> for DelegationSummary {
-    fn from(d: &Delegation) -> Self {
+impl DelegationSummary {
+    /// `d`, as `issuer` signed it.
+    pub fn new(issuer: Id, d: &Delegation) -> Self {
         DelegationSummary {
-            issuer: d.issuer.into(),
+            issuer: issuer.into(),
             audience: d.audience.into(),
             subject: d.subject.into(),
             can: d.power,
@@ -371,7 +372,7 @@ pub trait AddMemberUpdateExt {
 
 impl AddMemberUpdateExt for AddMemberUpdate {
     fn summary(&self) -> DelegationSummary {
-        DelegationSummary::from(self.delegation.payload())
+        DelegationSummary::new(self.delegation.issuer(), self.delegation.payload())
     }
 }
 
@@ -809,7 +810,10 @@ impl TestContext {
             .delegations_about(Identifier::from(subject.into()))
             .await?
             .iter()
-            .map(|signed| DelegationSummary::from(&decode_stored(signed)))
+            .map(|signed| {
+                let (issuer, d) = decode_stored(signed);
+                DelegationSummary::new(issuer, &d)
+            })
             .collect())
     }
 

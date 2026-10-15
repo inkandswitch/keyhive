@@ -48,6 +48,7 @@ impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for 
             // Delegations only: a revocation's watermark type has no
             // `Arbitrary`, and the signature is junk either way.
             3 => Ok(Self::Delegated(verified::Signed::from_parts(
+                u.arbitrary()?,
                 keyhive_codec::traits::Encode::encode(&Delegation::arbitrary(u)?),
                 ed25519_dalek::Signature::from_bytes(&u.arbitrary()?),
             ))),

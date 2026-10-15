@@ -11,7 +11,7 @@ This document describes who Keyhive defends against, what it defends, and what i
 |--------------------------------------------------|------------------------------------------------------------------------------------------------|
 | Document content (plaintext of CRDT operations)  | Causal encryption under BeeKEM application secrets                                             |
 | Membership (who may read, edit, administer)      | Signed delegation / revocation graph ([Keyline])                                               |
-| Integrity and authorship of membership certificates | Ed25519 signatures; certificates content-addressed by payload digest                         |
+| Integrity and authorship of membership certificates | Ed25519 signatures; certificates content-addressed by the digest of their issuer and payload  |
 | Signing keys and X25519 share keys               | Out of scope (see [Non-Goals](#non-goals)); `AsyncSigner` lets hosts keep keys in WebCrypto, hardware, or a KMS |
 | Existence of documents; shape of the graph       | Not protected from `Relay` holders (see [T8](#t8-metadata))                                    |
 

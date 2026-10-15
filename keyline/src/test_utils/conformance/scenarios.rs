@@ -12,7 +12,7 @@ use crate::{
     delegation::Delegation,
     power::Power,
     revocation::{Revocation, RevocationId},
-    test_utils::{assume_verified, id, resigned, signed},
+    test_utils::{assume_verified, id, resigned, signed, Issued},
 };
 use alloc::vec::Vec;
 use keyhive_crypto::digest::Digest;
@@ -21,7 +21,7 @@ use keyhive_crypto::digest::Digest;
 /// Owners; Members has Edit over Doc; Alice is a Member, added by Carol.
 ///
 /// Returns the graph, Carol's Owners membership, and Alice's Members membership.
-pub fn standard<C: Backend>() -> (Harness<C>, Delegation, Delegation) {
+pub fn standard<C: Backend>() -> (Harness<C>, Issued<Delegation>, Issued<Delegation>) {
     let carol_owner = d(OWNERS, CAROL, OWNERS, Power::Admin);
     let alice_member = d(CAROL, ALICE, MEMBERS, Power::Admin);
     let g = build([
@@ -394,7 +394,7 @@ pub fn insert_is_idempotent_and_reports_duplicates<C: Backend>() {
     assert!(!g.insert(assume_verified(alice_member)));
     assert_eq!(g.digest(), before);
 
-    let revocation: Revocation<C::Watermark> = r(CAROL, &alice_member);
+    let revocation: Issued<Revocation<C::Watermark>> = r(CAROL, &alice_member);
     let revocation_digest = revocation.digest();
     g.insert(assume_verified(revocation));
     assert!(!g.insert(assume_verified(alice_member)));
@@ -411,7 +411,7 @@ pub fn reissue_with_citation_heals<C: Backend>() {
     g.insert(assume_verified(eve_member));
     assert_eq!(power(&g, DOC, EVE), Some(Power::Edit));
 
-    let revocation: Revocation<C::Watermark> = r(CAROL, &alice_member);
+    let revocation: Issued<Revocation<C::Watermark>> = r(CAROL, &alice_member);
     let healed = alice_member.reissue(revocation.digest());
     g.insert(assume_verified(revocation));
     assert_eq!(power(&g, DOC, ALICE), None);
@@ -553,7 +553,7 @@ pub fn gift_cert_attack_follows_liveness<C: Backend>() {
         assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
         // Remove Eve: the ladder's standing over Doc rides her membership.
-        let removal: Revocation<C::Watermark> = r(BOB, &eve_member);
+        let removal: Issued<Revocation<C::Watermark>> = r(BOB, &eve_member);
         let removal_digest = removal.digest();
         g.insert(assume_verified(removal));
         assert_eq!(power(&g, DOC, EVE), None);
@@ -588,7 +588,7 @@ pub fn gift_cert_attack_follows_liveness<C: Backend>() {
     assert_eq!(power(&g, DOC, ALICE), Some(Power::Edit));
 
     // Alice's revocation of the gift is total, and leaves her own route alone.
-    let alice_revocation: Revocation<C::Watermark> = r(ALICE, &gift);
+    let alice_revocation: Issued<Revocation<C::Watermark>> = r(ALICE, &gift);
     let alice_revocation_digest = alice_revocation.digest();
     g.insert(assume_verified(alice_revocation));
     assert!(!g.is_live(&gift.digest()));
@@ -686,7 +686,7 @@ where
     C::Watermark: Clone + Default,
 {
     let (mut g, _, alice_member) = standard::<C>();
-    let plain: Revocation<C::Watermark> = r(CAROL, &alice_member);
+    let plain: Issued<Revocation<C::Watermark>> = r(CAROL, &alice_member);
     let retaining = plain
         .clone()
         .retaining([(id(DOC), C::Watermark::default())].into());
@@ -866,7 +866,7 @@ pub fn caretaker_admin_severs_downstream_but_not_the_supply<C: Backend>() {
 /// standing in the positive graph ignores revocations.
 pub fn closure_holds_what_a_document_needs<C: Backend>() {
     let (mut g, _, alice_member) = standard::<C>();
-    let revocation: Revocation<C::Watermark> = r(CAROL, &alice_member);
+    let revocation: Issued<Revocation<C::Watermark>> = r(CAROL, &alice_member);
     let revoked = revocation.digest();
     let unrelated = d(OTHER_DOC, DAN, OTHER_DOC, Power::Admin);
     g.insert(assume_verified(revocation));
@@ -901,7 +901,10 @@ pub fn delegations_to_lists_dead_delegations_too<C: Backend>() {
         2,
         "Carol's revoked membership and Bob's live one"
     );
-    assert_eq!(to_alice.get(&alice_member.digest()), Some(&alice_member));
+    assert_eq!(
+        to_alice.get(&alice_member.digest()),
+        Some(&(alice_member.issuer, alice_member.payload))
+    );
     assert!(!g.is_live(&alice_member.digest()));
     assert!(g.is_live(&alice_reader.digest()));
     assert!(g.delegations_to(id(DOC), id(ALICE)).is_empty());

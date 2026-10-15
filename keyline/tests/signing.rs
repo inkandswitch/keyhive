@@ -6,12 +6,12 @@ use future_form::{future_form, FutureForm, Local, Sendable};
 use keyhive_codec::{
     encoded::Encoded,
     error::DecodeError,
-    traits::{Decode, Encode},
+    traits::{Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::{
     digest::Digest,
-    id::Id,
-    signable::{message, Kinded, Signable, PREFIX},
+    id::{Id, InvalidId},
+    signable::{message, Kinded, Signable, TAG},
     signed::SigningError,
     signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSignerBasic},
     verifiable::Verifiable,
@@ -30,13 +30,16 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+/// Bytes before the issuer in a frame: the `KH` tag, the kind and the version.
+const HEADER_LEN: usize = TAG.len() + 2;
+
 fn sample() -> Delegation {
-    Delegation::new(id(1), id(2), id(3), Power::Edit)
+    Delegation::new(id(2), id(3), Power::Edit)
 }
 
-fn signed_by<T: Signable + Verifiable>(value: &T, key: &SigningKey) -> Signed<T> {
+fn signed_by<T: Signable>(value: &T, key: &SigningKey) -> Signed<T> {
     let (_, signed) = Verified::sign_sync(value, key)
-        .expect("key is the issuer")
+        .expect("any valid key signs")
         .into_parts();
     Arc::unwrap_or_clone(signed)
 }
@@ -49,25 +52,25 @@ fn ready<T, Fut: Future<Output = T>>(future: Fut) -> T {
     }
 }
 
-/// Signs the payload without the prefix and header, as a signer written for
+/// Signs what follows the tag, kind and version, as a signer written for
 /// another protocol might. Answers through both signer traits, so the async
 /// path that WebCrypto, HSM and KMS signers take is checked too.
-struct Unprefixed(SigningKey);
+struct Untagged(SigningKey);
 
-impl Verifiable for Unprefixed {
+impl Verifiable for Untagged {
     fn verifying_key(&self) -> VerifyingKey {
         self.0.verifying_key()
     }
 }
 
-impl SyncSignerBasic for Unprefixed {
+impl SyncSignerBasic for Untagged {
     fn try_sign_bytes_sync_basic(&self, bytes: &[u8]) -> Result<Signature, SigningError> {
-        Ok(self.0.sign(&bytes[PREFIX.len() + 2..]))
+        Ok(self.0.sign(&bytes[HEADER_LEN..]))
     }
 }
 
 #[future_form(Sendable, Local)]
-impl<F: FutureForm> AsyncSigner<F> for Unprefixed {
+impl<F: FutureForm> AsyncSigner<F> for Untagged {
     fn try_sign_bytes_async<'a>(
         &'a self,
         bytes: &'a [u8],
@@ -101,6 +104,32 @@ impl<F: FutureForm> AsyncSigner<F> for Broken {
     }
 }
 
+/// A signer whose verifying key is a small-order point, which cannot be an
+/// issuer. It is never asked to sign.
+struct Weak(VerifyingKey);
+
+impl Verifiable for Weak {
+    fn verifying_key(&self) -> VerifyingKey {
+        self.0
+    }
+}
+
+impl SyncSignerBasic for Weak {
+    fn try_sign_bytes_sync_basic(&self, _: &[u8]) -> Result<Signature, SigningError> {
+        panic!("a signer that cannot be an issuer is never asked to sign")
+    }
+}
+
+#[future_form(Sendable, Local)]
+impl<F: FutureForm> AsyncSigner<F> for Weak {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        bytes: &'a [u8],
+    ) -> F::Future<'a, Result<Signature, SigningError>> {
+        F::ready(self.try_sign_bytes_sync_basic(bytes))
+    }
+}
+
 /// `value` signed by `signer` through each path: async `Local` and `Sendable`
 /// (WebCrypto, an HSM, a KMS), and sync (an in-memory key).
 fn sign_every_way<S>(value: &Delegation, signer: &S) -> [Result<Verified<Delegation>, SignError>; 3]
@@ -120,20 +149,20 @@ fn async_signer_matches_sync() {
         value
     }
     let signer = MemorySigner(signing_key(1));
-    let expected = Verified::sign_sync(&sample(), &signing_key(1)).expect("key is the issuer");
-    let local = ready(Verified::sign::<Local, _>(&sample(), &signer)).expect("key is the issuer");
+    let expected = Verified::sign_sync(&sample(), &signing_key(1)).expect("any valid key signs");
+    let local = ready(Verified::sign::<Local, _>(&sample(), &signer)).expect("any valid key signs");
     let sendable = ready(assert_send(Verified::sign::<Sendable, _>(
         &sample(),
         &signer,
     )))
-    .expect("key is the issuer");
+    .expect("any valid key signs");
     assert_eq!(local, expected);
     assert_eq!(sendable, expected);
 }
 
 #[test]
-fn signer_that_drops_the_header_is_caught() {
-    for result in sign_every_way(&sample(), &Unprefixed(signing_key(1))) {
+fn signer_that_drops_the_tag_is_caught() {
+    for result in sign_every_way(&sample(), &Untagged(signing_key(1))) {
         assert!(matches!(
             result,
             Err(SignError::Unverifiable(VerifyError::BadSignature))
@@ -149,11 +178,35 @@ fn signer_failure_is_reported() {
 }
 
 #[test]
+fn a_signer_whose_key_cannot_be_an_issuer_is_refused() {
+    use curve25519_dalek::constants::EIGHT_TORSION;
+    let weak = VerifyingKey::from_bytes(&EIGHT_TORSION[1].compress().to_bytes())
+        .expect("a small-order point decompresses");
+    for result in sign_every_way(&sample(), &Weak(weak)) {
+        assert!(matches!(
+            result,
+            Err(SignError::InvalidIssuer(InvalidId::SmallOrder))
+        ));
+    }
+}
+
+/// Whoever signs is the issuer, and the issuer is part of the identity: the
+/// same payload signed by two keys is two statements.
+#[test]
+fn the_signer_is_the_issuer() {
+    let alice = signed_by(&sample(), &signing_key(1));
+    let bob = signed_by(&sample(), &signing_key(2));
+    assert_eq!(alice.issuer(), id(1));
+    assert_eq!(bob.issuer(), id(2));
+    assert_ne!(alice.digest(), bob.digest());
+}
+
+#[test]
 fn sign_then_verify() {
     let signed = signed_by(&sample(), &signing_key(1));
     let verified = signed.clone().verify().expect("verifies");
     assert_eq!(verified.payload(), &sample());
-    assert_eq!(verified.payload().issuer, id(1));
+    assert_eq!(verified.issuer(), id(1));
     assert_eq!(verified.digest(), signed.digest());
     assert_eq!(**verified.signed(), signed);
 }
@@ -161,11 +214,11 @@ fn sign_then_verify() {
 #[test]
 fn signature_and_digest_cover_the_same_bytes() {
     let signed = signed_by(&sample(), &signing_key(1));
-    assert_eq!(signed.digest(), Digest::of(&sample().encode()));
-    assert!(sample()
+    assert_eq!(signed.digest(), Digest::of(&id(1), &sample().encode()));
+    assert!(id(1)
         .verifying_key()
         .verify_strict(
-            &message::<Delegation>(signed.encoded().as_bytes()),
+            &message::<Delegation>(&id(1), signed.encoded().as_bytes()),
             signed.signature()
         )
         .is_ok());
@@ -177,7 +230,7 @@ fn signature_and_digest_cover_the_same_bytes() {
 fn signature_without_the_header_fails() {
     let encoded = sample().encode();
     let bare = signing_key(1).sign(encoded.as_bytes());
-    let signed = Signed::<Delegation>::from_parts(encoded, bare);
+    let signed = Signed::<Delegation>::from_parts(id(1), encoded, bare);
     assert_eq!(signed.verify().unwrap_err(), VerifyError::BadSignature);
 }
 
@@ -205,8 +258,8 @@ fn small_order_r_is_rejected() {
     let (encoded, message, signature) = (2..=u8::MAX)
         .flat_map(|n| EIGHT_TORSION.iter().map(move |r| (n, r)))
         .find_map(|(n, r)| {
-            let encoded = Delegation::new(issuer, id(n), id(1), Power::Edit).encode();
-            let message = message::<Delegation>(encoded.as_bytes());
+            let encoded = Delegation::new(id(n), id(1), Power::Edit).encode();
+            let message = message::<Delegation>(&issuer, encoded.as_bytes());
             let r_bytes = r.compress().to_bytes();
             let k = Scalar::from_bytes_mod_order_wide(
                 &Sha512::new()
@@ -225,21 +278,25 @@ fn small_order_r_is_rejected() {
 
     assert!(issuer.verifying_key().verify(&message, &signature).is_ok());
     assert_eq!(
-        Signed::<Delegation>::from_parts(encoded, signature)
+        Signed::<Delegation>::from_parts(issuer, encoded, signature)
             .verify()
             .unwrap_err(),
         VerifyError::BadSignature
     );
 }
 
-/// `Signed` equality is the received bytes plus the signature, so the same
-/// payload under a different signature is a different value. `Verified`
-/// compares as the `Signed` it was built from.
+/// `Signed` equality is the issuer, the received bytes and the signature, so
+/// the same payload under a different signature is a different value.
+/// `Verified` compares as the `Signed` it was built from.
 #[test]
-fn identity_is_bytes_and_signature() {
+fn identity_is_issuer_bytes_and_signature() {
     let a = signed_by(&sample(), &signing_key(1));
-    let forged = Signed::from_parts(a.encoded().clone(), Signature::from_bytes(&[0u8; 64]));
-    let read = Delegation::new(id(1), id(2), id(3), Power::Read);
+    let forged = Signed::from_parts(
+        a.issuer(),
+        a.encoded().clone(),
+        Signature::from_bytes(&[0u8; 64]),
+    );
+    let read = Delegation::new(id(2), id(3), Power::Read);
     let other = signed_by(&read, &signing_key(1));
     assert_ne!(a, forged);
     assert_ne!(a, other);
@@ -272,29 +329,18 @@ fn hash_agrees_with_eq() {
     assert_eq!(hash(&va), hash(&vb));
 }
 
+/// The forgeries `verify` must catch: Alice's signature presented as Bob's,
+/// and Bob's signature over a frame that names Alice.
 #[test]
-fn signing_with_a_key_that_is_not_the_issuer_is_refused() {
-    assert!(matches!(
-        Verified::sign_sync(&sample(), &signing_key(2)),
-        Err(SignError::NotTheIssuer)
-    ));
-    assert!(matches!(
-        ready(Verified::sign::<Local, _>(
-            &sample(),
-            &MemorySigner(signing_key(2))
-        )),
-        Err(SignError::NotTheIssuer)
-    ));
-}
+fn the_issuer_must_be_the_signer() {
+    let alice = signed_by(&sample(), &signing_key(1));
+    let renamed =
+        Signed::<Delegation>::from_parts(id(2), alice.encoded().clone(), *alice.signature());
+    assert_eq!(renamed.verify().unwrap_err(), VerifyError::BadSignature);
 
-/// The forgery `verify` must catch: a well-formed signature by Bob over a
-/// payload that names Alice as issuer.
-#[test]
-fn signer_must_be_the_payload_issuer() {
-    let forger = signing_key(2);
-    let encoded = sample().encode(); // issuer = id(1)
-    let signature = forger.sign(&message::<Delegation>(encoded.as_bytes()));
-    let forged = Signed::<Delegation>::from_parts(encoded, signature);
+    let encoded = sample().encode();
+    let signature = signing_key(2).sign(&message::<Delegation>(&id(1), encoded.as_bytes()));
+    let forged = Signed::<Delegation>::from_parts(id(1), encoded, signature);
     assert_eq!(forged.verify().unwrap_err(), VerifyError::BadSignature);
 }
 
@@ -304,21 +350,24 @@ fn tampered_bytes_fail() {
     // check can reject it.
     let signed = signed_by(&sample(), &signing_key(1));
     let mut bytes = signed.encoded().clone().into_bytes();
-    bytes[Id::LEN * 3] = Power::Read as u8;
+    bytes[Id::LEN * 2] = Power::Read as u8;
     assert!(Delegation::decode(&bytes).is_ok());
-    let tampered =
-        Signed::<Delegation>::from_parts(Encoded::from_bytes_unchecked(bytes), *signed.signature());
+    let tampered = Signed::<Delegation>::from_parts(
+        id(1),
+        Encoded::from_bytes_unchecked(bytes),
+        *signed.signature(),
+    );
     assert_eq!(tampered.verify().unwrap_err(), VerifyError::BadSignature);
 }
 
 #[test]
 fn valid_signature_over_non_canonical_bytes_fails_to_decode() {
     // Sign bytes that carry a trailing zero: signature is fine, decode is not.
-    let key = signing_key(1);
     let mut bytes = sample().encode().into_bytes();
     bytes.push(0);
-    let signature = key.sign(&message::<Delegation>(&bytes));
-    let signed = Signed::<Delegation>::from_parts(Encoded::from_bytes_unchecked(bytes), signature);
+    let signature = signing_key(1).sign(&message::<Delegation>(&id(1), &bytes));
+    let signed =
+        Signed::<Delegation>::from_parts(id(1), Encoded::from_bytes_unchecked(bytes), signature);
     assert_eq!(
         signed.verify().unwrap_err(),
         VerifyError::Decode(DecodeError::TrailingBytes)
@@ -327,10 +376,12 @@ fn valid_signature_over_non_canonical_bytes_fails_to_decode() {
 
 #[test]
 fn works_for_revocations() {
+    let revoke = Digest::of(&id(1), &sample().encode());
     let revocation: Revocation<Vec<u8>> =
-        Revocation::new(id(1), sample().digest()).retaining([(id(3), vec![7])].into());
-    let verified = Verified::sign_sync(&revocation, &signing_key(1)).expect("key is the issuer");
+        Revocation::new(revoke).retaining([(id(3), vec![7])].into());
+    let verified = Verified::sign_sync(&revocation, &signing_key(1)).expect("any valid key signs");
     assert_eq!(verified.payload(), &revocation);
+    assert_eq!(verified.issuer(), id(1));
 }
 
 #[test]
@@ -338,45 +389,76 @@ fn sign_verify_round_trip_property() {
     bolero::check!()
         .with_arbitrary::<(Delegation, Revocation<Vec<u8>>, [u8; 32])>()
         .for_each(|(d, r, seed)| {
-            // Re-issue both under the generated key so they are signable.
             let key = SigningKey::from(*seed);
-            let issuer = Id::from(&key);
-            let d = Delegation { issuer, ..*d };
-            let verified = Verified::sign_sync(&d, &key).expect("key is the issuer");
-            assert_eq!(verified.payload(), &d);
+            let verified = Verified::sign_sync(d, &key).expect("any valid key signs");
+            assert_eq!((verified.payload(), verified.issuer()), (d, Id::from(&key)));
 
-            let r = Revocation {
-                issuer,
-                ..r.clone()
-            };
-            let verified = Verified::sign_sync(&r, &key).expect("key is the issuer");
-            assert_eq!(verified.payload(), &r);
+            let verified = Verified::sign_sync(r, &key).expect("any valid key signs");
+            assert_eq!((verified.payload(), verified.issuer()), (r, Id::from(&key)));
         });
 }
 
-/// The frame is version, kind, signature, payload, and decodes back to the
-/// same value.
+/// The frame is the tag, kind, version, issuer, payload length, payload and
+/// signature, and decodes back to the same value.
 #[test]
 fn frame_round_trips() {
     let signed = signed_by(&sample(), &signing_key(1));
+    let payload = signed.encoded().as_bytes();
     let bytes = signed.encode().into_bytes();
-    assert_eq!(bytes[..2], [Delegation::VERSION, Delegation::KIND.to_u8()]);
-    assert_eq!(&bytes[2..66], &signed.signature().to_bytes());
-    assert_eq!(&bytes[66..], signed.encoded().as_bytes());
+    assert_eq!(
+        bytes[..HEADER_LEN],
+        [b'K', b'H', Delegation::KIND.to_u8(), Delegation::VERSION]
+    );
+    assert_eq!(&bytes[HEADER_LEN..HEADER_LEN + Id::LEN], id(1).as_bytes());
+    let at = HEADER_LEN + Id::LEN;
+    assert_eq!(
+        usize::from(bytes[at]),
+        payload.len(),
+        "a one-byte bijou64 length"
+    );
+    assert_eq!(&bytes[at + 1..at + 1 + payload.len()], payload);
+    assert_eq!(
+        &bytes[at + 1 + payload.len()..],
+        &signed.signature().to_bytes()
+    );
     assert_eq!(Signed::<Delegation>::decode(&bytes), Ok(signed));
 }
 
-/// A frame for another kind or version is refused before its payload is read.
+/// Frames are self-delimiting: a frame followed by other bytes reads back
+/// with the rest untouched.
+#[test]
+fn a_frame_reads_off_the_front_of_longer_input() {
+    let signed = signed_by(&sample(), &signing_key(1));
+    let mut bytes = signed.encode().into_bytes();
+    bytes.extend_from_slice(b"rest");
+    assert_eq!(
+        Signed::<Delegation>::decode_next(&bytes),
+        Ok((signed, &b"rest"[..]))
+    );
+}
+
+/// A frame that is not Keyhive's, or is for another kind or version, is
+/// refused before its payload is read.
 #[test]
 fn frame_header_is_checked() {
-    let mut bytes = signed_by(&sample(), &signing_key(1)).encode().into_bytes();
-    bytes[1] = Revocation::<()>::KIND.to_u8();
+    let good = signed_by(&sample(), &signing_key(1)).encode().into_bytes();
+
+    let mut bytes = good.clone();
+    bytes[0] = b'X';
     assert_eq!(
         Signed::<Delegation>::decode(&bytes),
-        Err(DecodeError::UnexpectedKind(bytes[1]))
+        Err(DecodeError::NotKeyhive)
     );
-    bytes[1] = Delegation::KIND.to_u8();
-    bytes[0] = Delegation::VERSION + 1;
+
+    let mut bytes = good.clone();
+    bytes[2] = Revocation::<()>::KIND.to_u8();
+    assert_eq!(
+        Signed::<Delegation>::decode(&bytes),
+        Err(DecodeError::UnexpectedKind(bytes[2]))
+    );
+
+    let mut bytes = good;
+    bytes[3] = Delegation::VERSION + 1;
     assert_eq!(
         Signed::<Delegation>::decode(&bytes),
         Err(DecodeError::UnsupportedVersion {
@@ -391,7 +473,7 @@ fn frame_header_is_checked() {
 #[test]
 fn signature_for_another_kind_fails() {
     let encoded = sample().encode();
-    let signature = signing_key(1).sign(&message::<Revocation<()>>(encoded.as_bytes()));
-    let signed = Signed::<Delegation>::from_parts(encoded, signature);
+    let signature = signing_key(1).sign(&message::<Revocation<()>>(&id(1), encoded.as_bytes()));
+    let signed = Signed::<Delegation>::from_parts(id(1), encoded, signature);
     assert_eq!(signed.verify().unwrap_err(), VerifyError::BadSignature);
 }

@@ -482,7 +482,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         .await?
         .value
         .into_iter()
-        .find(|(_, d)| d.issuer == doc_kl)
+        .find(|(_, (issuer, _))| *issuer == doc_kl)
         .ok_or("bob holds a founding delegation")?
         .0
         .into();
@@ -760,8 +760,5 @@ async fn test_group_member_is_known_before_its_defining_delegation() -> TestResu
 /// Whether `signed` is a delegation `issuer` signed: a root edge, when the
 /// issuer is the subject itself.
 fn issued_by(signed: &Signed<Delegation>, issuer: Identifier) -> bool {
-    signed
-        .encoded()
-        .decode()
-        .is_ok_and(|d| Identifier::from(d.issuer) == issuer)
+    Identifier::from(signed.issuer()) == issuer
 }

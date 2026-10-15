@@ -27,12 +27,18 @@ impl JsSignedRevocation {
     /// The decoded revocation; `undefined` if it does not decode.
     #[wasm_bindgen(getter)]
     pub fn revocation(&self) -> Option<JsRevocation> {
-        self.0.encoded().decode().ok().map(JsRevocation)
+        let issuer = self.0.issuer();
+        self.0
+            .encoded()
+            .decode()
+            .ok()
+            .map(|revocation| JsRevocation { issuer, revocation })
     }
 
+    /// The issuer's verifying key, from the signed envelope.
     #[wasm_bindgen(getter, js_name = verifyingKey)]
-    pub fn verifying_key(&self) -> Option<Vec<u8>> {
-        self.revocation().map(|r| r.0.issuer.as_bytes().to_vec())
+    pub fn verifying_key(&self) -> Vec<u8> {
+        self.0.issuer().as_bytes().to_vec()
     }
 
     #[wasm_bindgen(getter)]

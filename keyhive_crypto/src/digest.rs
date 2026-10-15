@@ -1,6 +1,9 @@
 //! Helpers for working with hashes.
 
-use crate::signable::{message, Kinded};
+use crate::{
+    id::Id,
+    signable::{head, Kinded, TAG},
+};
 use alloc::vec::Vec;
 use core::{
     fmt,
@@ -36,17 +39,26 @@ pub struct Digest<T> {
 }
 
 impl<T: Kinded> Digest<T> {
-    /// The content address of an encoded value: BLAKE3 over
-    /// [`message`], the same bytes a
-    /// signature over it covers.
-    pub fn of(encoded: &Encoded<T>) -> Self {
-        Self::of_bytes(encoded.as_bytes())
+    /// The identity of a signed statement: BLAKE3 over
+    /// [`message`](crate::signable::message), the same bytes its signature
+    /// covers, hashed incrementally.
+    pub fn of(issuer: &Id, encoded: &Encoded<T>) -> Self {
+        let payload = encoded.as_bytes();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&head::<T>(issuer, payload.len()));
+        hasher.update(payload);
+        Self::from(hasher.finalize())
     }
 
-    /// [`Digest::of`] for bytes not wrapped in an [`Encoded<T>`], such as a
-    /// composite that has no `T` value of its own.
+    /// The digest of a kind that is only hashed, never signed, such as a set
+    /// of certificate identities: BLAKE3 over
+    /// `"KH" ‖ kind ‖ version ‖ bytes`.
     pub fn of_bytes(bytes: &[u8]) -> Self {
-        Self::from(blake3::hash(&message::<T>(bytes)))
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&TAG);
+        hasher.update(&[T::KIND.to_u8(), T::VERSION]);
+        hasher.update(bytes);
+        Self::from(hasher.finalize())
     }
 }
 
@@ -305,7 +317,7 @@ impl<T> StreamDecode for Digest<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signable::Kind;
+    use crate::signable::{message, Kind};
 
     struct Example;
 
@@ -314,9 +326,24 @@ mod tests {
         const VERSION: u8 = 7;
     }
 
+    fn issuer() -> Id {
+        Id::from(&ed25519_dalek::SigningKey::from([1u8; 32]))
+    }
+
     #[test]
-    fn message_is_prefix_version_kind_payload() {
-        assert_eq!(message::<Example>(b"x"), b"keyhive\0\x07\x03x");
+    fn message_is_prefix_then_frame_without_signature() {
+        let mut expected = b"KHS\x07".to_vec();
+        expected.extend_from_slice(issuer().as_bytes());
+        expected.extend_from_slice(b"\x01x");
+        assert_eq!(message::<Example>(&issuer(), b"x"), expected);
+    }
+
+    #[test]
+    fn a_hash_only_digest_is_prefix_version_kind_bytes() {
+        assert_eq!(
+            Digest::<Example>::of_bytes(b"x").raw,
+            blake3::hash(b"KHS\x07x")
+        );
     }
 
     #[test]
@@ -329,9 +356,10 @@ mod tests {
 
     #[test]
     fn digest_covers_the_signed_message() {
+        let encoded = Encoded::<Example>::from_bytes_unchecked(b"payload".to_vec());
         assert_eq!(
-            Digest::<Example>::of_bytes(b"payload").raw,
-            blake3::hash(&message::<Example>(b"payload"))
+            Digest::of(&issuer(), &encoded).raw,
+            blake3::hash(&message::<Example>(&issuer(), b"payload"))
         );
     }
 }

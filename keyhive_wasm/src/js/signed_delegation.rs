@@ -26,7 +26,12 @@ impl JsSignedDelegation {
     /// The decoded delegation; `undefined` if it does not decode.
     #[wasm_bindgen(getter)]
     pub fn delegation(&self) -> Option<JsDelegation> {
-        self.0.encoded().decode().ok().map(JsDelegation)
+        let issuer = self.0.issuer();
+        self.0
+            .encoded()
+            .decode()
+            .ok()
+            .map(|delegation| JsDelegation { issuer, delegation })
     }
 
     #[wasm_bindgen(getter, js_name = subjectId)]
@@ -34,9 +39,10 @@ impl JsSignedDelegation {
         self.delegation().map(|d| d.subject())
     }
 
+    /// The issuer's verifying key, from the signed envelope.
     #[wasm_bindgen(getter, js_name = verifyingKey)]
-    pub fn verifying_key(&self) -> Option<Vec<u8>> {
-        self.delegation().map(|d| d.0.issuer.as_bytes().to_vec())
+    pub fn verifying_key(&self) -> Vec<u8> {
+        self.0.issuer().as_bytes().to_vec()
     }
 
     #[wasm_bindgen(getter)]

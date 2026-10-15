@@ -68,6 +68,8 @@ A delegation is a signed statement extending the issuer's own authority over a s
 | `citation` | `Option<Digest<RevocationId>>` | Freshness + heal provenance; zero semantics (see below) |
 | signature  | Ed25519 signature              | Over all of the above                                   |
 
+In the encoding, the issuer travels in the signed envelope beside the payload rather than inside it, the same for every signed type ([implementation, Domain Separation](implementation.md#domain-separation)).
+
 - A delegation reads: _`issuer` asserts that `audience` may exercise `power` over `subject`._
 - When `issuer = subject`: a _root edge_: the subject bootstrapping its own authority (see [Root Edges and the Root Role][root role]).
 
@@ -89,7 +91,7 @@ Under [constitutional flatness] (a role whose Admin memberships name only indivi
 
 ### The `citation` Field
 
-Certificates are identified by the digest of their payload, so re-issuing an identical delegation produces the _same certificate_, whatever its signature: the same hash, still covered by any revocation that named it. Without a freshness field, healing a mistaken removal on the same terms by the same issuer is impossible.
+Certificates are identified by the digest of their issuer and payload, so an issuer re-issuing an identical delegation produces the _same certificate_, whatever its signature: the same hash, still covered by any revocation that named it. Without a freshness field, healing a mistaken removal on the same terms by the same issuer is impossible.
 
 `citation` does a nonce's job with a fail-closed default: a re-issuance points at the _revocation_ the issuer has seen and is re-issuing past, changing the hash and documenting the heal ("re-granted, knowing of the revocation"). First issuances omit the field.
 
@@ -595,7 +597,7 @@ The canonical vocabulary for Keyline. The other documents in this directory use 
 | Audience              | The key a delegation is issued to. It gains `min(power, issuer's standing)` over the subject.                                                                                                                                                                                                                                                                                             |
 | Authority graph       | Who actually holds standing over what, derived from the message graph at every evaluation and stored nowhere ([Two Graphs, One Stored](#two-graphs-one-stored)).                                                                                                                                                                                                                          |
 | Cascade               | Implicit death downstream: when a delegation dies, every delegation whose standing depended on it dies too, though no certificate names them.                                                                                                                                                                                                                                             |
-| Certificate           | A signed delegation or a signed revocation: one statement in the set, identified by the digest of its payload. Never edited or removed.                                                                                                                                                                                                                                                   |
+| Certificate           | A signed delegation or a signed revocation: one statement in the set, identified by the digest of its issuer and payload. Never edited or removed.                                                                                                                                                                                                                                        |
 | Closure               | A subject, every node with standing over it in the positive graph (every node that has ever had standing over it), every certificate about those nodes, and every revocation naming one of those certificates. Nothing outside it can change an answer about the subject ([What a Replica Must Hold](#what-a-replica-must-hold)).                                                         |
 | Covers, coverage      | Where a third party's revocation takes effect: on every route of its target through the revoker's admin reach, which includes the revoker's own node (so revocation by the issuer is total). Computed on the positive graph. Revocation by the audience is a separate clause, not coverage.                                                                                               |
 | Creation edge         | A delegation a role's own key signs at creation, to one of its first admins: `{issuer: Members, audience: Dan, subject: Members, power: Admin}`. It is grounded at the role itself, so it never dies by cascade.                                                                                                                                                                          |

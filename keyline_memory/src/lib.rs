@@ -135,7 +135,7 @@ impl<F: FutureForm, W: Encode + Decode> Keyline<F> for MemoryKeyline<W> {
         &self,
         subject: Id,
         audience: Id,
-    ) -> Query<'_, F, BTreeMap<Digest<Delegation>, Delegation>, Infallible> {
+    ) -> Query<'_, F, BTreeMap<Digest<Delegation>, (Id, Delegation)>, Infallible> {
         F::from_future(self.read(move |s| s.delegations_to(subject, audience)))
     }
 
@@ -179,7 +179,8 @@ mod tests {
         revocation::Revocation,
         test_utils::{
             assume_verified,
-            conformance::{d, Polled, ALICE, CAROL, DOC, MEMBERS, OWNERS},
+            conformance::{d, r, Polled, ALICE, CAROL, DOC, MEMBERS, OWNERS},
+            Issued,
         },
     };
 
@@ -241,7 +242,7 @@ mod tests {
         assert!(!state.is_empty());
         assert_eq!(
             state.delegation(&root.digest()).map(|v| v.payload()),
-            Some(&root)
+            Some(&root.payload)
         );
         assert!(state.get(&root.digest().into()).is_some());
         assert!(state.revocation(&Digest::from([0u8; 32])).is_none());
@@ -250,13 +251,12 @@ mod tests {
         assert_eq!(state.insert_all([assume_verified(root)]), v);
         assert!(!state.insert(assume_verified(root)));
 
-        let revocation: Revocation<()> =
-            Revocation::new(alice_member.issuer, alice_member.digest());
+        let revocation: Issued<Revocation<()>> = r(CAROL, &alice_member);
         assert!(state.insert(assume_verified(revocation.clone())));
         assert!(state.version() > v);
         assert_eq!(
             state.revocation(&revocation.digest()).map(|v| v.payload()),
-            Some(&revocation)
+            Some(&revocation.payload)
         );
 
         let keyline: MemoryKeyline<()> = state.clone().into();

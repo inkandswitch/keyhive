@@ -187,7 +187,6 @@ mod tests {
         let id = |key: VerifyingKey| Id::try_from(key).expect("a generated key is a valid point");
         let delegation = Verified::sign_sync(
             &Delegation::new(
-                id(signer.verifying_key()),
                 id(IndividualId::generate(&mut csprng).verifying_key()),
                 id(doc_id1.verifying_key()),
                 Power::Read,

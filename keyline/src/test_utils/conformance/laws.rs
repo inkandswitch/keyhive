@@ -42,7 +42,7 @@ where
         .collect();
     let live = set
         .delegations()
-        .map(Delegation::digest)
+        .map(|d| d.digest())
         .filter(|h| k.is_live(h))
         .collect();
     Observed { levels, live }
@@ -320,7 +320,7 @@ where
             // before its target must already explain the collision.
             let targets = set
                 .delegations()
-                .map(Delegation::digest)
+                .map(|d| d.digest())
                 .chain(set.revocations().map(|r| r.revoke));
             for target in targets {
                 let expected: BTreeSet<_> = set
@@ -419,7 +419,7 @@ where
                     let expected: BTreeMap<_, _> = set
                         .delegations()
                         .filter(|d| d.subject == s && d.audience == a)
-                        .map(|d| (d.digest(), *d))
+                        .map(|d| (d.digest(), (d.issuer, d.payload)))
                         .collect();
                     assert_eq!(k.delegations_to(s, a), expected, "delegations_to({s}, {a})");
                 }

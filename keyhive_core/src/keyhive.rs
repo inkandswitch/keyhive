@@ -602,7 +602,10 @@ where
         };
         for cert in batch {
             if let VerifiedCertificate::Delegation(d) = cert {
-                if self.route_through(doc, d.payload(), reader).await? {
+                if self
+                    .route_through(doc, d.issuer(), d.payload(), reader)
+                    .await?
+                {
                     return Ok(Some(CgkaAuthorization::Delegation(d.digest().into())));
                 }
             }
@@ -623,10 +626,15 @@ where
         };
         for cert in batch {
             if let VerifiedCertificate::Revocation(r) = cert {
-                let Some(revoked) = self.stored_delegation(r.payload().revoke.into()).await? else {
+                let Some((revoked_issuer, revoked)) =
+                    self.stored_delegation(r.payload().revoke.into()).await?
+                else {
                     continue;
                 };
-                if self.route_through(doc, &revoked, reader).await? {
+                if self
+                    .route_through(doc, revoked_issuer, &revoked, reader)
+                    .await?
+                {
                     return Ok(Some(CgkaAuthorization::Revocation(r.digest().into())));
                 }
             }
@@ -661,8 +669,8 @@ where
             let Certificate::Delegation(signed) = cert else {
                 continue;
             };
-            let admitted: Delegation = decode_stored(&signed);
-            if admitted.issuer != removed
+            let (admitted_issuer, admitted): (Id, Delegation) = decode_stored(&signed);
+            if admitted_issuer != removed
                 || admitted.subject != subject
                 || admitted.audience == removed
                 || admitted.audience == revoker
@@ -679,18 +687,14 @@ where
                 continue;
             }
 
-            let adoption = Delegation::new(
-                revoker,
-                admitted.audience,
-                subject,
-                admitted.power.min(held),
-            );
-            adopted.push(self.unrevoked(adoption).await?);
+            let adoption = Delegation::new(admitted.audience, subject, admitted.power.min(held));
+            adopted.push(self.unrevoked(revoker, adoption).await?);
         }
         Ok(adopted)
     }
 
-    /// `d`, or a re-issue of it that no revocation names. A delegation
+    /// `d` as `issuer` would sign it, or a re-issue of it that no revocation
+    /// names. A delegation
     /// byte-identical to a revoked one would be that same, dead, certificate,
     /// so it is re-issued citing the revocation; if that re-issue was revoked
     /// in turn, it cites that revocation instead, and so on. Each revocation
@@ -698,12 +702,13 @@ where
     /// the walk ends.
     async fn unrevoked(
         &self,
+        issuer: Id,
         mut d: Delegation,
     ) -> Result<Delegation, KeylineStorageError<K::Error>> {
         loop {
             let revocations = self
                 .keyline()
-                .revocations_of(d.digest())
+                .revocations_of(Digest::of(&issuer, &d.encode()))
                 .await
                 .map_err(KeylineStorageError::new)?
                 .value;
@@ -717,7 +722,7 @@ where
     /// Sign a Keyline certificate with the active signer. Inside the crate
     /// only: a certificate reaches the store through [`Keyhive`]'s writes.
     #[cfg(not(any(test, feature = "test_utils")))]
-    pub(crate) async fn sign_certificate<V: Signable + Verifiable>(
+    pub(crate) async fn sign_certificate<V: Signable>(
         &self,
         value: &V,
     ) -> Result<Verified<V>, CertificateError> {
@@ -728,7 +733,7 @@ where
     /// Sign a Keyline certificate with the active signer; public for tests
     /// that forge certificates.
     #[cfg(any(test, feature = "test_utils"))]
-    pub async fn sign_certificate<V: Signable + Verifiable>(
+    pub async fn sign_certificate<V: Signable>(
         &self,
         value: &V,
     ) -> Result<Verified<V>, CertificateError> {
@@ -955,12 +960,11 @@ where
         }
 
         let certificate = Delegation::new(
-            issuer,
             Id::try_from(to_add).map_err(CertificateError::from)?,
             subject,
             can,
         );
-        let certificate = self.unrevoked(certificate).await?;
+        let certificate = self.unrevoked(issuer, certificate).await?;
         let delegation = Arc::new(self.sign_certificate(&certificate).await?);
 
         let cgka_ops = self
@@ -1022,7 +1026,7 @@ where
             .value;
         let revocable: Vec<_> = delegations
             .iter()
-            .filter(|(_, d)| held == Power::Admin || d.issuer == issuer)
+            .filter(|(_, (d_issuer, _))| held == Power::Admin || *d_issuer == issuer)
             .map(|(digest, _)| *digest)
             .collect();
         if delegations.is_empty() {
@@ -1043,7 +1047,7 @@ where
         let mut revocations = Vec::with_capacity(revocable.len());
         for digest in revocable {
             let revocation: Revocation<ContentHeads<T>> =
-                Revocation::new(issuer, digest).retaining(retain.clone());
+                Revocation::new(digest).retaining(retain.clone());
             revocations.push(Arc::new(self.sign_certificate(&revocation).await?));
         }
         let mut redelegations = Vec::with_capacity(adopted.len());
@@ -1449,7 +1453,7 @@ where
             let Certificate::Delegation(signed) = cert else {
                 continue;
             };
-            let d: Delegation = decode_stored(&signed);
+            let (_, d): (Id, Delegation) = decode_stored(&signed);
             if d.subject != subject {
                 continue;
             }
@@ -1490,7 +1494,7 @@ where
             let Certificate::Delegation(signed) = cert else {
                 continue;
             };
-            let d: Delegation = decode_stored(&signed);
+            let (_, d): (Id, Delegation) = decode_stored(&signed);
             if d.subject != subject || members.contains_key(&d.audience) {
                 continue;
             }
@@ -2155,7 +2159,7 @@ where
                 let CgkaAuthorization::Delegation(digest) = authorization else {
                     return Ok(Err(Denied));
                 };
-                let Some(grant) = self.stored_delegation(*digest).await? else {
+                let Some((grant_issuer, grant)) = self.stored_delegation(*digest).await? else {
                     return Ok(Err(Pending));
                 };
                 let Ok(added) = Id::try_from(Identifier::from(IndividualId::from(*added_id)))
@@ -2165,7 +2169,7 @@ where
                 if !grant.power.is_reader() {
                     return Ok(Err(Denied));
                 }
-                let founding = grant.issuer == doc && grant.subject == doc;
+                let founding = grant_issuer == doc && grant.subject == doc;
                 if founding {
                     // A root edge is signed by the document's own key, which is
                     // discarded, so only a creator (the audience of a root edge)
@@ -2177,16 +2181,16 @@ where
                         .map_err(KeylineStorageError::new)?
                         .value
                         .values()
-                        .any(|d| d.issuer == doc);
+                        .any(|(issuer, _)| *issuer == doc);
                     if !creator {
                         return Ok(Err(Pending));
                     }
-                } else if grant.issuer != signer {
+                } else if grant_issuer != signer {
                     return Ok(Err(Denied));
                 }
                 if !self.reads_ever(doc, signer).await?
                     || !self.reads_ever(doc, added).await?
-                    || !self.route_through(doc, &grant, added).await?
+                    || !self.route_through(doc, grant_issuer, &grant, added).await?
                 {
                     return Ok(Err(Pending));
                 }
@@ -2198,13 +2202,16 @@ where
                 let CgkaAuthorization::Revocation(digest) = authorization else {
                     return Ok(Err(Denied));
                 };
-                let Some(revocation) = self.stored_revocation(*digest).await? else {
+                let Some((revocation_issuer, revocation)) = self.stored_revocation(*digest).await?
+                else {
                     return Ok(Err(Pending));
                 };
-                if revocation.issuer != signer {
+                if revocation_issuer != signer {
                     return Ok(Err(Denied));
                 }
-                let Some(revoked) = self.stored_delegation(revocation.revoke.into()).await? else {
+                let Some((revoked_issuer, revoked)) =
+                    self.stored_delegation(revocation.revoke.into()).await?
+                else {
                     return Ok(Err(Pending));
                 };
                 if !revoked.power.is_reader() {
@@ -2217,13 +2224,15 @@ where
                 // Keyline: its issuer signed it or is named by it, or ever held
                 // Admin over its subject or this document. Admin reach only
                 // grows, so a revocation that covers nothing yet may later.
-                let covers = signer == revoked.issuer
+                let covers = signer == revoked_issuer
                     || signer == revoked.audience
                     || self.positive_power(revoked.subject, signer).await? == Some(Power::Admin)
                     || self.positive_power(doc, signer).await? == Some(Power::Admin);
                 if !covers
                     || self.positive_power(doc, signer).await?.is_none()
-                    || !self.route_through(doc, &revoked, removed).await?
+                    || !self
+                        .route_through(doc, revoked_issuer, &revoked, removed)
+                        .await?
                 {
                     return Ok(Err(Pending));
                 }
@@ -2273,19 +2282,21 @@ where
     async fn route_through(
         &self,
         doc: Id,
+        issuer: Id,
         delegation: &Delegation,
         who: Id,
     ) -> Result<bool, KeylineStorageError<K::Error>> {
-        route_through(self.keyline(), doc, delegation, who)
+        route_through(self.keyline(), doc, issuer, delegation, who)
             .await
             .map_err(KeylineStorageError::new)
     }
 
-    /// The Keyline delegation with this digest, if this replica holds it.
+    /// The Keyline delegation with this digest and its issuer, if this replica
+    /// holds it.
     async fn stored_delegation(
         &self,
         digest: [u8; 32],
-    ) -> Result<Option<Delegation>, KeylineStorageError<K::Error>> {
+    ) -> Result<Option<(Id, Delegation)>, KeylineStorageError<K::Error>> {
         let cert = self
             .keyline()
             .get(CertificateId::Delegation(Digest::from(digest)))
@@ -2298,11 +2309,12 @@ where
         })
     }
 
-    /// The Keyline revocation with this digest, if this replica holds it.
+    /// The Keyline revocation with this digest and its issuer, if this replica
+    /// holds it.
     async fn stored_revocation(
         &self,
         digest: [u8; 32],
-    ) -> Result<Option<Revocation<ContentHeads<T>>>, KeylineStorageError<K::Error>> {
+    ) -> Result<Option<(Id, Revocation<ContentHeads<T>>)>, KeylineStorageError<K::Error>> {
         let cert = self
             .keyline()
             .get(CertificateId::Revocation(Digest::from(digest)))
@@ -2859,21 +2871,13 @@ where
                 // if it failed to verify.
                 StaticEvent::Delegated(signed) => {
                     pending_delegated += 1;
-                    if signed
-                        .encoded()
-                        .decode()
-                        .is_ok_and(|d| IndividualId::from(d.issuer) == active_id)
-                    {
+                    if IndividualId::from(signed.issuer()) == active_id {
                         pending_delegated_by_active += 1;
                     }
                 }
                 StaticEvent::Revoked(signed) => {
                     pending_revoked += 1;
-                    if signed
-                        .encoded()
-                        .decode()
-                        .is_ok_and(|r| IndividualId::from(r.issuer) == active_id)
-                    {
+                    if IndividualId::from(signed.issuer()) == active_id {
                         pending_revoked_by_active += 1;
                     }
                 }
@@ -3390,7 +3394,7 @@ fn named_by<W>(cert: &Certificate<W>) -> Vec<Id> {
         Certificate::Delegation(signed) => signed
             .encoded()
             .decode()
-            .map(|d: Delegation| vec![d.issuer, d.audience, d.subject])
+            .map(|d: Delegation| vec![signed.issuer(), d.audience, d.subject])
             .unwrap_or_default(),
         Certificate::Revocation(_) => Vec::new(),
     }
@@ -3883,7 +3887,6 @@ mod tests {
                 bob.receive_certificate(cert).await?;
             }
             let carol_by_bob = Delegation::new(
-                Id::try_from(bob_id)?,
                 Id::try_from(carol_id)?,
                 Id::try_from(Identifier::from(group_id))?,
                 Power::Read,
@@ -3959,10 +3962,10 @@ mod tests {
         let doc_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         let doc = Id::try_from(Identifier::from(doc_id))?;
 
-        let to_bob = Delegation::new(id(&alice), id(&bob), doc, Power::Admin);
-        let bob_to_carol = Delegation::new(id(&bob), id(&carol), doc, Power::Read);
-        let to_group = Delegation::new(id(&alice), id(&group), doc, Power::Read);
-        let dave_in_group = Delegation::new(id(&group), id(&dave), id(&group), Power::Read);
+        let to_bob = Delegation::new(id(&bob), doc, Power::Admin);
+        let bob_to_carol = Delegation::new(id(&carol), doc, Power::Read);
+        let to_group = Delegation::new(id(&group), doc, Power::Read);
+        let dave_in_group = Delegation::new(id(&dave), id(&group), Power::Read);
         for (signer, d) in [
             (&alice, &to_bob),
             (&bob, &bob_to_carol),
@@ -3976,23 +3979,33 @@ mod tests {
         }
 
         assert!(
-            alice.route_through(doc, &to_bob, id(&bob)).await?,
+            alice
+                .route_through(doc, id(&alice), &to_bob, id(&bob))
+                .await?,
             "the audience"
         );
         assert!(
-            alice.route_through(doc, &to_bob, id(&carol)).await?,
+            alice
+                .route_through(doc, id(&alice), &to_bob, id(&carol))
+                .await?,
             "someone the audience admitted"
         );
         assert!(
-            alice.route_through(doc, &to_group, id(&dave)).await?,
+            alice
+                .route_through(doc, id(&alice), &to_group, id(&dave))
+                .await?,
             "a member of the audience"
         );
         assert!(
-            !alice.route_through(doc, &to_bob, id(&dave)).await?,
+            !alice
+                .route_through(doc, id(&alice), &to_bob, id(&dave))
+                .await?,
             "Dave's route does not pass through the grant to Bob"
         );
         assert!(
-            !alice.route_through(doc, &to_group, id(&carol)).await?,
+            !alice
+                .route_through(doc, id(&alice), &to_group, id(&carol))
+                .await?,
             "nor Carol's through the grant to the group"
         );
         Ok(())

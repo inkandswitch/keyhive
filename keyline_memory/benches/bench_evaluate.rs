@@ -16,10 +16,8 @@
 use divan::Bencher;
 use keyhive_crypto::id::Id;
 use keyline::{
-    delegation::Delegation,
     power::Power,
-    revocation::Revocation,
-    test_utils::{assume_verified, id, Statement},
+    test_utils::{assume_verified, delegation, id, revocation, Statement},
 };
 use keyline_memory::state::State;
 
@@ -36,7 +34,7 @@ const LADDER_LEAF: u8 = 250;
 const LATE_JOINER: u8 = 251;
 
 fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Statement<()> {
-    Delegation::new(id(issuer), id(audience), id(subject), power).into()
+    delegation(id(issuer), id(audience), id(subject), power).into()
 }
 
 fn build(certs: Vec<Statement<()>>) -> State<()> {
@@ -64,17 +62,17 @@ fn realistic(n: u8) -> State<()> {
     }
     let mut g: State<()> = build(certs);
     // Two revocations: one by an Owner (covers), one by a member (inert).
-    let victim = Delegation::new(
+    let victim = delegation(
         id(FIRST_HUMAN),
         id(FIRST_HUMAN + 3),
         id(ROLES[0]),
         Power::Edit,
     );
-    g.insert(assume_verified(Revocation::new(
+    g.insert(assume_verified(revocation(
         id(FIRST_HUMAN + 1),
         victim.digest(),
     )));
-    g.insert(assume_verified(Revocation::new(
+    g.insert(assume_verified(revocation(
         id(FIRST_HUMAN + 4),
         victim.digest(),
     )));
@@ -100,19 +98,19 @@ fn club_ladder(k: u8) -> State<()> {
 /// exclusion set.
 fn revocation_spree(k: u8) -> State<()> {
     let mut g = realistic(k);
-    let removed = Delegation::new(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Power::Admin);
-    g.insert(assume_verified(Revocation::new(
+    let removed = delegation(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Power::Admin);
+    g.insert(assume_verified(revocation(
         id(FIRST_HUMAN),
         removed.digest(),
     )));
     for i in 0..k {
-        let target = Delegation::new(
+        let target = delegation(
             id(FIRST_HUMAN),
             id(FIRST_HUMAN + 2 + i),
             id(ROLES[0]),
             Power::Edit,
         );
-        g.insert(assume_verified(Revocation::new(
+        g.insert(assume_verified(revocation(
             id(FIRST_HUMAN + 1),
             target.digest(),
         )));
