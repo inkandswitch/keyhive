@@ -488,7 +488,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         .into();
 
         let mut bob_tree =
-            keyhive_core::cgka::Cgka::new(doc_id, bob_active_id, beekem::keys::ShareKeyMap::new());
+            keyhive_core::cgka::Cgka::new(doc_id, bob_active_id, beekem::keys::ShareKeyMap::new())?;
         let bob_add = bob_tree
             .add::<Sendable, _>(
                 bob_active_id,

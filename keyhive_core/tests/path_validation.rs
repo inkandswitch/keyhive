@@ -11,7 +11,7 @@ use keyhive_core::{
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext},
 };
-use keyhive_crypto::{share_key::ShareKey, signed::Signed, verifiable::Verifiable};
+use keyhive_crypto::{share_key::ShareKey, signed::Signed};
 use keyline::power::Power::Read;
 use std::collections::{BTreeMap, HashSet};
 use testresult::TestResult;
@@ -81,7 +81,7 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
         new_path,
         predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&bob, design_doc).await,
-        doc_id: TreeId(design_doc.verifying_key()),
+        doc_id: TreeId::try_from(design_doc)?,
     };
 
     // We should ignore the forged path and not panic.

@@ -14,7 +14,9 @@ blake3 = { workspace = true }
 chacha20poly1305 = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["rand_core", "serde"] }
 future_form = { workspace = true }
-keyhive_crypto = { workspace = true }
+keyhive_codec = { workspace = true }
+# `serde` until serde leaves the workspace (C6): `MemberId` and `TreeId` derive it.
+keyhive_crypto = { workspace = true, features = ["serde"] }
 nonempty = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true, features = ["alloc", "derive", "rc"] }
@@ -30,6 +32,8 @@ arbitrary = { workspace = true, optional = true }
 arbitrary = { workspace = true }
 bolero.workspace = true
 beekem = { path = ".", features = ["arbitrary"] }
+curve25519-dalek = { workspace = true }
+keyhive_codec = { workspace = true, features = ["laws"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
@@ -38,6 +42,7 @@ std = [
     "blake3/std",
     "dupe",
     "ed25519-dalek/std",
+    "keyhive_codec/std",
     "keyhive_crypto/std",
     "nonempty/std",
     "rand/std",

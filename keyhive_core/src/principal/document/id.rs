@@ -54,7 +54,16 @@ impl From<DocumentId> for MemberedId {
 
 impl From<beekem::id::TreeId> for DocumentId {
     fn from(tree_id: beekem::id::TreeId) -> Self {
-        DocumentId(tree_id.0.into())
+        DocumentId(tree_id.id().into())
+    }
+}
+
+/// Into Beekem: fallible, as for Keyline's [`Id`].
+impl TryFrom<DocumentId> for beekem::id::TreeId {
+    type Error = keyhive_crypto::id::InvalidId;
+
+    fn try_from(id: DocumentId) -> Result<Self, Self::Error> {
+        Self::try_from(id.verifying_key())
     }
 }
 

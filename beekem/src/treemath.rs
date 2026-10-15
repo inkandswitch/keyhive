@@ -23,6 +23,10 @@ use core::{
     cmp::Ordering,
     ops::{Add, AddAssign, Sub, SubAssign},
 };
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use serde::{Deserialize, Serialize};
 
 /// LeafNodeIndex references a leaf node in a tree.
@@ -194,6 +198,27 @@ impl TreeNodeIndex {
             TreeNodeIndex::Leaf(index) => index.to_tree_index(),
             TreeNodeIndex::Inner(index) => index.to_tree_index(),
         }
+    }
+}
+
+/// The tree index as bijou32: even for a leaf, odd for an inner node. Every
+/// number is exactly one index, and encoded order is [`Ord`]'s.
+impl Encode for TreeNodeIndex {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.u32().encode_into(out);
+    }
+}
+
+impl Decode for TreeNodeIndex {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for TreeNodeIndex {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (index, rest) = u32::decode_next(bytes)?;
+        Ok((TreeNodeIndex::new(index), rest))
     }
 }
 
@@ -386,6 +411,25 @@ pub(crate) fn direct_path(node_index: TreeNodeIndex, size: TreeSize) -> Vec<Inne
 #[cfg(any(feature = "test_utils", test))]
 pub(crate) fn is_node_in_tree(node_index: TreeNodeIndex, size: TreeSize) -> bool {
     node_index.u32() < size.u32()
+}
+
+#[test]
+fn tree_node_index_codec_laws() {
+    keyhive_codec::laws::round_trip::<TreeNodeIndex>();
+    keyhive_codec::laws::canonical_near::<TreeNodeIndex>();
+    keyhive_codec::laws::stream::<TreeNodeIndex>();
+}
+
+#[test]
+fn tree_node_index_parity_is_its_variant() {
+    assert_eq!(
+        TreeNodeIndex::decode(&[4]),
+        Ok(TreeNodeIndex::Leaf(LeafNodeIndex::new(2)))
+    );
+    assert_eq!(
+        TreeNodeIndex::decode(&[5]),
+        Ok(TreeNodeIndex::Inner(InnerNodeIndex::new(2)))
+    );
 }
 
 #[test]

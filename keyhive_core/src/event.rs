@@ -131,7 +131,7 @@ mod tests {
         id::{MemberId, TreeId},
         operation::CgkaAuthorization,
     };
-    use ed25519_dalek::VerifyingKey;
+    use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
     use keyhive_crypto::{
         id::Id, share_key::ShareKey, signer::memory::MemorySigner, siv::Siv,
@@ -152,31 +152,31 @@ mod tests {
         let doc_id2 = DocumentId::generate(&mut csprng);
 
         let cgka_op_1 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
+            added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 42,
             invitation: None,
             predecessors: vec![],
-            doc_id: TreeId(doc_id1.verifying_key()),
+            doc_id: TreeId::try_from(doc_id1)?,
             authorization: CgkaAuthorization::Delegation([0u8; 32]),
         })?;
 
         let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
-            id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
+            id: MemberId::from(&SigningKey::generate(&mut csprng)),
             leaf_idx: 4,
             predecessors: vec![],
             removed_keys: vec![],
-            doc_id: TreeId(doc_id2.verifying_key()),
+            doc_id: TreeId::try_from(doc_id2)?,
             authorization: CgkaAuthorization::Revocation([0u8; 32]),
         })?;
 
         let cgka_op_3 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
+            added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 11,
             invitation: None,
             predecessors: vec![],
-            doc_id: TreeId(doc_id1.verifying_key()),
+            doc_id: TreeId::try_from(doc_id1)?,
             authorization: CgkaAuthorization::Delegation([0u8; 32]),
         })?;
 

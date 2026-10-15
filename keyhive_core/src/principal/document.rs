@@ -132,7 +132,7 @@ impl<T: ContentRef> DocumentState<T> {
         let (owner, owner_pk, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
-        let mut cgka = Cgka::new(id, owner, owner_sks);
+        let mut cgka = Cgka::new(id, owner, owner_sks)?;
         let mut ops = cgka.add_multiple(founders, signer).await?;
         let (_pcs_key, update_op, _new_key_pair) =
             cgka.update(owner_pk, owner_sk, signer, csprng).await?;
