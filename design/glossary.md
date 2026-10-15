@@ -6,40 +6,38 @@ Terms used across the Keyhive design documents and code. Where the design docume
 
 | Term | Meaning | In code |
 |------|---------|---------|
-| _Agent_ | Anything that can hold, delegate, or exercise authority. Identified by an Ed25519 verifying key. | `Agent` enum: `Individual`, `Group`, `Document`, `Active` |
-| _Individual_ (design docs: _Stateless Agent_, _Singleton_) | A bare key pair with no membership state. Leaves of the authority graph: devices, WebCrypto contexts, passkeys, hardware keys. Publishes X25519 prekeys so it can be added to BeeKEM trees. | `Individual`, `IndividualId` |
-| _Group_ (design docs: _Stateful Agent_) | An agent with a mutable membership: a set of delegations and revocations rooted at the group's key. | `Group`, `GroupId` |
-| _Document_ | A group that additionally owns encrypted content and a BeeKEM tree. `Document :< Group :< Individual` in the design-doc subtyping. | `Document`, `DocumentId` |
-| _Active_ | The local user's own agent: the individual whose signing key this replica controls. | `Active` |
+| _Principal_ | Anything that can hold, delegate, or exercise authority. Identified by an Ed25519 verifying key. | `Identifier`; a transient `Principal` handle |
+| _Individual_ | A bare key pair with no membership state: a device, WebCrypto context, passkey, or hardware key. Publishes X25519 prekeys so it can be added to BeeKEM trees. | `Individual`, `IndividualState`, `IndividualId` |
+| _Group_ | A key that stands for a set of members: a Keyline subject other keys hold delegations about. Keyline's _role_. | `Group`, `GroupId` |
+| _Document_ | A subject that also owns encrypted content and a BeeKEM tree. A replica knows a document from its authorized CGKA operations. | `Document`, `DocumentState`, `DocumentId` |
+| _Active_ | The individual whose signing key this replica controls. | `Active` |
 | _Public_ | A well-known individual whose keys everyone holds; used to encrypt "to anyone" as a fallback. | `Public` |
-| _Membered_ | Anything with a membership (a `Group` or a `Document`). | `Membered` |
-| _Peer_ | Anything you can delegate _to_ (an individual, group, or document) as opposed to a delegator. | `Peer` |
-| _Root_ / _Genesis key_ | The key pair whose verifying key _is_ a group's or document's identifier. All authority over that subject is rooted in delegations signed by it. Self-certifying: possession of the root key proves you created the subject. | |
+| _Membered_ | A group or a document: anything with members. | `MemberedId` |
+| _Root_ / _Genesis key_ | The key pair whose verifying key _is_ a group's or document's identifier. It signs the subject's root edges (`Admin` to each creator) and is then discarded. | `certificate::root_edges` |
 
 ## Authority
 
+Keyhive's authority model is [Keyline]; its [glossary][keyline glossary] defines the graph terms (route, live, admin reach, positive graph, closure, heal). The terms the rest of Keyhive uses:
+
 | Term | Meaning | In code |
 |------|---------|---------|
-| _Capability_ | A signed statement that some agent may act on some subject at some access level. In Keyhive a capability is a _delegation_ plus the chain of delegations that justifies it. | |
-| _Delegation_ | A signed edge in the authority graph: _issuer_ grants _delegate_ `can` over the subject, citing a _proof_ (the issuer's own delegation) and recording the revocations and document heads it was issued after. | `Delegation`, `Signed<Delegation>` |
-| _Revocation_ | A signed statement that a specific delegation no longer holds, with a proof of the revoker's own authority. | `Revocation`, `Signed<Revocation>` |
-| _Membership operation_ | Either a delegation or a revocation. | `MembershipOperation` |
-| _Access level_ | `Relay < Read < Edit < Admin`. Totally ordered; each level implies the ones below. | `Access` |
-| _Relay_ | May sync and forward ciphertext but not decrypt it. The level held by sync servers. Never placed in a BeeKEM tree. | `Access::Relay` |
-| _Read_ | May decrypt content; is a BeeKEM member. | `Access::Read` |
-| _Edit_ | May append operations to content. | `Access::Edit` |
-| _Admin_ | May revoke any delegation in the group, not only those in their own proof lineage; may manage membership generally. | `Access::Admin` |
-| _Authority graph_ | The directed graph whose vertices are agents and whose edges are delegations. Authorisation is reachability from the subject to the agent along validly-signed edges. | |
-| _Transitive authority_ | Authority that reaches an agent through one or more groups. Clamped to the _weakest link_: the minimum access level along the best path. | `Membered::transitive_members` |
-| _Seniority_ | Causal precedence within a group: an agent added earlier is senior to one added later. A non-admin may only revoke members junior to itself. An agent whose transitive access into the group is at least the target's level may also revoke it. A re-added agent keeps the seniority of its earliest add. Conflicting concurrent revocations are ordered by depth in the causal operation graph, then digest. | `Group::revoke_member`, `MembershipOperation::reverse_topsort` |
-| _Proof_ | The delegation an issuer cites to justify a new delegation or revocation. | `Delegation::proof` |
-| _Materialised view_ | The current membership computed from the full set of operations: for each agent, the maximum over paths of the per-path minimum access. | `Group::members`, `transitive_members` |
-| _Membership by parenthood_ | The pattern where whoever creates a group or document immediately delegates to themselves (or their group) from the fresh root, then may discard the root key. | |
-| _PoLA_ | Principle of Least Authority: grant the narrowest capability that does the job. Keyhive never restricts sub-delegation because doing so pushes users toward sharing raw keys instead. | |
-| _Whiteout_ | Operations whose authority was later revoked are retained (to preserve causality) but excluded from materialisation. | |
-| _Back-dating_ | A revoked agent fabricating operations that claim causal predecessors from before the revocation. Detected against the causal frontier (`after_content`) the revocation records. | `Delegation::after_content` |
-| _Convergent capabilities_ (_concap_) | Keyhive's capability model: certificate capabilities whose authority is evaluated over a CRDT of delegations and revocations, so all replicas converge on the same view. See [Convergent Capabilities](./convergent_capabilities.md). | |
-| _Keyline_ | The successor authority model: a uniform graph over keys, with revocation scoped by the issuer's admin reach. See [Keyline](./keyline/README.md). | `keyline` |
+| _Certificate_ | A signed delegation or revocation. The certificate set is a state-based CRDT: it only grows, and merges by union. | `keyline::certificate::Certificate` |
+| _Delegation_ | A signed edge: _issuer_ grants _audience_ `power` over _subject_, optionally citing an earlier revocation (a re-issue). It names no proof: authority is recomputed from the whole set. | `keyline::delegation::Delegation` |
+| _Revocation_ | A signed statement that a delegation, named by digest, no longer holds, with a `retain` watermark of content heads. | `keyline::revocation::Revocation` |
+| _Power_ | `Relay < Read < Edit < Admin`. Totally ordered; each level implies the ones below. | `Power` |
+| _Relay_ | May sync and forward ciphertext but not decrypt it. The level held by sync servers. Never placed in a BeeKEM tree. | `Power::Relay` |
+| _Read_ | May decrypt content; is a BeeKEM member. | `Power::Read` |
+| _Edit_ | May append operations to content. | `Power::Edit` |
+| _Admin_ | May act on the graph: revoke on routes through the node, and so manage a group's members. | `Power::Admin` |
+| _Effective power_ | What a principal holds over a subject: the maximum over live routes of the minimum `power` along each. | `Keyline::effective_power` |
+| _Admin reach_ | The nodes a key ever held `Admin` over, plus its own. A revocation by a third party breaks its target only on routes through the issuer's admin reach. | |
+| _Adoption_ | Re-issuing, from the revoker, the delegations a removed member issued, at no more than the revoker's power, so the members they admitted keep their access. Distinct from Keyline's _heal_ (a re-issue citing a revocation). | `revoke_member(…, retain_all_other_members: true)` |
+| _Reconciliation_ | Bringing each held document's BeeKEM tree in line with its readers after a certificate write, citing the certificate behind each add and remove. | `Keyhive::insert_and_reconcile` |
+| _Membership by parenthood_ | Whoever creates a group or document holds `Admin` over it through a root edge from the fresh root key, which is then discarded. | |
+| _PoLA_ | Principle of Least Authority: grant the narrowest capability that does the job. Keyhive never restricts sub-delegation, because doing so pushes users toward sharing raw keys instead. | |
+| _Retention watermark_ | The content heads a revocation records for each document it can affect: what the issuer had seen when revoking, as the application last set them (`Keyhive::set_content_heads`). The content layer decides what the revoked key's later content means. | `Revocation::retain`, `ContentHeads` |
+| _Convergent capabilities_ (_concap_) | Certificate capabilities whose authority is evaluated over a CRDT of delegations and revocations, so all replicas converge on the same view. See [Convergent Capabilities](./convergent_capabilities.md). | |
+| _Keyline_ | The authority graph: a uniform graph over keys, with revocation scoped by the issuer's admin reach. See [Keyline]. | `keyline`, `keyline_memory` |
 
 ## Encryption
 
@@ -70,7 +68,7 @@ Terms used across the Keyhive design documents and code. Where the design docume
 | _Content reference_ | An application-defined identifier for a chunk of encrypted content, typically its BLAKE3 hash. | `ContentRef` (32-byte array by default) |
 | _Digest_ | A typed BLAKE3 hash. `Digest<T>` for different `T` are distinct types. | `Digest<T>` |
 | _Signed_ | A payload with its Ed25519 signature and the signer's verifying key. | `Signed<T>` |
-| _Event_ / _Static event_ | The replication unit: a signed membership operation, prekey operation, or CGKA operation, in a form that can be serialised without live references. | `Event`, `StaticEvent` |
+| _Event_ / _Static event_ | The replication unit: a certificate, prekey operation, or CGKA operation, in a form that can be serialised without live references. | `Event`, `StaticEvent` |
 | _Archive_ | A serialisable snapshot of a whole `Keyhive` for persistence. | `Archive` |
 | _Contact card_ | The minimal out-of-band bundle (verifying key + a prekey) needed to add someone. | `ContactCard` |
 | _Relay_ (noun) | A peer or server that holds `Relay` access: stores and forwards ciphertext for others. | |
@@ -84,6 +82,11 @@ Terms used across the Keyhive design documents and code. Where the design docume
 |------|---------|
 | _E2EE_ | End-to-end encryption: only endpoints with `Read` hold plaintext. |
 | _Local-first_ | Software where the primary copy of data lives on the user's device and collaboration happens by sync, so it must tolerate partitions and offline work. |
-| _CRDT_ | Conflict-free Replicated Data Type. Both Keyhive's membership and BeeKEM's operation graph are op-based CRDTs; Keyline is a state-based one. |
+| _CRDT_ | Conflict-free Replicated Data Type. BeeKEM's operation graph is an op-based CRDT; Keyline's certificate set is a state-based one. |
 | _ocap_ | Object-capability model: authority as unforgeable references, fail-stop, no third-party revocation. |
 | _SPKI_ / _Certificate capabilities_ | Authority as signed certificate chains presented by the invoker (SPKI, UCAN). |
+
+<!-- Links -->
+
+[Keyline]: ./keyline/README.md
+[keyline glossary]: ./keyline/README.md#glossary
