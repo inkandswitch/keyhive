@@ -1,9 +1,11 @@
 use crate::transact::{fork::Fork, merge::Merge};
 use derive_where::derive_where;
 use keyhive_crypto::digest::Digest;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, HashMap},
+    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -151,7 +153,7 @@ impl<T: Serialize> FromIterator<T> for CaMap<T> {
 }
 
 impl<T: Serialize + PartialEq> PartialOrd for CaMap<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(
             self.0
                 .keys()
@@ -162,14 +164,14 @@ impl<T: Serialize + PartialEq> PartialOrd for CaMap<T> {
 }
 
 impl<T: Serialize + Eq> Ord for CaMap<T> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other)
             .expect("hashes are always comparable")
     }
 }
 
 impl<T: Serialize> Serialize for CaMap<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let tree: BTreeMap<&Digest<T>, &T> = self.0.iter().map(|(k, v)| (k, v.as_ref())).collect();
         tree.serialize(serializer)
     }
@@ -202,8 +204,8 @@ impl<T: Serialize> Extend<(Digest<T>, Arc<T>)> for CaMap<T> {
     }
 }
 
-impl<T: Serialize> std::hash::Hash for CaMap<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl<T: Serialize> Hash for CaMap<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         let mut keys: Vec<_> = self.0.keys().collect();
         keys.sort();
         keys.hash(state);

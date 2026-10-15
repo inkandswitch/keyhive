@@ -4,7 +4,7 @@ use derivative::Derivative;
 use keyhive_crypto::{
     content::reference::ContentRef, read_capability::ReadCap, symmetric_key::SymmetricKey,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize, Serializer};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     collections::{BTreeMap, HashMap},
     hash::{DefaultHasher, Hasher},
@@ -130,7 +130,7 @@ fn ordered_map_deserializer<'de, D, K: ContentRef + Deserialize<'de>, V: Deseria
     deserializer: D,
 ) -> Result<HashMap<K, V>, D::Error>
 where
-    D: serde::Deserializer<'de>,
+    D: Deserializer<'de>,
 {
     let ordered: BTreeMap<u64, (K, V)> = Deserialize::deserialize(deserializer)?;
     Ok(ordered.into_iter().map(|(_, (k, v))| (k, v)).collect())
