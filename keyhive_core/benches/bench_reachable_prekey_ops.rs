@@ -1,10 +1,12 @@
+use divan::Bencher;
 use dupe::Dupe;
 use keyhive_core::{
-    access::Access,
     principal::{individual::op::KeyOp, public::Public},
     test_utils::make_simple_keyhive,
 };
+use keyline::power::Power;
 use nonempty::nonempty;
+use tokio::runtime::Runtime;
 
 fn main() {
     divan::main();
@@ -23,11 +25,8 @@ const PREKEY_ROTATIONS_PER_PEER: usize = 5;
     (20, 40),
     (30, 60),
 ])]
-fn reachable_prekey_ops_for_agent(
-    bencher: divan::Bencher,
-    (n_peers, n_public_docs): (usize, usize),
-) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+fn reachable_prekey_ops_for_agent(bencher: Bencher, (n_peers, n_public_docs): (usize, usize)) {
+    let rt = Runtime::new().unwrap();
 
     let (keyhive, peer_id) = rt.block_on(async {
         let alice = make_simple_keyhive().await.unwrap();
@@ -68,7 +67,7 @@ fn reachable_prekey_ops_for_agent(
 
             for doc_id in &docs {
                 alice
-                    .add_member(peer_id, *doc_id, Access::Edit, &[])
+                    .add_member(peer_id, *doc_id, Power::Edit)
                     .await
                     .unwrap();
             }
@@ -83,7 +82,10 @@ fn reachable_prekey_ops_for_agent(
 
     bencher.bench_local(|| {
         rt.block_on(async {
-            keyhive.reachable_prekey_ops_for_agent(peer_id).await;
+            keyhive
+                .reachable_prekey_ops_for_agent(peer_id)
+                .await
+                .expect("selects events");
         });
     });
 }
