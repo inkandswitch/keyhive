@@ -63,7 +63,16 @@ impl From<&VerifyingKey> for IndividualId {
 
 impl From<beekem::id::MemberId> for IndividualId {
     fn from(member_id: beekem::id::MemberId) -> Self {
-        IndividualId(member_id.0.into())
+        IndividualId(member_id.id().into())
+    }
+}
+
+/// Into Beekem: fallible, as for Keyline's [`Id`].
+impl TryFrom<IndividualId> for beekem::id::MemberId {
+    type Error = keyhive_crypto::id::InvalidId;
+
+    fn try_from(id: IndividualId) -> Result<Self, Self::Error> {
+        Self::try_from(id.verifying_key())
     }
 }
 

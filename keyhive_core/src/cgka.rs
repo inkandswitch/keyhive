@@ -22,11 +22,11 @@ use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
+    id::InvalidId,
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
-    verifiable::Verifiable,
 };
 use nonempty::NonEmpty;
 use rand::{CryptoRng, RngCore};
@@ -61,12 +61,16 @@ impl Hash for Cgka {
 }
 
 impl Cgka {
-    pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
-        Cgka(beekem::cgka::Cgka::new(
-            TreeId(doc_id.verifying_key()),
-            MemberId(owner_id.verifying_key()),
+    pub fn new(
+        doc_id: DocumentId,
+        owner_id: IndividualId,
+        owner_sks: ShareKeyMap,
+    ) -> Result<Self, CgkaError> {
+        Ok(Cgka(beekem::cgka::Cgka::new(
+            TreeId::try_from(doc_id)?,
+            MemberId::try_from(owner_id)?,
             owner_sks,
-        ))
+        )))
     }
 
     pub fn with_new_owner(
@@ -74,10 +78,10 @@ impl Cgka {
         my_id: IndividualId,
         owner_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
-        Ok(Cgka(self.0.with_new_owner(
-            MemberId(my_id.verifying_key()),
-            owner_sks,
-        )?))
+        Ok(Cgka(
+            self.0
+                .with_new_owner(MemberId::try_from(my_id)?, owner_sks)?,
+        ))
     }
 
     pub fn ops_count(&self) -> usize {
@@ -138,7 +142,7 @@ impl Cgka {
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         self.0
-            .add(MemberId(id.verifying_key()), pk, authorization, signer)
+            .add(MemberId::try_from(id)?, pk, authorization, signer)
             .await
     }
 
@@ -147,7 +151,14 @@ impl Cgka {
         members: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
-        let converted = members.map(|(id, pk, auth)| (MemberId(id.verifying_key()), pk, auth));
+        let (head, tail) = (members.head, members.tail);
+        let converted = NonEmpty {
+            head: (MemberId::try_from(head.0)?, head.1, head.2),
+            tail: tail
+                .into_iter()
+                .map(|(id, pk, auth)| Ok((MemberId::try_from(id)?, pk, auth)))
+                .collect::<Result<_, InvalidId>>()?,
+        };
         self.0.add_multiple(converted, signer).await
     }
 
@@ -158,7 +169,7 @@ impl Cgka {
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         self.0
-            .remove(MemberId(id.verifying_key()), authorization, signer)
+            .remove(MemberId::try_from(id)?, authorization, signer)
             .await
     }
 

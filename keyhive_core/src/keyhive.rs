@@ -2243,7 +2243,7 @@ where
                     return Ok(Err(Denied));
                 }
                 // An update must be signed by the owner of the leaf it rotates.
-                if new_path.leaf_id.0 != signed_op.issuer {
+                if new_path.leaf_id.verifying_key() != signed_op.issuer {
                     return Ok(Err(Denied));
                 }
                 // Its leaf is checked against the tree on merge. A relay has no
@@ -2406,7 +2406,7 @@ where
             return Ok(());
         }
         let secrets = self.active.key_pairs.lock().await.clone();
-        let mut tree = Cgka::new(doc_id, me, ShareKeyMap::new());
+        let mut tree = Cgka::new(doc_id, me, ShareKeyMap::new())?;
         let failure = apply_in_causal_order(&mut tree, ops.clone(), me, &secrets, received);
         if !tree.contains_predecessors(&invitations.into_iter().collect()) {
             return failure.map_or(Ok(()), Err);
@@ -3480,7 +3480,7 @@ mod tests {
         listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
         test_utils::Hive, transact::transact_async,
     };
-    use beekem::{id::MemberId, operation::CgkaOperation};
+    use beekem::operation::CgkaOperation;
     use future_form::Sendable;
     use keyhive_codec::traits::Decode;
     use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
@@ -4849,9 +4849,7 @@ mod tests {
             .cgka_ops()
             .iter()
             .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove {
-                    id: MemberId(vk), ..
-                } => Some(*vk),
+                CgkaOperation::Remove { id, .. } => Some(id.verifying_key()),
                 _ => None,
             })
             .collect();
@@ -4890,9 +4888,7 @@ mod tests {
             .cgka_ops()
             .iter()
             .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove {
-                    id: MemberId(vk), ..
-                } => Some(*vk),
+                CgkaOperation::Remove { id, .. } => Some(id.verifying_key()),
                 _ => None,
             })
             .collect();

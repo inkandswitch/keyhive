@@ -21,6 +21,11 @@ use core::{
     mem,
     ops::Deref,
 };
+use keyhive_codec::{
+    error::DecodeError,
+    prefixed::{decode_bytes, decode_list, encode_bytes, encode_list},
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use keyhive_crypto::{
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
@@ -38,6 +43,36 @@ pub enum CgkaAuthorization {
 
     /// The digest of the revocation that generated a remove.
     Revocation([u8; 32]),
+}
+
+/// Tag `0` for a delegation, `1` for a revocation, then the digest.
+impl Encode for CgkaAuthorization {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let (tag, digest) = match self {
+            CgkaAuthorization::Delegation(digest) => (0, digest),
+            CgkaAuthorization::Revocation(digest) => (1, digest),
+        };
+        out.push(tag);
+        out.extend_from_slice(digest);
+    }
+}
+
+impl Decode for CgkaAuthorization {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for CgkaAuthorization {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (&tag, rest) = bytes.split_first().ok_or(DecodeError::UnexpectedEnd)?;
+        let (digest, rest) = <[u8; 32]>::decode_next(rest)?;
+        match tag {
+            0 => Ok((CgkaAuthorization::Delegation(digest), rest)),
+            1 => Ok((CgkaAuthorization::Revocation(digest), rest)),
+            other => Err(DecodeError::InvalidTag(other)),
+        }
+    }
 }
 
 /// An ordered [`NonEmpty`] of [`CgkaOperation`]s that a replay applies
@@ -81,6 +116,34 @@ pub struct InvitationSecret {
     pub encrypted_root_secret: EncryptedSecret<ShareSecretKey>,
 }
 
+/// `update_op_hash ‖ encrypted_root_secret`.
+impl Encode for InvitationSecret {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.update_op_hash.encode_into(out);
+        self.encrypted_root_secret.encode_into(out);
+    }
+}
+
+impl Decode for InvitationSecret {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for InvitationSecret {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (update_op_hash, rest) = Digest::decode_next(bytes)?;
+        let (encrypted_root_secret, rest) = EncryptedSecret::decode_next(rest)?;
+        Ok((
+            InvitationSecret {
+                update_op_hash,
+                encrypted_root_secret,
+            },
+            rest,
+        ))
+    }
+}
+
 /// When a member is added, it can't derive a root secret from the tree until the next
 /// update. An invitation provides it the root secrets the inviter could reach at the
 /// point it was added.
@@ -95,6 +158,34 @@ pub struct Invitation {
     /// for this add's nearest update ancestors and for every chainable update
     /// whose root secret it had not yet decrypted from a later update.
     pub ancestor_secrets: Vec<InvitationSecret>,
+}
+
+/// `inviter_pk ‖ count:bijou32 ‖ ancestor_secrets`, in order.
+impl Encode for Invitation {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.inviter_pk.encode_into(out);
+        encode_list(&self.ancestor_secrets, out);
+    }
+}
+
+impl Decode for Invitation {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for Invitation {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (inviter_pk, rest) = ShareKey::decode_next(bytes)?;
+        let (ancestor_secrets, rest) = decode_list(rest)?;
+        Ok((
+            Invitation {
+                inviter_pk,
+                ancestor_secrets,
+            },
+            rest,
+        ))
+    }
 }
 
 /// An earlier update's root secret, wrapped by a later update.
@@ -113,6 +204,34 @@ pub struct PredecessorSecret {
     /// The root secret, encrypted under a key derived from the root secret of the
     /// update that contains this entry.
     pub encrypted_root_secret: Vec<u8>,
+}
+
+/// `update_op_hash ‖ len:bijou32 ‖ encrypted_root_secret`.
+impl Encode for PredecessorSecret {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.update_op_hash.encode_into(out);
+        encode_bytes(&self.encrypted_root_secret, out);
+    }
+}
+
+impl Decode for PredecessorSecret {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for PredecessorSecret {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (update_op_hash, rest) = Digest::decode_next(bytes)?;
+        let (encrypted_root_secret, rest) = decode_bytes(rest)?;
+        Ok((
+            PredecessorSecret {
+                update_op_hash,
+                encrypted_root_secret: encrypted_root_secret.to_vec(),
+            },
+            rest,
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
@@ -580,11 +699,10 @@ mod causal_graph_tests {
     use keyhive_crypto::{
         share_key::ShareSecretKey,
         signer::{async_signer, memory::MemorySigner},
-        verifiable::Verifiable,
     };
 
     fn member_id() -> MemberId {
-        MemberId(MemorySigner::generate(&mut rand::thread_rng()).verifying_key())
+        MemberId::from(&MemorySigner::generate(&mut rand::thread_rng()).0)
     }
 
     async fn signed_add(
@@ -626,7 +744,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn merging_a_fork_keeps_the_operations_it_added() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut trunk = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         trunk.add_op(&root).expect("a root has no predecessors");
@@ -675,7 +793,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn graphs_holding_different_operations_hash_differently() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut one = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         one.add_op(&root).expect("a root has no predecessors");
@@ -706,7 +824,7 @@ mod causal_graph_tests {
         head: Option<&str>,
     ) -> Vec<BTreeSet<&'static str>> {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let mut signed = BTreeMap::new();
         for (leaf_index, (name, preds)) in (0..).zip(ops) {
@@ -842,7 +960,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn adding_an_op_again_leaves_the_graph_unchanged() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         let child = signed_add(&signer, doc_id, 1, &[&root]).await;
@@ -862,7 +980,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn adding_an_op_before_its_predecessor_leaves_the_graph_unchanged() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         graph.add_op(&root).expect("a root has no predecessors");
@@ -891,7 +1009,7 @@ mod causal_graph_tests {
             arbitrary::Arbitrary::arbitrary(&mut arbitrary::Unstructured::new(&[0; 4096]))
                 .expect("4096 bytes are enough for a path");
         let op = CgkaOperation::Update {
-            id: MemberId(signer.verifying_key()),
+            id: MemberId::from(&signer.0),
             new_path,
             predecessor_secrets: Vec::new(),
             predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
@@ -905,7 +1023,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn an_operation_with_no_predecessors_shares_a_batch_with_the_first_add() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         graph
             .add_op(&signed_add(&signer, doc_id, 0, &[]).await)
@@ -925,7 +1043,7 @@ mod causal_graph_tests {
         //    |       second_add
         //  update
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let first_add = signed_add(&signer, doc_id, 0, &[]).await;
         let update = signed_update(&signer, doc_id, &[&first_add]).await;
@@ -948,7 +1066,7 @@ mod causal_graph_tests {
         //      /    \
         // update  other_update
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         let update = signed_update(&signer, doc_id, &[&root]).await;
@@ -971,7 +1089,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn a_head_missing_from_the_graph_is_an_error() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let graph = CgkaOperationGraph::new();
         let unknown = signed_add(&signer, doc_id, 0, &[]).await;
 
@@ -988,7 +1106,7 @@ mod causal_graph_tests {
     async fn an_operation_after_every_head_starts_a_new_batch() {
         // first_root  second_root
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let first_root = signed_add(&signer, doc_id, 0, &[]).await;
         let second_root = signed_add(&signer, doc_id, 1, &[]).await;
@@ -1007,7 +1125,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn adding_a_root_that_is_not_an_add_leaves_the_graph_unchanged() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         graph
             .add_op(&signed_add(&signer, doc_id, 0, &[]).await)
@@ -1030,7 +1148,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn an_update_is_chainable_once_a_later_update_follows_it() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         let u1 = signed_update(&signer, doc_id, &[&root]).await;
@@ -1048,7 +1166,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn only_the_first_update_back_from_a_head_is_returned() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         let earlier = signed_update(&signer, doc_id, &[&root]).await;
@@ -1069,7 +1187,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn a_head_that_is_an_update_is_its_own_nearest_update() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         let update = signed_update(&signer, doc_id, &[&root]).await;
@@ -1084,7 +1202,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn a_head_with_no_update_in_its_past_has_no_nearest_update() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         let add = signed_add(&signer, doc_id, 1, &[&root]).await;
@@ -1101,7 +1219,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn a_members_secret_is_rebuildable_only_from_its_add_onwards() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let founder = member_id();
         let joiner = member_id();
@@ -1130,7 +1248,7 @@ mod causal_graph_tests {
     #[tokio::test]
     async fn each_head_contributes_its_own_nearest_update() {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
+        let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let root = signed_add(&signer, doc_id, 0, &[]).await;
         graph.add_op(&root).expect("a root add has no predecessors");
