@@ -60,6 +60,8 @@ test-utils = { workspace = true }
 
 arbitrary.workspace = true
 bolero.workspace = true
+keyline = { workspace = true, features = ["arbitrary", "serde", "std", "test_utils"] }
+keyline_memory = { workspace = true, features = ["std"] }
 lazy_static = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tokio-test = { workspace = true }
