@@ -426,7 +426,7 @@ impl CgkaOperationGraph {
         updates
     }
 
-    /// Whether a [`CgkaOperation::Add`] of `member` or of Public is in the
+    /// Whether a [`CgkaOperation::Add`] of `member` is in the
     /// causal past of `op_hash`, counting `op_hash` itself.
     pub(crate) fn has_add_before(
         &self,
@@ -445,7 +445,7 @@ impl CgkaOperationGraph {
             if matches!(
                 op.payload,
                 CgkaOperation::Add { added_id, .. }
-                    if added_id == member || added_id.is_public()
+                    if added_id == member
             ) {
                 return true;
             }
@@ -1124,26 +1124,6 @@ mod causal_graph_tests {
             rebuildable(founder),
             [true; 4],
             "the founder's add precedes every operation"
-        );
-    }
-
-    #[tokio::test]
-    async fn adding_public_makes_later_operations_rebuildable_by_anyone() {
-        let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(signer.verifying_key());
-        let mut graph = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
-        let public = signed_add_of(&signer, doc_id, MemberId::public(), 1, &[&root]).await;
-        let after = signed_update(&signer, doc_id, &[&public]).await;
-        for op in [&root, &public, &after] {
-            graph.add_op(op).expect("predecessors are added first");
-        }
-
-        let reader = member_id();
-        assert_eq!(
-            [&root, &public, &after].map(|op| graph.has_add_before(reader, Digest::hash(op))),
-            [false, true, true],
-            "a rebuild falls back to Public's leaf, so adding Public covers what follows"
         );
     }
 

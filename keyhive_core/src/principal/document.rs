@@ -182,17 +182,13 @@ impl<T: ContentRef> DocumentState<T> {
         self.cgka.ops()
     }
 
-    /// Rotate our CGKA key.
-    ///
-    /// The second element of the return is the new key pair or [`None`] when the owner
-    /// is not in the tree and the update fell back to Public's existing key.
+    /// Rotate our CGKA key, returning the update and the new leaf key pair.
     #[instrument(skip_all)]
-    #[allow(clippy::type_complexity)]
     pub async fn pcs_update<F: FutureForm, S: AsyncSigner<F>, R: RngCore + CryptoRng>(
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Signed<CgkaOperation>, Option<LeafKeyPair>), EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, LeafKeyPair), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op, new_key_pair) = self
@@ -207,7 +203,6 @@ impl<T: ContentRef> DocumentState<T> {
     /// open them.
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(skip_all)]
-    #[allow(clippy::type_complexity)]
     pub async fn try_encrypt_content_in_envelope<
         F: FutureForm,
         S: AsyncSigner<F>,
@@ -219,7 +214,13 @@ impl<T: ContentRef> DocumentState<T> {
         pred_refs: &Vec<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(EncryptedContentWithUpdate<T>, Option<LeafKeyPair>), EncryptInEnvelopeError<T>>
+    ) -> Result<
+        (
+            EncryptedContent<Vec<u8>, T>,
+            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
+        ),
+        EncryptInEnvelopeError<T>,
+    >
     where
         T: for<'de> Deserialize<'de>,
     {
@@ -239,15 +240,16 @@ impl<T: ContentRef> DocumentState<T> {
         };
         let bytes = bincode::serialize(&envelope)?;
 
-        let (encrypted, _key, sampled) = self
+        let (encrypted, _key, rotation) = self
             .try_encrypt_content_keyed::<F, S, R>(content_ref, &bytes, pred_refs, signer, csprng)
             .await?;
-        Ok((encrypted, sampled))
+        Ok((encrypted, rotation))
     }
 
-    /// The third element of the return is the key pair a rotation sampled for our leaf.
+    /// Encrypt `content`, returning it with the key it is encrypted under. The third
+    /// element is the update this write had to make, and the key pair it sampled for our
+    /// leaf, if the tree had no current key.
     #[instrument(skip_all)]
-    #[allow(clippy::type_complexity)]
     pub async fn try_encrypt_content_keyed<
         F: FutureForm,
         S: AsyncSigner<F>,
@@ -261,13 +263,13 @@ impl<T: ContentRef> DocumentState<T> {
         csprng: &mut R,
     ) -> Result<
         (
-            EncryptedContentWithUpdate<T>,
+            EncryptedContent<Vec<u8>, T>,
             SymmetricKey,
-            Option<LeafKeyPair>,
+            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
         ),
         EncryptError,
     > {
-        let (app_secret, maybe_update_op, new_key_pair) = self
+        let (app_secret, rotation) = self
             .cgka
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
             .await
@@ -281,14 +283,7 @@ impl<T: ContentRef> DocumentState<T> {
             .try_encrypt(content)
             .map_err(EncryptError::EncryptionFailed)?;
 
-        Ok((
-            EncryptedContentWithUpdate {
-                encrypted_content,
-                update_op: maybe_update_op,
-            },
-            application_secret_key,
-            new_key_pair,
-        ))
+        Ok((encrypted_content, application_secret_key, rotation))
     }
 
     #[instrument(skip_all)]

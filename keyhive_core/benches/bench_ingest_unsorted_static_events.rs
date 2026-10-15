@@ -3,9 +3,7 @@
 //! cargo bench --bench bench_ingest --features test_utils
 
 use divan::{counter::ItemsCount, Bencher};
-use keyhive_core::{
-    event::static_event::StaticEvent, principal::public::Public, test_utils::make_simple_keyhive,
-};
+use keyhive_core::{event::static_event::StaticEvent, test_utils::make_simple_keyhive};
 use keyline::power::Power;
 use nonempty::nonempty;
 use tokio::runtime::Runtime;
@@ -14,16 +12,13 @@ fn main() {
     divan::main();
 }
 
-async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEvent<[u8; 32]>> {
+async fn generate_events(n_peers: usize, n_docs: usize) -> Vec<StaticEvent<[u8; 32]>> {
     let alice = make_simple_keyhive().await.unwrap();
 
-    let mut docs = Vec::with_capacity(n_public_docs);
-    for i in 0..n_public_docs {
+    let mut docs = Vec::with_capacity(n_docs);
+    for i in 0..n_docs {
         let hash: [u8; 32] = blake3::hash(&(i as u64).to_le_bytes()).into();
-        let doc = alice
-            .generate_doc(vec![Public.id()], nonempty![hash])
-            .await
-            .unwrap();
+        let doc = alice.generate_doc(vec![], nonempty![hash]).await.unwrap();
         docs.push(doc);
     }
 
@@ -59,12 +54,12 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
     sample_count = 5,
     sample_size = 1,
 )]
-fn ingest_unsorted_static_events(bencher: Bencher, (n_peers, n_public_docs): (usize, usize)) {
+fn ingest_unsorted_static_events(bencher: Bencher, (n_peers, n_docs): (usize, usize)) {
     let rt = Runtime::new().unwrap();
-    let events = rt.block_on(generate_events(n_peers, n_public_docs));
+    let events = rt.block_on(generate_events(n_peers, n_docs));
     let event_count = events.len();
 
-    eprintln!("n_peers={n_peers}, n_public_docs={n_public_docs}: generated {event_count} events");
+    eprintln!("n_peers={n_peers}, n_docs={n_docs}: generated {event_count} events");
 
     bencher
         .counter(ItemsCount::new(event_count))

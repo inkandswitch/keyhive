@@ -1,7 +1,8 @@
+use ed25519_dalek::SigningKey;
 use keyhive_core::{
     content::heads::ContentHeads,
     event::{static_event::StaticEvent, Event},
-    principal::{identifier::Identifier, public::Public},
+    principal::identifier::Identifier,
     test_utils::TestContext,
 };
 use keyhive_crypto::{id::Id, verified::Verified};
@@ -20,25 +21,27 @@ where
 }
 
 #[tokio::test]
-async fn a_revocation_issued_by_public_does_not_deadlock_the_receiver() -> TestResult {
+async fn a_revocation_issued_by_an_outsider_does_not_deadlock_the_receiver() -> TestResult {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     alice.add_member(bob.id(), design_doc, Read).await?;
 
-    let public = Id::try_from(Public.id())?;
+    // An outsider, holding no power over the document, delegates and revokes.
+    let outsider_key = SigningKey::from([9u8; 32]);
+    let outsider = Id::from(&outsider_key);
     let dlg = Verified::sign_sync(
         &Delegation::new(
-            public,
+            outsider,
             Id::try_from(Identifier::from(bob.id()))?,
             Id::try_from(Identifier::from(design_doc))?,
             Read,
         ),
-        &Public.signer(),
+        &outsider_key,
     )?;
     let rev: Verified<Revocation<ContentHeads<[u8; 32]>>> =
-        Verified::sign_sync(&Revocation::new(public, dlg.digest()), &Public.signer())?;
+        Verified::sign_sync(&Revocation::new(outsider, dlg.digest()), &outsider_key)?;
 
     let event = |cert: Certificate<ContentHeads<[u8; 32]>>| StaticEvent::from(Event::from(cert));
     alice

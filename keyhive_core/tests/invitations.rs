@@ -1,7 +1,4 @@
-use keyhive_core::{
-    principal::public::Public,
-    test_utils::{TestContext, TestResult as Result},
-};
+use keyhive_core::test_utils::{TestContext, TestResult as Result};
 use keyline::power::Power::{Admin, Read};
 
 #[tokio::test]
@@ -62,34 +59,6 @@ async fn an_invitation_is_useless_to_a_non_member() -> Result<()> {
     assert!(
         bob.can_decrypt_content(design_doc, &ct).await?,
         "bob reads the same write from the same invitation"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn making_a_document_public_makes_its_history_public() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-
-    let earlier = ctx
-        .encrypt(
-            &alice,
-            design_doc,
-            b"written before the document was public",
-        )
-        .await?;
-    alice.add_member(Public.id(), design_doc, Read).await?;
-
-    // Carol was never added, but like everyone she has Public's key.
-    let carol = ctx.individual("carol").await?;
-    ctx.sync_as_public(&alice, &carol).await?;
-    ctx.give_content(&carol, &earlier).await?;
-
-    assert_eq!(
-        carol.try_decrypt_content(design_doc, &earlier).await?,
-        b"written before the document was public".to_vec(),
-        "a public document reads from its start, not only from the next write onward"
     );
     Ok(())
 }

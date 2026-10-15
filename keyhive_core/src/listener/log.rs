@@ -97,10 +97,7 @@ impl<F: FutureForm, T: ContentRef + Send + Sync> CgkaListener<F> for Log<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        keyhive::Keyhive, principal::public::Public,
-        store::ciphertext::memory::MemoryCiphertextStore,
-    };
+    use crate::{keyhive::Keyhive, store::ciphertext::memory::MemoryCiphertextStore};
     use keyhive_crypto::signer::memory::MemorySigner;
     use keyline::power::Power;
     use keyline_memory::MemoryKeyline;
@@ -163,12 +160,17 @@ mod tests {
             .generate_doc(vec![], nonempty![[0u8; 32]])
             .await
             .expect("doc generation should succeed");
-        hive.add_member(Public.id(), doc, Power::Read)
+        let reader_card = logged(&Log::new()).await.get_existing_contact_card().await;
+        let reader = hive
+            .receive_contact_card(&reader_card)
+            .await
+            .expect("a fresh contact card is valid");
+        hive.add_member(reader, doc, Power::Read)
             .await
             .expect("the first grant succeeds");
         log.clear().await;
 
-        hive.add_member(Public.id(), doc, Power::Read)
+        hive.add_member(reader, doc, Power::Read)
             .await
             .expect("the same grant again succeeds");
         assert!(log.is_empty().await, "nothing new to announce");

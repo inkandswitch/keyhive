@@ -6,7 +6,7 @@ use bench_utils::BenchKeyhive;
 
 use divan::Bencher;
 use keyhive_core::{
-    principal::{group::id::GroupId, individual::id::IndividualId, public::Public},
+    principal::{group::id::GroupId, individual::id::IndividualId},
     test_utils::make_simple_keyhive,
 };
 use keyline::power::Power;
@@ -66,7 +66,7 @@ async fn setup_many_docs_nested(n_docs: usize) -> (BenchKeyhive, GroupId, Indivi
         let mut content = [0u8; 32];
         content[..8].copy_from_slice(&(i as u64).to_le_bytes());
         let doc_id = alice
-            .generate_doc(vec![Public.id()], nonempty![content])
+            .generate_doc(vec![], nonempty![content])
             .await
             .unwrap();
         // Only the first and last docs contain the group chain
