@@ -576,6 +576,7 @@ impl CgkaOperationGraph {
 mod causal_graph_tests {
     use super::*;
     use alloc::{collections::BTreeMap, vec};
+    use future_form::Local;
     use keyhive_crypto::{
         share_key::ShareSecretKey,
         signer::{async_signer, memory::MemorySigner},
@@ -611,7 +612,7 @@ mod causal_graph_tests {
             doc_id,
             authorization: CgkaAuthorization::Delegation([0; 32]),
         };
-        async_signer::try_sign_async::<future_form::Local, _, _>(signer, op)
+        async_signer::try_sign_async::<Local, _, _>(signer, op)
             .await
             .expect("signing succeeds")
     }
@@ -896,7 +897,7 @@ mod causal_graph_tests {
             predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
             doc_id,
         };
-        async_signer::try_sign_async::<future_form::Local, _, _>(signer, op)
+        async_signer::try_sign_async::<Local, _, _>(signer, op)
             .await
             .expect("signing succeeds")
     }
