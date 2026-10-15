@@ -2,9 +2,9 @@
 //! between them.
 
 use crate::{
-    access::Access,
     archive::Archive,
-    crypto::signed_ext::SignedSubjectId,
+    certificate::{decode_stored, CertificateError, KeylineStorageError},
+    content::heads::ContentHeads,
     error::not_found::NotFound,
     event::static_event::StaticEvent,
     keyhive::{
@@ -13,39 +13,34 @@ use crate::{
     },
     listener::no_listener::NoListener,
     principal::{
-        document::{
-            id::DocumentId, AddMemberError, AddMemberUpdate, DecryptError, EncryptError,
-            GenerateDocError,
-        },
-        group::{
-            delegation::Delegation, error::AddError, id::GroupId, AddGroupMemberError,
-            RevokeMemberError,
-        },
+        document::{id::DocumentId, AddMemberError, DecryptError, EncryptError, GenerateDocError},
+        group::{id::GroupId, RevokeMemberError},
         identifier::Identifier,
         individual::{id::IndividualId, op::KeyOp, Individual, ReceivePrekeyOpError},
-        membered::{id::MemberedId, Membered},
+        membered::id::MemberedId,
         public::Public,
     },
     stats::Stats,
     store::ciphertext::{
         memory::MemoryCiphertextStore, CausalDecryptionError, CausalDecryptionState,
     },
+    update::AddMemberUpdate,
 };
 use beekem::{encrypted::EncryptedContent, error::CgkaError};
 use dupe::Dupe;
 use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef,
-    share_key::ShareKey,
-    signed::{Signed, SigningError},
-    signer::memory::MemorySigner,
-    symmetric_key::SymmetricKey,
+    content::reference::ContentRef, share_key::ShareKey, signed::SigningError,
+    signer::memory::MemorySigner, symmetric_key::SymmetricKey,
 };
+use keyline::{delegation::Delegation, power::Power};
+use keyline_memory::MemoryKeyline;
 use nonempty::nonempty;
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
     hash::Hash,
     ops::Deref,
     sync::Arc,
@@ -53,7 +48,19 @@ use std::{
 use thiserror::Error;
 
 /// The keyhive these tests use.
-pub type Hive = Keyhive<Sendable, MemorySigner>;
+pub type Hive = Keyhive<
+    Sendable,
+    MemorySigner,
+    [u8; 32],
+    Vec<u8>,
+    Store,
+    NoListener,
+    rand::rngs::OsRng,
+    KeylineStore,
+>;
+
+/// The Keyline store each test keyhive holds.
+pub type KeylineStore = MemoryKeyline<ContentHeads<[u8; 32]>>;
 
 type Store = MemoryCiphertextStore<[u8; 32], Vec<u8>>;
 type Ciphertext = EncryptedContent<Vec<u8>, [u8; 32]>;
@@ -68,7 +75,7 @@ pub type TestResult<T> = Result<T, TestError>;
 pub enum TestError {
     /// The issuer holds some access over the resource, but less than they tried to delegate.
     #[error("escalation: wanted {wanted}, holds {held}")]
-    Escalation { wanted: Access, held: Access },
+    Escalation { wanted: Power, held: Power },
 
     /// The issuer has no access to the resource.
     #[error("no authority over that resource")]
@@ -109,43 +116,28 @@ impl From<NotFound> for TestError {
     }
 }
 
-impl From<std::convert::Infallible> for TestError {
-    fn from(never: std::convert::Infallible) -> Self {
+impl From<Infallible> for TestError {
+    fn from(never: Infallible) -> Self {
         match never {}
     }
 }
 
-impl From<AddMemberError> for TestError {
-    fn from(e: AddMemberError) -> Self {
+impl From<AddMemberError<Infallible>> for TestError {
+    fn from(e: AddMemberError<Infallible>) -> Self {
         match e {
             AddMemberError::NotFound(inner) => inner.into(),
-            AddMemberError::AddMemberError(inner) => inner.into(),
+            AddMemberError::NoAuthority => TestError::NoAuthority,
+            AddMemberError::Escalation { wanted, held } => TestError::Escalation { wanted, held },
             other => TestError::Other(other.to_string()),
         }
     }
 }
 
-impl From<AddGroupMemberError> for TestError {
-    fn from(e: AddGroupMemberError) -> Self {
-        match e {
-            AddGroupMemberError::AddError(AddError::Escalation { wanted, held }) => {
-                TestError::Escalation { wanted, held }
-            }
-            AddGroupMemberError::NoProof => TestError::NoAuthority,
-            other => TestError::Other(other.to_string()),
-        }
-    }
-}
-
-impl From<RevokeMemberError> for TestError {
-    fn from(e: RevokeMemberError) -> Self {
+impl From<RevokeMemberError<Infallible>> for TestError {
+    fn from(e: RevokeMemberError<Infallible>) -> Self {
         match e {
             RevokeMemberError::NotFound(inner) => inner.into(),
-            RevokeMemberError::NoProof => TestError::NoAuthority,
-            RevokeMemberError::AddError(AddError::Escalation { wanted, held }) => {
-                TestError::Escalation { wanted, held }
-            }
-            RevokeMemberError::RedelegationError(inner) => inner.into(),
+            RevokeMemberError::NoAuthority => TestError::NoAuthority,
             other => TestError::Other(other.to_string()),
         }
     }
@@ -174,10 +166,17 @@ macro_rules! other_from {
     )+};
 }
 
-other_from!(CgkaError, SigningError, ReceivePrekeyOpError);
+other_from!(
+    CgkaError,
+    CertificateError,
+    KeylineStorageError<Infallible>,
+    keyhive_crypto::id::InvalidId,
+    ReceivePrekeyOpError,
+    SigningError,
+);
 
-impl From<GenerateDocError> for TestError {
-    fn from(e: GenerateDocError) -> Self {
+impl From<GenerateDocError<Infallible>> for TestError {
+    fn from(e: GenerateDocError<Infallible>) -> Self {
         match e {
             GenerateDocError::NotFound(inner) => inner.into(),
             other => TestError::Other(other.to_string()),
@@ -185,8 +184,8 @@ impl From<GenerateDocError> for TestError {
     }
 }
 
-impl From<GenerateGroupError> for TestError {
-    fn from(e: GenerateGroupError) -> Self {
+impl From<GenerateGroupError<Infallible>> for TestError {
+    fn from(e: GenerateGroupError<Infallible>) -> Self {
         match e {
             GenerateGroupError::NotFound(inner) => inner.into(),
             other => TestError::Other(other.to_string()),
@@ -221,8 +220,8 @@ impl From<CausalDecryptError<Sendable, [u8; 32], Vec<u8>, Store>> for TestError 
     }
 }
 
-impl From<ReceiveStaticEventError<Sendable, MemorySigner, [u8; 32], NoListener>> for TestError {
-    fn from(e: ReceiveStaticEventError<Sendable, MemorySigner, [u8; 32], NoListener>) -> Self {
+impl From<ReceiveStaticEventError<Infallible>> for TestError {
+    fn from(e: ReceiveStaticEventError<Infallible>) -> Self {
         TestError::Other(e.to_string())
     }
 }
@@ -352,16 +351,16 @@ pub struct DelegationSummary {
     /// The group or document the access is over.
     pub subject: Identifier,
     /// How much access it conveys before attenuation.
-    pub can: Access,
+    pub can: Power,
 }
 
-impl From<&Signed<Delegation<Sendable, MemorySigner>>> for DelegationSummary {
-    fn from(signed: &Signed<Delegation<Sendable, MemorySigner>>) -> Self {
+impl From<&Delegation> for DelegationSummary {
+    fn from(d: &Delegation) -> Self {
         DelegationSummary {
-            issuer: Identifier::from(signed.issuer()),
-            audience: signed.payload().delegate().id(),
-            subject: signed.subject_id(),
-            can: signed.payload().can(),
+            issuer: d.issuer.into(),
+            audience: d.audience.into(),
+            subject: d.subject.into(),
+            can: d.power,
         }
     }
 }
@@ -371,9 +370,9 @@ pub trait AddMemberUpdateExt {
     fn summary(&self) -> DelegationSummary;
 }
 
-impl AddMemberUpdateExt for AddMemberUpdate<Sendable, MemorySigner> {
+impl AddMemberUpdateExt for AddMemberUpdate {
     fn summary(&self) -> DelegationSummary {
-        DelegationSummary::from(self.delegation.as_ref())
+        DelegationSummary::from(self.delegation.payload())
     }
 }
 
@@ -490,7 +489,7 @@ impl TestContext {
         for coparent in coparents {
             owner
                 .get_group(*coparent)
-                .await
+                .await?
                 .ok_or("that coparent is not a group this instance knows")?;
             peers.push(Identifier::from(*coparent));
         }
@@ -513,11 +512,12 @@ impl TestContext {
             .ok_or("that archive's identity was not created by this TestContext")?
             .clone();
         let store = Store::new();
-        let hive = Keyhive::<Sendable, _, _, _, _, _, _>::try_from_archive(
+        let hive = Keyhive::<Sendable, _, _, _, _, _, _, _>::try_from_archive(
             archive,
             signer,
             store.clone(),
             NoListener,
+            KeylineStore::new(),
             Arc::new(Mutex::new(rand::rngs::OsRng)),
         )
         .await
@@ -541,9 +541,9 @@ impl TestContext {
         self.deliver(to, events).await
     }
 
-    /// Sends `to` everything the public agent may see, like a sync server.
+    /// Sends `to` everything the public principal may see, like a sync server.
     pub async fn sync_as_public(&mut self, from: &Instance, to: &Instance) -> TestResult<usize> {
-        let events = self.events_for(from, Public.id()).await;
+        let events = self.events_for(from, Public.id()).await?;
         self.deliver(to, events).await
     }
 
@@ -691,8 +691,7 @@ impl TestContext {
         who: IndividualId,
     ) -> TestResult<BTreeSet<ShareKey>> {
         let indie = Self::individual_seen_by(observer, who).await?;
-        let locked = indie.lock().await;
-        Ok(locked.prekeys().iter().copied().collect())
+        Ok(indie.prekeys().await.into_iter().collect())
     }
 
     /// The prekey operations behind [`TestContext::prekeys_of`].
@@ -702,9 +701,9 @@ impl TestContext {
         who: IndividualId,
     ) -> TestResult<Vec<PrekeyOp>> {
         let indie = Self::individual_seen_by(observer, who).await?;
-        let locked = indie.lock().await;
-        Ok(locked
+        Ok(indie
             .prekey_ops()
+            .await
             .values()
             .map(|op| match op.as_ref() {
                 KeyOp::Add(add) => PrekeyOp::Added {
@@ -805,30 +804,21 @@ impl TestContext {
         &self,
         observer: &Instance,
         subject: impl Into<MemberedId>,
-    ) -> TestResult<BTreeMap<Identifier, Access>> {
-        let raw = match self.membered_handle(observer, subject.into()).await? {
-            Membered::Group(_, group) => group.lock().await.revoked_members(),
-            Membered::Document(_, doc) => doc.lock().await.revoked_members(),
-        };
-        Ok(raw
-            .into_iter()
-            .map(|(id, (_, access))| (id, access))
-            .collect())
+    ) -> TestResult<BTreeMap<Identifier, Power>> {
+        Ok(observer.revoked_members(subject).await?)
     }
 
-    /// Every delegation `observer` holds for `subject`.
+    /// Every live delegation `observer` holds about `subject`.
     pub async fn delegations_for(
         &self,
         observer: &Instance,
         subject: impl Into<MemberedId>,
     ) -> TestResult<Vec<DelegationSummary>> {
-        let handle = self.membered_handle(observer, subject.into()).await?;
-        Ok(handle
-            .members()
-            .await
-            .into_values()
-            .flatten()
-            .map(|signed| DelegationSummary::from(signed.as_ref()))
+        Ok(observer
+            .delegations_about(Identifier::from(subject.into()))
+            .await?
+            .iter()
+            .map(|signed| DelegationSummary::from(&decode_stored(signed)))
             .collect())
     }
 
@@ -919,13 +909,13 @@ impl TestContext {
         to: &Instance,
     ) -> TestResult<Vec<([u8; 32], StaticEvent<[u8; 32]>)>> {
         // `from` cannot work out what `to` may see until it has heard of `to`.
-        from.get_agent(to.id().into())
-            .await
-            .ok_or_else(|| TestError::NotSynced(Box::new(to.id().into())))?;
+        if !from.has_individual(to.id()).await {
+            return Err(TestError::NotSynced(Box::new(to.id().into())));
+        }
 
         let mut events: BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
-            self.events_for(from, to.id()).await.into_iter().collect();
-        events.extend(self.events_for(from, Public.id()).await);
+            self.events_for(from, to.id()).await?.into_iter().collect();
+        events.extend(self.events_for(from, Public.id()).await?);
         Ok(events.into_iter().collect())
     }
 
@@ -933,12 +923,13 @@ impl TestContext {
         &self,
         from: &Instance,
         who: impl Into<Identifier>,
-    ) -> Vec<([u8; 32], StaticEvent<[u8; 32]>)> {
-        from.static_events_for_agent(who)
-            .await
+    ) -> TestResult<Vec<([u8; 32], StaticEvent<[u8; 32]>)>> {
+        Ok(from
+            .static_events_for_agent(who)
+            .await?
             .into_iter()
             .map(|(digest, event)| (*digest.raw.as_bytes(), event))
-            .collect()
+            .collect())
     }
 
     /// Deliver events and return how many are still waiting on a dependency.
@@ -976,30 +967,17 @@ impl TestContext {
 
     async fn add_instance(&mut self, signer: MemorySigner, name: &str) -> TestResult<Instance> {
         let store = MemoryCiphertextStore::new();
-        let hive = Keyhive::generate(signer, store.clone(), NoListener, rand::rngs::OsRng).await?;
+        let hive = Keyhive::generate(
+            signer,
+            store.clone(),
+            NoListener,
+            KeylineStore::new(),
+            rand::rngs::OsRng,
+        )
+        .await?;
         let handle = self.register_instance(hive, name).await?;
         self.stores.insert(handle.instance, store);
         Ok(handle)
-    }
-
-    /// The group or document `subject` names, as `observer` holds it.
-    async fn membered_handle(
-        &self,
-        observer: &Instance,
-        subject: MemberedId,
-    ) -> TestResult<Membered<Sendable, MemorySigner>> {
-        match subject {
-            MemberedId::DocumentId(id) => observer
-                .get_document(id)
-                .await
-                .map(|d| Membered::Document(id, d))
-                .ok_or_else(|| TestError::NotSynced(Box::new(id.into()))),
-            MemberedId::GroupId(id) => observer
-                .get_group(id)
-                .await
-                .map(|g| Membered::Group(id, g))
-                .ok_or_else(|| TestError::NotSynced(Box::new(id.into()))),
-        }
     }
 
     /// Refuse a predecessor written into a different document.
@@ -1036,11 +1014,11 @@ impl TestContext {
             .collect()
     }
 
-    /// The [`Individual`] `observer` holds for `who`.
+    /// `who`, as `observer` knows it.
     async fn individual_seen_by(
         observer: &Instance,
         who: IndividualId,
-    ) -> TestResult<Arc<Mutex<Individual>>> {
+    ) -> TestResult<Individual<Hive>> {
         observer
             .get_individual(who)
             .await
