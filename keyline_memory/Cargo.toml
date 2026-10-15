@@ -10,19 +10,15 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-keyhive_codec = { version = "0.1.0", path = "../keyhive_codec", default-features = false }
-keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", default-features = false }
-keyline = { version = "0.1.0", path = "../keyline", default-features = false }
-tracing = { version = "0.1.40", default-features = false, features = [
-  "attributes",
-] }
+keyhive_codec = { workspace = true }
+keyhive_crypto = { workspace = true }
+keyline = { workspace = true }
+tracing = { workspace = true, features = ["attributes"] }
 
 [dev-dependencies]
-divan = "0.1.15"
+divan = { workspace = true }
 # The scenarios run in every configuration, including `--no-default-features`.
-keyline = { version = "0.1.0", path = "../keyline", default-features = false, features = [
-  "conformance",
-] }
+keyline = { workspace = true, features = ["conformance"] }
 
 [features]
 default = ["std"]

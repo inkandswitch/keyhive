@@ -13,21 +13,21 @@ rust-version.workspace = true
 [dependencies]
 
 # Keyhive
-beekem = { version = "0.5.0", path = "../beekem" }
-keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto" }
+beekem = { workspace = true, features = ["std"] }
+keyhive_crypto = { workspace = true, features = ["std"] }
 
 # Docs
-aquamarine = { version = "0.6", optional = true }
+aquamarine = { workspace = true, optional = true }
 
 # Encoding
 bincode = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive", "rc", "std"] }
 
 # Crypto
-blake3 = { workspace = true }
+blake3 = { workspace = true, features = ["std"] }
 chacha20poly1305 = { workspace = true }
-ed25519-dalek = { workspace = true }
-rand = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["fast", "rand_core", "serde", "std", "zeroize"] }
+rand = { workspace = true, features = ["std", "std_rng"] }
 signature = { workspace = true }
 x25519-dalek = { workspace = true }
 
@@ -35,45 +35,40 @@ x25519-dalek = { workspace = true }
 thiserror = { workspace = true }
 
 # Utilities
-derivative = "2.2"
-derive_more = { workspace = true }
-derive-where = "1.2"
+derivative = { workspace = true }
+derive_more = { workspace = true, features = ["std"] }
+derive-where = { workspace = true }
 dupe = { workspace = true }
 future_form = { workspace = true }
-futures = { workspace = true }
+futures = { workspace = true, features = ["async-await", "executor", "std"] }
 nonempty = { workspace = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["attributes", "std"] }
 
 # Testing
-proptest = { version = "1.5", optional = true }
-proptest-derive = { version = "0.5.0", optional = true }
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
 arbitrary = { workspace = true, optional = true }
-prettytable-rs = { version = "0.10.0", optional = true }
+prettytable-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
-beekem = { version = "0.5.0", path = "../beekem", features = ["arbitrary"] }
+beekem = { workspace = true, features = ["arbitrary", "std"] }
 keyhive_core = { path = ".", features = ["test_utils", "debug_events"] }
-keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", features = ["arbitrary"] }
-test-utils = { path = "../test-utils" }
+keyhive_crypto = { workspace = true, features = ["arbitrary", "std"] }
+test-utils = { workspace = true }
 
 arbitrary.workspace = true
-lazy_static = "1.5"
-tokio = { version = "1.43", features = [
-    "macros",
-    "rt",
-    "sync",
-    "rt-multi-thread",
-] }
-tokio-test = "0.4.4"
+lazy_static = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tokio-test = { workspace = true }
 
 # Benchmarks
-divan = "0.1.15"
+divan = { workspace = true }
 
 # Test Helpers
 hex.workspace = true
-pretty_assertions = "1.4"
-testresult = "0.4.1"
-tracing-subscriber = { version = "0.3.19", features = ["ansi", "env-filter"] }
+pretty_assertions = { workspace = true }
+testresult = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["ansi", "env-filter"] }
 
 [features]
 default = []
