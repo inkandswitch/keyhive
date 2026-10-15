@@ -1156,7 +1156,7 @@ where
     {
         let handle = self.document_by_id(doc).await?;
         let signer = { self.active.signer.clone() };
-        let (result, new_key_pair) = {
+        let (encrypted_content, rotation) = {
             let mut locked_csprng = self.csprng.lock().await;
             handle
                 .lock()
@@ -1170,10 +1170,10 @@ where
                 )
                 .await?
         };
-        self.insert_rotated_secret(new_key_pair).await;
-        self.record_cgka_ops(result.update_op.iter().cloned().map(Arc::new))
-            .await;
-        Ok(result)
+        Ok(EncryptedContentWithUpdate {
+            encrypted_content,
+            update_op: self.record_rotation(rotation).await,
+        })
     }
 
     /// Encrypt `content` into `doc`. Returns the application secret it was
@@ -1188,7 +1188,7 @@ where
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
         let doc = self.document_by_id(doc).await?;
         let signer = { self.active.signer.clone() };
-        let (result, application_secret_key, new_key_pair) = {
+        let (encrypted_content, application_secret_key, rotation) = {
             let mut locked_csprng = self.csprng.lock().await;
             doc.lock()
                 .await
@@ -1202,18 +1202,27 @@ where
                 .await
                 .map_err(EncryptContentError::from)?
         };
-        self.insert_rotated_secret(new_key_pair).await;
-        self.record_cgka_ops(result.update_op.iter().cloned().map(Arc::new))
-            .await;
-        Ok((result, application_secret_key))
+        let update_op = self.record_rotation(rotation).await;
+        Ok((
+            EncryptedContentWithUpdate {
+                encrypted_content,
+                update_op,
+            },
+            application_secret_key,
+        ))
     }
 
-    /// Insert a rotation's leaf key in the shareable secrets for sharing with other
-    /// instances of a keyhive identity.
-    async fn insert_rotated_secret(&self, key_pair: Option<LeafKeyPair>) {
-        if let Some((pk, sk)) = key_pair {
-            self.active.insert_rotated_secret(pk, sk).await;
-        }
+    /// Keep what a write's rotation produced: its leaf key among the secrets this
+    /// identity's other instances can import, and its update in the operation store.
+    /// Returns the update, for the caller to send.
+    async fn record_rotation(
+        &self,
+        rotation: Option<(Signed<CgkaOperation>, LeafKeyPair)>,
+    ) -> Option<Signed<CgkaOperation>> {
+        let (op, (pk, sk)) = rotation?;
+        self.active.insert_rotated_secret(pk, sk).await;
+        self.record_cgka_ops([Arc::new(op.clone())]).await;
+        Some(op)
     }
 
     /// The identities in `doc`'s encryption tree. `None` if this replica holds
@@ -1343,7 +1352,8 @@ where
                 .pcs_update(&signer, &mut *locked_csprng)
                 .await?
         };
-        self.insert_rotated_secret(Some(new_key_pair)).await;
+        let (pk, sk) = new_key_pair;
+        self.active.insert_rotated_secret(pk, sk).await;
         self.record_cgka_ops([Arc::new(op.clone())]).await;
         Ok((op, new_key_pair))
     }

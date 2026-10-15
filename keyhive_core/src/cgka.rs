@@ -97,7 +97,6 @@ impl Cgka {
         &mut self.0.owner_sks
     }
 
-    #[allow(clippy::type_complexity)]
     pub async fn new_app_secret_for<
         F: FutureForm,
         S: AsyncSigner<F>,
@@ -113,8 +112,7 @@ impl Cgka {
     ) -> Result<
         (
             ApplicationSecret<T>,
-            Option<Signed<CgkaOperation>>,
-            Option<LeafKeyPair>,
+            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
         ),
         CgkaError,
     > {
@@ -164,7 +162,6 @@ impl Cgka {
             .await
     }
 
-    #[allow(clippy::type_complexity)]
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: CryptoRng + RngCore>(
         &mut self,
         new_pk: ShareKey,

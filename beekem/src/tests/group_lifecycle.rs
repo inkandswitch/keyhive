@@ -183,20 +183,20 @@ async fn a_write_rotates_only_when_there_is_no_current_key() {
     let signer = group.members[0].signer.clone();
 
     group.rotate(0, &mut rng).await;
-    let (_, op, _) = group.replicas[0]
+    let (_, rotation) = group.replicas[0]
         .new_app_secret_for::<Local, _, u32, _>(&1, b"content", &Vec::new(), &signer, &mut rng)
         .await
         .expect("a member can write");
-    assert!(op.is_none(), "a write should reuse the current key");
+    assert!(rotation.is_none(), "a write should reuse the current key");
 
     let carol = member(&mut rng);
     group.add(0, carol.id, carol.pk).await;
-    let (_, op, _) = group.replicas[0]
+    let (_, rotation) = group.replicas[0]
         .new_app_secret_for::<Local, _, u32, _>(&2, b"content", &Vec::new(), &signer, &mut rng)
         .await
         .expect("a member can write");
     assert!(
-        op.is_some(),
+        rotation.is_some(),
         "an add blanks the root, so the next write should rotate"
     );
 }
