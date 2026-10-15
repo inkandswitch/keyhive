@@ -10,10 +10,13 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bijoux = { workspace = true }
 serde = { workspace = true, features = ["alloc"], optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+arbitrary = { workspace = true }
+bolero = { workspace = true }
 postcard = { workspace = true, features = ["alloc"] }
 
 [features]
