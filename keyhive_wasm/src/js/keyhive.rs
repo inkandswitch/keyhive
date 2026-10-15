@@ -1,24 +1,21 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    convert::Infallible,
+};
 
-use keyhive_core::principal::identifier::Identifier;
+use keyhive_core::{content::heads::ContentHeads, principal::identifier::Identifier};
+use keyline_memory::MemoryKeyline;
 
 use crate::{
     js::{
-        archive::JsSerializationError,
-        document_id::{JsDocumentId, JsDocumentIdRef},
-        event::JsEvent,
-        group_id::JsGroupId,
-        individual::JsIndividual,
-        membership::{individual_memberships, Membership},
-        stats::JsStats,
+        archive::JsSerializationError, document_id::JsDocumentId, event::JsEvent,
+        group_id::JsGroupId, individual::JsIndividual, membership::Membership, stats::JsStats,
     },
     macros::init_span,
 };
 
 use super::{
-    access::JsAccess,
     add_member_error::JsAddMemberError,
-    agent::JsAgent,
     all_agent_events::JsAllAgentEvents,
     archive::JsArchive,
     change_id::{JsChangeId, JsChangeIdRef},
@@ -35,7 +32,10 @@ use super::{
     group::JsGroup,
     identifier::{JsIdentifier, JsIdentifierRef},
     individual_id::JsIndividualId,
+    keyline_storage_error::JsKeylineStorageError,
     membered_id::JsMemberedId,
+    power::JsPower,
+    principal::JsPrincipal,
     revoke_member_error::JsRevokeMemberError,
     share_key::JsShareKey,
     signed::JsSigned,
@@ -46,7 +46,7 @@ use super::{
     summary::Summary,
 };
 use derive_more::{From, Into};
-use dupe::{Dupe, IterDupedExt};
+use dupe::Dupe;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use keyhive_core::{
@@ -54,17 +54,23 @@ use keyhive_core::{
     crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
-    principal::{
-        agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError, public::Public,
-    },
+    principal::{document::DecryptError, individual::ReceivePrekeyOpError, public::Public},
 };
 use nonempty::NonEmpty;
 use rand::rngs::OsRng;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-type InnerKeyhive =
-    Keyhive<Local, JsSigner, JsChangeId, Vec<u8>, JsCiphertextStore, JsEventHandler, OsRng>;
+pub(crate) type InnerKeyhive = Keyhive<
+    Local,
+    JsSigner,
+    JsChangeId,
+    Vec<u8>,
+    JsCiphertextStore,
+    JsEventHandler,
+    OsRng,
+    MemoryKeyline<ContentHeads<JsChangeId>>,
+>;
 
 #[wasm_bindgen(js_name = Keyhive)]
 #[derive(Debug, From, Into)]
@@ -85,6 +91,7 @@ impl JsKeyhive {
                 signer.clone(),
                 ciphertext_store.clone(),
                 JsEventHandler(event_handler.clone()),
+                MemoryKeyline::new(),
                 OsRng,
             )
             .await?,
@@ -104,10 +111,12 @@ impl JsKeyhive {
 
     pub async fn individual(&self) -> JsIndividual {
         init_span!("JsKeyhive::individual");
-        JsIndividual {
-            id: self.0.id(),
-            inner: self.0.individual().await.dupe(),
-        }
+        JsIndividual(
+            self.0
+                .get_individual(self.0.id())
+                .await
+                .expect("the active identity is in the individuals table"),
+        )
     }
 
     #[wasm_bindgen(getter, js_name = idString)]
@@ -171,6 +180,23 @@ impl JsKeyhive {
     pub async fn try_sign(&self, data: &[u8]) -> Result<JsSigned, JsSigningError> {
         init_span!("JsKeyhive::try_sign");
         Ok(self.0.try_sign(data.to_vec()).await.map(JsSigned)?)
+    }
+
+    /// Record `heads` as the document's current content heads: the
+    /// watermark this keyhive's revocations record for it (`Revocation.retained`).
+    /// Throws if this keyhive holds no tree for the document.
+    #[wasm_bindgen(js_name = setContentHeads)]
+    pub async fn set_content_heads(
+        &self,
+        doc_id: &JsDocumentId,
+        heads: Vec<JsChangeIdRef>,
+    ) -> Result<(), JsError> {
+        init_span!("JsKeyhive::set_content_heads");
+        let heads = heads.iter().map(JsChangeId::from_js_ref);
+        self.0
+            .set_content_heads(doc_id.0, heads)
+            .await
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 
     #[wasm_bindgen(js_name = tryEncrypt)]
@@ -251,21 +277,12 @@ impl JsKeyhive {
         &self,
         to_add: &JsIdentifier,
         membered_id: &JsMemberedId,
-        access: &JsAccess,
-        other_relevant_docs: Vec<JsDocumentIdRef>,
+        access: &JsPower,
     ) -> Result<JsSignedDelegation, JsAddMemberError> {
         init_span!("JsKeyhive::add_member");
-        let other_docs: Vec<_> = other_relevant_docs
-            .iter()
-            .map(|r| JsDocumentId::from_js_ref(r).0)
-            .collect();
+        let res = self.0.add_member(to_add.0, membered_id.0, **access).await?;
 
-        let res = self
-            .0
-            .add_member(to_add.0, membered_id.0, **access, other_docs.as_slice())
-            .await?;
-
-        Ok(res.delegation.into())
+        Ok(JsSignedDelegation(res.delegation.signed().dupe()))
     }
 
     #[wasm_bindgen(js_name = revokeMember)]
@@ -284,23 +301,23 @@ impl JsKeyhive {
         Ok(res
             .revocations()
             .iter()
-            .duped()
-            .map(JsSignedRevocation)
+            .map(|r| JsSignedRevocation(r.signed().dupe()))
             .collect())
     }
 
     #[wasm_bindgen(js_name = reachableDocs)]
-    pub async fn reachable_docs(&self) -> Vec<Summary> {
+    pub async fn reachable_docs(&self) -> Result<Vec<Summary>, JsKeylineStorageError> {
         init_span!("JsKeyhive::reachable_docs");
-        self.0
+        Ok(self
+            .0
             .reachable_doc_handles()
-            .await
+            .await?
             .into_iter()
-            .map(|(doc_id, (inner, can))| Summary {
-                doc: JsDocument { doc_id, inner },
-                access: JsAccess(can),
+            .map(|(_, (doc, can))| Summary {
+                doc: JsDocument(doc),
+                access: JsPower(can),
             })
-            .collect()
+            .collect())
     }
 
     /// Force a PCS key rotation and return the new leaf secret, serialized as a
@@ -371,19 +388,16 @@ impl JsKeyhive {
         ))
     }
 
-    #[wasm_bindgen(js_name = getAgent)]
-    pub async fn get_agent(&self, id: &JsIdentifier) -> Option<JsAgent> {
-        init_span!("JsKeyhive::get_agent");
-        self.0.get_agent(id.0).await.map(JsAgent)
+    #[wasm_bindgen(js_name = getPrincipal)]
+    pub async fn get_principal(&self, id: &JsIdentifier) -> JsPrincipal {
+        init_span!("JsKeyhive::get_principal");
+        JsPrincipal::new(self.0.get_principal(id.0)).await
     }
 
     #[wasm_bindgen(js_name = getIndividual)]
     pub async fn get_individual(&self, id: &JsIndividualId) -> Option<JsIndividual> {
         init_span!("JsKeyhive::get_individual");
-        self.0
-            .get_individual(id.0)
-            .await
-            .map(|inner| JsIndividual { id: id.0, inner })
+        self.0.get_individual(id.0).await.map(JsIndividual)
     }
 
     #[wasm_bindgen(js_name = pendingEventHashes)]
@@ -397,82 +411,61 @@ impl JsKeyhive {
         set
     }
 
-    /// Returns events for provided [`Agent`] as a map from hash to serialized [`StaticEvent`] bytes.
+    /// Every event `agent` is sent, as a map from hash to serialized [`StaticEvent`] bytes.
+    /// Throws a `KeylineStorageError` if the store fails, or a `SerializationError`.
     #[wasm_bindgen(js_name = eventsForAgent)]
-    pub async fn events_for_agent(
-        &self,
-        agent: &JsAgent,
-    ) -> Result<js_sys::Map, JsSerializationError> {
+    pub async fn events_for_agent(&self, agent: &JsPrincipal) -> Result<js_sys::Map, JsValue> {
         init_span!("JsKeyhive::events_for_agent");
-
-        let who = agent.0.id();
-        let membership_ops = self.0.membership_ops_for_agent(who).await;
-        let reachable_prekey_ops = self.0.reachable_prekey_ops_for_agent(who).await;
-        let cgka_ops = self.0.cgka_ops_reachable_by_agent(who).await;
-
         let map = js_sys::Map::new();
-
-        // Add membership operations as serialized bytes
-        for (digest, op) in membership_ops {
+        for (digest, event) in self
+            .0
+            .events_for_agent(agent.inner.id())
+            .await
+            .map_err(JsKeylineStorageError::from)?
+        {
             let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = op.into();
-            let static_event = StaticEvent::from(event);
-            let bytes = bincode::serialize(&static_event)?;
-            let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-            map.set(&hash.into(), &js_bytes.into());
+            let bytes = bincode::serialize(&StaticEvent::from(event))
+                .map_err(JsSerializationError::from)?;
+            map.set(
+                &hash.into(),
+                &js_sys::Uint8Array::from(bytes.as_slice()).into(),
+            );
         }
-
-        // Add prekey operations as serialized bytes
-        for key_ops in reachable_prekey_ops.values() {
-            for key_op in key_ops.iter() {
-                let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> =
-                    Event::from(key_op.as_ref().dupe());
-                let digest = Digest::hash(&event);
-                let hash = js_sys::Uint8Array::from(digest.as_slice());
-                let static_event = StaticEvent::from(event);
-                let bytes = bincode::serialize(&static_event)?;
-                let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-                map.set(&hash.into(), &js_bytes.into());
-            }
-        }
-
-        // Add CGKA operations as serialized bytes
-        for cgka_op in cgka_ops {
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = Event::from(cgka_op);
-            let digest = Digest::hash(&event);
-            let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let static_event = StaticEvent::from(event);
-            let bytes = bincode::serialize(&static_event)?;
-            let js_bytes = js_sys::Uint8Array::from(bytes.as_slice());
-            map.set(&hash.into(), &js_bytes.into());
-        }
-
         Ok(map)
     }
 
     /// The hashes of every event `agent` can reach, as an array of hash bytes.
     #[wasm_bindgen(js_name = eventHashesForAgent)]
-    pub async fn event_hashes_for_agent(&self, agent: &JsAgent) -> js_sys::Array {
+    pub async fn event_hashes_for_agent(
+        &self,
+        agent: &JsPrincipal,
+    ) -> Result<js_sys::Array, JsKeylineStorageError> {
         init_span!("JsKeyhive::event_hashes_for_agent");
         let arr = js_sys::Array::new();
-        for digest in self.0.event_digests_for_agent(agent.0.id()).await {
+        for digest in self.0.event_digests_for_agent(agent.inner.id()).await? {
             arr.push(&js_sys::Uint8Array::from(digest.as_slice()).into());
         }
-        arr
+        Ok(arr)
     }
 
-    /// Every event each agent can reach, deduplicated, with a source layer so one digest
-    /// list is shared by every agent that reaches it.
+    /// Every event each principal can reach, deduplicated, with a source layer so one
+    /// digest list is shared by every principal that reaches it.
     ///
-    /// The consumer follows: agent -> source IDs -> hashes -> event bytes.
+    /// The consumer follows: principal -> source IDs -> hashes -> event bytes.
+    /// Throws a `KeylineStorageError` if the store fails, or a `SerializationError`.
     #[wasm_bindgen(js_name = allAgentEvents)]
-    pub async fn all_agent_events(&self) -> Result<JsAllAgentEvents, JsSerializationError> {
+    pub async fn all_agent_events(&self) -> Result<JsAllAgentEvents, JsValue> {
         init_span!("JsKeyhive::all_agent_events");
-        let all = self.0.all_agent_events().await;
+        let all = self
+            .0
+            .all_agent_events()
+            .await
+            .map_err(JsKeylineStorageError::from)?;
 
         let events = js_sys::Map::new();
         for (digest, event) in &all.events {
-            let bytes = bincode::serialize(&StaticEvent::from(event.clone()))?;
+            let bytes = bincode::serialize(&StaticEvent::from(event.clone()))
+                .map_err(JsSerializationError::from)?;
             events.set(
                 &js_sys::Uint8Array::from(digest.as_slice()).into(),
                 &js_sys::Uint8Array::from(bytes.as_slice()).into(),
@@ -480,10 +473,7 @@ impl JsKeyhive {
         }
 
         fn hashes_per_source(
-            sources: &HashMap<
-                Identifier,
-                Vec<EventDigest<Local, JsSigner, JsChangeId, JsEventHandler>>,
-            >,
+            sources: &HashMap<Identifier, Vec<EventDigest<JsChangeId>>>,
         ) -> js_sys::Map {
             let map = js_sys::Map::new();
             for (source_id, digests) in sources {
@@ -514,39 +504,41 @@ impl JsKeyhive {
             map
         }
 
-        Ok(JsAllAgentEvents::new(
+        Ok(JsAllAgentEvents {
             events,
-            hashes_per_source(&all.membership_sources),
-            sources_per_agent(&all.membership_index),
-            hashes_per_source(&all.prekey_sources),
-            sources_per_agent(&all.prekey_index),
-            hashes_per_source(&all.cgka_sources),
-            sources_per_agent(&all.cgka_index),
-        ))
+            membership_sources: hashes_per_source(&all.membership_sources),
+            explanations: hashes_per_source(&all.explanations),
+            agent_membership_sources: sources_per_agent(&all.membership_index),
+            prekey_sources: hashes_per_source(&all.prekey_sources),
+            agent_prekey_sources: sources_per_agent(&all.prekey_index),
+            cgka_sources: hashes_per_source(&all.cgka_sources),
+            agent_cgka_sources: sources_per_agent(&all.cgka_index),
+        })
     }
 
     #[wasm_bindgen(js_name = membershipOpsForAgent)]
-    pub async fn membership_ops_for_agent(&self, agent: &JsAgent) -> js_sys::Map {
+    /// The Keyline certificates `agent` is sent, as events by digest.
+    pub async fn membership_ops_for_agent(
+        &self,
+        agent: &JsPrincipal,
+    ) -> Result<js_sys::Map, JsKeylineStorageError> {
         init_span!("JsKeyhive::membership_ops_for_agent");
-        let membership_ops = self.0.membership_ops_for_agent(agent.0.id()).await;
         let map = js_sys::Map::new();
-        for (digest, op) in membership_ops {
-            let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let event: Event<Local, JsSigner, JsChangeId, JsEventHandler> = op.into();
-            let js_event = JsEvent::from(event);
-            map.set(&hash.into(), &JsValue::from(js_event));
+        for cert in self.0.certificates_for_agent(agent.inner.id()).await? {
+            let event: Event<JsChangeId> = cert.into();
+            let hash = js_sys::Uint8Array::from(Digest::hash(&event).as_slice());
+            map.set(&hash.into(), &JsValue::from(JsEvent::from(event)));
         }
-        map
+        Ok(map)
     }
 
     #[wasm_bindgen(js_name = getGroup)]
-    pub async fn get_group(&self, group_id: &JsGroupId) -> Option<JsGroup> {
+    pub async fn get_group(
+        &self,
+        group_id: &JsGroupId,
+    ) -> Result<Option<JsGroup>, JsKeylineStorageError> {
         init_span!("JsKeyhive::get_group");
-        let id = group_id.dupe().0;
-        self.0.get_group(id).await.map(|g| JsGroup {
-            group_id: id,
-            inner: g.dupe(),
-        })
+        Ok(self.0.get_group(group_id.0).await?.map(JsGroup))
     }
 
     /// Whether a document with this id is known.
@@ -558,9 +550,9 @@ impl JsKeyhive {
 
     /// Whether a group with this id is known.
     #[wasm_bindgen(js_name = hasGroup)]
-    pub async fn has_group(&self, group_id: &JsGroupId) -> bool {
+    pub async fn has_group(&self, group_id: &JsGroupId) -> Result<bool, JsKeylineStorageError> {
         init_span!("JsKeyhive::has_group");
-        self.0.has_group(group_id.0).await
+        Ok(self.0.has_group(group_id.0).await?)
     }
 
     /// Whether an individual with this id is known.
@@ -573,44 +565,27 @@ impl JsKeyhive {
     #[wasm_bindgen(js_name = getDocument)]
     pub async fn get_document(&self, doc_id: &JsDocumentId) -> Option<JsDocument> {
         init_span!("JsKeyhive::get_document");
-        let id = doc_id.dupe().0;
-        self.0.get_document(id).await.map(|d| JsDocument {
-            doc_id: id,
-            inner: d.dupe(),
-        })
+        self.0.get_document(doc_id.0).await.map(JsDocument)
     }
 
     #[wasm_bindgen(js_name = docMemberCapabilities)]
-    pub async fn doc_member_capabilities(&self, doc_id: &JsDocumentId) -> Vec<Membership> {
+    pub async fn doc_member_capabilities(
+        &self,
+        doc_id: &JsDocumentId,
+    ) -> Result<Vec<Membership>, JsKeylineStorageError> {
         init_span!("JsKeyhive::doc_member_capabilities");
-        if let Some(doc) = self.0.get_document(doc_id.0).await {
-            let transitive_members = { doc.lock().await.transitive_members().await };
-            individual_memberships(transitive_members, doc_id.0.into())
-        } else {
-            Vec::new()
-        }
+        let members = self.0.reachable_members(doc_id.0).await?;
+        Ok(Membership::individuals(&self.0, members).await)
     }
 
     #[wasm_bindgen(js_name = revokedMembersForDoc)]
-    pub async fn revoked_members_for_doc(&self, doc_id: &JsDocumentId) -> Vec<Membership> {
+    pub async fn revoked_members_for_doc(
+        &self,
+        doc_id: &JsDocumentId,
+    ) -> Result<Vec<Membership>, JsKeylineStorageError> {
         init_span!("JsKeyhive::revoked_members_for_doc");
-        if let Some(doc) = self.0.get_document(doc_id.0).await {
-            let revoked = { doc.lock().await.revoked_members() };
-            revoked
-                .into_iter()
-                .filter(|(id, _)| *id != doc_id.0.into())
-                .filter_map(|(_, (agent, access))| {
-                    matches!(agent, Agent::Individual(_, _) | Agent::Active(_, _)).then(|| {
-                        Membership {
-                            who: agent,
-                            can: access,
-                        }
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
+        let revoked = self.0.revoked_members(doc_id.0).await?;
+        Ok(Membership::individuals(&self.0, revoked).await)
     }
 
     #[wasm_bindgen(js_name = accessForDoc)]
@@ -618,33 +593,26 @@ impl JsKeyhive {
         &self,
         id: &JsIdentifier,
         doc_id: &JsDocumentId,
-    ) -> Option<JsAccess> {
+    ) -> Result<Option<JsPower>, JsKeylineStorageError> {
         init_span!("JsKeyhive::access_for_doc");
-        let doc = self.0.get_document(doc_id.0).await?;
-        let mems = { doc.lock().await.transitive_members().await };
-        mems.get(&id.0).map(|(_, access)| JsAccess(*access))
+        let members = self.0.reachable_members(doc_id.0).await?;
+        Ok(members.get(&id.0).copied().map(JsPower))
     }
 
-    /// The most permissive of `id`'s direct access and the document's
-    /// public access. Returns undefined if neither grants access (or the
-    /// document is unknown).
+    /// The most permissive of `id`'s access and the document's public
+    /// access. Returns undefined if neither grants access (or the document
+    /// is unknown).
     #[wasm_bindgen(js_name = bestAccessForDoc)]
     pub async fn best_access_for_doc(
         &self,
         id: &JsIdentifier,
         doc_id: &JsDocumentId,
-    ) -> Option<JsAccess> {
+    ) -> Result<Option<JsPower>, JsKeylineStorageError> {
         init_span!("JsKeyhive::best_access_for_doc");
-        let doc = self.0.get_document(doc_id.0).await?;
-        let members = { doc.lock().await.transitive_members().await };
-        let direct = members.get(&id.0).map(|(_, access)| *access);
-        let public = members.get(&Public.id()).map(|(_, access)| *access);
-        match (direct, public) {
-            (Some(d), Some(p)) => Some(JsAccess(d.max(p))),
-            (Some(d), None) => Some(JsAccess(d)),
-            (None, Some(p)) => Some(JsAccess(p)),
-            (None, None) => None,
-        }
+        let members = self.0.reachable_members(doc_id.0).await?;
+        let direct = members.get(&id.0).copied();
+        let public = members.get(&Public.id()).copied();
+        Ok(direct.max(public).map(JsPower))
     }
 
     #[wasm_bindgen(js_name = exportPrekeySecrets)]
@@ -668,9 +636,9 @@ impl JsKeyhive {
     }
 
     #[wasm_bindgen(js_name = toArchive)]
-    pub async fn to_archive(&self) -> JsArchive {
+    pub async fn to_archive(&self) -> Result<JsArchive, JsKeylineStorageError> {
         init_span!("JsKeyhive::to_archive");
-        self.0.into_archive().await.into()
+        Ok(self.0.into_archive().await?.into())
     }
 
     #[allow(clippy::result_large_err)]
@@ -774,9 +742,7 @@ impl From<JsDecryptError> for JsValue {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsReceiveStaticEventError(
-    #[from] ReceiveStaticEventError<Local, JsSigner, JsChangeId, JsEventHandler>,
-);
+pub struct JsReceiveStaticEventError(#[from] ReceiveStaticEventError<Infallible>);
 
 impl From<JsReceiveStaticEventError> for JsValue {
     fn from(err: JsReceiveStaticEventError) -> Self {
@@ -813,6 +779,77 @@ mod tests {
         async fn test_length() {
             let bh = setup().await;
             assert_eq!(bh.id().to_bytes().len(), 32);
+        }
+    }
+
+    mod members {
+        use super::*;
+        use crate::js::membership_list::direct_members;
+        use keyhive_core::principal::{
+            identifier::Identifier,
+            individual::{op::KeyOp, IndividualState},
+        };
+        use keyline::power::Power;
+
+        async fn introduce(observer: &JsKeyhive, who: &JsKeyhive) -> Identifier {
+            let op = who.0.expand_prekeys().await.expect("prekeys expand");
+            let indie = IndividualState::new(KeyOp::Add(op));
+            let id = indie.id();
+            observer.0.register_individual(indie).await;
+            id.into()
+        }
+
+        async fn sync(from: &JsKeyhive, to: &JsKeyhive) {
+            let events = from
+                .0
+                .static_events_for_agent(to.0.id())
+                .await
+                .expect("the memory store does not fail");
+            to.0.ingest_unsorted_static_events(events.into_values().collect())
+                .await;
+        }
+
+        /// A member is listed at the power its delegation gives, which is no
+        /// more than the issuer holds: bob's Admin grant to carol revives at
+        /// Read once bob holds only Read.
+        #[wasm_bindgen_test]
+        #[allow(unused)]
+        async fn members_report_the_power_a_delegation_gives() {
+            let (alice, bob, carol) = (setup().await, setup().await, setup().await);
+            let bob_id = introduce(&alice, &bob).await;
+            introduce(&bob, &alice).await;
+            let carol_id = introduce(&bob, &carol).await;
+            let group = alice.0.generate_group(vec![]).await.expect("a group");
+            alice
+                .0
+                .add_member(bob_id, group, Power::Admin)
+                .await
+                .expect("bob is admitted");
+            sync(&alice, &bob).await;
+            bob.0
+                .add_member(carol_id, group, Power::Admin)
+                .await
+                .expect("carol is admitted");
+            sync(&bob, &alice).await;
+            alice
+                .0
+                .revoke_member(bob_id, false, group)
+                .await
+                .expect("bob is removed");
+            alice
+                .0
+                .add_member(bob_id, group, Power::Read)
+                .await
+                .expect("bob is back at Read");
+
+            let members = direct_members(&alice.0, group.into())
+                .await
+                .expect("the memory store does not fail");
+            let carols = members
+                .iter()
+                .find(|c| c.who == carol_id)
+                .expect("carol is a member");
+            assert_eq!(carols.can, Power::Read);
         }
     }
 

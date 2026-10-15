@@ -1,5 +1,6 @@
 use derive_more::{Display, From};
 use keyhive_core::keyhive::GenerateGroupError;
+use std::convert::Infallible;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -7,7 +8,7 @@ use wasm_bindgen::prelude::*;
 pub enum JsGenerateGroupError {
     /// Generating the group failed.
     #[display("{_0}")]
-    GenerateGroup(GenerateGroupError),
+    GenerateGroup(GenerateGroupError<Infallible>),
 }
 
 impl From<JsGenerateGroupError> for JsValue {

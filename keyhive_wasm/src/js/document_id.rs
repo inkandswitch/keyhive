@@ -1,5 +1,6 @@
 use crate::js::identifier::JsIdentifier;
 use derive_more::{Display, From, Into};
+use ed25519_dalek::VerifyingKey;
 use keyhive_core::principal::{document::id::DocumentId, identifier::Identifier};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -17,7 +18,7 @@ impl JsDocumentId {
         let vec: [u8; 32] = bytes.try_into().map_err(|_| JsParseDocIdError)?;
 
         // NOTE signature::Error is opaque, so we can just ignore the inbuilt error
-        let vk = ed25519_dalek::VerifyingKey::from_bytes(&vec).map_err(|_| JsParseDocIdError)?;
+        let vk = VerifyingKey::from_bytes(&vec).map_err(|_| JsParseDocIdError)?;
 
         Ok(JsDocumentId(DocumentId::from(Identifier::from(vk))))
     }

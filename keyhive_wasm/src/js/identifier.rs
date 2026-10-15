@@ -1,3 +1,4 @@
+use ed25519_dalek::VerifyingKey;
 use keyhive_core::principal::{identifier::Identifier, public::Public};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -16,8 +17,7 @@ impl JsIdentifier {
         let vec: [u8; 32] = bytes.try_into().map_err(|_| CannotParseIdentifier)?;
 
         // NOTE signature::Error is opaque, so we can just ignore the inbuilt error
-        let vk =
-            ed25519_dalek::VerifyingKey::from_bytes(&vec).map_err(|_| CannotParseIdentifier)?;
+        let vk = VerifyingKey::from_bytes(&vec).map_err(|_| CannotParseIdentifier)?;
 
         Ok(JsIdentifier(Identifier::from(vk)))
     }
