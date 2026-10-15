@@ -18,10 +18,8 @@ several instances, and they share its signing key and its identifier.
 ## Example test
 
 ```rust
-use keyhive_core::{
-    access::Access::Read,
-    test_utils::{TestContext, TestResult as Result},
-};
+use keyhive_core::test_utils::{TestContext, TestResult as Result};
+use keyline::power::Power::Read;
 
 #[tokio::test]
 async fn a_reader_reads_what_a_member_wrote() -> Result<()> {

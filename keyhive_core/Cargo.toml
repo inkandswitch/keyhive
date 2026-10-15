@@ -17,6 +17,8 @@ beekem = { workspace = true, features = ["std"] }
 keyhive_codec = { workspace = true, features = ["std"] }
 keyhive_crypto = { workspace = true, features = ["std"] }
 keyline = { workspace = true, features = ["serde", "std"] }
+# The in-memory Keyline store, for the test helpers.
+keyline_memory = { workspace = true, features = ["std"], optional = true }
 
 # Docs
 aquamarine = { workspace = true, optional = true }
@@ -37,6 +39,7 @@ x25519-dalek = { workspace = true }
 thiserror = { workspace = true }
 
 # Utilities
+async-lock = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true, features = ["std"] }
 derive-where = { workspace = true }
@@ -77,9 +80,10 @@ tracing-subscriber = { workspace = true, features = ["ansi", "env-filter"] }
 
 [features]
 default = []
+arbitrary = ["dep:arbitrary", "keyline/arbitrary"]
 debug_events = ["prettytable-rs"]
 mermaid_docs = ["aquamarine"]
-test_utils = ["beekem/test_utils", "proptest", "proptest-derive"]
+test_utils = ["beekem/test_utils", "dep:keyline_memory", "proptest", "proptest-derive"]
 
 [[bench]]
 name = "bench_cgka"

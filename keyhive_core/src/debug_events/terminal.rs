@@ -13,12 +13,10 @@ use super::{CgkaOperationDetails, DebugEventDetails, DebugEventTable};
 ///
 /// # Example
 /// ```
-/// use future_form::Local;
 /// use keyhive_core::event::Event;
-/// use keyhive_crypto::signer::memory::MemorySigner;
 /// use keyhive_core::debug_events::{DebugEventTable, Nicknames, terminal::print_event_table};
 ///
-/// let events: Vec<Event<Local, MemorySigner>> = vec![];
+/// let events: Vec<Event<[u8; 32]>> = vec![];
 /// let table = DebugEventTable::from_events(events, Nicknames::default());
 ///
 /// // Print a table of events
@@ -212,51 +210,31 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
             subject,
             can_access,
             delegate,
-            after_revocations_count,
-            after_content_count,
+            reissued,
         } => {
+            let base = format!(
+                "Power: {}\nSubject: {}\nDelegate: {}",
+                can_access,
+                subject.short_hex(),
+                delegate.short_hex(),
+            );
             if verbose {
-                format!(
-                    "Access: {}\nSubject: {}\nDelegate: {}\nAfter Revocations: {}\nAfter Content: {}",
-                    can_access,
-                    subject.short_hex(),
-                    delegate.short_hex(),
-                    after_revocations_count,
-                    after_content_count
-                )
+                format!("{base}\nReissued: {reissued}")
             } else {
-                format!(
-                    "Access: {}\nSubject: {}\nDelegate: {}\nAfter Content: {}",
-                    can_access,
-                    subject.short_hex(),
-                    delegate.short_hex(),
-                    after_content_count
-                )
+                base
             }
         }
         DebugEventDetails::Revoked {
-            subject,
             revoke,
-            has_proof,
-            after_content_count,
+            retain_count,
         } => {
             if verbose {
-                format!(
-                    "Revoke: {}\nSubject: {}\nProof: {}\nAfter Content: {}",
-                    revoke.short_hex(),
-                    subject.short_hex(),
-                    has_proof,
-                    after_content_count
-                )
+                format!("Revoke: {}\nRetains: {}", revoke.short_hex(), retain_count)
             } else {
-                format!(
-                    "Revoke: {}\nProof: {}\nAfter Content: {}",
-                    revoke.short_hex(),
-                    has_proof,
-                    after_content_count
-                )
+                format!("Revoke: {}", revoke.short_hex())
             }
         }
+        DebugEventDetails::Undecodable => "undecodable certificate".to_string(),
     }
 }
 
