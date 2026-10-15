@@ -95,7 +95,7 @@ test.describe("Keyhive", async () => {
       const {
         Keyhive,
         Signer,
-        Access,
+        Power,
         Archive,
         ChangeId,
         CiphertextStore,
@@ -122,13 +122,11 @@ test.describe("Keyhive", async () => {
       await kh.generateGroup([g2Id.toIdentifier(), d1Id.toIdentifier()]);
 
       const individualId = await kh.receiveContactCard(testContactCard);
-      const access = Access.tryFromString("edit");
+      const access = Power.tryFromString("edit");
       await kh.addMember(
         individualId.toIdentifier(),
         MemberedId.group(g2Id),
-        access,
-        [],
-      );
+        access);
 
       const archive = await kh.toArchive();
       const archiveBytes = archive.toBytes();
@@ -166,6 +164,116 @@ test.describe("Keyhive", async () => {
     }, getTestContactCard());
 
     expect(out.received).toBe(out.expected);
+  });
+
+  test("addMember returns the delegation and revokeMember its revocation", async ({
+    page,
+  }) => {
+    const out = await page.evaluate(async (contactCardJson) => {
+      const { Keyhive, Signer, CiphertextStore, ContactCard, MemberedId, Power } =
+        window.keyhive;
+      const kh = await Keyhive.init(
+        await Signer.generate(),
+        CiphertextStore.newInMemory(),
+        (_) => {},
+      );
+      const groupId = await kh.generateGroup([]);
+      const member = (
+        await kh.receiveContactCard(ContactCard.fromJson(contactCardJson))
+      ).toIdentifier();
+
+      const dlg = await kh.addMember(
+        member,
+        MemberedId.group(groupId),
+        Power.tryFromString("edit"));
+      const revs = await kh.revokeMember(member, false, MemberedId.group(groupId));
+      return {
+        verified: dlg.verify(),
+        can: dlg.delegation.can.toString(),
+        delegate: dlg.delegation.delegate.toString(),
+        subject: dlg.subjectId.toString(),
+        member: member.toString(),
+        group: groupId.toString(),
+        dlgId: Array.from(dlg.id),
+        revCount: revs.length,
+        revVerified: revs.every((r) => r.verify()),
+        revoked: revs.map((r) => Array.from(r.revocation.revoked)),
+      };
+    }, getTestContactCard());
+
+    expect(out.verified).toBe(true);
+    expect(out.can).toBe("Edit");
+    expect(out.delegate).toBe(out.member);
+    expect(out.subject).toBe(out.group);
+    expect(out.revCount).toBe(1);
+    expect(out.revVerified).toBe(true);
+    expect(out.revoked).toStrictEqual([out.dlgId]);
+  });
+
+  test("a listener sees a membership change as a signed delegation", async ({
+    page,
+  }) => {
+    const out = await page.evaluate(async (contactCardJson) => {
+      const { Keyhive, Signer, CiphertextStore, ContactCard, MemberedId, Power } =
+        window.keyhive;
+      const delegations = [];
+      const kh = await Keyhive.init(
+        await Signer.generate(),
+        CiphertextStore.newInMemory(),
+        (event) => {
+          const dlg = event.asSignedDelegation();
+          if (dlg) {
+            delegations.push(dlg.delegation.can.toString());
+          }
+        },
+      );
+      const groupId = await kh.generateGroup([]);
+      const member = (
+        await kh.receiveContactCard(ContactCard.fromJson(contactCardJson))
+      ).toIdentifier();
+      await kh.addMember(
+        member,
+        MemberedId.group(groupId),
+        Power.tryFromString("read"));
+      return { delegations };
+    }, getTestContactCard());
+
+    expect(out.delegations).toStrictEqual(["Admin", "Read"]);
+  });
+
+  test("a revocation retains the heads the application set", async ({ page }) => {
+    const out = await page.evaluate(async (contactCardJson) => {
+      const { ChangeId, Keyhive, Signer, CiphertextStore, ContactCard, MemberedId, Power } =
+        window.keyhive;
+      const kh = await Keyhive.init(
+        await Signer.generate(),
+        CiphertextStore.newInMemory(),
+        (_) => {},
+      );
+      const docId = await kh.generateDocument(
+        [],
+        new ChangeId(new Uint8Array(32).fill(7)),
+        [],
+      );
+      const otherId = await kh.generateDocument([], new ChangeId(new Uint8Array(32).fill(8)), []);
+      const member = (
+        await kh.receiveContactCard(ContactCard.fromJson(contactCardJson))
+      ).toIdentifier();
+
+      const latest = new Uint8Array(32).fill(9);
+      await kh.setContentHeads(docId, [new ChangeId(latest)]);
+
+      await kh.addMember(member, MemberedId.document(docId), Power.read());
+      const [rev] = await kh.revokeMember(member, false, MemberedId.document(docId));
+      return {
+        retained: rev.revocation.retained(docId)?.map((h) => Array.from(h.toBytes())),
+        other: rev.revocation.retained(otherId),
+        latest: Array.from(latest),
+      };
+    }, getTestContactCard());
+
+    expect(out.retained).toStrictEqual([out.latest]);
+    expect(out.other).toBeUndefined();
   });
 
   test("a listener records a prekey rotation", async ({ page }) => {
@@ -268,7 +376,7 @@ test.describe("Keyhive", async () => {
           CiphertextStore,
           Archive,
           ContactCard,
-          Access,
+          Power,
           MemberedId,
         } = window.keyhive;
 
@@ -284,8 +392,8 @@ test.describe("Keyhive", async () => {
         const individualId = await kh.receiveContactCard(testContactCard);
         const member = individualId.toIdentifier();
         const membered = MemberedId.document(docId);
-        const access = Access.tryFromString("edit");
-        await kh.addMember(member, membered, access, []);
+        const access = Power.tryFromString("edit");
+        await kh.addMember(member, membered, access);
 
         // Revoke that individual
         await kh.revokeMember(member, true, membered);
