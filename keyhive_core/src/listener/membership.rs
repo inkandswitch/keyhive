@@ -1,34 +1,30 @@
 //! Trait for listening to membership change events.
 
 use super::{cgka::CgkaListener, prekey::PrekeyListener};
-use crate::principal::group::{delegation::Delegation, revocation::Revocation};
+use crate::content::heads::ContentHeads;
 use future_form::FutureForm;
-use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
-};
+use keyhive_crypto::{content::reference::ContentRef, verified::Verified};
+use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
 
-/// Trait for listening to [`Group`] or [`Document`] membership change events.
+/// Trait for listening to membership changes: the Keyline certificates a
+/// replica writes or receives for the first time.
 ///
 /// This can be helpful for logging, live streaming of changes, gossip, and so on.
 ///
 /// If you don't want this feature, you can use the default listener:
 /// [`NoListener`][super::no_listener::NoListener].
-///
-/// [`Group`]: crate::principal::group::Group
-/// [`Document`]: crate::principal::document::Document
-pub trait MembershipListener<F: FutureForm, S: AsyncSigner<F>, T: ContentRef>:
+pub trait MembershipListener<F: FutureForm, T: ContentRef>:
     PrekeyListener<F> + CgkaListener<F>
 {
-    /// React to new [`Delegation`]s.
-    fn on_delegation<'a>(
-        &'a self,
-        data: &'a Arc<Signed<Delegation<F, S, T, Self>>>,
-    ) -> F::Future<'a, ()>;
+    /// React to a Keyline delegation this replica signed or received for
+    /// the first time.
+    fn on_delegation<'a>(&'a self, data: &'a Arc<Verified<Delegation>>) -> F::Future<'a, ()>;
 
-    /// React to new [`Revocation`]s.
+    /// React to a Keyline revocation this replica signed or received for
+    /// the first time.
     fn on_revocation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<F, S, T, Self>>>,
+        data: &'a Arc<Verified<Revocation<ContentHeads<T>>>>,
     ) -> F::Future<'a, ()>;
 }

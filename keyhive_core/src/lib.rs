@@ -25,6 +25,7 @@ pub mod principal;
 pub mod stats;
 pub mod store;
 pub mod transact;
+pub mod update;
 pub mod util;
 
 #[cfg(any(test, feature = "test_utils"))]
