@@ -1,20 +1,22 @@
 use super::{
     active::Active,
     identifier::Identifier,
-    individual::{op::add_key::AddKeyOp, state::PrekeyState, Individual},
+    individual::{op::add_key::AddKeyOp, state::PrekeyState, IndividualState},
 };
 use crate::listener::prekey::PrekeyListener;
 use dupe::Dupe;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     share_key::{ShareKey, ShareSecretKey},
-    signer::memory::MemorySigner,
+    signer::{async_signer::AsyncSigner, memory::MemorySigner},
     verifiable::Verifiable,
 };
 use std::{
     collections::BTreeMap,
+    marker::PhantomData,
     sync::{Arc, LazyLock},
 };
 
@@ -25,7 +27,7 @@ static PUBLIC_ID: LazyLock<Identifier> = LazyLock::new(|| Public.verifying_key()
 static PUBLIC_SHARE_KEY: LazyLock<ShareKey> =
     LazyLock::new(|| Public.share_secret_key().share_key());
 
-/// A well-known agent that can be used by anyone. ⚠ USE WITH CAUTION ⚠
+/// A well-known individual that can be used by anyone. ⚠ USE WITH CAUTION ⚠
 ///
 /// This is a constant key that is publicly-known.
 /// Sharing to this key is equivalent to setting a document to "public" by using a
@@ -39,8 +41,8 @@ impl Public {
         *PUBLIC_ID
     }
 
-    pub fn signing_key(&self) -> ed25519_dalek::SigningKey {
-        ed25519_dalek::SigningKey::from([0; 32])
+    pub fn signing_key(&self) -> SigningKey {
+        SigningKey::from([0; 32])
     }
 
     pub fn signer(&self) -> MemorySigner {
@@ -55,7 +57,7 @@ impl Public {
         *PUBLIC_SHARE_KEY
     }
 
-    pub fn individual(&self) -> Individual {
+    pub fn individual(&self) -> IndividualState {
         let op = Arc::new(
             self.signer()
                 .try_sign_sync(AddKeyOp {
@@ -67,7 +69,7 @@ impl Public {
 
         let prekey_state = PrekeyState::new(op);
 
-        Individual {
+        IndividualState {
             id: self.verifying_key().into(),
             prekeys: prekey_state.build(),
             prekey_state,
@@ -79,7 +81,7 @@ impl Public {
         listener: L,
     ) -> Active<F, MemorySigner, T, L>
     where
-        MemorySigner: keyhive_crypto::signer::async_signer::AsyncSigner<F>,
+        MemorySigner: AsyncSigner<F>,
     {
         Active {
             id: self.signer().verifying_key().into(),
@@ -90,13 +92,13 @@ impl Public {
             )]))),
             individual: Arc::new(Mutex::new(self.individual())),
             listener,
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
 impl Verifiable for Public {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        ed25519_dalek::VerifyingKey::from(&self.signing_key())
+    fn verifying_key(&self) -> VerifyingKey {
+        VerifyingKey::from(&self.signing_key())
     }
 }
