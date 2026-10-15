@@ -1,9 +1,7 @@
 //! The update predecessor secret chain.
 
-use keyhive_core::{
-    access::Access::{Admin, Read},
-    test_utils::{TestContext, TestResult as Result},
-};
+use keyhive_core::test_utils::{TestContext, TestResult as Result};
+use keyline::power::Power::{Admin, Read};
 
 #[tokio::test]
 async fn the_chain_goes_back_past_the_secret_an_invitation_wraps() -> Result<()> {
@@ -19,7 +17,7 @@ async fn the_chain_goes_back_past_the_secret_an_invitation_wraps() -> Result<()>
 
     // Carol was in the tree for none of those rotations.
     let carol = ctx.individual("carol").await?;
-    alice.add_member(carol.id(), design_doc, Read, &[]).await?;
+    alice.add_member(carol.id(), design_doc, Read).await?;
     ctx.sync(&alice, &carol).await?;
     for ct in [&first, &second, &third] {
         ctx.give_content(&carol, ct).await?;
@@ -41,7 +39,7 @@ async fn a_later_update_encrypts_a_secret_no_invitation_wrapped() -> Result<()> 
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Admin, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Admin).await?;
     ctx.encrypt(&alice, design_doc, b"before the fork").await?;
     ctx.sync(&alice, &bob).await?;
 
@@ -54,7 +52,7 @@ async fn a_later_update_encrypts_a_secret_no_invitation_wrapped() -> Result<()> 
     // wraps what the inviter can derive when it is created and alice cannot reach
     // bob's secret yet, so carol's can't contain it.
     let carol = ctx.individual("carol").await?;
-    alice.add_member(carol.id(), design_doc, Admin, &[]).await?;
+    alice.add_member(carol.id(), design_doc, Admin).await?;
     ctx.sync(&alice, &carol).await?;
     ctx.give_content(&carol, &on_bob).await?;
     assert!(
@@ -82,7 +80,7 @@ async fn an_update_propagates_an_ancestor_it_cannot_derive() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Admin, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Admin).await?;
 
     ctx.encrypt(&alice, design_doc, b"before the fork").await?;
     ctx.sync(&alice, &bob).await?;
@@ -95,7 +93,7 @@ async fn an_update_propagates_an_ancestor_it_cannot_derive() -> Result<()> {
     // Carol is added while still partitioned, so her invitation wraps alice's
     // update and she has no way to reach bob's.
     let carol = ctx.individual("carol").await?;
-    alice.add_member(carol.id(), design_doc, Admin, &[]).await?;
+    alice.add_member(carol.id(), design_doc, Admin).await?;
 
     // Alice takes bob's branch first, then carol receives from alice. Bob never
     // heard of carol, so he has nothing to send her.
@@ -115,7 +113,7 @@ async fn an_update_propagates_an_ancestor_it_cannot_derive() -> Result<()> {
     // Carol invites dave. Her invitation wraps alice's update, and dave follows
     // its chain back to bob's.
     let dave = ctx.individual("dave").await?;
-    carol.add_member(dave.id(), design_doc, Read, &[]).await?;
+    carol.add_member(dave.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
     ctx.give_content(&dave, &on_bob).await?;
 

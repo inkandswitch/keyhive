@@ -1,9 +1,7 @@
 //! Expanding and rotating prekeys.
 
-use keyhive_core::{
-    access::Access::Read,
-    test_utils::{PrekeyOp, TestContext, TestResult as Result},
-};
+use keyhive_core::test_utils::{PrekeyOp, TestContext, TestResult as Result};
+use keyline::power::Power::Read;
 
 #[tokio::test]
 async fn expanding_prekeys_adds_a_distinct_key() -> Result<()> {
@@ -53,7 +51,7 @@ async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     let old = alice.expand_prekeys().await?.payload().share_key;

@@ -1,9 +1,7 @@
 //! Saving an instance to an archive and rebuilding it.
 
-use keyhive_core::{
-    access::Access::{Admin, Edit, Read},
-    test_utils::{CausalDecryptionExt, TestContext, TestError, TestResult as Result},
-};
+use keyhive_core::test_utils::{CausalDecryptionExt, TestContext, TestError, TestResult as Result};
+use keyline::power::Power::{Admin, Edit, Read};
 
 #[tokio::test]
 async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Result<()> {
@@ -14,27 +12,27 @@ async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Resu
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
 
-    alice.add_member(engineering, design_doc, Edit, &[]).await?;
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
-    alice.add_member(carol.id(), design_doc, Admin, &[]).await?;
+    alice.add_member(engineering, design_doc, Edit).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
+    alice.add_member(carol.id(), design_doc, Admin).await?;
     let ct = ctx
         .encrypt(&alice, design_doc, b"before the archive")
         .await?;
     ctx.sync_all_unsent().await?;
 
-    let members_before = ctx.named(alice.reachable_members(design_doc).await);
-    let archive = alice.into_archive().await;
+    let members_before = ctx.named(alice.reachable_members(design_doc).await?);
+    let archive = alice.into_archive().await?;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
 
     assert_eq!(
-        ctx.named(alice.reachable_members(design_doc).await),
+        ctx.named(restored.reachable_members(design_doc).await?),
         members_before,
         "the same people, at the same levels"
     );
     for who in [&bob, &carol] {
         assert_eq!(
-            restored.access_for_doc(who, design_doc).await,
-            alice.access_for_doc(who, design_doc).await,
+            restored.access_for_doc(who, design_doc).await?,
+            alice.access_for_doc(who, design_doc).await?,
             "the restored instance disagrees about {}",
             who.name()
         );
@@ -55,16 +53,14 @@ async fn a_restored_instance_can_still_issue_delegations() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.sync_all_unsent().await?;
 
-    let archive = alice.into_archive().await;
+    let archive = alice.into_archive().await?;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
 
-    restored
-        .add_member(dave.id(), design_doc, Edit, &[])
-        .await?;
+    restored.add_member(dave.id(), design_doc, Edit).await?;
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.access_for_doc(dave.id(), design_doc).await,
+        alice.access_for_doc(dave.id(), design_doc).await?,
         Some(Edit),
         "the original instance honors what the restored one signed"
     );
@@ -79,18 +75,18 @@ async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
     let carol = ctx.individual("carol").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    let old = alice.into_archive().await;
+    alice.add_member(bob.id(), design_doc, Read).await?;
+    let old = alice.into_archive().await?;
 
     // More happens after the archive is created.
-    alice.add_member(carol.id(), design_doc, Admin, &[]).await?;
+    alice.add_member(carol.id(), design_doc, Admin).await?;
     alice.revoke_member(bob.id(), true, design_doc).await?;
 
     let restored = ctx
         .rebuild_from_archive(&old, "alice-from-old-archive")
         .await?;
     assert_eq!(
-        restored.access_for_doc(carol.id(), design_doc).await,
+        restored.access_for_doc(carol.id(), design_doc).await?,
         None,
         "the archive predates carol's delegation"
     );
@@ -98,12 +94,12 @@ async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        restored.access_for_doc(carol.id(), design_doc).await,
-        alice.access_for_doc(carol.id(), design_doc).await
+        restored.access_for_doc(carol.id(), design_doc).await?,
+        alice.access_for_doc(carol.id(), design_doc).await?
     );
     assert_eq!(
-        restored.access_for_doc(bob.id(), design_doc).await,
-        alice.access_for_doc(bob.id(), design_doc).await,
+        restored.access_for_doc(bob.id(), design_doc).await?,
+        alice.access_for_doc(bob.id(), design_doc).await?,
         "including the revocation it never saw"
     );
     Ok(())
@@ -117,20 +113,20 @@ async fn ingesting_an_archive_merges_into_a_live_instance() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let notes = ctx.doc(&bob, "notes").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    bob.add_member(alice.id(), notes, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
+    bob.add_member(alice.id(), notes, Read).await?;
 
-    let from_bob = bob.into_archive().await;
+    let from_bob = bob.into_archive().await?;
     let pending = alice.ingest_archive(from_bob).await?.len();
 
     assert_eq!(pending, 0, "nothing in bob's archive was unusable to alice");
     assert_eq!(
-        alice.access_for_doc(alice.id(), notes).await,
+        alice.access_for_doc(alice.id(), notes).await?,
         Some(Read),
         "alice learned about bob's document"
     );
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await,
+        alice.access_for_doc(bob.id(), design_doc).await?,
         Some(Read),
         "and kept what she already knew"
     );
@@ -142,7 +138,7 @@ async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
-    let early = alice.into_archive().await;
+    let early = alice.into_archive().await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let ct = ctx.encrypt(&alice, design_doc, b"hello world").await?;
@@ -182,7 +178,7 @@ async fn an_archive_merged_into_a_rebuild_reaches_a_readable_state() -> Result<(
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
-    let early = alice.into_archive().await;
+    let early = alice.into_archive().await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let ct = ctx
@@ -190,7 +186,7 @@ async fn an_archive_merged_into_a_rebuild_reaches_a_readable_state() -> Result<(
         .await?;
 
     let restored = ctx.rebuild_from_archive(&early, "alice-restored").await?;
-    let latest = alice.into_archive().await;
+    let latest = alice.into_archive().await?;
     let pending = restored.ingest_archive(latest).await?.len();
     assert_eq!(pending, 0, "the later archive was ingested completely");
 
@@ -213,18 +209,18 @@ async fn ingesting_an_archive_carries_the_key_state_as_well_as_the_graph() -> Re
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
-    let early = alice.into_archive().await;
+    let early = alice.into_archive().await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let ct = ctx.encrypt(&alice, design_doc, b"hello world").await?;
 
     let restored = ctx.rebuild_from_archive(&early, "alice-restored").await?;
-    let latest = alice.into_archive().await;
+    let latest = alice.into_archive().await?;
     let pending = restored.ingest_archive(latest).await?.len();
 
     assert_eq!(pending, 0, "the archive was ingested completely");
     assert_eq!(
-        restored.access_for_doc(alice.id(), design_doc).await,
+        restored.access_for_doc(alice.id(), design_doc).await?,
         Some(Admin),
         "and it believes it is an admin of the document"
     );
@@ -241,7 +237,7 @@ async fn a_rebuilt_instance_can_write_and_walk_back() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    let archive = alice.into_archive().await;
+    let archive = alice.into_archive().await?;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
 
     let genesis = ctx
