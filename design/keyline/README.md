@@ -89,7 +89,7 @@ Under [constitutional flatness] (a role whose Admin memberships name only indivi
 
 ### The `citation` Field
 
-Ed25519 is deterministic and certificates are content-addressed, so re-issuing an identical delegation produces the _same certificate_: the same hash, still covered by any revocation that named it. Without a freshness field, healing a mistaken removal on the same terms by the same issuer is impossible.
+Certificates are identified by the digest of their payload, so re-issuing an identical delegation produces the _same certificate_, whatever its signature: the same hash, still covered by any revocation that named it. Without a freshness field, healing a mistaken removal on the same terms by the same issuer is impossible.
 
 `citation` does a nonce's job with a fail-closed default: a re-issuance points at the _revocation_ the issuer has seen and is re-issuing past, changing the hash and documenting the heal ("re-granted, knowing of the revocation"). First issuances omit the field.
 

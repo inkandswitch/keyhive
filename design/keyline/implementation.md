@@ -18,7 +18,7 @@ _Keyline_ is the design, `keyline` is the crate, and `Keyline` is the trait.
 
 A revocation can carry content-layer data (`retain`, below), but only as an opaque, canonically encoded value that evaluation never reads.
 
-The crate sits beside `beekem`: both are engines over untyped keys, and neither is meant to be exposed to users. The plan is for `keyhive_core` to keep its `Individual` / `Group` / `Document` handles and its public API, and to convert IDs at the boundary when a handle needs a membership or reachability answer, the same way `keyhive_core::cgka::Cgka` wraps `beekem::Cgka`. The typed handles are the [Ghosts of Departed Proofs][gdp] witnesses; `keyline` is the untyped thing they are proofs about. See [Integration Sketch](#integration-sketch).
+The crate sits beside `beekem`: both are engines over untyped keys, and neither is meant to be exposed to users. `keyhive_core` keeps its `Individual` / `Group` / `Document` handles and converts IDs at the boundary when a handle needs a membership or reachability answer, the same way `keyhive_core::cgka::Cgka` wraps `beekem::Cgka`. The typed handles are the [Ghosts of Departed Proofs][gdp] witnesses; `keyline` is the untyped thing they are proofs about. See [Integration](#integration).
 
 ## Types
 
@@ -26,11 +26,11 @@ Field names follow one rule. Participants and references are nouns: `issuer`, `a
 
 ### `Id`
 
-A newtype over the 32-byte compressed form of an `ed25519_dalek::VerifyingKey`. Every principal, role, document, and group is an `Id`. `keyline` attaches no meaning to which is which.
+`keyhive_crypto::id::Id`: a newtype over the 32-byte compressed form of an `ed25519_dalek::VerifyingKey`, with a canonical codec (`Encode`, `Decode`, `StreamDecode`). It started in `keyline` and moved down so that Beekem and `keyhive_core` can use the same validated key on the wire. Every principal, role, document, and group is an `Id`. `keyline` attaches no meaning to which is which.
 
 `Id::from_bytes` accepts only the canonical encoding of a curve point outside the small-order subgroup. A non-canonical encoding would give one key two `Id`s, and a small-order key verifies forged signatures. `InvalidId` says which check failed.
 
-`keyhive_core` has `Identifier` for the same thing; `keyline` defines its own, to be converted at the boundary as `beekem::MemberId` is. Shared types are slated for a `keyhive_types` crate; `TODO(keyhive_types)` marks the sites.
+`keyhive_core` has `Identifier` for the same thing, and Beekem has `MemberId` and `TreeId`; they are converted at the boundary. The codec migration (`TODO(keyhive_types)`) has them wrap `Id`.
 
 ### `Power`
 
@@ -124,7 +124,7 @@ pub enum CertificateId {            // what the set is keyed by
 }
 ```
 
-What gets signed is the delegation or the revocation itself, each under its own [domain context](#domain-separation). A certificate is the sum of those two signed forms, not a signature over a sum, so each statement has one identity: the digest of its signed payload. That digest is the set key (`CertificateId`), and it is what `revoke` and `citation` name. `Certificate::verify` verifies whichever kind it holds. `W` is fixed for each set as `Keyline::RetentionWatermark`. `Certificate` equality is `Signed`'s, bytes and signature; compare ids for "same statement".
+What gets signed is the delegation or the revocation itself, each as its own [kind](#domain-separation). A certificate is the sum of those two signed forms, not a signature over a sum, so each statement has one identity: the digest of its signed payload. That digest is the set key (`CertificateId`), and it is what `revoke` and `citation` name. `Certificate::verify` verifies whichever kind it holds. `W` is fixed for each set as `Keyline::RetentionWatermark`. `Certificate` equality is `Signed`'s, bytes and signature; compare ids for "same statement".
 
 ### `Encoded<T>`
 
@@ -143,19 +143,25 @@ The type does not check the claim. `Encode::encode` produces canonical bytes fro
 
 ### `Digest<T>`
 
-`keyhive_crypto::digest::Digest<T>`: BLAKE3, 32 bytes, phantom-typed. `keyline` obtains it as `Digest::of(&Encoded<T>)`, which requires `T: Domain` and hashes the [domain-separated](#domain-separation) bytes, or as `Digest::of_bytes` for a composite with no `T` value of its own, such as the set digest. The `std`-gated `Digest::hash` (which needs `bincode`) is not used; its `T: Serialize` bound sits on `hash()` alone.
+`keyhive_crypto::digest::Digest<T>`: BLAKE3, 32 bytes, phantom-typed. `keyline` obtains it as `Digest::of(&Encoded<T>)`, which requires `T: Kinded` and hashes the [prefixed](#domain-separation) bytes, or as `Digest::of_bytes` for a composite with no `T` value of its own, such as the set digest. The `std`-gated `Digest::hash` (which needs `bincode`) is not used; its `T: Serialize` bound sits on `hash()` alone.
 
 ### Domain Separation
 
-The keys that sign Keyline certificates may also sign in other protocols, such as `keyhive_core`'s serde-encoded payloads. If one byte string were valid in two formats, one signature would be valid in both. So every byte string Keyline signs or hashes is prefixed with a context naming the protocol, its version, and the type, then a NUL byte:
+The keys that sign Keyline certificates also sign in other protocols, such as key agreement operations and prekey operations. If one byte string were valid in two formats, one signature would be valid in both. So every byte string Keyhive signs or hashes this way is
 
-| Type             | Context                      | Used for                          |
-|------------------|------------------------------|-----------------------------------|
-| `Delegation`     | `keyline/v0/delegation`      | signing, and its digest           |
-| `Revocation<W>`  | `keyline/v0/revocation`      | signing, and its digest           |
-| `CertificateSet` | `keyline/v0/certificate_set` | the set digest only; never signed |
+```
+"keyhive\0" ‖ version:u8 ‖ kind:u8 ‖ payload
+```
 
-Contexts contain no NUL (checked at build time, when a type is first signed or hashed), so the context can be read back off any message and two contexts never produce the same message. The two kinds of certificate are separated by their contexts, which is also why their digests can share one key type without a kind tag. The trait is `keyhive_crypto::domain_separator::Domain`. The free function `domain_separator::message::<T>` builds the prefixed bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input; being a free function, no implementation can override it. `v0` is the protocol version. It changes whenever the meaning of signed bytes does, so a certificate from one version never verifies under another. Each type declares its context next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core` today, still relies on that protocol's formats.
+The kind is the type's permanent number in one registry for the whole workspace, `keyhive_crypto::signable::Kind`; a retired number is never reused. The version is the version of the type's encoding.
+
+| Type             | Kind   | Used for                          |
+|------------------|--------|-----------------------------------|
+| `Delegation`     | `0x01` | signing, and its digest           |
+| `Revocation<W>`  | `0x02` | signing, and its digest           |
+| `CertificateSet` | `0x03` | the set digest only; never signed |
+
+A type with a kind implements `keyhive_crypto::signable::Kinded` (`KIND`, `VERSION`). `Signable` is `Kinded + Encode + Decode`, with a blanket impl: what can be signed and verified. `CertificateSet` is `Kinded` but has no codec, so it cannot be signed. The two kinds of certificate are separated by their kinds, which is also why their digests can share one key type without a tag. The free function `signable::message::<T>` builds the bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input; being a free function, no implementation can override it. The version and kind are also the first two bytes of the [wire frame](#encoding), so everything stored except the signature is signed: a frame whose version or kind was changed does not verify. Each type declares its kind next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core`'s serde payloads today, still relies on that protocol's formats.
 
 ### `Signed<T>` and `Verified<T>`
 
@@ -170,11 +176,11 @@ pub struct Verified<T> {
     signed:  Signed<T>,  // retained so the certificate can be forwarded as received
 }
 
-impl<T: Decode + Domain + Encode + Verifiable> Signed<T> {
+impl<T: Signable + Verifiable> Signed<T> {
     pub fn verify(self) -> Result<Verified<T>, VerifyError>;
 }
 
-impl<T: Decode + Domain + Encode + Verifiable> Verified<T> {
+impl<T: Signable + Verifiable> Verified<T> {
     pub async fn sign<F: FutureForm, S: AsyncSigner<F>>(value: &T, signer: &S) -> Result<Self, SignError>;
     pub fn sign_sync<S: SyncSignerBasic + Verifiable>(value: &T, signer: &S) -> Result<Self, SignError>;
 }
@@ -184,69 +190,90 @@ There is no issuer field. The payload names its own issuer (`Delegation.issuer`,
 
 1. decodes the payload;
 2. re-encodes it and requires exactly the received bytes, so a `Verified<T>` is always canonical;
-3. runs `verify_strict` over the domain-separated bytes with `payload.verifying_key()`.
+3. runs `verify_strict` over `message::<T>` of those bytes with `payload.verifying_key()`.
 
 A certificate that names one issuer and is signed by another does not verify. Storing the signer separately would be a redundant field that the transport controls, and checking the signature against it instead of the payload would admit exactly that forgery. `sign` refuses a signer that is not the payload's issuer for the same reason. `verify_strict` rejects the small-order and malleable signatures that plain `verify` accepts; a unit test builds such a forgery and checks that it fails.
 
-Signing goes through `keyhive_crypto`'s signer traits, the same ones `keyhive_core` uses, so the signing key can be non-extractable: WebCrypto, an HSM, or a KMS behind `AsyncSigner`, or an in-memory key behind `SyncSignerBasic`. The signer sees only the domain-separated bytes, so a caller cannot forget the context. `sign` returns a `Verified<T>` rather than a `Signed<T>`: it verifies what the signer returned, so a signer that produces a bad signature fails at the issuer, not at every peer that receives the certificate. A unit test pins this with a signer that drops the domain context.
+Signing goes through `keyhive_crypto`'s signer traits, the same ones `keyhive_core` uses, so the signing key can be non-extractable: WebCrypto, an HSM, or a KMS behind `AsyncSigner`, or an in-memory key behind `SyncSignerBasic`. The signer sees only `message::<T>`, so a caller cannot forget the prefix. `sign` returns a `Verified<T>` rather than a `Signed<T>`: it verifies what the signer returned, so a signer that produces a bad signature fails at the issuer, not at every peer that receives the certificate. Tests pin this with a signer that drops the prefix and header, and with a failing signer, through both the async (`Local` and `Sendable`) and the sync signer traits.
 
-Outside the `conformance` and `test_utils` features, `verify`, `sign` and `sign_sync` are the only public constructors of `Verified<T>`, and all three check the signature. The digest is taken from the same bytes the signature covers, so nothing re-encodes a payload to identify it. A crate-private constructor lets `test_utils::assume_verified` build fixtures without paying for signing. With either feature enabled the witness therefore proves nothing, so enable them only from dev-dependencies. One scenario goes through `sign_sync` for every certificate so the shortcut cannot hide a discrepancy.
+Outside the `conformance` and `test_utils` features, `verify`, `sign` and `sign_sync` are the only public constructors of `Verified<T>`, and all three check the signature. The digest is taken from the same bytes the signature covers, so nothing re-encodes a payload to identify it. A `Verified<T>` computes it once, at verification, and keeps it: the value is immutable, and a backend looks digests up on every step of a search. It shares its `Signed<T>` in an `Arc`, as `Certificate<W>` does, so a store hands out certificates without copying their bytes; `VerifiedCertificate<W>` shares its `Verified<T>` the same way, so a batch clones for the price of reference counts. `Verified::assume`, behind `keyhive_crypto`'s `unchecked` feature, lets `test_utils::assume_verified` build fixtures without paying for signing; `conformance` turns `unchecked` on. With either feature enabled the witness therefore proves nothing, so enable them only from dev-dependencies. One scenario goes through `sign_sync` for every certificate so the shortcut cannot hide a discrepancy.
 
 `Signed<T>` equality is by bytes _and_ signature. RFC 8032 signing is deterministic, so one key signing one payload twice yields equal values. A signer that picks its nonce another way produces a different, equally valid signature: a different `Signed<T>` with the same digest. A `Keyline` set is keyed by digest, so it holds such a pair as one certificate; the `second_signature_is_the_same_certificate` scenario pins this.
 
-These two types live in `keyline` (`TODO(keyhive_types)`). `keyhive_crypto`'s serde-based `Signed<T>` is unchanged and remains what `keyhive_core` uses; the codec migration unifies them.
+These two types live in `keyhive_crypto::verified`, with `Encode` / `Decode` for the wire frame `version ‖ kind ‖ signature ‖ payload`. `keyhive_crypto::signed`'s serde-based `Signed<T>` is still what `keyhive_core`'s other signed types use; the codec migration moves them over.
 
 ## The `Keyline` Trait
 
 ```rust
-pub trait Keyline {
+pub struct Version(u64);                     // local to one store, opaque, monotone
+pub struct Versioned<T> { pub version: Version, pub value: T }
+pub type Query<'a, F, T, E> = <F as FutureForm>::Future<'a, Result<Versioned<T>, E>>;
+
+pub trait Keyline<F: FutureForm> {
     type RetentionWatermark: Encode + Decode;
+    type Error: core::error::Error;
 
-    fn insert(&mut self, cert: VerifiedCertificate<Self::RetentionWatermark>) -> bool;
-    fn contains(&self, cert: &CertificateId) -> bool;
+    fn version(&self) -> F::Future<'_, Result<Version, Self::Error>>;
+    fn insert(&self, batch: Vec<VerifiedCertificate<Self::RetentionWatermark>>)
+        -> F::Future<'_, Result<Version, Self::Error>>;
 
-    fn effective_power(&self, subject: Id, audience: Id) -> Option<Power>;
-    fn members(&self, subject: Id) -> BTreeMap<Id, Power>;
-    fn is_live(&self, delegation: &Digest<Delegation>) -> bool;
-    fn revocations_of(&self, delegation: &Digest<Delegation>) -> BTreeSet<Digest<RevocationId>>;
-    fn digest(&self) -> Digest<CertificateSet>;
+    fn contains(&self, cert: CertificateId) -> Query<'_, F, bool, Self::Error>;
+    fn get(&self, cert: CertificateId) -> Query<'_, F, Option<Certificate<Self::RetentionWatermark>>, Self::Error>;
+    fn certificates(&self) -> Query<'_, F, Vec<Certificate<Self::RetentionWatermark>>, Self::Error>;
+    fn revocations_of(&self, delegation: Digest<Delegation>) -> Query<'_, F, BTreeSet<Digest<RevocationId>>, Self::Error>;
+    fn delegations_to(&self, subject: Id, audience: Id) -> Query<'_, F, BTreeMap<Digest<Delegation>, Delegation>, Self::Error>;
+    fn effective_power(&self, subject: Id, audience: Id) -> Query<'_, F, Option<Power>, Self::Error>;
+    fn members(&self, subject: Id) -> Query<'_, F, BTreeMap<Id, Power>, Self::Error>;
+    fn is_live(&self, delegation: Digest<Delegation>) -> Query<'_, F, bool, Self::Error>;
+$1    fn subjects(&self) -> Query<'_, F, BTreeSet<Id>, Self::Error>;
+    fn closure(&self, subject: Id) -> Query<'_, F, Vec<Certificate<Self::RetentionWatermark>>, Self::Error>;
+    fn digest(&self) -> Query<'_, F, Digest<CertificateSet>, Self::Error>;
 }
 ```
 
-| Item                 | Meaning                                                                                                                   |
-|----------------------|---------------------------------------------------------------------------------------------------------------------------|
-| `RetentionWatermark` | The `retain` watermark type. Evaluation never reads it. A backend that does not care picks `()`.                          |
-| `insert`             | Add a certificate. `true` if newly added, as `BTreeSet::insert`. Idempotent. A dedupe signal, not a change signal.        |
-| `contains`           | Whether a certificate with this id is in the set. Ingest checks this before paying for signature verification.            |
-| `effective_power`    | `audience`'s effective power over `subject`: max over live routes of min along each. `None` if unreachable.               |
-| `members`            | Every `Id` other than `subject` itself with a live route to `subject`, with its effective power. The materialized view.   |
-| `is_live`            | Whether `delegation` survives evaluation.                                                                                 |
-| `revocations_of`     | Revocations that name the delegation, covering or not. Explains a silent `citation` collision.                            |
-| `digest`             | A digest of the set, usable as a cache key: same digest, same answers. `CertificateSet` is an uninhabited marker.         |
+| Item                 | Meaning                                                                                                                         |
+|----------------------|---------------------------------------------------------------------------------------------------------------------------------|
+| `RetentionWatermark` | The `retain` watermark type. Evaluation never reads it. A backend that does not care picks `()`.                                |
+| `Error`              | What the backend's storage can fail with. `Infallible` in memory.                                                               |
+| `version`            | The current version, for cheap staleness checks.                                                                                |
+| `insert`             | Add a batch atomically. Idempotent. Returns the version after: greater than every version read before if the batch added any. |
+| `contains`           | Whether a certificate with this id is in the set. Ingest checks this before paying for signature verification.                  |
+| `get`                | The certificate as received, for serving events and archives.                                                                   |
+| `certificates`       | Every certificate, in id order, for archives.                                                                                   |
+| `revocations_of`     | Revocations that name the delegation, covering or not. Explains a silent `citation` collision.                                  |
+| `delegations_to`     | Every delegation from `subject` to `audience`, live or not: what revoking `audience`'s access must name.                        |
+| `effective_power`    | `audience`'s effective power over `subject`: max over live routes of min along each. `None` if unreachable.                     |
+| `members`            | Every `Id` other than `subject` itself with a live route to `subject`, with its effective power. The materialized view.         |
+| `is_live`            | Whether `delegation` survives evaluation.                                                                                       |
+$1| `subjects`           | The subject of every delegation in the set, live or not: everything the set says something about. Monotone in the set.        |
+| `closure`            | The subject's [closure](README.md#what-a-replica-must-hold), in id order: what sync sends.                                      |
+| `digest`             | A digest of the set, comparable across replicas. `CertificateSet` is an uninhabited marker.                                     |
 
-Every method is defined purely in terms of the set. That is what makes the trait a backend contract: an implementation over DBSP, Postgres, or anything else is correct if and only if it gives the same answers as the reference implementation for the same set. The conformance suite (below) is how a backend shows that.
+Every query is defined purely in terms of the set. That is what makes the trait a backend contract: an implementation over DBSP, Postgres, or anything else is correct if and only if it gives the same answers as the reference implementation for the same set. The conformance suite (below) is how a backend shows that.
 
-The trait is `&self` for queries and `&mut self` for `insert`. It is synchronous. There is no `FutureForm` parameter: the evaluator does no I/O, and concurrency is the wrapper's concern. A wrapper holds the implementation behind a `RwLock` (or a `Local` equivalent); readers take the read guard and call `&self` methods in parallel, and writers take the write guard briefly.
+The trait is shaped for those backends, not for the in-memory one. A database answers with I/O, so every method returns a future, in the `F: FutureForm` of the caller (`Sendable` or `Local`). Connections drop and transactions abort, so every method returns a `Result`. Sync and archive loading arrive in batches, and an incremental engine wants them whole, so `insert` takes a batch and applies it atomically. Every method takes `&self`: each backend owns its concurrency control, as a database has transactions and `MemoryKeyline` a lock.
+
+Each query is atomic on its own and returns the version it read. There are no views (a consistent state shared by several queries): no lock or transaction ever leaves the store, so callers have no rules to follow to avoid deadlocks, and a database backend holds no connection between queries. Where a caller combines queries, it does not need a view: positive queries are monotone, so a `yes` read at one version stays true; closures only grow, so a union of closures from adjacent versions is still a valid set to send. The version comes back with each answer, not from a separate call, so that a cache can never stamp an old answer as fresh. `Version` is a concrete newtype over `u64`, because every backend has one at hand (a write counter, a log position, a step), and a concrete type lets a caching layer hold versions without a type parameter.
 
 ### Insert
 
-`insert` cannot fail on bad input: the `Verified` witness has already excluded it. It returns whether the certificate was new so that ingest can avoid re-announcing a certificate it already held. It does not say whether any query result changed: a new certificate may be dead on arrival, and a duplicate never changes anything. A caller that must react to membership changes (to drive BeeKEM key rotation) diffs `members(subject)` before and after; an incremental evaluator that reports deltas is a later optimization.
+`insert` cannot fail on bad input: the `Verified` witness has already excluded it; it fails only if the backend's storage does. It returns the version after the batch. If the batch added a certificate, that version is greater than every version read before the call; a batch of duplicates may leave it unchanged, so duplicate gossip does not invalidate caches. The set growing does not mean an answer changed: a new certificate may be dead on arrival. A caller that must react to membership changes (to drive BeeKEM key rotation) diffs `members(subject)` before and after, serializing its inserts so that the diff is exact; an evaluator that reports deltas is a later optimization.
 
-A duplicate is also how a silent `citation` collision shows up: an issuer who re-mints a revoked delegation without `citation` produces the identical certificate, `insert` returns `false`, and `revocations_of` reports which revocations named it, so the layer above can prompt for a re-issue with `citation` set.
+A duplicate is also how a silent `citation` collision shows up: an issuer who re-mints a revoked delegation without `citation` produces a certificate already in the set (`contains` is true), and `revocations_of` reports which revocations named it, so the layer above can prompt for a re-issue with `citation` set.
 
 A revocation whose target is not (yet) in the set is stored like any other certificate and contributes nothing until the target arrives; insertion order never matters.
 
-Not yet on the trait: `get(&CertificateId) -> Option<&Certificate<W>>` and iteration over the set. Sync and archiving need them, but their shape depends on how Subduction pulls certificates, and a database-backed implementation may not hold the signed bytes. Decided at integration.
-
 ### `MemoryKeyline`
 
-The reference implementation, in its own crate (`keyline_memory::MemoryKeyline`): in-memory, `impl Keyline`, generic over the watermark type `W` with no default. Being a separate crate, it is written against `keyline`'s public API alone, as any other backend must be. Plain maps of plain data; no `Rc`, no `Cell`, so `Send + Sync` hold without effort. It does no caching, and it computes stratum 1 over every subject on the replica rather than over the queried subject's closure: every query recomputes both strata, so cost scales with the replica's whole certificate set rather than with the queried subject. Structure that no query's closure contains, such as delegations an outsider roots at their own keys, is still searched. Rooting stratum 1 at the closure is a later optimization. That suits the deployment it is for, an embedded or Wasm replica holding a document's [closure](README.md#what-a-replica-must-hold), and not a relay holding many documents, which wants a backend that materializes the monotone stratum.
+The reference implementation, in its own crate (`keyline_memory`), in two layers. `State<W>` is the set and a synchronous evaluator. It holds each verified certificate once, in an `Arc` (payload, signed form and digest together), and its indexes (the adjacency the search walks, and revocations by target) share those `Arc`s. It has `insert_all(&mut self)`, queries on `&self`, no async and no lock, which is what the oracles and most tests want. `MemoryKeyline<W>` puts it behind one `async_lock::RwLock` and implements `Keyline<F>` for both future forms. Queries hold the read lock for their whole evaluation, so they run concurrently; inserts mutate in place under the write lock. The lock is a leaf, taken and released inside each method and never handed to a caller, so it cannot deadlock, and `async-lock`'s `RwLock` is write-preferring, so queries cannot starve an insert. Being a separate crate, it is written against `keyline`'s public API alone, as any other backend must be. Both are generic over the watermark type `W` with no default.
+
+`State` caches the evaluation (strata 1 and 2) in a `OnceBox`: the first query after an insert computes it, every query until the next insert that changes the set shares it, and that insert drops it. Each query then runs one search rooted at its subject. Stratum 1 is computed over every subject on the replica rather than over the queried subject's closure, so the first query after an insert costs what the whole replica costs. Structure that no query's closure contains, such as delegations an outsider roots at their own keys, is still searched. Rooting stratum 1 at the closure is a later optimization. That suits the deployment it is for, an embedded or Wasm replica holding a document's [closure](README.md#what-a-replica-must-hold), and not a relay holding many documents, which wants a backend that materializes the monotone stratum.
 
 It is also not demand-driven. `effective_power(s, a)` materializes `s`'s whole row and indexes into it, so a point query costs what the full view costs. Magic sets would fix that, at the price of the property that makes a bottom-up evaluator safe: forward chaining from the subject never visits a fact it cannot ground, so an attacker's ungrounded structure costs nothing. A demand-driven evaluator must earn that back with the ordering obligation in [evaluation notes §7](evaluation-notes.md#7-threat-model-evaluation-cost-as-a-dos-surface). The reference implementation stays simple; a faster backend is what the trait and the conformance suite are for.
 
 ## Evaluation
 
-Evaluation is a pure function of the set. The strata below are the canonical order the model document describes (all delegations, then all revocations, then the check), made executable: stratum 1 replays the proxy network of delegations, stratum 2 applies every revocation to it, and a query is the invocation being checked. The reference implementation is this program, with four answer-preserving shortcuts listed in `keyline_memory`'s crate docs (dropping coverage that touches no route, sharing contexts, one unexcluded pre-filter search, and `cap = power` for uncovered edges). Any faster backend must agree with it on every set.
+Evaluation is a pure function of the set. The strata below are the canonical order the model document describes (all delegations, then all revocations, then the check), made executable: stratum 1 replays the proxy network of delegations, stratum 2 applies every revocation to it, and a query is the invocation being checked. The reference implementation is this program, with five answer-preserving shortcuts listed in `keyline_memory::state`'s docs (dropping coverage that touches no route, sharing contexts, one unexcluded pre-filter search, uncovered edges usable from the first round of the live fixed point, and `cap = power` for uncovered edges). Any faster backend must agree with it on every set.
 
 ```
 Stratum 0 — facts
@@ -383,12 +410,12 @@ The second is a security requirement. Certificates travel as `Encoded<T>`, and t
 Delegation:  issuer ‖ audience ‖ subject ‖ power:u8 ‖ citation_tag:u8 ‖ citation?    power is one of L R E A
 Revocation:  issuer ‖ revoke ‖ count:bijou32 ‖ entry*
   entry:     subject ‖ len:bijou32 ‖ W
-Certificate: kind:u8 ‖ signature:64 ‖ payload                                        kind is 0 (delegation) or 1 (revocation)
+Certificate: version:u8 ‖ kind:u8 ‖ signature:64 ‖ payload                           kind is 0x01 (delegation) or 0x02 (revocation)
 ```
 
 In `Delegation`, `citation_tag` is `0` with no following bytes when `citation` is absent, and `1` followed by 32 bytes when present. `power` is one of the four ASCII tags. Fixed-width layouts are canonical by construction, so `decode` only has to check length, tag membership, and that each `Id` is a valid point (an invalid one is reported by field name). `0x00` is not a valid `power`, so a zeroed buffer fails to decode.
 
-`Delegation` and `Revocation` encodings are the bytes that are signed and hashed, under each type's context. `Certificate` is the wire form of a signed statement: its kind, its signature, then its payload. The payload is last and runs to the end of the input, so it needs no length; a larger message that carries certificates frames each one. `Certificate::decode` checks the framing only and keeps the payload as received; `Certificate::verify` decodes the payload, checks that it is canonical, and checks the signature. Encodings need not be self-delimiting, so any composite must frame its variable-length fields, as `Revocation` does. The `serde` feature also derives `Serialize`/`Deserialize` on the public types, for a caller that wants a format of its own; that is not Keyline's wire format.
+`Delegation` and `Revocation` encodings are the bytes that are signed and hashed, after the prefix, version and kind. `Certificate` is the wire form of a signed statement: its `Signed<T>` frame, version, kind, signature, then payload. The payload is last and runs to the end of the input, so it needs no length; a larger message that carries certificates frames each one. `Certificate::decode` checks the framing only (`UnexpectedKind` and `UnsupportedVersion` come from the header, before the payload is read) and keeps the payload as received; `Certificate::verify` decodes the payload, checks that it is canonical, and checks the signature. Encodings need not be self-delimiting, so any composite must frame its variable-length fields, as `Revocation` does. The `serde` feature also derives `Serialize`/`Deserialize` on the public types, for a caller that wants a format of its own; that is not Keyline's wire format.
 
 `retain` is the only variable-length field, so it is the only place where canonicality is not free. `decode` enforces it with four rules:
 
@@ -399,21 +426,22 @@ In `Delegation`, `citation_tag` is `0` with no following bytes when `citation` i
 
 Offsets are computed with checked arithmetic, because a declared length near `u32::MAX` overflows `usize` on 32-bit targets, and a count larger than the remaining input could hold is rejected before the loop. Values below 252 take one byte, so an empty `retain` costs one byte and typical watermark lengths one each.
 
-This is the first step of Keyhive's bespoke codec: hand-written, canonical `Encode` / `Decode` impls in `keyhive_codec`'s traits, with bijou varints for variable-length integers. Later steps may replace the hand-written impls (for example with derive macros in `keyhive_codec`); if the bytes change, every digest changes and the domain contexts move to the next protocol version. `Encoded<T>`, `Signed<T>`, `Verified<T>`, and the `Keyline` trait do not change. Known-answer tests pin one delegation, one revocation and one set digest, so any change to the bytes is deliberate.
+This is the first step of Keyhive's bespoke codec: hand-written, canonical `Encode` / `Decode` impls in `keyhive_codec`'s traits, with bijou varints for variable-length integers. Later steps may replace the hand-written impls (for example with derive macros in `keyhive_codec`); if the bytes change, every digest changes and the type's `VERSION` moves on. `Encoded<T>`, `Signed<T>`, `Verified<T>`, and the `Keyline` trait do not change. Known-answer tests pin one delegation, one revocation and one set digest, so any change to the bytes is deliberate.
 
 ## Crates
 
 ```
 keyhive_codec        Encode, Decode, Encoded<T>, DecodeError. Depends on thiserror; serde optional.
       ▲
-keyhive_crypto       Digest<T>, Digest::of(&Encoded<T>), Domain. Its serde-based Signed<T> is untouched.
+keyhive_crypto       Id, Digest<T>, Digest::of(&Encoded<T>), signable (Kind, Kinded, Signable),
+                     verified (Signed/Verified over Encoded). Its serde-based Signed<T> remains.
       ▲
-keyline              Id, Power, Delegation, Revocation, Certificate, Signed/Verified over Encoded,
-                     the Keyline trait, the conformance suite.
+keyline              Id, Power, Delegation, Revocation, Certificate, the Keyline trait,
+                     the conformance suite.
       ▲
 keyline_memory       MemoryKeyline, the reference backend, against keyline's public API.
       ▲
-keyhive_core         (planned) consumes keyline and a backend; never sees raw bytes.
+keyhive_core         consumes keyline and a backend; never sees raw bytes.
 ```
 
 `keyhive_codec` holds only the traits and `Encoded<T>` because the dependency direction is only right if it sits at the bottom: `beekem` will implement the same traits when it migrates, and `beekem → keyline` would be wrong. It contains no BLAKE3; hashing an `Encoded<T>` is `keyhive_crypto`'s job.
@@ -424,12 +452,10 @@ keyhive_core         (planned) consumes keyline and a backend; never sees raw by
 keyline/
   src/
     lib.rs           //! model summary, naming convention, links to design/keyline/
-    id.rs            Id, InvalidId
     power.rs         Power
-    delegation.rs    Delegation, its encoding and domain context
-    revocation.rs    Revocation, RevocationId, its encoding and domain context
+    delegation.rs    Delegation, its encoding and kind
+    revocation.rs    Revocation, RevocationId, its encoding and kind
     certificate.rs   Certificate, VerifiedCertificate, CertificateId
-    signed.rs        Signed<T>, Verified<T>
     contract.rs      the Keyline trait, CertificateSet, set_digest
     test_utils.rs    Statement, deterministic ids, unsigned and signed fixtures, fuzz helpers
     test_utils/
@@ -439,20 +465,22 @@ keyline/
       conformance/oracle.rs           shared oracle types
       conformance/oracle/naive.rs     value-form oracle
       conformance/oracle/threshold.rs threshold-form oracle
-      conformance/scenarios.rs        named cases, generic over K: Keyline
+      conformance/scenarios.rs        named cases, generic over C: Backend
   tests/
-    invariants.rs    crate-wide invariants (distinct domain contexts)
+    invariants.rs    crate-wide invariants (distinct kinds)
+    signing.rs       Signed/Verified with keyline payloads: signer paths, frame, forgeries
 
 keyline_memory/
   src/
-    lib.rs           MemoryKeyline: storage, stratified evaluator, Keyline impl, its conformance run
+    lib.rs           MemoryKeyline: State behind an RwLock, the Keyline impl, its conformance run
+    state.rs         State: storage, stratified evaluator, evaluation cache
     collections.rs   (private) Map/Set aliases: HashMap with std, BTreeMap without
   benches/
     bench_evaluate.rs
 ```
 
-- `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`. `keyline`, `keyline_memory`, `keyhive_codec` and `keyhive_crypto` build for `wasm32-unknown-unknown` with `--no-default-features` (checked by `ci-no-std`). Targets without atomic compare-and-swap (e.g. `thumbv6m-none-eabi`) fail in `tracing-core`. `keyline` uses three items from `keyhive_crypto`: `Digest<T>`, `Domain`, and `Verifiable`. Moving them down to `keyhive_codec`, or to a crate beneath it, would be the cleaner layering, for the same reason that put `Encode`/`Decode` at the bottom.
-- `keyline` depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Digest`, `Domain`, `Verifiable`, the signer traits), `ed25519-dalek` (`VerifyingKey`, `Signature`), `future_form` (the `Sendable`/`Local` form of an async signer), `bijoux` (bijou32), `tracing`, and `thiserror` 2 (`no_std`-capable; pinned locally until the workspace moves off 1). Optional: `serde`, `arbitrary`, and, for the test features, `bolero` and `sha2`. `keyline_memory` depends on `keyline`, `keyhive_codec`, `keyhive_crypto` and `tracing`.
+- `#![no_std]` + `extern crate alloc`; `#![forbid(unsafe_code)]`. `keyline`, `keyline_memory`, `keyhive_codec` and `keyhive_crypto` build for `wasm32-unknown-unknown` with `--no-default-features` (checked by `ci-no-std`). Targets without atomic compare-and-swap (e.g. `thumbv6m-none-eabi`) fail in `tracing-core`. `keyline` uses `keyhive_crypto`'s `Id`, `Digest<T>`, `signable`, `verified`, and `Verifiable`. Moving them down to `keyhive_codec`, or to a crate beneath it, would be the cleaner layering, for the same reason that put `Encode`/`Decode` at the bottom.
+- `keyline` depends on `keyhive_codec` (traits, `Encoded`), `keyhive_crypto` (`Id`, `Digest`, `Kinded`, `Signed`/`Verified`, `Verifiable`, the signer traits), `ed25519-dalek` (`VerifyingKey`, `Signature`), `future_form` (the `Sendable`/`Local` form of an async signer), `bijoux` (bijou32), `tracing`, and `thiserror` 2 (`no_std`-capable, without default features). Every version is set once, in the root `[workspace.dependencies]`. Optional: `serde`, `arbitrary`, and, for the test features, `bolero` and `sha2`. `keyline_memory` depends on `keyline`, `keyhive_codec`, `keyhive_crypto` and `tracing`.
 - `std` feature (default on): the `std` features of `tracing` and `thiserror`, and in `keyline_memory` `HashMap`/`HashSet` for the evaluator's maps (`BTreeMap`/`BTreeSet` without it).
 - `conformance` feature (`keyline`): the fixtures and the conformance scenarios, without `std`, plus `ed25519-dalek/hazmat` for the fixture that signs with a non-standard nonce. Enough for a backend to run every scenario in a `no_std` build.
 - `test_utils` feature: `conformance` plus the generator, the oracles, the `bolero` laws and property tests, and `serde` (so the serde round-trip tests run wherever the full suite does). Implies `arbitrary`, which implies `std` (`derive(Arbitrary)` expands to a `thread_local!`). Both features let `assume_verified` build a `VerifiedCertificate` without a signature check, so enable them only from dev-dependencies. `keyline_memory`'s `test_utils` turns on `keyline/test_utils`.
@@ -466,11 +494,14 @@ Instrumentation: `insert` logs each certificate at `debug` (kind, endpoints, whe
 
 ## Conformance Suite
 
-Every backend runs the same tests against `impl Keyline`. The suite is exported behind `test_utils` as plain functions generic over `K: Keyline + Default`, and one macro call writes a `#[test]` for each:
+Every backend runs the same tests against `impl Keyline<F>`. The suite is exported behind `test_utils` as plain functions generic over a `Backend`: the store type, the future form it is used at, and a `block_on` that drives its futures. Scenarios and laws talk to the store through a synchronous `Harness`, which also checks the version contract on every call: each answer reports the version the last insert returned (the suite runs nothing concurrently), and an insert that adds a certificate returns a greater version. `Polled<K, F>` is the `Backend` for a store whose futures are ready on their first poll, which needs no executor and runs without `std`; a backend that does real I/O implements `Backend` with its own executor. One macro call writes a `#[test]` for each scenario and law:
 
 ```rust
 mod conformance {
-    keyline::keyline_conformance!(my_crate::MyKeyline<()>);   // as keyline_memory does
+    use future_form::Local;
+    use keyline::test_utils::conformance::Polled;
+
+    keyline::keyline_conformance!(Polled<my_crate::MyKeyline<()>, Local>);   // as keyline_memory does, at both forms
 }
 ```
 
@@ -491,14 +522,19 @@ _Laws_ (`bolero`, over generated sets):
 
 - Oracle agreement: `members` over the pool and `is_live` for every delegation agree with `oracle::naive` (without revocations, and with) and with `oracle::threshold`.
 - Order independence: a uniformly shuffled order and the reversed order both give the same `digest`, the same levels over the pool, the same live set, and the same `members`.
-- Idempotence: re-inserting every certificate returns `false` and changes nothing.
+- Idempotence: re-inserting every certificate adds nothing and changes nothing.
 - Revocations only deny: for each revocation in a set, the set without it has levels `≥` everywhere and a live set `⊇`.
 - Revocation by a party is total: a revocation signed by its target's issuer or audience kills the target.
 - `retain` is inert: emptying every `retain` map changes no answer.
 - Digest identifies the set: permutation-invariant; dropping any non-duplicated certificate changes it.
 - Query consistency: `effective_power(s, s) = Some(Admin)` for every `s`; `members(s)` is `effective_power(s, ·)` minus `s`; `contains` holds for every inserted certificate and fails for one left out; `revocations_of(h)` is exactly the revocations in the set with `revoke = h`, whether or not `h` is present.
+- `positive_power` is stratum 1: it agrees with `oracle::naive`'s reach over the set without its revocations, and adding any certificate never lowers it.
+- Listings match the set: `certificates` lists exactly the set in id order, `get` finds every member and nothing else, `delegations_to(s, a)` is exactly the set's delegations from `s` to `a`, and `subjects` is exactly the set of delegation subjects.
+- The closure is sufficient: a store holding only `closure(s)` agrees with the full store on `members(s)`, `positive_power(s, ·)`, and the liveness of every delegation about `s`; dropping a certificate never grows a closure.
+- Batches equal singles: one batch, or two split anywhere, answer as one certificate at a time.
+- Interleaving is invisible: querying after every insert, then finishing, answers as building the set fresh. This is the law a cache that is not reset correctly fails.
 
-Every law builds its backend through a helper that checks each `insert` reports whether its certificate was new. A unit test checks that the macro lists every scenario and law. At `W = ()` a `retain` entry carries a subject but no watermark bytes, so `MemoryKeyline` re-runs both oracles, the inert-`retain` law, and digest identity with `W = Vec<u8>`.
+Every law builds its backend through a helper that checks each `insert` reports whether its certificate was new, and through the `Harness`, which checks versions. A unit test checks that the macro lists every scenario and law. At `W = ()` a `retain` entry carries a subject but no watermark bytes, so `MemoryKeyline` re-runs both oracles, the inert-`retain` law, and digest identity with `W = Vec<u8>`.
 
 _Scenarios._ Named cases derived from the [edge-cases] findings, the model document and the patterns, including:
 
@@ -516,26 +552,26 @@ _Scenarios._ Named cases derived from the [edge-cases] findings, the model docum
 - a covered edge conveys only what its issuer holds on the avoiding derivation (the `Mods` example), and two covered edges on each other's avoiding derivation cannot lift each other's level;
 - the gift-cert attack from the [evaluation notes](evaluation-notes.md#gift-cert-scenario): an unconsented delegation into an attacker's ladder, which removing the attacker takes out of the document, which a same-key re-add revives and a fresh key does not (though supplying the ladder again under any key regrounds the attacker through it), and which the victim severs by revoking it as audience;
 - a second valid signature over a certificate already present is the same certificate;
-- two revocations differing only in `retain` are two certificates with the same effect.
+- two revocations differing only in `retain` are two certificates with the same effect;
+- a document's closure holds every node that has had standing over it (a revoked member included), and nothing about unrelated subjects;
+- `delegations_to` names dead delegations as well as live ones.
 
-_Negative._ A revocation naming an unknown digest is new and changes no answer. A duplicate returns `false` from `insert`, and `revocations_of` reports what named it.
+_Negative._ A revocation naming an unknown digest is new and changes no answer. A duplicate adds nothing, and `revocations_of` reports what named it.
 
-## Integration Sketch
+## Integration
 
-Not implemented here; recorded so the crate's shape is checked against its one planned consumer.
+`keyhive_core` evaluates membership with Keyline; nothing else decides who may do what. The shape:
 
-- `keyhive_core` holds `Arc<RwLock<MemoryKeyline<W>>>` (or `Rc<RefCell<_>>` for `Local`) on `Keyhive`, with `W` the watermark type it picks.
-- `Group::members()`, `Document::members()`, `Membered::transitive_members()` become `keyline.members(id)` with ID conversion.
-- `add_member` builds a `Delegation` and calls `Verified::sign(&delegation, &active_signer).await?`, then `insert`s the result. The active signer is `keyhive_core`'s existing `AsyncSigner`, so WebCrypto keys work unchanged.
-- `revoke_member` builds one `Revocation` per delegation to revoke. Whether to also revoke everything the member issued (explicit removal) is a `keyhive_core` policy, per the model document's removal tiers.
-- Events for sync carry `Certificate<W>`; ingest is `verify` then `insert`.
-- BeeKEM membership is `members(doc).filter(|(_, a)| a >= Read)`. The coupling of revocation to key rotation remains an open design item in the model document.
-- `keyhive_core::Delegation`'s `proof`, `after_revocations`, and `after_content` fields have no counterpart, and `delegate: Agent` becomes `audience: Id`. This is a wire-format break, absorbed by the pending API break.
+- _The store._ `Keyhive` holds a `K: Keyline<F, RetentionWatermark = ContentHeads<T>>` together with the lock that serializes its writes, so that a fork shares both. Every membership read (`members`, transitive members, standing, `reachable_docs`) is a Keyline query, with identifiers converted at the boundary (`Identifier` and `keyhive_crypto::id::Id`).
+- _Creation._ `generate_group` and `generate_doc` sign the subject's root edges (`Admin` to each creator) with the fresh subject key, then discard it.
+- _Grants._ `add_member` checks the issuer's `effective_power` (refusing a delegation above it, `AddMemberError::Escalation`), signs a `Delegation` with the active signer (an `AsyncSigner`, so WebCrypto keys work), and inserts it.
+- _Revocation._ `revoke_member` revokes each `delegations_to(resource, member)`: every one if the issuer holds `Admin`, otherwise those it issued. Each revocation's `retain` holds the content heads of every held document the resource is or stands over, as the application last set them with `set_content_heads`; a document with none set is left out. A member with no delegation from the resource is refused (`NotADirectMember`): it reaches the resource through a group or document, which is what to revoke. With `retain_all_other_members`, the same batch re-issues from the revoker the delegations the removed member issued, at no more than the revoker's own power (_adoption_). A grant or adoption that would repeat a revoked delegation cites that revocation, and the latest revocation of each re-issue in turn.
+- _Sync._ Events carry `Certificate<ContentHeads<T>>`; ingest is `verify`, then `insert`.
+- _BeeKEM._ A document's readers are its Keyline members at `Read` or above whose prekeys this replica holds. Every local write reconciles each held document's tree with its readers under the insert lock: an add for each new reader whose prekeys this replica holds, a remove for each lost reader the tree holds, each citing the certificate it routes through. A CGKA operation is accepted only from a principal with the standing it needs. A replica knows a document from its authorized CGKA operations, and builds its tree only once invited; a relay stores the operations without one.
 
 ## Deferred
 
-- Whiteout: `retain` gives the revocation's issuer a place to record an answer, but deciding what a watermark _means_ is still a content-layer question. That includes the type `keyhive_core` picks for `W`, the policy for subjects the map does not name, and how to combine concurrent revocations of one delegation.
-- The `Relay`/BeeKEM rotation coupling: an integration question.
+- Whiteout: `keyhive_core` records content heads (`ContentHeads<T>`) in `retain`, but deciding what they _mean_ for the revoked key's content is a content-layer question. That includes the policy for documents the map does not name, and how to combine concurrent revocations of one delegation.
 - The bespoke codec.
 - Incremental evaluation and memoization: only once the conformance suite pins semantics.
 
