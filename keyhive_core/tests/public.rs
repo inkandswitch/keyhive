@@ -1,10 +1,13 @@
 //! The well-known `Public` principal as a member.
 
+use beekem::operation::CgkaOperation;
 use keyhive_core::{
-    access::Access::{Admin, Edit, Read, Relay},
     principal::public::Public,
     test_utils::{content_ref, TestContext, TestResult as Result},
 };
+use keyhive_crypto::share_key::ShareSecretKey;
+use keyline::power::Power::{Admin, Edit, Read, Relay};
+use rand::rngs::OsRng;
 use std::collections::BTreeMap;
 
 #[tokio::test]
@@ -16,12 +19,12 @@ async fn delegating_to_public_creates_a_public_delegation() -> Result<()> {
     for level in [Read, Edit, Admin] {
         let design_doc = ctx.doc(&alice, &format!("design_doc-{level:?}")).await?;
 
-        assert_eq!(alice.access_for_doc(public, design_doc).await, None);
-        alice.add_member(public, design_doc, level, &[]).await?;
+        assert_eq!(alice.access_for_doc(public, design_doc).await?, None);
+        alice.add_member(public, design_doc, level).await?;
 
-        assert_eq!(alice.access_for_doc(public, design_doc).await, Some(level));
+        assert_eq!(alice.access_for_doc(public, design_doc).await?, Some(level));
         assert_eq!(
-            ctx.named(alice.reachable_members(design_doc).await)
+            ctx.named(alice.reachable_members(design_doc).await?)
                 .get("public"),
             Some(&level),
             "the public delegation should add public as a member"
@@ -38,15 +41,15 @@ async fn a_public_delegation_raises_best_access_for_doc_and_not_access_for_doc()
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let public = Public.id();
 
-    alice.add_member(public, design_doc, Read, &[]).await?;
+    alice.add_member(public, design_doc, Read).await?;
 
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await,
+        alice.access_for_doc(bob.id(), design_doc).await?,
         None,
         "nobody delegated anything to bob"
     );
     assert_eq!(
-        alice.best_access_for_doc(bob.id(), design_doc).await,
+        alice.best_access_for_doc(bob.id(), design_doc).await?,
         Some(Read),
         "the document is public"
     );
@@ -62,16 +65,16 @@ async fn a_direct_delegation_and_a_public_delegation_take_the_higher() -> Result
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let public = Public.id();
 
-    alice.add_member(public, design_doc, Read, &[]).await?;
-    alice.add_member(bob.id(), design_doc, Admin, &[]).await?;
+    alice.add_member(public, design_doc, Read).await?;
+    alice.add_member(bob.id(), design_doc, Admin).await?;
 
     assert_eq!(
-        alice.best_access_for_doc(bob.id(), design_doc).await,
+        alice.best_access_for_doc(bob.id(), design_doc).await?,
         Some(Admin),
         "bob's own delegation is the better one"
     );
     assert_eq!(
-        alice.best_access_for_doc(carol.id(), design_doc).await,
+        alice.best_access_for_doc(carol.id(), design_doc).await?,
         Some(Read),
         "carol has only the public delegation"
     );
@@ -85,14 +88,14 @@ async fn a_public_reader_reads_what_a_member_wrote() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
+    alice.add_member(Public.id(), design_doc, Read).await?;
     alice.force_pcs_update(design_doc).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"announcement").await?;
 
     ctx.sync(&alice, &bob).await?;
 
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await,
+        alice.access_for_doc(bob.id(), design_doc).await?,
         None,
         "bob is not a member and never becomes one"
     );
@@ -131,7 +134,7 @@ async fn two_public_readers_meet_through_the_document() -> Result<()> {
     let carol = ctx.individual("carol").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
+    alice.add_member(Public.id(), design_doc, Read).await?;
     alice.force_pcs_update(design_doc).await?;
     ctx.sync(&alice, &bob).await?;
     ctx.sync(&alice, &carol).await?;
@@ -155,10 +158,8 @@ async fn another_member_does_not_displace_the_public_reader() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice
-        .add_member(server.id(), design_doc, Relay, &[])
-        .await?;
-    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
+    alice.add_member(server.id(), design_doc, Relay).await?;
+    alice.add_member(Public.id(), design_doc, Read).await?;
     alice.force_pcs_update(design_doc).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"relayed").await?;
 
@@ -184,12 +185,10 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
     // A document bob is a direct member of. The reachability assertion below
     // distinguishes "the public document is excluded" from "bob reaches nothing".
     let notes = ctx.doc(&alice, "notes").await?;
-    alice.add_member(bob.id(), notes, Read, &[]).await?;
+    alice.add_member(bob.id(), notes, Read).await?;
 
-    alice
-        .add_member(server.id(), design_doc, Relay, &[])
-        .await?;
-    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
+    alice.add_member(server.id(), design_doc, Relay).await?;
+    alice.add_member(Public.id(), design_doc, Read).await?;
     alice.force_pcs_update(design_doc).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"announcement").await?;
 
@@ -209,19 +208,19 @@ async fn a_public_document_is_reachable_as_public_and_not_as_yourself() -> Resul
 
     assert_eq!(pending, 0, "bob could apply everything the server relayed");
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await,
+        bob.access_for_doc(bob.id(), design_doc).await?,
         None,
         "asking about himself does not find the document"
     );
     ctx.sync(&alice, &bob).await?;
     assert_eq!(
-        ctx.named(bob.docs_reachable_by_agent(bob.id()).await),
+        ctx.named(bob.docs_reachable_by_agent(bob.id()).await?),
         BTreeMap::from([("notes".to_string(), Read)]),
         "the documents he reaches because of his personal access are notes and only \
         notes, so the public one is excluded rather than there being nothing to exclude it from"
     );
     assert_eq!(
-        bob.access_for_doc(Public.id(), design_doc).await,
+        bob.access_for_doc(Public.id(), design_doc).await?,
         Some(Read),
         "asking about public does"
     );
@@ -240,7 +239,7 @@ async fn a_public_editor_writes_by_rotating_the_public_leaf() -> Result<()> {
     let peer = ctx.individual("peer").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(Public.id(), design_doc, Edit, &[]).await?;
+    alice.add_member(Public.id(), design_doc, Edit).await?;
     ctx.sync_as_public(&alice, &peer).await?;
 
     let written = peer
@@ -254,7 +253,7 @@ async fn a_public_editor_writes_by_rotating_the_public_leaf() -> Result<()> {
 
     let rotated_leaf_is_public = matches!(
         written.update_op().as_ref().map(|op| op.payload()),
-        Some(beekem::operation::CgkaOperation::Update { new_path, .. })
+        Some(CgkaOperation::Update { new_path, .. })
             if new_path.leaf_id == beekem::id::MemberId::public()
     );
     assert!(
@@ -279,13 +278,13 @@ async fn the_public_leaf_keeps_its_well_known_key() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let peer = ctx.individual("peer").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(Public.id(), design_doc, Edit, &[]).await?;
+    alice.add_member(Public.id(), design_doc, Edit).await?;
     ctx.sync_as_public(&alice, &peer).await?;
 
     let written = peer
         .try_encrypt_content(design_doc, &content_ref(b"hello"), &vec![], b"hello")
         .await?;
-    let beekem::operation::CgkaOperation::Update {
+    let CgkaOperation::Update {
         id,
         new_path,
         predecessor_secrets,
@@ -302,15 +301,14 @@ async fn the_public_leaf_keeps_its_well_known_key() -> Result<()> {
     };
 
     // The same path, with the public leaf given a key only the sender holds.
-    let other_key =
-        keyhive_crypto::share_key::ShareSecretKey::generate(&mut rand::rngs::OsRng).share_key();
+    let other_key = ShareSecretKey::generate(&mut OsRng).share_key();
     let mut swapped = new_path.clone();
     swapped.leaf_pk = beekem::keys::NodeKey::ShareKey(other_key);
     swapped.removed_keys = vec![Public.share_key()];
 
     let result = alice
         .receive_cgka_op(
-            peer.try_sign(beekem::operation::CgkaOperation::Update {
+            peer.try_sign(CgkaOperation::Update {
                 id,
                 new_path: swapped,
                 predecessor_secrets,

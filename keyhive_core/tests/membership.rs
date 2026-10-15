@@ -1,10 +1,10 @@
 //! Adding and revoking members.
 
 use keyhive_core::{
-    access::Access::{Admin, Edit, Read},
     principal::document::id::DocumentId,
     test_utils::{AddMemberUpdateExt, Instance, TestContext, TestError, TestResult as Result},
 };
+use keyline::power::Power::{Admin, Edit, Read};
 use std::collections::BTreeSet;
 
 /// Write new content and report which of `cast` can read it.
@@ -78,15 +78,15 @@ async fn revoking_a_group_from_a_document_removes_only_its_members() -> Result<(
     let inner = ctx.group(&alice, "inner").await?;
     let outer = ctx.group(&alice, "outer").await?;
     for who in [&dave, &eve, &frank] {
-        alice.add_member(who.id(), inner, Read, &[]).await?;
+        alice.add_member(who.id(), inner, Read).await?;
     }
-    alice.add_member(carol.id(), outer, Read, &[]).await?;
-    alice.add_member(inner, outer, Read, &[]).await?;
+    alice.add_member(carol.id(), outer, Read).await?;
+    alice.add_member(inner, outer, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    alice.add_member(outer, design_doc, Read, &[]).await?;
-    alice.add_member(frank.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
+    alice.add_member(outer, design_doc, Read).await?;
+    alice.add_member(frank.id(), design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -140,15 +140,15 @@ async fn revoking_a_subgroup_removes_only_the_members_it_brought() -> Result<()>
     let inner = ctx.group(&alice, "inner").await?;
     let outer = ctx.group(&alice, "outer").await?;
     for who in [&dave, &eve, &frank] {
-        alice.add_member(who.id(), inner, Read, &[]).await?;
+        alice.add_member(who.id(), inner, Read).await?;
     }
-    alice.add_member(carol.id(), outer, Read, &[]).await?;
-    alice.add_member(inner, outer, Read, &[]).await?;
+    alice.add_member(carol.id(), outer, Read).await?;
+    alice.add_member(inner, outer, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    alice.add_member(outer, design_doc, Read, &[]).await?;
-    alice.add_member(frank.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
+    alice.add_member(outer, design_doc, Read).await?;
+    alice.add_member(frank.id(), design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -179,13 +179,13 @@ async fn a_change_in_a_group_that_holds_a_document_leaves_the_document_alone() -
     let cast = [&alice, &bob, &dave];
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
 
     let staff = ctx.group(&alice, "staff").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
-    alice.add_member(dave.id(), staff, Read, &[]).await?;
-    alice.add_member(design_doc, engineering, Read, &[]).await?;
-    alice.add_member(staff, engineering, Read, &[]).await?;
+    alice.add_member(dave.id(), staff, Read).await?;
+    alice.add_member(design_doc, engineering, Read).await?;
+    alice.add_member(staff, engineering, Read).await?;
 
     let before = readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?;
     assert_eq!(
@@ -217,7 +217,7 @@ async fn adding_a_member_to_a_group_reaches_the_documents_it_holds() -> Result<(
 
     let engineering = ctx.group(&alice, "engineering").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(engineering, design_doc, Read, &[]).await?;
+    alice.add_member(engineering, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -225,7 +225,7 @@ async fn adding_a_member_to_a_group_reaches_the_documents_it_holds() -> Result<(
         "bob is in nothing yet"
     );
 
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"after", &cast).await?,
@@ -249,11 +249,11 @@ async fn adding_a_member_deep_in_a_chain_reaches_the_document() -> Result<()> {
     let innermost = ctx.group(&alice, "innermost").await?;
     let middle = ctx.group(&alice, "middle").await?;
     let outermost = ctx.group(&alice, "outermost").await?;
-    alice.add_member(innermost, middle, Read, &[]).await?;
-    alice.add_member(middle, outermost, Read, &[]).await?;
+    alice.add_member(innermost, middle, Read).await?;
+    alice.add_member(middle, outermost, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(outermost, design_doc, Read, &[]).await?;
+    alice.add_member(outermost, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -261,7 +261,7 @@ async fn adding_a_member_deep_in_a_chain_reaches_the_document() -> Result<()> {
         "bob is in none of the three groups yet"
     );
 
-    alice.add_member(bob.id(), innermost, Read, &[]).await?;
+    alice.add_member(bob.id(), innermost, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"after", &cast).await?,
@@ -285,8 +285,8 @@ async fn adding_a_member_to_a_group_reaches_every_document_it_holds() -> Result<
     let engineering = ctx.group(&alice, "engineering").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let notes = ctx.doc(&alice, "notes").await?;
-    alice.add_member(engineering, design_doc, Read, &[]).await?;
-    alice.add_member(engineering, notes, Read, &[]).await?;
+    alice.add_member(engineering, design_doc, Read).await?;
+    alice.add_member(engineering, notes, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -294,7 +294,7 @@ async fn adding_a_member_to_a_group_reaches_every_document_it_holds() -> Result<
         "bob is in the group holding neither document yet"
     );
 
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"one", &cast).await?,
@@ -323,13 +323,13 @@ async fn a_member_with_a_second_route_survives_a_revocation() -> Result<()> {
     let readers = ctx.group(&alice, "readers").await?;
     let left = ctx.group(&alice, "left").await?;
     let right = ctx.group(&alice, "right").await?;
-    alice.add_member(bob.id(), readers, Read, &[]).await?;
-    let readers_in_left = alice.add_member(readers, left, Read, &[]).await?.summary();
-    alice.add_member(readers, right, Read, &[]).await?;
+    alice.add_member(bob.id(), readers, Read).await?;
+    let readers_in_left = alice.add_member(readers, left, Read).await?.summary();
+    alice.add_member(readers, right, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(left, design_doc, Read, &[]).await?;
-    alice.add_member(right, design_doc, Read, &[]).await?;
+    alice.add_member(left, design_doc, Read).await?;
+    alice.add_member(right, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -363,17 +363,17 @@ async fn revoking_one_route_leaves_the_other_document_alone() -> Result<()> {
     let cast = [&alice, &bob];
 
     let readers = ctx.group(&alice, "readers").await?;
-    alice.add_member(bob.id(), readers, Read, &[]).await?;
+    alice.add_member(bob.id(), readers, Read).await?;
 
     let left = ctx.group(&alice, "left").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(readers, left, Read, &[]).await?;
-    alice.add_member(left, design_doc, Read, &[]).await?;
+    alice.add_member(readers, left, Read).await?;
+    alice.add_member(left, design_doc, Read).await?;
 
     let right = ctx.group(&alice, "right").await?;
     let notes = ctx.doc(&alice, "notes").await?;
-    alice.add_member(readers, right, Read, &[]).await?;
-    alice.add_member(right, notes, Read, &[]).await?;
+    alice.add_member(readers, right, Read).await?;
+    alice.add_member(right, notes, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -406,12 +406,12 @@ async fn revoking_a_group_from_one_document_leaves_the_other() -> Result<()> {
     let cast = [&alice, &bob];
 
     let engineering = ctx.group(&alice, "engineering").await?;
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let notes = ctx.doc(&alice, "notes").await?;
-    alice.add_member(engineering, design_doc, Read, &[]).await?;
-    alice.add_member(engineering, notes, Read, &[]).await?;
+    alice.add_member(engineering, design_doc, Read).await?;
+    alice.add_member(engineering, notes, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -447,15 +447,15 @@ async fn a_direct_membership_survives_a_revocation_further_up() -> Result<()> {
 
     let readers = ctx.group(&alice, "readers").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
-    alice.add_member(bob.id(), readers, Read, &[]).await?;
+    alice.add_member(bob.id(), readers, Read).await?;
     let readers_in_engineering = alice
-        .add_member(readers, engineering, Read, &[])
+        .add_member(readers, engineering, Read)
         .await?
         .summary();
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(engineering, design_doc, Read, &[]).await?;
-    alice.add_member(readers, design_doc, Read, &[]).await?;
+    alice.add_member(engineering, design_doc, Read).await?;
+    alice.add_member(readers, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -492,12 +492,12 @@ async fn revoking_a_link_removes_everyone_below_it() -> Result<()> {
     let innermost = ctx.group(&alice, "innermost").await?;
     let middle = ctx.group(&alice, "middle").await?;
     let outermost = ctx.group(&alice, "outermost").await?;
-    alice.add_member(bob.id(), innermost, Read, &[]).await?;
-    alice.add_member(innermost, middle, Read, &[]).await?;
-    alice.add_member(middle, outermost, Read, &[]).await?;
+    alice.add_member(bob.id(), innermost, Read).await?;
+    alice.add_member(innermost, middle, Read).await?;
+    alice.add_member(middle, outermost, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(outermost, design_doc, Read, &[]).await?;
+    alice.add_member(outermost, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -528,11 +528,11 @@ async fn a_cycle_does_not_stop_an_addition_reaching_the_document() -> Result<()>
 
     let first = ctx.group(&alice, "first").await?;
     let second = ctx.group(&alice, "second").await?;
-    alice.add_member(second, first, Read, &[]).await?;
-    alice.add_member(first, second, Read, &[]).await?;
+    alice.add_member(second, first, Read).await?;
+    alice.add_member(first, second, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(first, design_doc, Read, &[]).await?;
+    alice.add_member(first, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -540,7 +540,7 @@ async fn a_cycle_does_not_stop_an_addition_reaching_the_document() -> Result<()>
         "bob is in neither half of the cycle yet"
     );
 
-    alice.add_member(bob.id(), second, Read, &[]).await?;
+    alice.add_member(bob.id(), second, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"after", &cast).await?,
@@ -564,12 +564,12 @@ async fn revoking_a_link_in_a_cycle_removes_access() -> Result<()> {
 
     let first = ctx.group(&alice, "first").await?;
     let second = ctx.group(&alice, "second").await?;
-    alice.add_member(second, first, Read, &[]).await?;
-    alice.add_member(first, second, Read, &[]).await?;
-    alice.add_member(bob.id(), second, Read, &[]).await?;
+    alice.add_member(second, first, Read).await?;
+    alice.add_member(first, second, Read).await?;
+    alice.add_member(bob.id(), second, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(first, design_doc, Read, &[]).await?;
+    alice.add_member(first, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -601,13 +601,13 @@ async fn revoking_a_link_in_a_longer_cycle_removes_access() -> Result<()> {
     let first = ctx.group(&alice, "first").await?;
     let second = ctx.group(&alice, "second").await?;
     let third = ctx.group(&alice, "third").await?;
-    alice.add_member(second, first, Read, &[]).await?;
-    alice.add_member(third, second, Read, &[]).await?;
-    alice.add_member(first, third, Read, &[]).await?;
-    alice.add_member(bob.id(), third, Read, &[]).await?;
+    alice.add_member(second, first, Read).await?;
+    alice.add_member(third, second, Read).await?;
+    alice.add_member(first, third, Read).await?;
+    alice.add_member(bob.id(), third, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(first, design_doc, Read, &[]).await?;
+    alice.add_member(first, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -637,13 +637,13 @@ async fn breaking_a_cycle_from_both_sides_terminates() -> Result<()> {
     let first = ctx.group(&alice, "first").await?;
     let second = ctx.group(&alice, "second").await?;
     let third = ctx.group(&alice, "third").await?;
-    alice.add_member(second, first, Read, &[]).await?;
-    alice.add_member(third, second, Read, &[]).await?;
-    alice.add_member(first, third, Read, &[]).await?;
-    alice.add_member(bob.id(), third, Read, &[]).await?;
+    alice.add_member(second, first, Read).await?;
+    alice.add_member(third, second, Read).await?;
+    alice.add_member(first, third, Read).await?;
+    alice.add_member(bob.id(), third, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(first, design_doc, Read, &[]).await?;
+    alice.add_member(first, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -676,16 +676,13 @@ async fn revoking_one_of_two_cyclic_groups_keeps_the_other_route() -> Result<()>
 
     let first = ctx.group(&alice, "first").await?;
     let second = ctx.group(&alice, "second").await?;
-    alice.add_member(second, first, Read, &[]).await?;
-    alice.add_member(first, second, Read, &[]).await?;
-    alice.add_member(bob.id(), first, Read, &[]).await?;
+    alice.add_member(second, first, Read).await?;
+    alice.add_member(first, second, Read).await?;
+    alice.add_member(bob.id(), first, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    let first_in_doc = alice
-        .add_member(first, design_doc, Read, &[])
-        .await?
-        .summary();
-    alice.add_member(second, design_doc, Read, &[]).await?;
+    let first_in_doc = alice.add_member(first, design_doc, Read).await?.summary();
+    alice.add_member(second, design_doc, Read).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -719,13 +716,11 @@ async fn revoking_a_member_keeps_the_members_they_admitted() -> Result<()> {
 
     let engineering = ctx.group(&alice, "engineering").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(engineering, design_doc, Read, &[]).await?;
-    alice
-        .add_member(carol.id(), engineering, Admin, &[])
-        .await?;
+    alice.add_member(engineering, design_doc, Read).await?;
+    alice.add_member(carol.id(), engineering, Admin).await?;
     ctx.sync_all_unsent().await?;
     // Dan is in the group because carol put him there.
-    carol.add_member(dan.id(), engineering, Read, &[]).await?;
+    carol.add_member(dan.id(), engineering, Read).await?;
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
@@ -752,10 +747,8 @@ async fn a_cascading_revocation_removes_the_member_it_names() -> Result<()> {
 
     let engineering = ctx.group(&alice, "engineering").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(engineering, design_doc, Read, &[]).await?;
-    alice
-        .add_member(carol.id(), engineering, Admin, &[])
-        .await?;
+    alice.add_member(engineering, design_doc, Read).await?;
+    alice.add_member(carol.id(), engineering, Admin).await?;
 
     assert_eq!(
         readers_after_writing(&mut ctx, &alice, design_doc, b"before", &cast).await?,
@@ -765,7 +758,7 @@ async fn a_cascading_revocation_removes_the_member_it_names() -> Result<()> {
     alice.revoke_member(carol.id(), false, engineering).await?;
 
     assert_eq!(
-        ctx.named(alice.reachable_members(engineering).await)
+        ctx.named(alice.reachable_members(engineering).await?)
             .get("carol"),
         None,
         "carol is out of the group"
@@ -779,7 +772,6 @@ async fn a_cascading_revocation_removes_the_member_it_names() -> Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "a cascading revocation keeps members admitted by the one it removes"]
 async fn a_cascading_revocation_removes_the_members_they_admitted() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
@@ -789,12 +781,10 @@ async fn a_cascading_revocation_removes_the_members_they_admitted() -> Result<()
 
     let engineering = ctx.group(&alice, "engineering").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(engineering, design_doc, Read, &[]).await?;
-    alice
-        .add_member(carol.id(), engineering, Admin, &[])
-        .await?;
+    alice.add_member(engineering, design_doc, Read).await?;
+    alice.add_member(carol.id(), engineering, Admin).await?;
     ctx.sync_all_unsent().await?;
-    carol.add_member(dan.id(), engineering, Read, &[]).await?;
+    carol.add_member(dan.id(), engineering, Read).await?;
     ctx.sync_all_unsent().await?;
 
     alice.revoke_member(carol.id(), false, engineering).await?;
@@ -815,8 +805,8 @@ async fn a_revoked_member_is_listed_with_what_they_lost() -> Result<()> {
     let carol = ctx.individual("carol").await?;
 
     let engineering = ctx.group(&alice, "engineering").await?;
-    alice.add_member(bob.id(), engineering, Edit, &[]).await?;
-    alice.add_member(carol.id(), engineering, Read, &[]).await?;
+    alice.add_member(bob.id(), engineering, Edit).await?;
+    alice.add_member(carol.id(), engineering, Read).await?;
 
     assert!(
         ctx.named(ctx.revoked_members_of(&alice, engineering).await?)
@@ -838,7 +828,7 @@ async fn a_revoked_member_is_listed_with_what_they_lost() -> Result<()> {
         "and carol, who is still a member, is not listed"
     );
     assert_eq!(
-        ctx.named(alice.reachable_members(engineering).await)
+        ctx.named(alice.reachable_members(engineering).await?)
             .get("bob"),
         None,
         "the two lists do not overlap"
@@ -853,7 +843,7 @@ async fn a_member_who_was_revoked_and_admitted_again_is_not_listed() -> Result<(
     let bob = ctx.individual("bob").await?;
 
     let engineering = ctx.group(&alice, "engineering").await?;
-    alice.add_member(bob.id(), engineering, Edit, &[]).await?;
+    alice.add_member(bob.id(), engineering, Edit).await?;
     alice.revoke_member(bob.id(), true, engineering).await?;
     assert_eq!(
         ctx.named(ctx.revoked_members_of(&alice, engineering).await?)
@@ -861,7 +851,7 @@ async fn a_member_who_was_revoked_and_admitted_again_is_not_listed() -> Result<(
         Some(&Edit)
     );
 
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
 
     assert_eq!(
         ctx.named(ctx.revoked_members_of(&alice, engineering).await?)
@@ -870,7 +860,7 @@ async fn a_member_who_was_revoked_and_admitted_again_is_not_listed() -> Result<(
         "he is a member again, so he is not a revoked member"
     );
     assert_eq!(
-        ctx.named(alice.reachable_members(engineering).await)
+        ctx.named(alice.reachable_members(engineering).await?)
             .get("bob"),
         Some(&Read),
         "at the level he was admitted at the second time"
@@ -886,8 +876,8 @@ async fn a_revoked_member_is_listed_at_the_best_level_they_held() -> Result<()> 
 
     // Two delegations to the same person, at different levels.
     let engineering = ctx.group(&alice, "engineering").await?;
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
-    alice.add_member(bob.id(), engineering, Admin, &[]).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
+    alice.add_member(bob.id(), engineering, Admin).await?;
 
     alice.revoke_member(bob.id(), true, engineering).await?;
 
@@ -907,7 +897,7 @@ async fn a_revoked_member_of_a_document_is_listed_too() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Edit, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Edit).await?;
     alice.revoke_member(bob.id(), true, design_doc).await?;
 
     assert_eq!(
@@ -931,17 +921,17 @@ async fn revoking_a_subgroup_takes_its_members_out_of_the_key_group() -> Result<
 
     let inner = ctx.group(&alice, "inner").await?;
     for who in [&dave, &eve, &frank] {
-        alice.add_member(who.id(), inner, Read, &[]).await?;
+        alice.add_member(who.id(), inner, Read).await?;
     }
     let outer = ctx.group(&alice, "outer").await?;
-    alice.add_member(carol.id(), outer, Read, &[]).await?;
-    alice.add_member(inner, outer, Read, &[]).await?;
+    alice.add_member(carol.id(), outer, Read).await?;
+    alice.add_member(inner, outer, Read).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    alice.add_member(outer, design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
+    alice.add_member(outer, design_doc, Read).await?;
     // frank also holds the document directly, so he keeps his key either way.
-    alice.add_member(frank.id(), design_doc, Read, &[]).await?;
+    alice.add_member(frank.id(), design_doc, Read).await?;
 
     let before = alice
         .cgka_members_for(design_doc)
@@ -985,7 +975,7 @@ async fn a_document_has_no_key_for_itself() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
 
     let members = alice
         .cgka_members_for(design_doc)

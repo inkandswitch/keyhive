@@ -2,16 +2,16 @@
 
 use beekem::operation::CgkaOperation;
 use keyhive_core::{
-    access::Access::{self, Edit, Read},
     event::Event,
     principal::{document::id::DocumentId, individual::id::IndividualId},
     test_utils::{EventKind, Instance, TestContext, TestResult as Result},
 };
-use keyhive_crypto::{digest::Digest, signer::memory::MemorySigner};
+use keyhive_crypto::digest::Digest;
+use keyline::power::Power::{self, Edit, Read};
 use std::collections::BTreeSet;
 
 /// The event type the harness's keyhives emit.
-type Ev = Event<future_form::Sendable, MemorySigner>;
+type Ev = Event<[u8; 32]>;
 
 #[tokio::test]
 async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
@@ -31,17 +31,15 @@ async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
-    alice.add_member(engineering, design_doc, Edit, &[]).await?;
-    alice.add_member(carol.id(), engineering, Read, &[]).await?;
-    alice.add_member(bob.id(), design_doc, Edit, &[]).await?;
+    alice.add_member(engineering, design_doc, Edit).await?;
+    alice.add_member(carol.id(), engineering, Read).await?;
+    alice.add_member(bob.id(), design_doc, Edit).await?;
     for observer in &observers {
-        alice
-            .add_member(observer.id(), design_doc, Read, &[])
-            .await?;
+        alice.add_member(observer.id(), design_doc, Read).await?;
     }
     alice.revoke_member(bob.id(), true, design_doc).await?;
 
-    let mut answers: Vec<Vec<(String, Option<Access>)>> = vec![];
+    let mut answers: Vec<Vec<(String, Option<Power>)>> = vec![];
     for (order, observer) in observers.iter().enumerate() {
         let pending = ctx.sync_shuffled(&alice, observer, order as u64).await?;
         assert_eq!(pending, 0, "order {order} left events unapplied");
@@ -50,7 +48,7 @@ async fn delivery_order_does_not_change_the_authority_graph() -> Result<()> {
         for who in [&bob, &carol] {
             believes.push((
                 who.name().to_string(),
-                observer.access_for_doc(who, design_doc).await,
+                observer.access_for_doc(who, design_doc).await?,
             ));
         }
         answers.push(believes);
@@ -76,24 +74,24 @@ async fn a_revocation_inside_a_group_reaches_a_peer_of_the_parent() -> Result<()
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
 
-    alice.add_member(engineering, design_doc, Edit, &[]).await?;
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
-    alice.add_member(dave.id(), design_doc, Read, &[]).await?;
+    alice.add_member(engineering, design_doc, Edit).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
+    alice.add_member(dave.id(), design_doc, Read).await?;
     alice.revoke_member(bob.id(), true, engineering).await?;
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await,
+        alice.access_for_doc(bob.id(), design_doc).await?,
         None,
         "alice, who issued the revocation, has it right"
     );
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await,
+        bob.access_for_doc(bob.id(), design_doc).await?,
         None,
         "and so does bob, who was sent it"
     );
     assert_eq!(
-        dave.access_for_doc(bob.id(), design_doc).await,
+        dave.access_for_doc(bob.id(), design_doc).await?,
         None,
         "dave must agree: he holds every delegation that built this graph"
     );
@@ -108,8 +106,8 @@ async fn partial_delivery_leaves_events_pending_and_they_apply_later() -> Result
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
 
-    alice.add_member(engineering, design_doc, Edit, &[]).await?;
-    alice.add_member(bob.id(), engineering, Edit, &[]).await?;
+    alice.add_member(engineering, design_doc, Edit).await?;
+    alice.add_member(bob.id(), engineering, Edit).await?;
 
     // One event at a time.
     let pending_at_the_end = ctx.sync_in_batches(&alice, &bob, 1).await?;
@@ -120,7 +118,7 @@ async fn partial_delivery_leaves_events_pending_and_they_apply_later() -> Result
     );
     assert_eq!(bob.stats().await.pending_total(), 0);
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await,
+        bob.access_for_doc(bob.id(), design_doc).await?,
         Some(Edit),
         "bob converged on the same answer alice has"
     );
@@ -134,7 +132,7 @@ async fn the_resending_sync_methods_really_resend() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     let entitled = ctx.event_kinds_for(&alice, &bob).await?.len();
@@ -164,15 +162,11 @@ async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
     let alice = ctx.individual("alice").await?;
 
     // The server is a member of the stranger's document and is sent its key agreement
-    // without the delegations that would let it place them. Nothing later supplies those.
+    // without the certificates that authorize it. Nothing later supplies those.
     let stranger_doc = ctx.doc(&stranger, "stranger_doc").await?;
-    stranger
-        .add_member(server.id(), stranger_doc, Read, &[])
-        .await?;
+    stranger.add_member(server.id(), stranger_doc, Read).await?;
     let friend = ctx.individual("friend").await?;
-    stranger
-        .add_member(friend.id(), stranger_doc, Read, &[])
-        .await?;
+    stranger.add_member(friend.id(), stranger_doc, Read).await?;
     // Rotations rather than more members, so the backlog grows without adding identities
     // that alice would also have to tell the server about.
     for _ in 0..4 {
@@ -186,7 +180,7 @@ async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
 
     // Unrelated and entirely valid: alice's own document, which the server may have in full.
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(server.id(), design_doc, Read, &[]).await?;
+    alice.add_member(server.id(), design_doc, Read).await?;
     alice.force_pcs_update(design_doc).await?;
     let ct = ctx
         .encrypt(&alice, design_doc, b"written despite the backlog")
@@ -228,8 +222,8 @@ async fn redelivering_known_events_changes_nothing() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
 
-    alice.add_member(engineering, design_doc, Edit, &[]).await?;
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+    alice.add_member(engineering, design_doc, Edit).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"written once").await?;
     ctx.sync_all_unsent().await?;
 
@@ -253,7 +247,7 @@ async fn redelivering_known_events_changes_nothing() -> Result<()> {
     );
     assert_eq!(bob.stats().await.pending_total(), 0);
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await,
+        bob.access_for_doc(bob.id(), design_doc).await?,
         Some(Read),
         "the second delivery changed what bob believes"
     );
@@ -271,19 +265,21 @@ async fn withholding_key_agreement_leaves_a_member_who_cannot_read() -> Result<(
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"needs a key").await?;
 
     ctx.sync_without(&alice, &bob, EventKind::CgkaOperation)
         .await?;
 
     assert_eq!(
-        bob.access_for_doc(bob.id(), design_doc).await,
+        bob.access_for_doc(bob.id(), design_doc).await?,
         Some(Read),
         "the graph says bob is a reader"
     );
     assert!(
-        !bob.can_decrypt_content(design_doc, &ct).await?,
+        !bob.can_decrypt_content(design_doc, &ct)
+            .await
+            .unwrap_or(false),
         "but he was never given the key material"
     );
 
@@ -303,7 +299,7 @@ async fn a_member_without_the_key_tree_derives_no_pcs_key() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.encrypt(&alice, design_doc, b"needs a key").await?;
 
     ctx.sync_without(&alice, &bob, EventKind::CgkaOperation)
@@ -330,21 +326,21 @@ async fn stats_counts_key_agreement_only_once_the_operations_arrive() -> Result<
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.encrypt(&alice, design_doc, b"needs a key").await?;
 
     ctx.sync_without(&alice, &bob, EventKind::CgkaOperation)
         .await?;
 
     assert_eq!(
-        bob.stats().await.docs,
-        1,
-        "bob has the document itself, from the delegation"
-    );
-    assert_eq!(
         bob.stats().await.cgka_operations,
         0,
-        "but none of its key agreement operations"
+        "bob has none of the document's key agreement operations"
+    );
+    assert_eq!(
+        bob.stats().await.docs,
+        0,
+        "so he does not know it is a document: only its key agreement says so"
     );
 
     ctx.sync(&alice, &bob).await?;
@@ -353,6 +349,7 @@ async fn stats_counts_key_agreement_only_once_the_operations_arrive() -> Result<
         bob.stats().await.cgka_operations > 0,
         "which arrive with the rest of the events"
     );
+    assert_eq!(bob.stats().await.docs, 1, "and make the document known");
     Ok(())
 }
 
@@ -363,47 +360,45 @@ async fn all_agent_events_agrees_with_the_per_agent_walk() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(engineering, design_doc, Edit, &[]).await?;
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
+    alice.add_member(engineering, design_doc, Edit).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
     ctx.encrypt(&alice, design_doc, b"something to rotate for")
         .await?;
     ctx.sync_all_unsent().await?;
 
-    let all = alice.all_agent_events().await;
+    let all = alice.all_agent_events().await?;
     assert!(all.event_count() > 0, "there is something to send");
 
     for who in [&alice, &bob] {
         let who_id = who.id();
-        alice
-            .get_agent(who_id.into())
-            .await
-            .ok_or("alice knows this agent")?;
+        assert!(alice.has_individual(who_id).await, "alice knows this agent");
 
         let mut per_agent: BTreeSet<[u8; 32]> = BTreeSet::new();
-        for (digest, _) in alice.membership_ops_for_agent(who_id).await {
-            per_agent.insert(*digest.raw.as_bytes());
-        }
-        for key_ops in alice.reachable_prekey_ops_for_agent(who_id).await.values() {
+        for key_ops in alice.reachable_prekey_ops_for_agent(who_id).await?.values() {
             for key_op in key_ops.iter() {
                 let event: Ev = Event::from(key_op.as_ref().clone());
                 per_agent.insert(*Digest::hash(&event).raw.as_bytes());
             }
         }
-        for cgka_op in alice.cgka_ops_reachable_by_agent(who_id).await {
+        for cgka_op in alice.cgka_ops_reachable_by_agent(who_id).await? {
             let event: Ev = Event::from(cgka_op);
+            per_agent.insert(*Digest::hash(&event).raw.as_bytes());
+        }
+        for cert in alice.certificates_for_agent(who_id.into()).await? {
+            let event: Ev = Event::from(cert);
             per_agent.insert(*Digest::hash(&event).raw.as_bytes());
         }
 
         let single: BTreeSet<[u8; 32]> = alice
             .event_digests_for_agent(who_id)
-            .await
+            .await?
             .into_iter()
             .map(|d| *d.raw.as_bytes())
             .collect();
         assert_eq!(
             single,
             per_agent,
-            "event_digests_for_agent disagrees with the three walks it gathers for {}",
+            "event_digests_for_agent disagrees with the four walks it gathers for {}",
             who.name()
         );
 
@@ -446,11 +441,11 @@ async fn a_replica_sent_a_concurrent_removal_still_applies_later_ones() -> Resul
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     alice
-        .add_member(dave.id(), design_doc, Access::Admin, &[])
+        .add_member(dave.id(), design_doc, Power::Admin)
         .await?;
-    alice.add_member(erin.id(), design_doc, Read, &[]).await?;
+    alice.add_member(erin.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
-    dave.add_member(frank.id(), design_doc, Read, &[]).await?;
+    dave.add_member(frank.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     // Neither has seen the other's revocation of frank, so dave is sent a
@@ -478,7 +473,7 @@ async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_
     let bob = ctx.individual("bob").await?;
     let grace = ctx.individual("grace").await?;
     let design_doc = ctx.doc(&dave, "design_doc").await?;
-    dave.add_member(bob.id(), design_doc, Read, &[]).await?;
+    dave.add_member(bob.id(), design_doc, Read).await?;
     let dave_replica = ctx.new_keyhive_instance_for(&dave, "dave-laptop").await?;
     // The tree adds dave with one of his prekeys. The replica needs that
     // prekey's secret to merge the add.
@@ -486,7 +481,7 @@ async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_
     ctx.sync_all_unsent().await?;
 
     dave_replica
-        .add_member(grace.id(), design_doc, Read, &[])
+        .add_member(grace.id(), design_doc, Read)
         .await?;
     // The original writes, so its heads move past what the replica's add's dependencies
     // and that add reaches it as a concurrent change that is pending.

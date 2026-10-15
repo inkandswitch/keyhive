@@ -7,24 +7,28 @@ use beekem::{
     tree::PathChange,
 };
 use keyhive_core::{
-    access::Access::Read,
     crypto::digest::Digest,
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext, TestResult as Result},
 };
 use keyhive_crypto::{share_key::ShareKey, signed::Signed, verifiable::Verifiable};
+use keyline::power::Power::Read;
+use std::collections::HashSet;
 
 /// One of `who`'s own prekeys it would use to join `doc`.
 async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
-    let indie = who.get_individual(who.id()).await.unwrap();
-    let guard = indie.lock().await;
-    *guard.pick_prekey(doc)
+    who.get_individual(who.id())
+        .await
+        .expect("an instance holds its own prekeys")
+        .pick_prekey(doc)
+        .await
+        .expect("an individual has a prekey")
 }
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
 async fn cgka_heads(observer: &Instance, doc: DocumentId) -> Vec<Digest<Signed<CgkaOperation>>> {
-    let ops = observer.cgka_ops_for_doc(&doc).await.unwrap().unwrap();
-    let referenced: std::collections::HashSet<_> = ops
+    let ops = observer.cgka_ops_for_doc(&doc).await.unwrap();
+    let referenced: HashSet<_> = ops
         .iter()
         .flat_map(|op| op.payload.predecessors())
         .collect();
@@ -37,7 +41,6 @@ async fn cgka_heads(observer: &Instance, doc: DocumentId) -> Vec<Digest<Signed<C
 async fn an_update(who: &Instance, doc: DocumentId) -> (MemberId, Box<PathChange>) {
     who.cgka_ops_for_doc(&doc)
         .await
-        .unwrap()
         .unwrap()
         .iter()
         .find_map(|op| match op.payload() {
@@ -52,7 +55,7 @@ async fn doc_shared_with_bob(ctx: &mut TestContext) -> Result<(Instance, Instanc
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.encrypt(&alice, design_doc, b"warm up").await?;
     ctx.sync_all_unsent().await?;
     Ok((alice, bob, design_doc))
