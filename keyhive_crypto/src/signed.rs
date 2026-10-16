@@ -2,7 +2,10 @@
 
 #[cfg(feature = "std")]
 use super::digest::Digest;
-use super::verifiable::Verifiable;
+use super::{
+    id::{Id, InvalidId},
+    verifiable::Verifiable,
+};
 #[cfg(feature = "std")]
 use alloc::vec::Vec;
 use core::{
@@ -28,8 +31,8 @@ pub struct Signed<T: Serialize + Debug> {
     /// The data that was signed.
     pub payload: T,
 
-    /// The verifying key of the signer (for verifying the signature).
-    pub issuer: ed25519_dalek::VerifyingKey,
+    /// The signer. Deserializing checks that it is a valid [`Id`].
+    pub issuer: Id,
 
     /// The signature of the payload, which can be verified by the `verifying_key`.
     pub signature: ed25519_dalek::Signature,
@@ -44,7 +47,7 @@ impl<T: Serialize + Debug> Debug for Signed<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Signed")
             .field("payload", &self.payload)
-            .field("issuer", &format_args!("{}", HexKey(&self.issuer)))
+            .field("issuer", &format_args!("{:x}", self.issuer))
             .field("signature", &format_args!("{}", HexSig(&self.signature)))
             .finish()
     }
@@ -55,14 +58,6 @@ struct HexSig<'a>(&'a ed25519_dalek::Signature);
 impl fmt::Display for HexSig<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         crate::hex::bytes_as_hex(self.0.to_bytes().iter(), f)
-    }
-}
-
-struct HexKey<'a>(&'a ed25519_dalek::VerifyingKey);
-
-impl fmt::Display for HexKey<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        crate::hex::bytes_as_hex(self.0.as_bytes().iter(), f)
     }
 }
 
@@ -105,11 +100,7 @@ impl<T: Clone + Serialize + Debug> Clone for Signed<T> {
 
 impl<T: Serialize + Debug> Signed<T> {
     /// Create a new [`Signed`]. The digest hash will be computed eagerly.
-    pub fn new(
-        payload: T,
-        issuer: ed25519_dalek::VerifyingKey,
-        signature: ed25519_dalek::Signature,
-    ) -> Self {
+    pub fn new(payload: T, issuer: Id, signature: ed25519_dalek::Signature) -> Self {
         let signed = Self {
             payload,
             issuer,
@@ -138,8 +129,8 @@ impl<T: Serialize + Debug> Signed<T> {
         Digest::from(*bytes)
     }
 
-    /// Getter for the verifying key of the signer.
-    pub fn issuer(&self) -> &ed25519_dalek::VerifyingKey {
+    /// The signer.
+    pub fn issuer(&self) -> &Id {
         &self.issuer
     }
 
@@ -180,6 +171,7 @@ impl<T: Serialize + Debug> Signed<T> {
 
 #[cfg(all(feature = "std", any(test, feature = "arbitrary")))]
 mod arb {
+    use crate::id::Id;
     use core::fmt::Debug;
     use signature::SignerMut;
 
@@ -199,18 +191,14 @@ mod arb {
             let mut key = arb_signing_key(u)?;
             let encoded = bincode::serialize(&payload).unwrap();
             let signature = key.sign(&encoded);
-            Ok(super::Signed::new(payload, key.verifying_key(), signature))
+            Ok(super::Signed::new(payload, Id::from(&key), signature))
         }
     }
 }
 
 impl<T: Serialize + PartialOrd + Debug> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self
-            .verifying_key()
-            .as_bytes()
-            .partial_cmp(other.verifying_key().as_bytes())
-        {
+        match self.issuer.as_bytes().partial_cmp(other.issuer.as_bytes()) {
             Some(Ordering::Equal) => match self
                 .signature
                 .to_bytes()
@@ -258,7 +246,7 @@ impl<T: Dupe + Serialize + Debug> Dupe for Signed<T> {
 
 impl<T: Serialize + Debug> Verifiable for Signed<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.issuer
+        self.issuer.verifying_key()
     }
 }
 
@@ -302,6 +290,9 @@ pub enum SigningError {
     #[error("Signing failed: {0}")]
     SigningFailed(#[from] ed25519_dalek::SignatureError),
 
+    #[error("The signer's key cannot be an issuer: {0}")]
+    InvalidIssuer(#[from] InvalidId),
+
     #[error("Payload serialization failed: {0}")]
     SerializationFailed(#[from] bincode::Error),
 }
@@ -310,6 +301,7 @@ pub enum SigningError {
 #[derive(Debug)]
 pub enum SigningError {
     SigningFailed(ed25519_dalek::SignatureError),
+    InvalidIssuer(InvalidId),
 }
 
 #[cfg(not(feature = "std"))]
@@ -317,6 +309,7 @@ impl fmt::Display for SigningError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SigningFailed(e) => write!(f, "Signing failed: {e}"),
+            Self::InvalidIssuer(e) => write!(f, "The signer's key cannot be an issuer: {e}"),
         }
     }
 }
@@ -325,6 +318,13 @@ impl fmt::Display for SigningError {
 // `Display` includes it.
 #[cfg(not(feature = "std"))]
 impl core::error::Error for SigningError {}
+
+#[cfg(not(feature = "std"))]
+impl From<InvalidId> for SigningError {
+    fn from(e: InvalidId) -> Self {
+        Self::InvalidIssuer(e)
+    }
+}
 
 #[cfg(not(feature = "std"))]
 impl From<ed25519_dalek::SignatureError> for SigningError {

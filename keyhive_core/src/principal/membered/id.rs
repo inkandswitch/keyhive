@@ -1,6 +1,6 @@
-use crate::principal::{document::id::DocumentId, group::id::GroupId, identifier::Identifier};
+use crate::principal::{document::id::DocumentId, group::id::GroupId};
 use ed25519_dalek::VerifyingKey;
-use keyhive_crypto::verifiable::Verifiable;
+use keyhive_crypto::{id::Id, verifiable::Verifiable};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -37,7 +37,7 @@ impl Verifiable for MemberedId {
     }
 }
 
-impl From<MemberedId> for Identifier {
+impl From<MemberedId> for Id {
     fn from(membered_id: MemberedId) -> Self {
         match membered_id {
             MemberedId::GroupId(group_id) => group_id.into(),

@@ -26,6 +26,7 @@ use future_form::FutureForm;
 use futures::{lock::Mutex, prelude::*};
 use keyhive_crypto::{
     content::reference::ContentRef,
+    id::InvalidId,
     share_key::{ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
     signer::{async_signer, async_signer::AsyncSigner},
@@ -75,12 +76,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     ) -> Result<Self, SigningError> {
         let init_sk = ShareSecretKey::generate(csprng);
         let init_pk = init_sk.share_key();
-        let init_op = Arc::new(
+        let init_op: KeyOp = Arc::new(
             async_signer::try_sign_async::<F, _, _>(&signer, AddKeyOp { share_key: init_pk })
                 .await?,
         )
         .into();
 
+        // Signing checked that the signer's key is a valid id.
+        let id = IndividualId::from(*init_op.issuer());
         let mut prekey_state = PrekeyState::new(init_op);
         let prekey_pairs =
             (0..6).try_fold(BTreeMap::from_iter([(init_pk, init_sk)]), |mut acc, _| {
@@ -110,8 +113,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         prekey_state
             .extend(ops)
             .expect("newly generated local op should be valid");
-
-        let id = signer.verifying_key().into();
 
         Ok(Self {
             id,
@@ -296,20 +297,24 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         }
     }
 
-    /// Deserialize from storage.
-    pub fn from_archive(archive: &ActiveArchive, signer: S, listener: L) -> Self {
+    /// Deserialize from storage. Fails if the signer's key is not a valid id.
+    pub fn from_archive(
+        archive: &ActiveArchive,
+        signer: S,
+        listener: L,
+    ) -> Result<Self, InvalidId> {
         tracing::trace!(
             num_key_pairs = archive.key_pairs.len(),
             "loaded from archive"
         );
-        Self {
-            id: signer.verifying_key().into(),
+        Ok(Self {
+            id: IndividualId::try_from(signer.verifying_key())?,
             key_pairs: Arc::new(Mutex::new(archive.key_pairs.clone())),
             individual: Arc::new(Mutex::new(archive.individual.clone())),
             signer,
             listener,
             _phantom: PhantomData,
-        }
+        })
     }
 }
 

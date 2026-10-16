@@ -16,18 +16,18 @@ pub struct JsDelegation {
 impl JsDelegation {
     #[wasm_bindgen(getter)]
     pub fn issuer(&self) -> JsIdentifier {
-        JsIdentifier(self.issuer.into())
+        JsIdentifier(self.issuer)
     }
 
     /// Who receives the power: the delegation's audience.
     #[wasm_bindgen(getter)]
     pub fn delegate(&self) -> JsIdentifier {
-        JsIdentifier(self.delegation.audience.into())
+        JsIdentifier(self.delegation.audience)
     }
 
     #[wasm_bindgen(getter)]
     pub fn subject(&self) -> JsIdentifier {
-        JsIdentifier(self.delegation.subject.into())
+        JsIdentifier(self.delegation.subject)
     }
 
     #[wasm_bindgen(getter)]

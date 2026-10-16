@@ -45,9 +45,11 @@ impl JsPrincipal {
         JsIdentifier(self.inner.id())
     }
 
+    /// The whole identifier, as `Identifier.toString()` gives it: `0x` and 64
+    /// hex digits.
     #[wasm_bindgen(js_name = toString)]
     pub fn to_js_string(&self) -> String {
-        self.inner.id().to_string()
+        format!("{:#x}", self.inner.id())
     }
 
     #[wasm_bindgen(getter, js_name = isActive)]

@@ -21,7 +21,6 @@ use crate::{
             GenerateDocError,
         },
         group::{id::GroupId, Group, RevokeMemberError},
-        identifier::Identifier,
         individual::{
             id::IndividualId,
             op::{
@@ -55,7 +54,7 @@ use keyhive_codec::traits::{Encode, StreamDecode};
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    id::Id,
+    id::{Id, InvalidId},
     share_key::{ShareKey, ShareSecretKey},
     signable::Signable,
     signed::{Signed, SigningError, VerificationError},
@@ -275,7 +274,7 @@ where
     #[instrument(skip_all)]
     pub async fn generate_group(
         &self,
-        coparents: Vec<Identifier>,
+        coparents: Vec<Id>,
     ) -> Result<GroupId, GenerateGroupError<K::Error>> {
         let (group_id, roots) = self
             .found::<GenerateGroupError<K::Error>>(coparents)
@@ -291,14 +290,14 @@ where
         E: From<NotFound> + From<KeylineStorageError<K::Error>> + From<CertificateError>,
     >(
         &self,
-        coparents: Vec<Identifier>,
-    ) -> Result<(Identifier, Vec<VerifiedCertificate<ContentHeads<T>>>), E> {
+        coparents: Vec<Id>,
+    ) -> Result<(Id, Vec<VerifiedCertificate<ContentHeads<T>>>), E> {
         for id in &coparents {
             if !self.is_known(*id).await? {
                 return Err(NotFound::new(*id).into());
             }
         }
-        let creators = std::iter::once(Identifier::from(self.id())).chain(coparents);
+        let creators = std::iter::once(Id::from(self.id())).chain(coparents);
         let (roots, subject) = {
             let mut csprng = self.csprng.lock().await;
             EphemeralSigner::with_signer(&mut *csprng, |subject, signer| {
@@ -306,7 +305,7 @@ where
             })
         };
         Ok((
-            subject.into(),
+            subject,
             roots?
                 .into_iter()
                 .map(|root| VerifiedCertificate::Delegation(Arc::new(root)))
@@ -469,7 +468,7 @@ where
             docs.iter()
                 .map(|(id, d)| (*id, Some(d.dupe())))
                 .chain(unheld)
-                .filter_map(|(id, d)| Id::try_from(id).ok().map(|kl| (id, kl, d)))
+                .map(|(id, d)| (id, Id::from(id), d))
                 .collect()
         };
 
@@ -550,7 +549,7 @@ where
             .value
             .into_iter()
             .filter(|(_, power)| power.is_reader())
-            .map(|(id, _)| IndividualId(id.into()))
+            .map(|(id, _)| IndividualId(id))
             .collect();
         Ok((answer.version, readers))
     }
@@ -575,9 +574,7 @@ where
         };
         let mut retain = BTreeMap::new();
         for (doc_id, state) in documents {
-            let Ok(doc) = Id::try_from(doc_id) else {
-                continue;
-            };
+            let doc = Id::from(doc_id);
             if doc != subject && self.positive_power(doc, subject).await?.is_none() {
                 continue;
             }
@@ -597,9 +594,7 @@ where
         batch: &[VerifiedCertificate<ContentHeads<T>>],
         reader: IndividualId,
     ) -> Result<Option<CgkaAuthorization>, KeylineStorageError<K::Error>> {
-        let Ok(reader) = Id::try_from(Identifier::from(reader)) else {
-            return Ok(None);
-        };
+        let reader = Id::from(reader);
         for cert in batch {
             if let VerifiedCertificate::Delegation(d) = cert {
                 if self
@@ -621,9 +616,7 @@ where
         batch: &[VerifiedCertificate<ContentHeads<T>>],
         reader: IndividualId,
     ) -> Result<Option<CgkaAuthorization>, KeylineStorageError<K::Error>> {
-        let Ok(reader) = Id::try_from(Identifier::from(reader)) else {
-            return Ok(None);
-        };
+        let reader = Id::from(reader);
         for cert in batch {
             if let VerifiedCertificate::Revocation(r) = cert {
                 let Some((revoked_issuer, revoked)) =
@@ -747,7 +740,7 @@ where
     #[instrument(skip_all)]
     pub async fn generate_doc(
         &self,
-        coparents: Vec<Identifier>,
+        coparents: Vec<Id>,
         initial_content_heads: NonEmpty<T>,
     ) -> Result<DocumentId, GenerateDocError<K::Error>> {
         let (doc_id, roots) = self.found::<GenerateDocError<K::Error>>(coparents).await?;
@@ -791,7 +784,7 @@ where
     ) -> Result<(), GenerateDocError<K::Error>> {
         *fresh = self.insert_fresh(reconciled, roots).await?;
 
-        let doc_kl = Id::try_from(Identifier::from(doc_id)).map_err(CertificateError::from)?;
+        let doc_kl = Id::from(doc_id);
         let (signer, owner, owner_pk, owner_sks) = {
             let active = &self.active;
             let owner_pk = active.pick_prekey(doc_id).await;
@@ -932,7 +925,7 @@ where
     /// Returns an error if we have never heard of `to_add` or `resource`.
     pub async fn add_member(
         &self,
-        to_add: impl Into<Identifier>,
+        to_add: impl Into<Id>,
         resource: impl Into<MemberedId>,
         can: Power,
     ) -> Result<AddMemberUpdate, AddMemberError<K::Error>> {
@@ -946,8 +939,8 @@ where
             .written_document::<AddMemberError<K::Error>>(resource)
             .await?;
 
-        let issuer = Id::try_from(self.id()).map_err(CertificateError::from)?;
-        let subject = Id::try_from(Identifier::from(resource)).map_err(CertificateError::from)?;
+        let issuer = Id::from(self.id());
+        let subject = Id::from(resource);
         let held = self
             .keyline()
             .effective_power(subject, issuer)
@@ -959,11 +952,7 @@ where
             return Err(AddMemberError::Escalation { wanted: can, held });
         }
 
-        let certificate = Delegation::new(
-            Id::try_from(to_add).map_err(CertificateError::from)?,
-            subject,
-            can,
-        );
+        let certificate = Delegation::new(to_add, subject, can);
         let certificate = self.unrevoked(issuer, certificate).await?;
         let delegation = Arc::new(self.sign_certificate(&certificate).await?);
 
@@ -994,7 +983,7 @@ where
     #[instrument(skip_all)]
     pub async fn revoke_member(
         &self,
-        to_revoke: impl Into<Identifier>,
+        to_revoke: impl Into<Id>,
         retain_all_other_members: bool,
         resource: impl Into<MemberedId>,
     ) -> Result<RevokeMemberUpdate<T>, RevokeMemberError<K::Error>> {
@@ -1003,9 +992,9 @@ where
         let written = self
             .written_document::<RevokeMemberError<K::Error>>(resource)
             .await?;
-        let issuer = Id::try_from(self.id()).map_err(CertificateError::from)?;
-        let subject = Id::try_from(Identifier::from(resource)).map_err(CertificateError::from)?;
-        let audience = Id::try_from(to_revoke).map_err(CertificateError::from)?;
+        let issuer = Id::from(self.id());
+        let subject = Id::from(resource);
+        let audience = to_revoke;
 
         // An Admin's revocation reaches every route through the resource; a
         // lesser member's, only the delegations it issued itself.
@@ -1078,13 +1067,10 @@ where
 
     /// Whether this replica knows `id`: an individual, a document, or a Keyline
     /// subject (a group).
-    async fn is_known(&self, id: Identifier) -> Result<bool, KeylineStorageError<K::Error>> {
+    async fn is_known(&self, id: Id) -> Result<bool, KeylineStorageError<K::Error>> {
         if self.has_individual(IndividualId(id)).await || self.has_document(DocumentId(id)).await {
             return Ok(true);
         }
-        let Ok(id) = Id::try_from(id) else {
-            return Ok(false);
-        };
         Ok(self
             .keyline()
             .subjects()
@@ -1402,7 +1388,7 @@ where
     #[instrument(skip_all)]
     pub async fn docs_reachable_by_agent(
         &self,
-        who: impl Into<Identifier>,
+        who: impl Into<Id>,
     ) -> Result<BTreeMap<DocumentId, Power>, KeylineStorageError<K::Error>> {
         Ok(self
             .standing_of(who.into())
@@ -1421,7 +1407,7 @@ where
     #[instrument(skip_all)]
     pub async fn membered_reachable_by_agent(
         &self,
-        who: impl Into<Identifier>,
+        who: impl Into<Id>,
     ) -> Result<BTreeMap<MemberedId, Power>, KeylineStorageError<K::Error>> {
         self.standing_of(who.into()).await
     }
@@ -1433,8 +1419,8 @@ where
     pub async fn reachable_members(
         &self,
         membered: impl Into<MemberedId>,
-    ) -> Result<BTreeMap<Identifier, Power>, KeylineStorageError<K::Error>> {
-        self.members_of(Identifier::from(membered.into())).await
+    ) -> Result<BTreeMap<Id, Power>, KeylineStorageError<K::Error>> {
+        self.members_of(Id::from(membered.into())).await
     }
 
     /// The live delegations whose subject is `subject`: its direct members,
@@ -1443,13 +1429,11 @@ where
     #[instrument(skip_all)]
     pub async fn delegations_about(
         &self,
-        subject: impl Into<Identifier>,
+        subject: impl Into<Id>,
     ) -> Result<Vec<Arc<verified::Signed<Delegation>>>, KeylineStorageError<K::Error>> {
-        let Ok(subject) = Id::try_from(subject.into()) else {
-            return Ok(Vec::new()); // not a valid Keyline key, so no certificate names it
-        };
+        let subject = subject.into();
         let mut live = Vec::new();
-        for cert in self.closure(subject.into()).await? {
+        for cert in self.closure(subject).await? {
             let Certificate::Delegation(signed) = cert else {
                 continue;
             };
@@ -1479,18 +1463,16 @@ where
     pub async fn revoked_members(
         &self,
         membered: impl Into<MemberedId>,
-    ) -> Result<BTreeMap<Identifier, Power>, KeylineStorageError<K::Error>> {
-        let Ok(subject) = Id::try_from(Identifier::from(membered.into())) else {
-            return Ok(BTreeMap::new()); // not a valid Keyline key, so no certificate names it
-        };
+    ) -> Result<BTreeMap<Id, Power>, KeylineStorageError<K::Error>> {
+        let subject = Id::from(membered.into());
         let members = self
             .keyline()
             .members(subject)
             .await
             .map_err(KeylineStorageError::new)?
             .value;
-        let mut revoked: BTreeMap<Identifier, Power> = BTreeMap::new();
-        for cert in self.closure(subject.into()).await? {
+        let mut revoked: BTreeMap<Id, Power> = BTreeMap::new();
+        for cert in self.closure(subject).await? {
             let Certificate::Delegation(signed) = cert else {
                 continue;
             };
@@ -1505,7 +1487,7 @@ where
                 .map_err(KeylineStorageError::new)?
                 .value;
             if !revocations.is_empty() {
-                let best = revoked.entry(d.audience.into()).or_insert(d.power);
+                let best = revoked.entry(d.audience).or_insert(d.power);
                 *best = (*best).max(d.power);
             }
         }
@@ -1515,11 +1497,8 @@ where
     /// Keyline's members of `subject`, by identifier.
     pub(crate) async fn members_of(
         &self,
-        subject: Identifier,
-    ) -> Result<BTreeMap<Identifier, Power>, KeylineStorageError<K::Error>> {
-        let Ok(subject) = Id::try_from(subject) else {
-            return Ok(BTreeMap::new()); // not a valid Keyline key, so no certificate names it
-        };
+        subject: Id,
+    ) -> Result<BTreeMap<Id, Power>, KeylineStorageError<K::Error>> {
         Ok(self
             .keyline()
             .members(subject)
@@ -1527,7 +1506,6 @@ where
             .map_err(KeylineStorageError::new)?
             .value
             .into_iter()
-            .map(|(id, can)| (id.into(), can))
             .collect())
     }
 
@@ -1536,11 +1514,9 @@ where
     /// and a group otherwise.
     async fn standing_of(
         &self,
-        who: Identifier,
+        who: Id,
     ) -> Result<BTreeMap<MemberedId, Power>, KeylineStorageError<K::Error>> {
-        let Ok(audience) = Id::try_from(who) else {
-            return Ok(BTreeMap::new()); // not a valid Keyline key, so no certificate names it
-        };
+        let audience = who;
         let subjects = self
             .keyline()
             .subjects()
@@ -1558,7 +1534,7 @@ where
             else {
                 continue;
             };
-            let id = Identifier::from(subject);
+            let id = subject;
             let kind = if self.cgka_ops.lock().await.holds(DocumentId(id)) {
                 MemberedId::DocumentId(DocumentId(id))
             } else {
@@ -1583,7 +1559,7 @@ where
     #[instrument(skip_all)]
     pub async fn events_for_agent(
         &self,
-        who: impl Into<Identifier>,
+        who: impl Into<Id>,
     ) -> Result<HashMap<Digest<Event<T>>, Event<T>>, KeylineStorageError<K::Error>> {
         let who = who.into();
         let mut ops = HashMap::new();
@@ -1613,11 +1589,9 @@ where
     /// those it has only positive standing over, having been cut off.
     async fn standing_over(
         &self,
-        who: Identifier,
+        who: Id,
     ) -> Result<(Vec<Id>, Vec<Id>), KeylineStorageError<K::Error>> {
-        let Ok(audience) = Id::try_from(who) else {
-            return Ok((Vec::new(), Vec::new())); // not a valid Keyline key, so in no certificate
-        };
+        let audience = who;
         let (mut live, mut cut) = (Vec::new(), Vec::new());
         for subject in self.subjects().await? {
             let effective = self
@@ -1651,13 +1625,12 @@ where
     async fn subject_views(&self) -> Result<Vec<SubjectView<T>>, KeylineStorageError<K::Error>> {
         let mut views = Vec::new();
         for subject in self.subjects().await? {
-            let closure = self.closure(subject.into()).await?;
-            let live: BTreeSet<Identifier> =
-                self.members_of(subject.into()).await?.into_keys().collect();
+            let closure = self.closure(subject).await?;
+            let live: BTreeSet<Id> = self.members_of(subject).await?.into_keys().collect();
             let named: BTreeSet<Id> = closure.iter().flat_map(named_by).collect();
             let mut cut = Vec::new();
             for audience in named {
-                let id = Identifier::from(audience);
+                let id = audience;
                 if audience == subject
                     || live.contains(&id)
                     || self.positive_power(subject, audience).await?.is_none()
@@ -1670,7 +1643,7 @@ where
                 cut.push((id, explained));
             }
             views.push(SubjectView {
-                subject: subject.into(),
+                subject,
                 closure,
                 live,
                 cut,
@@ -1683,11 +1656,8 @@ where
     /// about it.
     async fn closure(
         &self,
-        subject: Identifier,
+        subject: Id,
     ) -> Result<Vec<Certificate<ContentHeads<T>>>, KeylineStorageError<K::Error>> {
-        let Ok(subject) = Id::try_from(subject) else {
-            return Ok(Vec::new());
-        };
         Ok(self
             .keyline()
             .closure(subject)
@@ -1702,32 +1672,32 @@ where
     /// nothing that happens after.
     pub async fn certificates_for_agent(
         &self,
-        who: Identifier,
+        who: Id,
     ) -> Result<Vec<Certificate<ContentHeads<T>>>, KeylineStorageError<K::Error>> {
         let mut certs = BTreeMap::new();
         let (live, cut) = self.standing_over(who).await?;
         for subject in live {
-            for cert in self.closure(subject.into()).await? {
+            for cert in self.closure(subject).await? {
                 certs.insert(cert.id(), cert);
             }
         }
-        if let Ok(audience) = Id::try_from(who) {
-            for subject in cut {
-                for cert in explanation(self.keyline(), subject, audience)
-                    .await
-                    .map_err(KeylineStorageError::new)?
-                {
-                    certs.insert(cert.id(), cert);
-                }
+        let audience = who;
+        for subject in cut {
+            for cert in explanation(self.keyline(), subject, audience)
+                .await
+                .map_err(KeylineStorageError::new)?
+            {
+                certs.insert(cert.id(), cert);
             }
         }
+
         Ok(certs.into_values().collect())
     }
 
     #[instrument(skip_all)]
     pub async fn static_events_for_agent(
         &self,
-        who: impl Into<Identifier>,
+        who: impl Into<Id>,
     ) -> Result<HashMap<Digest<StaticEvent<T>>, StaticEvent<T>>, KeylineStorageError<K::Error>>
     {
         Ok(self
@@ -1743,7 +1713,7 @@ where
     #[instrument(skip_all)]
     pub async fn cgka_ops_reachable_by_agent(
         &self,
-        who: impl Into<Identifier>,
+        who: impl Into<Id>,
     ) -> Result<Vec<Arc<Signed<CgkaOperation>>>, KeylineStorageError<K::Error>> {
         let standing = self.standing_of(who.into()).await?;
         let store = self.cgka_ops.lock().await;
@@ -1778,17 +1748,17 @@ where
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
-        who: impl Into<Identifier>,
+        who: impl Into<Id>,
     ) -> Result<KeyOps, KeylineStorageError<K::Error>> {
         let who = who.into();
-        let active_id: Identifier = { self.active.id().into() };
+        let active_id: Id = { self.active.id().into() };
         let mut owners = BTreeSet::from([active_id, who]);
         let (live, _) = self.standing_over(who).await?;
         for subject in live {
-            owners.extend(self.members_of(subject.into()).await?.into_keys());
+            owners.extend(self.members_of(subject).await?.into_keys());
         }
 
-        let mut map: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
+        let mut map: HashMap<Id, CaMap<KeyOp>> = HashMap::new();
         for id in owners {
             if let Some(state) = self.individual_state(IndividualId(id)).await {
                 map.insert(id, state.lock().await.prekey_ops().clone());
@@ -1812,9 +1782,9 @@ where
     }
 
     async fn prekey_ops_for_views(&self, views: &[SubjectView<T>]) -> AllReachablePrekeyOps {
-        let active_id: Identifier = { self.active.id().into() };
+        let active_id: Id = { self.active.id().into() };
 
-        let mut agents: BTreeSet<Identifier> = self
+        let mut agents: BTreeSet<Id> = self
             .individuals
             .lock()
             .await
@@ -1826,14 +1796,14 @@ where
             agents.extend(view.live.iter().copied());
         }
 
-        let mut key_ops_cache: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
+        let mut key_ops_cache: HashMap<Id, CaMap<KeyOp>> = HashMap::new();
         for id in &agents {
             if let Some(state) = self.individual_state(IndividualId(*id)).await {
                 key_ops_cache.insert(*id, state.lock().await.prekey_ops().clone());
             }
         }
 
-        let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
+        let mut index: HashMap<Id, HashSet<Id>> = HashMap::new();
         for id in &agents {
             index.entry(*id).or_default().extend([active_id, *id]);
         }
@@ -1861,8 +1831,8 @@ where
     pub async fn cgka_ops_for_all_agents(
         &self,
     ) -> Result<AllCgkaOps, KeylineStorageError<K::Error>> {
-        let mut ops: HashMap<Identifier, Vec<Arc<Signed<CgkaOperation>>>> = HashMap::new();
-        let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
+        let mut ops: HashMap<Id, Vec<Arc<Signed<CgkaOperation>>>> = HashMap::new();
+        let mut index: HashMap<Id, HashSet<Id>> = HashMap::new();
 
         let doc_ids: Vec<DocumentId> = { self.cgka_ops.lock().await.documents().collect() };
         for doc_id in doc_ids {
@@ -1875,7 +1845,7 @@ where
             }
             let members = self.members_of(doc_id.into()).await?;
 
-            let source_id: Identifier = doc_id.into();
+            let source_id: Id = doc_id.into();
             for agent_id in members.keys() {
                 index.entry(*agent_id).or_default().insert(source_id);
             }
@@ -1891,7 +1861,7 @@ where
     /// which it needs to verify those revocations.
     pub async fn event_digests_for_agent(
         &self,
-        agent: impl Into<Identifier>,
+        agent: impl Into<Id>,
     ) -> Result<HashSet<EventDigest<T>>, KeylineStorageError<K::Error>> {
         let who = agent.into();
         let mut digests = HashSet::new();
@@ -1952,8 +1922,8 @@ where
         // stands over, itself included, and for those it was cut off from,
         // what explains that.
         let mut membership_sources = HashMap::new();
-        let mut membership_index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
-        let mut explained: HashMap<Identifier, HashSet<EventDigest<T>>> = HashMap::new();
+        let mut membership_index: HashMap<Id, HashSet<Id>> = HashMap::new();
+        let mut explained: HashMap<Id, HashSet<EventDigest<T>>> = HashMap::new();
         for view in views {
             for (who, certs) in view.cut {
                 let digests = explained.entry(who).or_default();
@@ -1998,7 +1968,7 @@ where
     #[instrument(skip_all)]
     /// Any identifier, as this replica knows it: a transient handle, built on
     /// demand.
-    pub fn get_principal(&self, id: Identifier) -> Principal<Self> {
+    pub fn get_principal(&self, id: Id) -> Principal<Self> {
         Principal::new(self.clone(), id)
     }
 
@@ -2059,15 +2029,13 @@ where
     /// neither an individual nor a document here.
     #[instrument(skip_all)]
     pub async fn has_group(&self, id: GroupId) -> Result<bool, KeylineStorageError<K::Error>> {
-        let ident = Identifier::from(id);
+        let ident = Id::from(id);
         if self.has_individual(IndividualId(ident)).await
             || self.has_document(DocumentId(ident)).await
         {
             return Ok(false);
         }
-        let Ok(subject) = Id::try_from(ident) else {
-            return Ok(false);
-        };
+        let subject = ident;
         Ok(self.subjects().await?.contains(&subject))
     }
 
@@ -2079,7 +2047,7 @@ where
 
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
-        let id = Identifier(*key_op.issuer());
+        let id = *key_op.issuer();
         // Prekeys are an individual's, whatever else its identifier names.
         // The active individual is in the table too.
         match self.individual_state(IndividualId(id)).await {
@@ -2143,12 +2111,8 @@ where
     ) -> Result<Result<(), CgkaUnauthorized>, KeylineStorageError<K::Error>> {
         use CgkaUnauthorized::{Denied, Pending};
 
-        let Ok(doc) = Id::try_from(Identifier::from(doc_id)) else {
-            return Ok(Err(Denied));
-        };
-        let Ok(signer) = Id::try_from(Identifier(signed_op.issuer)) else {
-            return Ok(Err(Denied));
-        };
+        let doc = Id::from(doc_id);
+        let signer = signed_op.issuer;
 
         match &signed_op.payload {
             CgkaOperation::Add {
@@ -2162,10 +2126,7 @@ where
                 let Some((grant_issuer, grant)) = self.stored_delegation(*digest).await? else {
                     return Ok(Err(Pending));
                 };
-                let Ok(added) = Id::try_from(Identifier::from(IndividualId::from(*added_id)))
-                else {
-                    return Ok(Err(Denied));
-                };
+                let added = added_id.id();
                 if !grant.power.is_reader() {
                     return Ok(Err(Denied));
                 }
@@ -2217,9 +2178,7 @@ where
                 if !revoked.power.is_reader() {
                     return Ok(Err(Denied));
                 }
-                let Ok(removed) = Id::try_from(Identifier::from(IndividualId::from(*id))) else {
-                    return Ok(Err(Denied));
-                };
+                let removed = id.id();
                 // The revocation must cover the delegation it names, as in
                 // Keyline: its issuer signed it or is named by it, or ever held
                 // Admin over its subject or this document. Admin reach only
@@ -2243,7 +2202,7 @@ where
                     return Ok(Err(Denied));
                 }
                 // An update must be signed by the owner of the leaf it rotates.
-                if new_path.leaf_id.verifying_key() != signed_op.issuer {
+                if new_path.leaf_id.id() != signed_op.issuer {
                     return Ok(Err(Denied));
                 }
                 // Its leaf is checked against the tree on merge. A relay has no
@@ -2406,7 +2365,7 @@ where
             return Ok(());
         }
         let secrets = self.active.key_pairs.lock().await.clone();
-        let mut tree = Cgka::new(doc_id, me, ShareKeyMap::new())?;
+        let mut tree = Cgka::new(doc_id, me, ShareKeyMap::new());
         let failure = apply_in_causal_order(&mut tree, ops.clone(), me, &secrets, received);
         if !tree.contains_predecessors(&invitations.into_iter().collect()) {
             return failure.map_or(Ok(()), Err);
@@ -2568,7 +2527,7 @@ where
         shared: Arc<Certificates<K>>,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, TryFromArchiveError<K::Error>> {
-        let raw_active = Active::from_archive(&archive.active, signer, listener.clone());
+        let raw_active = Active::from_archive(&archive.active, signer, listener.clone())?;
 
         let mut individuals = HashMap::new();
         for (id, indie) in archive.individuals.iter() {
@@ -2808,7 +2767,6 @@ where
                 let documents = self.cgka_ops.lock().await;
                 subjects
                     .into_iter()
-                    .map(Identifier::from)
                     .filter(|id| {
                         !individuals.contains_key(&IndividualId(*id))
                             && !documents.holds(DocumentId(*id))
@@ -2851,19 +2809,19 @@ where
             match event.as_ref() {
                 StaticEvent::PrekeysExpanded(signed) => {
                     pending_prekeys_expanded += 1;
-                    if IndividualId(Identifier(signed.issuer)) == active_id {
+                    if IndividualId(signed.issuer) == active_id {
                         pending_prekeys_expanded_by_active += 1;
                     }
                 }
                 StaticEvent::PrekeyRotated(signed) => {
                     pending_prekey_rotated += 1;
-                    if IndividualId(Identifier(signed.issuer)) == active_id {
+                    if IndividualId(signed.issuer) == active_id {
                         pending_prekey_rotated_by_active += 1;
                     }
                 }
                 StaticEvent::CgkaOperation(signed) => {
                     pending_cgka_operation += 1;
-                    if IndividualId(Identifier(signed.issuer)) == active_id {
+                    if IndividualId(signed.issuer) == active_id {
                         pending_cgka_operation_by_active += 1;
                     }
                 }
@@ -2912,7 +2870,7 @@ where
     /// `None` for a principal we have not heard of.
     pub async fn access_for_doc(
         &self,
-        who: impl Into<Identifier>,
+        who: impl Into<Id>,
         doc: DocumentId,
     ) -> Result<Option<Power>, KeylineStorageError<K::Error>> {
         Ok(self.members_of(doc.into()).await?.get(&who.into()).copied())
@@ -3227,6 +3185,10 @@ pub enum EnvelopeError<T: ContentRef> {
 /// Why an archive could not be loaded.
 #[derive(Debug, Error)]
 pub enum TryFromArchiveError<E: core::error::Error + 'static> {
+    /// The signer's key is not a valid id.
+    #[error("the signer's key is not a valid id: {0}")]
+    InvalidSigner(#[from] InvalidId),
+
     /// A certificate in it did not verify.
     #[error(transparent)]
     Certificate(#[from] VerifyError),
@@ -3380,10 +3342,10 @@ struct Certificates<K> {
 /// and for each principal cut off from it, the certificates that explain
 /// that.
 struct SubjectView<T: ContentRef> {
-    subject: Identifier,
+    subject: Id,
     closure: Vec<Certificate<ContentHeads<T>>>,
-    live: BTreeSet<Identifier>,
-    cut: Vec<(Identifier, Vec<Certificate<ContentHeads<T>>>)>,
+    live: BTreeSet<Id>,
+    cut: Vec<(Id, Vec<Certificate<ContentHeads<T>>>)>,
 }
 
 /// The identifiers a certificate names: a delegation's issuer, audience and
@@ -3530,17 +3492,13 @@ mod tests {
     }
 
     /// Keyline's members of `subject`, by Keyhive identifier.
-    async fn keyline_members(
-        hive: &TestKeyhive,
-        subject: impl Into<Identifier>,
-    ) -> BTreeMap<Identifier, Power> {
-        let subject = Id::try_from(subject.into()).expect("a valid id");
+    async fn keyline_members(hive: &TestKeyhive, subject: impl Into<Id>) -> BTreeMap<Id, Power> {
+        let subject = subject.into();
         Keyline::<Sendable>::members(hive.keyline(), subject)
             .await
             .expect("the memory store does not fail")
             .value
             .into_iter()
-            .map(|(id, power)| (id.into(), power))
             .collect()
     }
 
@@ -3550,9 +3508,9 @@ mod tests {
     async fn writes_produce_certificates() -> TestResult {
         let hive = make_keyhive().await;
         let (bob, carol) = (make_keyhive().await, make_keyhive().await);
-        let bob_id: Identifier = introduce(&hive, &bob).await.into();
-        let carol_id: Identifier = introduce(&hive, &carol).await.into();
-        let me: Identifier = hive.id().into();
+        let bob_id: Id = introduce(&hive, &bob).await.into();
+        let carol_id: Id = introduce(&hive, &carol).await.into();
+        let me: Id = hive.id().into();
 
         let group_id = hive.generate_group(vec![bob_id]).await?;
         assert_eq!(
@@ -3571,7 +3529,7 @@ mod tests {
         hive.add_member(group_id, doc_id, Power::Edit).await?;
         let members = keyline_members(&hive, doc_id).await;
         assert_eq!(members.get(&carol_id), Some(&Power::Read));
-        assert_eq!(members.get(&Identifier::from(group_id)), Some(&Power::Edit));
+        assert_eq!(members.get(&Id::from(group_id)), Some(&Power::Edit));
         assert_eq!(
             members.get(&bob_id),
             Some(&Power::Edit),
@@ -3586,8 +3544,7 @@ mod tests {
     async fn revocations_retain_the_heads_they_bound() -> TestResult {
         let hive = make_keyhive().await;
         let bob = make_keyhive().await;
-        let bob_id: Identifier = introduce(&hive, &bob).await.into();
-        let id = |i: Identifier| Id::try_from(i).expect("valid");
+        let bob_id: Id = introduce(&hive, &bob).await.into();
 
         let group_id = hive.generate_group(vec![]).await?;
         let shared = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
@@ -3600,12 +3557,12 @@ mod tests {
         let from_group = hive.revoke_member(bob_id, false, group_id).await?;
         assert_eq!(
             from_group.revocations()[0].payload().retain,
-            BTreeMap::from([(id(shared.into()), heads([1u8; 32]))]),
+            BTreeMap::from([(Id::from(shared), heads([1u8; 32]))]),
         );
         let from_doc = hive.revoke_member(bob_id, false, unrelated).await?;
         assert_eq!(
             from_doc.revocations()[0].payload().retain,
-            BTreeMap::from([(id(unrelated.into()), heads([2u8; 32]))]),
+            BTreeMap::from([(Id::from(unrelated), heads([2u8; 32]))]),
         );
         Ok(())
     }
@@ -3699,7 +3656,7 @@ mod tests {
 
         let prekeys = alice.reachable_prekey_ops_for_agent(bob_id).await?;
         assert!(
-            prekeys.get(&Identifier::from(carol_id)).is_none(),
+            prekeys.get(&Id::from(carol_id)).is_none(),
             "bob is not sent carol's prekeys"
         );
         Ok(())
@@ -3771,7 +3728,7 @@ mod tests {
         alice.add_member(bob_id, doc, Power::Admin).await?;
         send(&alice, &bob, true).await?;
 
-        let doc_kl = Id::try_from(doc)?;
+        let doc_kl = Id::from(doc);
         let heads = [[7u8; 32], [8u8; 32]];
         bob.set_content_heads(doc, heads).await?;
         bob.add_member(carol_id, doc, Power::Read).await?;
@@ -3791,7 +3748,7 @@ mod tests {
     async fn revocation_writes_revocations() -> TestResult {
         let hive = make_keyhive().await;
         let bob = make_keyhive().await;
-        let bob_id: Identifier = introduce(&hive, &bob).await.into();
+        let bob_id: Id = introduce(&hive, &bob).await.into();
         let doc_id = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
         hive.add_member(bob_id, doc_id, Power::Read).await?;
@@ -3800,11 +3757,10 @@ mod tests {
         hive.revoke_member(bob_id, true, doc_id).await?;
         assert!(!keyline_members(&hive, doc_id).await.contains_key(&bob_id));
 
-        let subject = Id::try_from(Identifier::from(doc_id))?;
-        let to_bob =
-            Keyline::<Sendable>::delegations_to(hive.keyline(), subject, Id::try_from(bob_id)?)
-                .await?
-                .value;
+        let subject = Id::from(doc_id);
+        let to_bob = Keyline::<Sendable>::delegations_to(hive.keyline(), subject, bob_id)
+            .await?
+            .value;
         assert_eq!(to_bob.len(), 1);
         for digest in to_bob.keys() {
             assert!(
@@ -3827,7 +3783,7 @@ mod tests {
     async fn received_certificates_converge() -> TestResult {
         let alice = make_keyhive().await;
         let bob = make_keyhive().await;
-        let bob_id: Identifier = introduce(&alice, &bob).await.into();
+        let bob_id: Id = introduce(&alice, &bob).await.into();
         let doc_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         alice.add_member(bob_id, doc_id, Power::Read).await?;
 
@@ -3873,8 +3829,8 @@ mod tests {
             let alice = make_keyhive().await;
             let bob = make_keyhive().await;
             let carol = make_keyhive().await;
-            let bob_id: Identifier = introduce(&alice, &bob).await.into();
-            let carol_id: Identifier = introduce(&alice, &carol).await.into();
+            let bob_id: Id = introduce(&alice, &bob).await.into();
+            let carol_id: Id = introduce(&alice, &carol).await.into();
             introduce(&bob, &carol).await;
             let group_id = alice.generate_group(vec![]).await?;
             alice.add_member(bob_id, group_id, Power::Admin).await?;
@@ -3886,11 +3842,7 @@ mod tests {
             {
                 bob.receive_certificate(cert).await?;
             }
-            let carol_by_bob = Delegation::new(
-                Id::try_from(carol_id)?,
-                Id::try_from(Identifier::from(group_id))?,
-                Power::Read,
-            );
+            let carol_by_bob = Delegation::new(carol_id, Id::from(group_id), Power::Read);
             let signed = bob.sign_certificate(&carol_by_bob).await?;
             alice
                 .receive_certificate(VerifiedCertificate::from(signed).into_certificate())
@@ -3919,8 +3871,8 @@ mod tests {
     async fn cgka_authorization_is_monotone() -> TestResult {
         let alice = make_keyhive().await;
         let (bob, carol) = (make_keyhive().await, make_keyhive().await);
-        let bob_id: Identifier = introduce(&alice, &bob).await.into();
-        let carol_id: Identifier = introduce(&alice, &carol).await.into();
+        let bob_id: Id = introduce(&alice, &bob).await.into();
+        let carol_id: Id = introduce(&alice, &carol).await.into();
         let doc_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         alice.add_member(bob_id, doc_id, Power::Read).await?;
 
@@ -3958,9 +3910,9 @@ mod tests {
             make_keyhive().await,
             make_keyhive().await,
         );
-        let id = |kh: &TestKeyhive| Id::try_from(Identifier::from(kh.id())).expect("valid");
+        let id = |kh: &TestKeyhive| Id::from(kh.id());
         let doc_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-        let doc = Id::try_from(Identifier::from(doc_id))?;
+        let doc = Id::from(doc_id);
 
         let to_bob = Delegation::new(id(&bob), doc, Power::Admin);
         let bob_to_carol = Delegation::new(id(&carol), doc, Power::Read);
@@ -4017,7 +3969,7 @@ mod tests {
     async fn archives_carry_certificates() -> TestResult {
         let hive = make_keyhive().await;
         let bob = make_keyhive().await;
-        let bob_id: Identifier = introduce(&hive, &bob).await.into();
+        let bob_id: Id = introduce(&hive, &bob).await.into();
         let doc_id = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         hive.add_member(bob_id, doc_id, Power::Read).await?;
 
@@ -4237,7 +4189,7 @@ mod tests {
         let right = make_keyhive().await;
         // Middle reads the document; Right only relays it.
         let reader_card = middle.get_existing_contact_card().await;
-        let reader = Identifier::from(left.receive_contact_card(&reader_card).await?);
+        let reader = Id::from(left.receive_contact_card(&reader_card).await?);
         right.receive_contact_card(&reader_card).await?;
 
         // Two root edges: to Left and to the reader.
@@ -4318,10 +4270,7 @@ mod tests {
             .unwrap();
         let dlg = keyhive.add_member(reader, doc, Power::Read).await.unwrap();
 
-        assert_eq!(
-            Identifier::from(dlg.delegation.payload().subject),
-            doc.into()
-        );
+        assert_eq!(dlg.delegation.payload().subject, doc.into());
     }
 
     #[tokio::test]
@@ -4589,7 +4538,7 @@ mod tests {
         // a per-agent call. Count checked after all per-agent comparisons below.
 
         // Check the active individual
-        let active_id: Identifier = alice.id().into();
+        let active_id: Id = alice.id().into();
         let active_all_ops = all_results.ops_for_agent(&active_id);
         assert!(
             active_all_ops.is_some(),
@@ -4607,11 +4556,11 @@ mod tests {
         );
 
         // For each agent in the index, compare with per-agent result
-        let mut expected_checked: HashSet<Identifier> = HashSet::new();
+        let mut expected_checked: HashSet<Id> = HashSet::new();
         expected_checked.insert(active_id);
         let agents: Vec<IndividualId> = vec![bob_id, carol_id, dan_id, eve_id, frank_id];
         for id in &agents {
-            let agent_id: Identifier = (*id).into();
+            let agent_id: Id = (*id).into();
             expected_checked.insert(agent_id);
 
             let all_ops = all_results.ops_for_agent(&agent_id);
@@ -4748,7 +4697,7 @@ mod tests {
             .expect("selects events");
 
         // Helper to collect flattened CGKA digests from the all-agents result
-        let all_digests_for = |agent_id: &Identifier| -> Vec<_> {
+        let all_digests_for = |agent_id: &Id| -> Vec<_> {
             let mut digests: Vec<_> = all_results
                 .ops_for_agent(agent_id)
                 .map(|ops| ops.map(|op| Digest::hash(op.as_ref())).collect())
@@ -4771,7 +4720,7 @@ mod tests {
         }
 
         // Eve: registered but not on any doc and should not appear
-        let eve_identifier: Identifier = eve_id.into();
+        let eve_identifier: Id = eve_id.into();
         assert!(
             !all_results.index.contains_key(&eve_identifier),
             "eve should not be in all_results since she is not a member of any doc"
@@ -4783,7 +4732,7 @@ mod tests {
         );
 
         // Bob: revoked from doc1, no other docs and should have zero CGKA ops
-        let bob_identifier: Identifier = bob_id.into();
+        let bob_identifier: Id = bob_id.into();
         let bob_all = all_digests_for(&bob_identifier);
         let bob_per_agent = per_agent_digests!(bob_id);
         assert_eq!(
@@ -4793,7 +4742,7 @@ mod tests {
         assert!(bob_all.is_empty(), "revoked bob should have no CGKA ops");
 
         // Carol: on doc1 directly + doc2 via group and should see ops from both
-        let carol_identifier: Identifier = carol_id.into();
+        let carol_identifier: Id = carol_id.into();
         let carol_all = all_digests_for(&carol_identifier);
         let carol_per_agent = per_agent_digests!(carol_id);
         assert_eq!(
@@ -4808,7 +4757,7 @@ mod tests {
         );
 
         // Dave: only on doc2 via group
-        let dave_identifier: Identifier = dave_id.into();
+        let dave_identifier: Id = dave_id.into();
         let dave_all = all_digests_for(&dave_identifier);
         let dave_per_agent = per_agent_digests!(dave_id);
         assert_eq!(
@@ -4823,7 +4772,7 @@ mod tests {
         );
 
         // Active agent (alice): should see all docs she owns
-        let active_id: Identifier = alice.id().into();
+        let active_id: Id = alice.id().into();
         let active_all = all_digests_for(&active_id);
         let active_per_agent = per_agent_digests!(active_id);
         assert_eq!(

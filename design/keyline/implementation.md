@@ -30,7 +30,7 @@ Field names follow one rule. Participants and references are nouns: `issuer`, `a
 
 `Id::from_bytes` accepts only the canonical encoding of a curve point outside the small-order subgroup. A non-canonical encoding would give one key two `Id`s, and a small-order key verifies forged signatures. `InvalidId` says which check failed.
 
-`keyhive_core` has `Identifier` for the same thing, and Beekem has `MemberId` and `TreeId`; they are converted at the boundary. The codec migration (`TODO(keyhive_types)`) has them wrap `Id`.
+`keyhive_core`'s typed identifiers (`IndividualId`, `GroupId`, `DocumentId`) and Beekem's `MemberId` and `TreeId` wrap `Id`, so converting between them cannot fail; a key is validated once, where it enters.
 
 ### `Power`
 
@@ -565,7 +565,7 @@ _Negative._ A revocation naming an unknown digest is new and changes no answer. 
 
 `keyhive_core` evaluates membership with Keyline; nothing else decides who may do what. The shape:
 
-- _The store._ `Keyhive` holds a `K: Keyline<F, RetentionWatermark = ContentHeads<T>>` together with the lock that serializes its writes, so that a fork shares both. Every membership read (`members`, transitive members, standing, `reachable_docs`) is a Keyline query, with identifiers converted at the boundary (`Identifier` and `keyhive_crypto::id::Id`).
+- _The store._ `Keyhive` holds a `K: Keyline<F, RetentionWatermark = ContentHeads<T>>` together with the lock that serializes its writes, so that a fork shares both. Every membership read (`members`, transitive members, standing, `reachable_docs`) is a Keyline query, with no conversion at the boundary: `keyhive_core` identifies principals by `keyhive_crypto::id::Id`, as Keyline does.
 - _Creation._ `generate_group` and `generate_doc` sign the subject's root edges (`Admin` to each creator) with the fresh subject key, then discard it.
 - _Grants._ `add_member` checks the issuer's `effective_power` (refusing a delegation above it, `AddMemberError::Escalation`), signs a `Delegation` with the active signer (an `AsyncSigner`, so WebCrypto keys work), and inserts it.
 - _Revocation._ `revoke_member` revokes each `delegations_to(resource, member)`: every one if the issuer holds `Admin`, otherwise those it issued. Each revocation's `retain` holds the content heads of every held document the resource is or stands over, as the application last set them with `set_content_heads`; a document with none set is left out. A member with no delegation from the resource is refused (`NotADirectMember`): it reaches the resource through a group or document, which is what to revoke. With `retain_all_other_members`, the same batch re-issues from the revoker the delegations the removed member issued, at no more than the revoker's own power (_adoption_). A grant or adoption that would repeat a revoked delegation cites that revocation, and the latest revocation of each re-issue in turn.

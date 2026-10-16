@@ -4,11 +4,12 @@ pub mod add_key;
 pub mod rotate_key;
 
 use self::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
-use crate::{principal::identifier::Identifier, util::content_addressed_map::CaMap};
+use crate::util::content_addressed_map::CaMap;
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use ed25519_dalek::{Signature, VerifyingKey};
 use keyhive_crypto::{
+    id::Id,
     share_key::ShareKey,
     signed::{Signed, VerificationError},
     verifiable::Verifiable,
@@ -49,7 +50,7 @@ impl KeyOp {
         }
     }
 
-    pub fn issuer(&self) -> &VerifyingKey {
+    pub fn issuer(&self) -> &Id {
         match self {
             KeyOp::Add(add) => &add.issuer,
             KeyOp::Rotate(rot) => &rot.issuer,
@@ -75,16 +76,16 @@ impl Verifiable for KeyOp {
 
 /// Key ops grouped by the identifier they belong to.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct KeyOps(HashMap<Identifier, Vec<Arc<KeyOp>>>);
+pub struct KeyOps(HashMap<Id, Vec<Arc<KeyOp>>>);
 
 impl KeyOps {
     /// The ops belonging to `id`.
-    pub fn get(&self, id: &Identifier) -> Option<&[Arc<KeyOp>]> {
+    pub fn get(&self, id: &Id) -> Option<&[Arc<KeyOp>]> {
         self.0.get(id).map(Vec::as_slice)
     }
 
     /// The identifiers that have ops.
-    pub fn keys(&self) -> impl Iterator<Item = &Identifier> {
+    pub fn keys(&self) -> impl Iterator<Item = &Id> {
         self.0.keys()
     }
 
@@ -94,8 +95,8 @@ impl KeyOps {
     }
 }
 
-impl From<HashMap<Identifier, CaMap<KeyOp>>> for KeyOps {
-    fn from(by_id: HashMap<Identifier, CaMap<KeyOp>>) -> Self {
+impl From<HashMap<Id, CaMap<KeyOp>>> for KeyOps {
+    fn from(by_id: HashMap<Id, CaMap<KeyOp>>) -> Self {
         KeyOps(
             by_id
                 .into_iter()
@@ -106,8 +107,8 @@ impl From<HashMap<Identifier, CaMap<KeyOp>>> for KeyOps {
 }
 
 impl IntoIterator for KeyOps {
-    type Item = (Identifier, Vec<Arc<KeyOp>>);
-    type IntoIter = std::collections::hash_map::IntoIter<Identifier, Vec<Arc<KeyOp>>>;
+    type Item = (Id, Vec<Arc<KeyOp>>);
+    type IntoIter = std::collections::hash_map::IntoIter<Id, Vec<Arc<KeyOp>>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -126,22 +127,19 @@ pub struct AllReachablePrekeyOps {
     /// For each principal: the set of identifiers whose ops in `ops` are reachable, plus
     /// members it can no longer reach whose keys still help verify the history it is
     /// sent.
-    pub index: HashMap<Identifier, HashSet<Identifier>>,
+    pub index: HashMap<Id, HashSet<Id>>,
 }
 
 impl AllReachablePrekeyOps {
     /// Returns the set of principal identifiers that have reachable ops.
-    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
+    pub fn agents(&self) -> impl Iterator<Item = &Id> {
         self.index.keys()
     }
 
     /// Returns an iterator over all reachable [`KeyOp`]s for the given principal
     /// (flattened across all source identifiers), or `None` if the principal is not
     /// in the index.
-    pub fn ops_for_agent(
-        &self,
-        agent_id: &Identifier,
-    ) -> Option<impl Iterator<Item = &Arc<KeyOp>>> {
+    pub fn ops_for_agent(&self, agent_id: &Id) -> Option<impl Iterator<Item = &Arc<KeyOp>>> {
         self.index
             .get(agent_id)
             .map(|ids| ids.iter().filter_map(|id| self.ops.get(id)).flatten())

@@ -13,7 +13,7 @@ use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
 #[cfg(feature = "std")]
 use {
-    crate::{hex::ToHexString, signed::Signed},
+    crate::{hex::ToHexString, id::Id, signed::Signed},
     serde::Serialize,
     tracing::info,
 };
@@ -87,6 +87,6 @@ pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + core::fmt::Deb
     let bytes = bincode::serialize(&payload)?;
     let signature = signer.try_sign_bytes_sync_basic(bytes.as_slice())?;
     info!("signature: {:0x?}", signature.to_bytes());
-    let signed = Signed::new(payload, issuer, signature);
+    let signed = Signed::new(payload, Id::try_from(issuer)?, signature);
     Ok(signed)
 }

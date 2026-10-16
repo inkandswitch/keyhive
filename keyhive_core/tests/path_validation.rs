@@ -81,7 +81,7 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
         new_path,
         predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&bob, design_doc).await,
-        doc_id: TreeId::try_from(design_doc)?,
+        doc_id: TreeId::from(design_doc),
     };
 
     // We should ignore the forged path and not panic.

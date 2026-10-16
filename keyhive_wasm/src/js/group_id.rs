@@ -1,6 +1,6 @@
 use crate::js::identifier::JsIdentifier;
-use ed25519_dalek::VerifyingKey;
-use keyhive_core::principal::{group::id::GroupId, identifier::Identifier};
+use keyhive_core::principal::group::id::GroupId;
+use keyhive_crypto::id::Id;
 use std::{
     fmt,
     fmt::{Display, Formatter},
@@ -18,8 +18,8 @@ impl JsGroupId {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: Vec<u8>) -> Result<Self, JsParseGroupIdError> {
         let vec: [u8; 32] = bytes.try_into().map_err(|_| JsParseGroupIdError)?;
-        let vk = VerifyingKey::from_bytes(&vec).map_err(|_| JsParseGroupIdError)?;
-        Ok(JsGroupId(GroupId::from(Identifier::from(vk))))
+        let id = Id::from_bytes(vec).map_err(|_| JsParseGroupIdError)?;
+        Ok(JsGroupId(GroupId::from(id)))
     }
 
     #[wasm_bindgen(js_name = toBytes)]
@@ -34,7 +34,7 @@ impl JsGroupId {
 
     #[wasm_bindgen(js_name = toIdentifier)]
     pub fn to_identifier(&self) -> JsIdentifier {
-        JsIdentifier(Identifier::from(self.0))
+        JsIdentifier(Id::from(self.0))
     }
 }
 

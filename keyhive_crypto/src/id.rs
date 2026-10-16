@@ -19,7 +19,10 @@ use keyhive_codec::{
 /// that the bytes are the canonical encoding of a curve point outside the
 /// small-order subgroup, so [`Id::verifying_key`] cannot fail and each key has
 /// exactly one `Id`.
-// TODO(keyhive_types): unify with `keyhive_core::Identifier` and `beekem::MemberId`.
+///
+/// Formatting: [`Debug`](fmt::Debug) and [`LowerHex`](fmt::LowerHex) show the
+/// whole key (`{:#x}` adds `0x`); [`Display`](fmt::Display) shows the first
+/// four bytes, for logs.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Id([u8; Self::LEN]);
 
@@ -116,6 +119,13 @@ impl fmt::Display for Id {
     }
 }
 
+/// The whole key in hex; `{:#x}` prefixes `0x`.
+impl fmt::LowerHex for Id {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        crate::hex::bytes_as_hex(self.0.iter(), f)
+    }
+}
+
 impl Encode for Id {
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.0);
@@ -138,14 +148,12 @@ impl StreamDecode for Id {
     }
 }
 
-#[cfg(feature = "serde")]
 impl serde::Serialize for Id {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_bytes(&self.0)
     }
 }
 
-#[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for Id {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         d.deserialize_bytes(IdVisitor)
@@ -155,10 +163,8 @@ impl<'de> serde::Deserialize<'de> for Id {
 /// Reads what [`Id`]'s `Serialize` writes: a byte string. Self-describing
 /// formats that render bytes as a list (JSON) arrive as a sequence instead.
 /// Both paths check the length and that the bytes are a curve point.
-#[cfg(feature = "serde")]
 struct IdVisitor;
 
-#[cfg(feature = "serde")]
 impl<'de> serde::de::Visitor<'de> for IdVisitor {
     type Value = Id;
 
@@ -214,7 +220,6 @@ pub enum InvalidId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "serde")]
     use alloc::string::ToString;
 
     #[test]
@@ -287,7 +292,6 @@ mod tests {
     /// Through a positional format with no type tags, where a disagreement
     /// between `Serialize` and `Deserialize` misreads instead of erroring.
     #[test]
-    #[cfg(feature = "serde")]
     fn serde_round_trips_through_postcard() {
         let id = sample();
         let bytes = postcard::to_allocvec(&id).expect("serialize");
@@ -298,7 +302,6 @@ mod tests {
 
     /// The sequence path, as a self-describing format like JSON delivers it.
     #[test]
-    #[cfg(feature = "serde")]
     fn serde_accepts_a_byte_sequence_of_exactly_the_right_length() {
         use serde::{de::value::SeqDeserializer, Deserialize};
         type Seq<I> = SeqDeserializer<I, serde::de::value::Error>;

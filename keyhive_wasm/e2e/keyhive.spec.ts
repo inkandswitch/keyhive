@@ -60,6 +60,26 @@ test.describe("Keyhive", async () => {
     expect(out.idString).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
+  test("a principal's string is its whole identifier", async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      const { Keyhive, Signer, CiphertextStore } = window.keyhive;
+      const kh = await Keyhive.init(
+        await Signer.generate(),
+        CiphertextStore.newInMemory(),
+        () => {},
+      );
+      const groupId = await kh.generateGroup([]);
+      const principal = await kh.getPrincipal(groupId.toIdentifier());
+      return {
+        principal: principal.toString(),
+        identifier: groupId.toIdentifier().toString(),
+      };
+    });
+
+    expect(out.principal).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(out.principal).toBe(out.identifier);
+  });
+
   test("generateGroup returns the id of a group whose sole member is an admin", async ({
     page,
   }) => {

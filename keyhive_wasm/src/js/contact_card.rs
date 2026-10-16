@@ -1,6 +1,6 @@
 use derive_more::{Deref, Display, From, Into};
-use keyhive_core::{contact_card::ContactCard, event::Event, principal::identifier::Identifier};
-use keyhive_crypto::verifiable::Verifiable;
+use keyhive_core::{contact_card::ContactCard, event::Event};
+use keyhive_crypto::{id::Id, verifiable::Verifiable};
 use wasm_bindgen::prelude::*;
 
 use crate::js::{event::JsEvent, identifier::JsIdentifier};
@@ -16,7 +16,7 @@ pub struct JsContactCard(ContactCard);
 impl JsContactCard {
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIdentifier {
-        let identifier = Identifier::from(self.0.id());
+        let identifier = Id::from(self.0.id());
         JsIdentifier(identifier)
     }
 

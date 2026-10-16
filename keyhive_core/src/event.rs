@@ -157,7 +157,7 @@ mod tests {
             leaf_index: 42,
             invitation: None,
             predecessors: vec![],
-            doc_id: TreeId::try_from(doc_id1)?,
+            doc_id: TreeId::from(doc_id1),
             authorization: CgkaAuthorization::Delegation([0u8; 32]),
         })?;
 
@@ -166,7 +166,7 @@ mod tests {
             leaf_idx: 4,
             predecessors: vec![],
             removed_keys: vec![],
-            doc_id: TreeId::try_from(doc_id2)?,
+            doc_id: TreeId::from(doc_id2),
             authorization: CgkaAuthorization::Revocation([0u8; 32]),
         })?;
 
@@ -176,7 +176,7 @@ mod tests {
             leaf_index: 11,
             invitation: None,
             predecessors: vec![],
-            doc_id: TreeId::try_from(doc_id1)?,
+            doc_id: TreeId::from(doc_id1),
             authorization: CgkaAuthorization::Delegation([0u8; 32]),
         })?;
 

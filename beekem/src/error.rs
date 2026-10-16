@@ -1,6 +1,6 @@
 //! Error types for CGKA operations.
 
-use keyhive_crypto::{id::InvalidId, signed::SigningError};
+use keyhive_crypto::signed::SigningError;
 
 /// Errors arising from CGKA operations.
 #[derive(Debug)]
@@ -29,9 +29,6 @@ pub enum CgkaError {
 
     #[cfg_attr(feature = "thiserror", error("Identifier not found"))]
     IdentifierNotFound,
-
-    #[cfg_attr(feature = "thiserror", error("Invalid identifier: {0}"))]
-    InvalidId(InvalidId),
 
     #[cfg_attr(feature = "thiserror", error("Invalid operation"))]
     InvalidOperation,
@@ -100,7 +97,6 @@ impl core::fmt::Display for CgkaError {
             Self::Encryption(e) => write!(f, "Encryption failed: {e}"),
             Self::EncryptedSecretNotFound => write!(f, "Encrypted secret not found"),
             Self::IdentifierNotFound => write!(f, "Identifier not found"),
-            Self::InvalidId(e) => write!(f, "Invalid identifier: {e}"),
             Self::InvalidOperation => write!(f, "Invalid operation"),
             Self::InvalidPathLength => write!(f, "Invalid path length"),
             Self::NoMembers => write!(f, "Group has no members"),
@@ -122,13 +118,6 @@ impl core::fmt::Display for CgkaError {
             Self::WrongDocument => write!(f, "Operation belongs to a different document"),
             Self::SigningError(e) => write!(f, "{e}"),
         }
-    }
-}
-
-/// A member or document key that is not a valid [`Id`](keyhive_crypto::id::Id).
-impl From<InvalidId> for CgkaError {
-    fn from(e: InvalidId) -> Self {
-        Self::InvalidId(e)
     }
 }
 

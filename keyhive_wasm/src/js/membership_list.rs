@@ -4,10 +4,8 @@ use super::{
     capability::Capability, keyhive::InnerKeyhive, keyline_storage_error::JsKeylineStorageError,
     signed_delegation::JsSignedDelegation,
 };
-use keyhive_core::{
-    certificate::decode_stored,
-    principal::{identifier::Identifier, membered::id::MemberedId},
-};
+use keyhive_core::{certificate::decode_stored, principal::membered::id::MemberedId};
+use keyhive_crypto::id::Id;
 use keyline::delegation::Delegation;
 use std::collections::BTreeMap;
 
@@ -21,11 +19,10 @@ pub(crate) async fn direct_members(
     subject: MemberedId,
 ) -> Result<Vec<Capability>, JsKeylineStorageError> {
     let held = keyhive.reachable_members(subject).await?;
-    let subject_id = Identifier::from(subject);
-    let mut best: BTreeMap<Identifier, Capability> = BTreeMap::new();
+    let subject_id = Id::from(subject);
+    let mut best: BTreeMap<Id, Capability> = BTreeMap::new();
     for signed in keyhive.delegations_about(subject).await? {
         let (issuer, d): (_, Delegation) = decode_stored(&signed);
-        let issuer = Identifier::from(issuer);
         let can = if issuer == subject_id {
             d.power
         } else {
@@ -34,7 +31,7 @@ pub(crate) async fn direct_members(
                 None => continue, // a live delegation's issuer has standing
             }
         };
-        let who = Identifier::from(d.audience);
+        let who = d.audience;
         match best.get(&who) {
             Some(kept) if kept.can >= can => {}
             _ => {

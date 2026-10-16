@@ -6,7 +6,7 @@
 pub mod store;
 
 use crate::{
-    principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
+    principal::{document::id::DocumentId, individual::id::IndividualId},
     transact::{fork::Fork, merge::Merge},
 };
 use beekem::{
@@ -22,7 +22,7 @@ use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
-    id::InvalidId,
+    id::Id,
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
     signer::async_signer::AsyncSigner,
@@ -61,16 +61,12 @@ impl Hash for Cgka {
 }
 
 impl Cgka {
-    pub fn new(
-        doc_id: DocumentId,
-        owner_id: IndividualId,
-        owner_sks: ShareKeyMap,
-    ) -> Result<Self, CgkaError> {
-        Ok(Cgka(beekem::cgka::Cgka::new(
-            TreeId::try_from(doc_id)?,
-            MemberId::try_from(owner_id)?,
+    pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
+        Cgka(beekem::cgka::Cgka::new(
+            TreeId::from(doc_id),
+            MemberId::from(owner_id),
             owner_sks,
-        )))
+        ))
     }
 
     pub fn with_new_owner(
@@ -79,8 +75,7 @@ impl Cgka {
         owner_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
         Ok(Cgka(
-            self.0
-                .with_new_owner(MemberId::try_from(my_id)?, owner_sks)?,
+            self.0.with_new_owner(MemberId::from(my_id), owner_sks)?,
         ))
     }
 
@@ -142,7 +137,7 @@ impl Cgka {
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         self.0
-            .add(MemberId::try_from(id)?, pk, authorization, signer)
+            .add(MemberId::from(id), pk, authorization, signer)
             .await
     }
 
@@ -151,14 +146,7 @@ impl Cgka {
         members: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
-        let (head, tail) = (members.head, members.tail);
-        let converted = NonEmpty {
-            head: (MemberId::try_from(head.0)?, head.1, head.2),
-            tail: tail
-                .into_iter()
-                .map(|(id, pk, auth)| Ok((MemberId::try_from(id)?, pk, auth)))
-                .collect::<Result<_, InvalidId>>()?,
-        };
+        let converted = members.map(|(id, pk, auth)| (MemberId::from(id), pk, auth));
         self.0.add_multiple(converted, signer).await
     }
 
@@ -169,7 +157,7 @@ impl Cgka {
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         self.0
-            .remove(MemberId::try_from(id)?, authorization, signer)
+            .remove(MemberId::from(id), authorization, signer)
             .await
     }
 
@@ -257,16 +245,16 @@ impl Merge for Cgka {
 /// documents it has standing over in Keyline.
 #[derive(Debug)]
 pub struct AllCgkaOps {
-    /// CGKA ops per doc, keyed by doc Identifier.
-    pub ops: HashMap<Identifier, Vec<Arc<Signed<CgkaOperation>>>>,
+    /// CGKA ops per doc, keyed by doc Id.
+    pub ops: HashMap<Id, Vec<Arc<Signed<CgkaOperation>>>>,
 
     /// For each principal: the set of doc identifiers whose ops are reachable.
-    pub index: HashMap<Identifier, HashSet<Identifier>>,
+    pub index: HashMap<Id, HashSet<Id>>,
 }
 
 impl AllCgkaOps {
     /// Returns the set of principal identifiers that have reachable CGKA ops.
-    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
+    pub fn agents(&self) -> impl Iterator<Item = &Id> {
         self.index.keys()
     }
 
@@ -274,7 +262,7 @@ impl AllCgkaOps {
     /// (flattened across all documents), or `None` if the principal is not in the index.
     pub fn ops_for_agent(
         &self,
-        agent_id: &Identifier,
+        agent_id: &Id,
     ) -> Option<impl Iterator<Item = &Arc<Signed<CgkaOperation>>>> {
         self.index.get(agent_id).map(|doc_ids| {
             doc_ids
