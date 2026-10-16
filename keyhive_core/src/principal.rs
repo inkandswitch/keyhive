@@ -11,14 +11,12 @@
 pub mod active;
 pub mod document;
 pub mod group;
-pub mod identifier;
 pub mod individual;
 pub mod membered;
 
 use self::{
     document::{id::DocumentId, Document},
     group::{id::GroupId, Group},
-    identifier::Identifier,
     individual::{id::IndividualId, Individual},
 };
 use crate::{
@@ -31,7 +29,7 @@ use crate::{
 use future_form::FutureForm;
 use keyhive_codec::traits::{Encode, StreamDecode};
 use keyhive_crypto::{
-    content::reference::ContentRef, signer::async_signer::AsyncSigner, verified::Signed,
+    content::reference::ContentRef, id::Id, signer::async_signer::AsyncSigner, verified::Signed,
 };
 use keyline::{contract::Keyline, delegation::Delegation, power::Power};
 use rand::{CryptoRng, RngCore};
@@ -42,11 +40,11 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Debug, Clone)]
 pub struct Principal<KH> {
     keyhive: KH,
-    id: Identifier,
+    id: Id,
 }
 
 impl<KH> Principal<KH> {
-    pub(crate) fn new(keyhive: KH, id: Identifier) -> Self {
+    pub(crate) fn new(keyhive: KH, id: Id) -> Self {
         Principal { keyhive, id }
     }
 
@@ -55,7 +53,7 @@ impl<KH> Principal<KH> {
         &self.keyhive
     }
 
-    pub fn id(&self) -> Identifier {
+    pub fn id(&self) -> Id {
         self.id
     }
 }
@@ -106,7 +104,7 @@ where
     /// Everyone with a live route to this principal, with their power.
     pub async fn transitive_members(
         &self,
-    ) -> Result<BTreeMap<Identifier, Power>, KeylineStorageError<K::Error>> {
+    ) -> Result<BTreeMap<Id, Power>, KeylineStorageError<K::Error>> {
         self.keyhive.members_of(self.id).await
     }
 }

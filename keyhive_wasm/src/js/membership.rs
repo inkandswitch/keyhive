@@ -1,5 +1,6 @@
 use super::{keyhive::InnerKeyhive, power::JsPower, principal::JsPrincipal};
-use keyhive_core::principal::{identifier::Identifier, individual::id::IndividualId};
+use keyhive_core::principal::individual::id::IndividualId;
+use keyhive_crypto::id::Id;
 use keyline::power::Power;
 use std::collections::BTreeMap;
 use wasm_bindgen::prelude::*;
@@ -16,7 +17,7 @@ impl Membership {
     /// their power. A member whose prekeys have not arrived is left out.
     pub(crate) async fn individuals(
         keyhive: &InnerKeyhive,
-        members: BTreeMap<Identifier, Power>,
+        members: BTreeMap<Id, Power>,
     ) -> Vec<Membership> {
         let mut memberships = Vec::new();
         for (id, can) in members {

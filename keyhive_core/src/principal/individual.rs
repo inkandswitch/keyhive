@@ -5,7 +5,7 @@ pub mod op;
 pub mod state;
 
 use self::op::KeyOp;
-use super::{document::id::DocumentId, identifier::Identifier};
+use super::document::id::DocumentId;
 use crate::{
     contact_card::ContactCard,
     content::heads::ContentHeads,
@@ -22,7 +22,7 @@ use future_form::FutureForm;
 use id::IndividualId;
 use keyhive_codec::traits::{Encode, StreamDecode};
 use keyhive_crypto::{
-    content::reference::ContentRef, share_key::ShareKey, signed::VerificationError,
+    content::reference::ContentRef, id::Id, share_key::ShareKey, signed::VerificationError,
     signer::async_signer::AsyncSigner, verifiable::Verifiable,
 };
 use keyline::contract::Keyline;
@@ -78,7 +78,7 @@ pub struct IndividualState {
 impl IndividualState {
     #[instrument]
     pub fn new(initial_op: KeyOp) -> Self {
-        let id = IndividualId(initial_op.verifying_key().into());
+        let id = IndividualId::from(*initial_op.issuer());
         let prekey_state = PrekeyState::new(initial_op);
 
         Self {
@@ -98,7 +98,7 @@ impl IndividualState {
             PrekeyState::generate::<F, _, _>(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
 
         Ok(Self {
-            id: IndividualId(signer.verifying_key().into()),
+            id: IndividualId::try_from(signer.verifying_key())?,
             prekeys: prekey_state.build(),
             prekey_state,
         })
@@ -115,7 +115,7 @@ impl IndividualState {
 
     #[instrument(skip(self), fields(indie_id = %self.id))]
     pub fn receive_prekey_op(&mut self, op: op::KeyOp) -> Result<(), ReceivePrekeyOpError> {
-        if op.verifying_key() != self.id.verifying_key() {
+        if *op.issuer() != Id::from(self.id) {
             return Err(ReceivePrekeyOpError::IncorrectSigner);
         }
 
@@ -214,7 +214,7 @@ impl<KH> Individual<KH> {
         &self.keyhive
     }
 
-    pub fn id(&self) -> Identifier {
+    pub fn id(&self) -> Id {
         self.id.into()
     }
 

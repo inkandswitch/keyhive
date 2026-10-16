@@ -15,8 +15,7 @@ chacha20poly1305 = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["rand_core", "serde"] }
 future_form = { workspace = true }
 keyhive_codec = { workspace = true }
-# `serde` until serde leaves the workspace (C6): `MemberId` and `TreeId` derive it.
-keyhive_crypto = { workspace = true, features = ["serde"] }
+keyhive_crypto = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true, features = ["alloc", "derive", "rc"] }

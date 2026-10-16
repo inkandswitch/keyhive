@@ -15,7 +15,7 @@ pub struct ContactCard(pub(crate) KeyOp);
 
 impl ContactCard {
     pub fn id(&self) -> IndividualId {
-        self.0.issuer().into()
+        IndividualId::from(*self.0.issuer())
     }
 
     pub fn share_key(&self) -> &ShareKey {

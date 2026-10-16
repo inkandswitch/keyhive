@@ -1,27 +1,25 @@
-use crate::principal::identifier::Identifier;
-use derive_more::Display;
+use beekem::id::MemberId;
 use dupe::Dupe;
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use keyhive_crypto::{
     id::{Id, InvalidId},
     verifiable::Verifiable,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
-#[derive(
-    Debug, Display, Copy, Dupe, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
-)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub struct IndividualId(pub Identifier);
+pub struct IndividualId(pub Id);
 
 impl IndividualId {
-    pub fn new(identifier: Identifier) -> Self {
-        Self(identifier)
+    pub fn new(id: Id) -> Self {
+        Self(id)
     }
 
     #[cfg(any(test, feature = "test_utils"))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
-        Identifier::generate(csprng).into()
+        Self::from(&SigningKey::generate(csprng))
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
@@ -33,46 +31,54 @@ impl IndividualId {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        self.0.as_slice()
+        self.0.as_bytes()
     }
 }
 
-impl From<Identifier> for IndividualId {
-    fn from(identifier: Identifier) -> Self {
-        IndividualId(identifier)
+/// The whole key, `0x`-prefixed.
+impl fmt::Display for IndividualId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:#x}", self.0)
     }
 }
 
-impl From<IndividualId> for Identifier {
-    fn from(individual_id: IndividualId) -> Self {
-        individual_id.0
+impl Dupe for IndividualId {}
+
+impl From<Id> for IndividualId {
+    fn from(id: Id) -> Self {
+        IndividualId(id)
     }
 }
 
-impl From<VerifyingKey> for IndividualId {
-    fn from(verifying_key: VerifyingKey) -> Self {
-        IndividualId(verifying_key.into())
+impl From<IndividualId> for Id {
+    fn from(id: IndividualId) -> Self {
+        id.0
     }
 }
 
-impl From<&VerifyingKey> for IndividualId {
-    fn from(verifying_key: &VerifyingKey) -> Self {
-        IndividualId((*verifying_key).into())
+impl From<&SigningKey> for IndividualId {
+    fn from(key: &SigningKey) -> Self {
+        IndividualId(Id::from(key))
     }
 }
 
-impl From<beekem::id::MemberId> for IndividualId {
-    fn from(member_id: beekem::id::MemberId) -> Self {
-        IndividualId(member_id.id().into())
+impl TryFrom<VerifyingKey> for IndividualId {
+    type Error = InvalidId;
+
+    fn try_from(key: VerifyingKey) -> Result<Self, InvalidId> {
+        Id::try_from(key).map(IndividualId)
     }
 }
 
-/// Into Beekem: fallible, as for Keyline's [`Id`].
-impl TryFrom<IndividualId> for beekem::id::MemberId {
-    type Error = keyhive_crypto::id::InvalidId;
+impl From<MemberId> for IndividualId {
+    fn from(member: MemberId) -> Self {
+        IndividualId(member.id())
+    }
+}
 
-    fn try_from(id: IndividualId) -> Result<Self, Self::Error> {
-        Self::try_from(id.verifying_key())
+impl From<IndividualId> for MemberId {
+    fn from(id: IndividualId) -> Self {
+        MemberId::from(id.0)
     }
 }
 
@@ -82,16 +88,36 @@ impl Verifiable for IndividualId {
     }
 }
 
-impl TryFrom<IndividualId> for Id {
-    type Error = InvalidId;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::principal::{document::id::DocumentId, group::id::GroupId};
 
-    fn try_from(id: IndividualId) -> Result<Id, InvalidId> {
-        Identifier::from(id).try_into()
+    /// The identity point decompresses, so `ed25519_dalek` accepts it as a
+    /// verifying key, but it has small order: no principal can be named by it.
+    #[test]
+    fn small_order_keys_name_no_principal() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let weak = VerifyingKey::from_bytes(&identity).expect("the identity point decompresses");
+        assert_eq!(IndividualId::try_from(weak), Err(InvalidId::SmallOrder));
+        assert_eq!(DocumentId::try_from(weak), Err(InvalidId::SmallOrder));
+        assert_eq!(GroupId::try_from(weak), Err(InvalidId::SmallOrder));
     }
-}
 
-impl From<Id> for IndividualId {
-    fn from(id: Id) -> Self {
-        Identifier::from(id).into()
+    /// JS `toString` and its callers' map keys read the whole key.
+    #[test]
+    fn principals_display_as_the_whole_key() {
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let hex: String = key
+            .verifying_key()
+            .as_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let expected = format!("0x{hex}");
+        assert_eq!(IndividualId::from(&key).to_string(), expected);
+        assert_eq!(DocumentId::from(&key).to_string(), expected);
+        assert_eq!(GroupId::from(&key).to_string(), expected);
     }
 }

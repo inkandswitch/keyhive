@@ -1,24 +1,22 @@
-use crate::principal::{identifier::Identifier, membered::id::MemberedId};
+use crate::principal::membered::id::MemberedId;
+use beekem::id::TreeId;
 use dupe::Dupe;
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use keyhive_crypto::{
     id::{Id, InvalidId},
     verifiable::Verifiable,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    fmt,
-    fmt::{Debug, Display, Formatter},
-};
+use std::fmt;
 
-#[derive(Copy, Dupe, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub struct DocumentId(pub(crate) Identifier);
+pub struct DocumentId(pub(crate) Id);
 
 impl DocumentId {
     #[cfg(any(feature = "test_utils", test))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
-        Self(Identifier::generate(csprng))
+        Self::from(&SigningKey::generate(csprng))
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
@@ -30,19 +28,35 @@ impl DocumentId {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        self.0.as_slice()
+        self.0.as_bytes()
     }
 }
 
-impl From<DocumentId> for Identifier {
-    fn from(id: DocumentId) -> Identifier {
+impl Dupe for DocumentId {}
+
+impl From<Id> for DocumentId {
+    fn from(id: Id) -> Self {
+        DocumentId(id)
+    }
+}
+
+impl From<DocumentId> for Id {
+    fn from(id: DocumentId) -> Self {
         id.0
     }
 }
 
-impl From<Identifier> for DocumentId {
-    fn from(id: Identifier) -> DocumentId {
-        DocumentId(id)
+impl From<&SigningKey> for DocumentId {
+    fn from(key: &SigningKey) -> Self {
+        DocumentId(Id::from(key))
+    }
+}
+
+impl TryFrom<VerifyingKey> for DocumentId {
+    type Error = InvalidId;
+
+    fn try_from(key: VerifyingKey) -> Result<Self, InvalidId> {
+        Id::try_from(key).map(DocumentId)
     }
 }
 
@@ -52,49 +66,33 @@ impl From<DocumentId> for MemberedId {
     }
 }
 
-impl From<beekem::id::TreeId> for DocumentId {
-    fn from(tree_id: beekem::id::TreeId) -> Self {
-        DocumentId(tree_id.id().into())
+impl From<TreeId> for DocumentId {
+    fn from(tree: TreeId) -> Self {
+        DocumentId(tree.id())
     }
 }
 
-/// Into Beekem: fallible, as for Keyline's [`Id`].
-impl TryFrom<DocumentId> for beekem::id::TreeId {
-    type Error = keyhive_crypto::id::InvalidId;
-
-    fn try_from(id: DocumentId) -> Result<Self, Self::Error> {
-        Self::try_from(id.verifying_key())
+impl From<DocumentId> for TreeId {
+    fn from(id: DocumentId) -> Self {
+        TreeId::from(id.0)
     }
 }
 
 impl Verifiable for DocumentId {
     fn verifying_key(&self) -> VerifyingKey {
-        self.0.into()
+        self.0.verifying_key()
     }
 }
 
-impl Debug for DocumentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "DocumentId({})", self.0)
+impl fmt::Debug for DocumentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DocumentId({self})")
     }
 }
 
-impl Display for DocumentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.0, f)
-    }
-}
-
-impl TryFrom<DocumentId> for Id {
-    type Error = InvalidId;
-
-    fn try_from(id: DocumentId) -> Result<Id, InvalidId> {
-        Identifier::from(id).try_into()
-    }
-}
-
-impl From<Id> for DocumentId {
-    fn from(id: Id) -> Self {
-        Identifier::from(id).into()
+/// The whole key, `0x`-prefixed.
+impl fmt::Display for DocumentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:#x}", self.0)
     }
 }

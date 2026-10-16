@@ -16,7 +16,7 @@ pub struct JsRevocation {
 impl JsRevocation {
     #[wasm_bindgen(getter)]
     pub fn issuer(&self) -> JsIdentifier {
-        JsIdentifier(self.issuer.into())
+        JsIdentifier(self.issuer)
     }
 
     /// The digest of the delegation revoked.
@@ -29,7 +29,7 @@ impl JsRevocation {
     /// revocation records them: content from the revoked member that does not
     /// causally precede them came after the revocation.
     pub fn retained(&self, doc: &JsDocumentId) -> Option<Vec<JsChangeId>> {
-        let doc = Id::try_from(doc.0).ok()?;
+        let doc = Id::from(doc.0);
         self.revocation
             .retain
             .get(&doc)

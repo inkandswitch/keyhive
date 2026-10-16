@@ -3,7 +3,7 @@
 
 pub mod id;
 
-use super::{identifier::Identifier, membered::id::MemberedId};
+use super::membered::id::MemberedId;
 use crate::{
     certificate::{CertificateError, KeylineStorageError},
     content::heads::ContentHeads,
@@ -19,7 +19,7 @@ use future_form::FutureForm;
 use id::GroupId;
 use keyhive_codec::traits::{Encode, StreamDecode};
 use keyhive_crypto::{
-    content::reference::ContentRef, signer::async_signer::AsyncSigner, verified::Signed,
+    content::reference::ContentRef, id::Id, signer::async_signer::AsyncSigner, verified::Signed,
 };
 use keyline::{contract::Keyline, delegation::Delegation, power::Power};
 use rand::{CryptoRng, RngCore};
@@ -44,7 +44,7 @@ impl<KH> Group<KH> {
         &self.keyhive
     }
 
-    pub fn id(&self) -> Identifier {
+    pub fn id(&self) -> Id {
         self.id.into()
     }
 
@@ -76,14 +76,14 @@ where
     /// Everyone with a live route to this group, with their power.
     pub async fn transitive_members(
         &self,
-    ) -> Result<BTreeMap<Identifier, Power>, KeylineStorageError<K::Error>> {
+    ) -> Result<BTreeMap<Id, Power>, KeylineStorageError<K::Error>> {
         self.keyhive.members_of(self.id.into()).await
     }
 
     /// Grant `to_add` power over this group.
     pub async fn add_member(
         &self,
-        to_add: Identifier,
+        to_add: Id,
         can: Power,
     ) -> Result<AddMemberUpdate, AddMemberError<K::Error>> {
         self.keyhive
@@ -95,7 +95,7 @@ where
     /// the revoker adopts the members it had admitted.
     pub async fn revoke_member(
         &self,
-        to_revoke: Identifier,
+        to_revoke: Id,
         retain_all_other_members: bool,
     ) -> Result<RevokeMemberUpdate<T>, RevokeMemberError<K::Error>> {
         self.keyhive
@@ -125,7 +125,7 @@ pub enum RevokeMemberError<E: core::error::Error + 'static> {
     /// The member holds no delegation from the resource itself: it reaches
     /// it only through a group or document, which is what to revoke instead.
     #[error("{0} holds no delegation from the resource")]
-    NotADirectMember(Identifier),
+    NotADirectMember(Id),
 
     #[error(transparent)]
     KeylineStorage(#[from] KeylineStorageError<E>),

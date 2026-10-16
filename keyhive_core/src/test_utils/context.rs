@@ -15,7 +15,6 @@ use crate::{
     principal::{
         document::{id::DocumentId, AddMemberError, DecryptError, EncryptError, GenerateDocError},
         group::{id::GroupId, RevokeMemberError},
-        identifier::Identifier,
         individual::{id::IndividualId, op::KeyOp, Individual, ReceivePrekeyOpError},
         membered::id::MemberedId,
     },
@@ -82,7 +81,7 @@ pub enum TestError {
 
     /// The instance has not received the events that would tell it this exists.
     #[error("{0} has not been received. Sync first, or check access.")]
-    NotSynced(Box<Identifier>),
+    NotSynced(Box<Id>),
 
     /// Two things in one context cannot share a name.
     #[error("{name:?} is already the name of something in this TestContext")]
@@ -265,8 +264,8 @@ impl Instance {
     }
 }
 
-impl From<&Instance> for Identifier {
-    fn from(instance: &Instance) -> Identifier {
+impl From<&Instance> for Id {
+    fn from(instance: &Instance) -> Id {
         instance.id().into()
     }
 }
@@ -344,11 +343,11 @@ pub fn content_ref(content: &[u8]) -> [u8; 32] {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DelegationSummary {
     /// Who signed it.
-    pub issuer: Identifier,
+    pub issuer: Id,
     /// Who received the access.
-    pub audience: Identifier,
+    pub audience: Id,
     /// The group or document the access is over.
-    pub subject: Identifier,
+    pub subject: Id,
     /// How much access it conveys before attenuation.
     pub can: Power,
 }
@@ -357,9 +356,9 @@ impl DelegationSummary {
     /// `d`, as `issuer` signed it.
     pub fn new(issuer: Id, d: &Delegation) -> Self {
         DelegationSummary {
-            issuer: issuer.into(),
-            audience: d.audience.into(),
-            subject: d.subject.into(),
+            issuer,
+            audience: d.audience,
+            subject: d.subject,
             can: d.power,
         }
     }
@@ -385,7 +384,7 @@ pub struct TestContext {
     stores: BTreeMap<InstanceId, Store>,
     /// One signing key per identity, so a second instance can be given the same one.
     signers: BTreeMap<IndividualId, MemorySigner>,
-    names: BTreeMap<Identifier, Arc<str>>,
+    names: BTreeMap<Id, Arc<str>>,
     /// The digests each instance has received, so `sync_all_unsent` sends a delta.
     delivered: BTreeMap<InstanceId, BTreeSet<[u8; 32]>>,
     last_delivery: usize,
@@ -489,7 +488,7 @@ impl TestContext {
                 .get_group(*coparent)
                 .await?
                 .ok_or("that coparent is not a group this instance knows")?;
-            peers.push(Identifier::from(*coparent));
+            peers.push(Id::from(*coparent));
         }
         let id = owner.generate_doc(peers, nonempty![[0u8; 32]]).await?;
         self.names.insert(id.into(), name.into());
@@ -796,7 +795,7 @@ impl TestContext {
         &self,
         observer: &Instance,
         subject: impl Into<MemberedId>,
-    ) -> TestResult<BTreeMap<Identifier, Power>> {
+    ) -> TestResult<BTreeMap<Id, Power>> {
         Ok(observer.revoked_members(subject).await?)
     }
 
@@ -807,7 +806,7 @@ impl TestContext {
         subject: impl Into<MemberedId>,
     ) -> TestResult<Vec<DelegationSummary>> {
         Ok(observer
-            .delegations_about(Identifier::from(subject.into()))
+            .delegations_about(Id::from(subject.into()))
             .await?
             .iter()
             .map(|signed| {
@@ -853,8 +852,8 @@ impl TestContext {
 
     /// Rename the keys of a query result, so assertions can say "bob" rather than an id.
     ///
-    /// The library's queries are keyed by [`Identifier`]. Only the context knows the names.
-    pub fn named<K: Into<Identifier>, V>(
+    /// The library's queries are keyed by [`Id`]. Only the context knows the names.
+    pub fn named<K: Into<Id>, V>(
         &self,
         raw: impl IntoIterator<Item = (K, V)>,
     ) -> BTreeMap<String, V> {
@@ -864,7 +863,7 @@ impl TestContext {
     }
 
     /// The name this context knows `id` by, or the id itself if it knows none.
-    pub fn name_of(&self, id: Identifier) -> Arc<str> {
+    pub fn name_of(&self, id: Id) -> Arc<str> {
         self.names
             .get(&id)
             .cloned()
@@ -913,7 +912,7 @@ impl TestContext {
     async fn events_for(
         &self,
         from: &Instance,
-        who: impl Into<Identifier>,
+        who: impl Into<Id>,
     ) -> TestResult<Vec<([u8; 32], StaticEvent<[u8; 32]>)>> {
         Ok(from
             .static_events_for_agent(who)

@@ -1,6 +1,6 @@
 use super::{identifier::JsIdentifier, power::JsPower, signed_delegation::JsSignedDelegation};
 use dupe::Dupe;
-use keyhive_core::principal::identifier::Identifier;
+use keyhive_crypto::id::Id;
 use keyline::power::Power;
 use wasm_bindgen::prelude::*;
 
@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct Capability {
-    pub(crate) who: Identifier,
+    pub(crate) who: Id,
     pub(crate) can: Power,
     pub(crate) proof: JsSignedDelegation,
 }

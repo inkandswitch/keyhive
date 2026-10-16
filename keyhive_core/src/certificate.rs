@@ -5,7 +5,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::FutureForm;
 use keyhive_codec::traits::Decode;
 use keyhive_crypto::{
-    id::{Id, InvalidId},
+    id::Id,
     signed::SigningError,
     signer::sync_signer::SyncSignerBasic,
     verifiable::Verifiable,
@@ -18,7 +18,6 @@ use keyline::{
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
-use crate::principal::identifier::Identifier;
 use core::marker::PhantomData;
 
 /// Signs the root edges of a freshly created subject: an `Admin` delegation
@@ -27,17 +26,16 @@ use core::marker::PhantomData;
 /// `signer` is the subject's ephemeral key, which is discarded once the
 /// subject exists, so these are the only certificates it ever signs. They
 /// never die by cascade: nothing above the subject can lose standing.
-pub(crate) fn root_edges<I: IntoIterator<Item = Identifier>>(
+pub(crate) fn root_edges<I: IntoIterator<Item = Id>>(
     signer: &dyn SyncSignerBasic,
-    subject: VerifyingKey,
+    subject: Id,
     creators: I,
 ) -> Result<Vec<Verified<Delegation>>, CertificateError> {
     let signer = Ephemeral { signer, subject };
-    let subject = Id::try_from(subject)?;
     creators
         .into_iter()
         .map(|creator| {
-            let edge = Delegation::new(Id::try_from(creator)?, subject, Power::Admin);
+            let edge = Delegation::new(creator, subject, Power::Admin);
             Ok(Verified::sign_sync(&edge, &signer)?)
         })
         .collect()
@@ -209,11 +207,11 @@ impl<'a, F: FutureForm, K: Keyline<F>> Standing<'a, F, K> {
     }
 }
 
-/// An ephemeral signer paired with the key it signs for, which Keyline's
-/// signing checks against each certificate's issuer.
+/// An ephemeral signer paired with its key, which becomes the issuer of each
+/// certificate it signs.
 struct Ephemeral<'a> {
     signer: &'a dyn SyncSignerBasic,
-    subject: VerifyingKey,
+    subject: Id,
 }
 
 impl SyncSignerBasic for Ephemeral<'_> {
@@ -224,19 +222,13 @@ impl SyncSignerBasic for Ephemeral<'_> {
 
 impl Verifiable for Ephemeral<'_> {
     fn verifying_key(&self) -> VerifyingKey {
-        self.subject
+        self.subject.verifying_key()
     }
 }
 
 /// Why a Keyline certificate could not be made.
 #[derive(Debug, Error)]
 pub enum CertificateError {
-    /// An identifier named in the certificate is not a valid Keyline [`Id`]:
-    /// a key that is not a canonical encoding of a prime-order point. Only a
-    /// peer can introduce one.
-    #[error(transparent)]
-    InvalidId(#[from] InvalidId),
-
     /// Signing failed, or the signature did not verify.
     #[error(transparent)]
     Sign(#[from] SignError),
@@ -286,11 +278,11 @@ mod tests {
     #[test]
     fn root_edges_are_admin_from_the_subject() {
         let subject = SigningKey::from_bytes(&[1; 32]);
-        let creators: Vec<Identifier> = [[2; 32], [3; 32]]
-            .map(|seed| SigningKey::from_bytes(&seed).verifying_key().into())
+        let creators: Vec<Id> = [[2; 32], [3; 32]]
+            .map(|seed| Id::from(&SigningKey::from_bytes(&seed)))
             .into();
-        let edges = root_edges(&subject, subject.verifying_key(), creators.clone())
-            .expect("valid keys sign");
+        let edges =
+            root_edges(&subject, Id::from(&subject), creators.clone()).expect("valid keys sign");
 
         let subject_id = Id::from(&subject);
         assert_eq!(edges.len(), 2);
@@ -300,23 +292,10 @@ mod tests {
                 (edge.issuer(), d.subject, d.power),
                 (subject_id, subject_id, Power::Admin)
             );
-            assert_eq!(Identifier::from(d.audience), *creator);
+            assert_eq!(d.audience, *creator);
             let reverified = (**edge.signed()).clone().verify().expect("verifies");
             assert_eq!(reverified.digest(), edge.digest());
         }
-    }
-
-    /// A small-order creator key is refused before anything is signed.
-    #[test]
-    fn small_order_creators_are_refused() {
-        let subject = SigningKey::from_bytes(&[1; 32]);
-        let mut identity = [0u8; 32];
-        identity[0] = 1;
-        let weak = Identifier(VerifyingKey::from_bytes(&identity).expect("decompresses"));
-        assert!(matches!(
-            root_edges(&subject, subject.verifying_key(), [weak]),
-            Err(CertificateError::InvalidId(InvalidId::SmallOrder))
-        ));
     }
     /// `route_through` against Keyline's own evaluator, as an independent
     /// oracle. It is bounded on both sides:

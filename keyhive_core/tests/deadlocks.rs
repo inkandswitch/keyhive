@@ -2,7 +2,6 @@ use ed25519_dalek::SigningKey;
 use keyhive_core::{
     content::heads::ContentHeads,
     event::{static_event::StaticEvent, Event},
-    principal::identifier::Identifier,
     test_utils::TestContext,
 };
 use keyhive_crypto::{id::Id, verified::Verified};
@@ -31,11 +30,7 @@ async fn a_revocation_issued_by_an_outsider_does_not_deadlock_the_receiver() -> 
     // An outsider, holding no power over the document, delegates and revokes.
     let outsider_key = SigningKey::from([9u8; 32]);
     let dlg = Verified::sign_sync(
-        &Delegation::new(
-            Id::try_from(Identifier::from(bob.id()))?,
-            Id::try_from(Identifier::from(design_doc))?,
-            Read,
-        ),
+        &Delegation::new(Id::from(bob.id()), Id::from(design_doc), Read),
         &outsider_key,
     )?;
     let rev: Verified<Revocation<ContentHeads<[u8; 32]>>> =

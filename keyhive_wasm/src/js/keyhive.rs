@@ -1,9 +1,10 @@
+use keyhive_crypto::id::Id;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     convert::Infallible,
 };
 
-use keyhive_core::{content::heads::ContentHeads, principal::identifier::Identifier};
+use keyhive_core::content::heads::ContentHeads;
 use keyline_memory::MemoryKeyline;
 
 use crate::{
@@ -471,9 +472,7 @@ impl JsKeyhive {
             );
         }
 
-        fn hashes_per_source(
-            sources: &HashMap<Identifier, Vec<EventDigest<JsChangeId>>>,
-        ) -> js_sys::Map {
+        fn hashes_per_source(sources: &HashMap<Id, Vec<EventDigest<JsChangeId>>>) -> js_sys::Map {
             let map = js_sys::Map::new();
             for (source_id, digests) in sources {
                 let arr = js_sys::Array::new();
@@ -488,7 +487,7 @@ impl JsKeyhive {
             map
         }
 
-        fn sources_per_agent(index: &HashMap<Identifier, HashSet<Identifier>>) -> js_sys::Map {
+        fn sources_per_agent(index: &HashMap<Id, HashSet<Id>>) -> js_sys::Map {
             let map = js_sys::Map::new();
             for (agent_id, source_ids) in index {
                 let arr = js_sys::Array::new();
@@ -768,13 +767,10 @@ mod tests {
     mod members {
         use super::*;
         use crate::js::membership_list::direct_members;
-        use keyhive_core::principal::{
-            identifier::Identifier,
-            individual::{op::KeyOp, IndividualState},
-        };
+        use keyhive_core::principal::individual::{op::KeyOp, IndividualState};
         use keyline::power::Power;
 
-        async fn introduce(observer: &JsKeyhive, who: &JsKeyhive) -> Identifier {
+        async fn introduce(observer: &JsKeyhive, who: &JsKeyhive) -> Id {
             let op = who.0.expand_prekeys().await.expect("prekeys expand");
             let indie = IndividualState::new(KeyOp::Add(op));
             let id = indie.id();

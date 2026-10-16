@@ -6,7 +6,7 @@ Terms used across the Keyhive design documents and code. Where the design docume
 
 | Term | Meaning | In code |
 |------|---------|---------|
-| _Principal_ | Anything that can hold, delegate, or exercise authority. Identified by an Ed25519 verifying key. | `Identifier`; a transient `Principal` handle |
+| _Principal_ | Anything that can hold, delegate, or exercise authority. Identified by an Ed25519 verifying key. | `keyhive_crypto::id::Id`; a transient `Principal` handle |
 | _Individual_ | A bare key pair with no membership state: a device, WebCrypto context, passkey, or hardware key. Publishes X25519 prekeys so it can be added to BeeKEM trees. | `Individual`, `IndividualState`, `IndividualId` |
 | _Group_ | A key that stands for a set of members: a Keyline subject other keys hold delegations about. Keyline's _role_. | `Group`, `GroupId` |
 | _Document_ | A subject that also owns encrypted content and a BeeKEM tree. A replica knows a document from its authorized CGKA operations. | `Document`, `DocumentState`, `DocumentId` |

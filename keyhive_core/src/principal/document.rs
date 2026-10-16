@@ -11,7 +11,7 @@ use crate::{
     error::not_found::NotFound,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
-    principal::{group::RevokeMemberError, identifier::Identifier, membered::id::MemberedId},
+    principal::{group::RevokeMemberError, membered::id::MemberedId},
     store::ciphertext::{
         CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
         ErrorReason,
@@ -30,6 +30,7 @@ use id::DocumentId;
 use keyhive_codec::traits::{Encode, StreamDecode};
 use keyhive_crypto::{
     content::reference::ContentRef,
+    id::Id,
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
     signer::async_signer::AsyncSigner,
@@ -84,7 +85,7 @@ impl<T: ContentRef> DocumentState<T> {
         }
     }
 
-    pub fn id(&self) -> Identifier {
+    pub fn id(&self) -> Id {
         self.id.into()
     }
 
@@ -132,7 +133,7 @@ impl<T: ContentRef> DocumentState<T> {
         let (owner, owner_pk, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
-        let mut cgka = Cgka::new(id, owner, owner_sks)?;
+        let mut cgka = Cgka::new(id, owner, owner_sks);
         let mut ops = cgka.add_multiple(founders, signer).await?;
         let (_pcs_key, update_op, _new_key_pair) =
             cgka.update(owner_pk, owner_sk, signer, csprng).await?;
@@ -413,7 +414,7 @@ impl<KH> Document<KH> {
         &self.keyhive
     }
 
-    pub fn id(&self) -> Identifier {
+    pub fn id(&self) -> Id {
         self.id.into()
     }
 
@@ -445,14 +446,14 @@ where
     /// Everyone with a live route to this document, with their power.
     pub async fn transitive_members(
         &self,
-    ) -> Result<BTreeMap<Identifier, Power>, KeylineStorageError<K::Error>> {
+    ) -> Result<BTreeMap<Id, Power>, KeylineStorageError<K::Error>> {
         self.keyhive.members_of(self.id.into()).await
     }
 
     /// Grant `to_add` power over this document.
     pub async fn add_member(
         &self,
-        to_add: Identifier,
+        to_add: Id,
         can: Power,
     ) -> Result<AddMemberUpdate, AddMemberError<K::Error>> {
         self.keyhive
@@ -464,7 +465,7 @@ where
     /// the revoker adopts the members it had admitted.
     pub async fn revoke_member(
         &self,
-        to_revoke: Identifier,
+        to_revoke: Id,
         retain_all_other_members: bool,
     ) -> Result<RevokeMemberUpdate<T>, RevokeMemberError<K::Error>> {
         self.keyhive

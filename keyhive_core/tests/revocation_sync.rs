@@ -1,10 +1,8 @@
 //! What is synced to each principal after a revocation: a revoked member's
 //! keys go to no one, a live member's to those it may be seated with.
 
-use keyhive_core::{
-    principal::identifier::Identifier,
-    test_utils::{Instance, TestContext, TestResult as Result},
-};
+use keyhive_core::test_utils::{Instance, TestContext, TestResult as Result};
+use keyhive_crypto::id::Id;
 use keyline::power::Power::{Admin, Read};
 
 /// Alice's document, reached through a group holding Bob and Erin, with Dave an
@@ -128,7 +126,7 @@ async fn a_member_revoked_inside_a_revoked_group_is_offered_to_no_one() -> Resul
     // step.
     for (who, sources) in &all.prekey_index {
         assert!(
-            *who == Identifier::from(frank.id()) || !sources.contains(&frank.id().into()),
+            *who == Id::from(frank.id()) || !sources.contains(&frank.id().into()),
             "{who} is given the keys of a member revoked inside the revoked group"
         );
     }

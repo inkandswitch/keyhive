@@ -2,10 +2,7 @@
 //! extend or cut one, asked of Keyline through `Keyhive`.
 
 use keyhive_core::{
-    principal::{
-        group::{id::GroupId, RevokeMemberError},
-        identifier::Identifier,
-    },
+    principal::group::{id::GroupId, RevokeMemberError},
     test_utils::{Instance, TestContext, TestError, TestResult as Result},
 };
 use keyhive_crypto::id::Id;
@@ -16,7 +13,7 @@ use keyline::{
 };
 use std::collections::BTreeMap;
 
-async fn members(who: &Instance, group: GroupId) -> Result<BTreeMap<Identifier, Power>> {
+async fn members(who: &Instance, group: GroupId) -> Result<BTreeMap<Id, Power>> {
     Ok(who.reachable_members(group).await?)
 }
 
@@ -225,11 +222,7 @@ async fn a_delegation_beyond_the_weakest_link_is_attenuated() -> Result<()> {
     } = weakest_link_chain().await?;
     let dan = ctx.individual("dan").await?;
     let forged = carol
-        .sign_certificate(&Delegation::new(
-            Id::try_from(Identifier::from(dan.id()))?,
-            Id::try_from(Identifier::from(outer))?,
-            Admin,
-        ))
+        .sign_certificate(&Delegation::new(Id::from(dan.id()), Id::from(outer), Admin))
         .await?;
     alice
         .receive_certificate(Certificate::Delegation(forged.signed().clone()))
@@ -258,7 +251,7 @@ async fn membership_is_transitive_through_shared_parents() -> Result<()> {
         .await?;
     let g3 = alice.generate_group(vec![g1.into(), g2.into()]).await?;
 
-    let ids = |m: BTreeMap<Identifier, Power>| m.into_keys().collect::<Vec<_>>();
+    let ids = |m: BTreeMap<Id, Power>| m.into_keys().collect::<Vec<_>>();
     let mut expected = vec![alice.id().into(), g0.into()];
     expected.sort();
     assert_eq!(ids(members(&alice, g1).await?), expected, "g1");
@@ -301,7 +294,7 @@ async fn membership_terminates_on_a_cycle() -> Result<()> {
     assert!(g0_members.contains_key(&alice.id().into()));
     assert!(g0_members.contains_key(&bob.id().into()));
     for g in &chain {
-        assert!(g0_members.contains_key(&Identifier::from(*g)), "{g:?}");
+        assert!(g0_members.contains_key(&Id::from(*g)), "{g:?}");
     }
     assert_eq!(g0_members.len(), 11, "alice, bob, and g1 to g9");
     Ok(())
@@ -328,7 +321,7 @@ async fn an_added_member_reaches_every_group_above() -> Result<()> {
     );
     let g2_members = members(&owner, g2).await?;
     for (who, power) in [
-        (Identifier::from(owner.id()), Admin),
+        (Id::from(owner.id()), Admin),
         (alice.id().into(), Admin),
         (bob.id().into(), Admin),
         (carol.id().into(), Edit),
@@ -455,7 +448,7 @@ async fn revoking_an_indirect_member_is_refused() -> Result<()> {
 
     let result = alice.revoke_member(bob.id(), true, outer).await;
     assert!(
-        matches!(result, Err(RevokeMemberError::NotADirectMember(id)) if id == Identifier::from(bob.id())),
+        matches!(result, Err(RevokeMemberError::NotADirectMember(id)) if id == Id::from(bob.id())),
         "{result:?}"
     );
     assert_eq!(

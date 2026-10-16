@@ -6,7 +6,6 @@ use keyhive_core::{
     listener::no_listener::NoListener,
     principal::{
         document::id::DocumentId,
-        identifier::Identifier,
         individual::{id::IndividualId, op::KeyOp, IndividualState},
     },
     store::ciphertext::memory::MemoryCiphertextStore,
@@ -473,22 +472,19 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         let bob_active_id = bob.active().id();
         let bob_pk = bob.active().pick_prekey(doc_id).await;
         // Bob's founding delegation: the document's Keyline root edge to him.
-        let doc_kl = Id::try_from(Identifier::from(doc_id))?;
-        let bob_founding: [u8; 32] = Keyline::<Sendable>::delegations_to(
-            bob.keyline(),
-            doc_kl,
-            Id::try_from(Identifier::from(bob_active_id))?,
-        )
-        .await?
-        .value
-        .into_iter()
-        .find(|(_, (issuer, _))| *issuer == doc_kl)
-        .ok_or("bob holds a founding delegation")?
-        .0
-        .into();
+        let doc_kl = Id::from(doc_id);
+        let bob_founding: [u8; 32] =
+            Keyline::<Sendable>::delegations_to(bob.keyline(), doc_kl, Id::from(bob_active_id))
+                .await?
+                .value
+                .into_iter()
+                .find(|(_, (issuer, _))| *issuer == doc_kl)
+                .ok_or("bob holds a founding delegation")?
+                .0
+                .into();
 
         let mut bob_tree =
-            keyhive_core::cgka::Cgka::new(doc_id, bob_active_id, beekem::keys::ShareKeyMap::new())?;
+            keyhive_core::cgka::Cgka::new(doc_id, bob_active_id, beekem::keys::ShareKeyMap::new());
         let bob_add = bob_tree
             .add::<Sendable, _>(
                 bob_active_id,
@@ -635,7 +631,7 @@ async fn test_document_waits_for_its_defining_delegation() -> TestResult {
     let alice_id = { alice.active().id() };
     let all_events = alice.static_events_for_agent(alice_id).await?;
 
-    let doc_a_ident: Identifier = doc_a_id.into();
+    let doc_a_ident: Id = doc_a_id.into();
     let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];
     let mut rest: Vec<StaticEvent<[u8; 32]>> = vec![];
     for event in all_events.into_values() {
@@ -704,7 +700,7 @@ async fn test_group_member_is_known_before_its_defining_delegation() -> TestResu
     let alice_id = { alice.active().id() };
     let all_events = alice.static_events_for_agent(alice_id).await?;
 
-    let group_ident: Identifier = group_id.into();
+    let group_ident: Id = group_id.into();
     let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];
     let mut rest: Vec<StaticEvent<[u8; 32]>> = vec![];
     for event in all_events.into_values() {
@@ -759,6 +755,6 @@ async fn test_group_member_is_known_before_its_defining_delegation() -> TestResu
 
 /// Whether `signed` is a delegation `issuer` signed: a root edge, when the
 /// issuer is the subject itself.
-fn issued_by(signed: &Signed<Delegation>, issuer: Identifier) -> bool {
-    Identifier::from(signed.issuer()) == issuer
+fn issued_by(signed: &Signed<Delegation>, issuer: Id) -> bool {
+    signed.issuer() == issuer
 }
