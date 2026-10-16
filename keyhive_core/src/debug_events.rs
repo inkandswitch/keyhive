@@ -174,7 +174,7 @@ impl DebugEventRow {
             }
             Event::CgkaOperation(signed) => {
                 let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
+                let event_hash = Hash::new(signed.digest().raw.as_bytes(), nicknames);
                 let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
                 let doc_id = Hash::new(payload.doc_id.as_bytes(), nicknames);
                 let predecessors: Vec<_> = payload

@@ -222,7 +222,7 @@ async fn a_delegation_beyond_the_weakest_link_is_attenuated() -> Result<()> {
     } = weakest_link_chain().await?;
     let dan = ctx.individual("dan").await?;
     let forged = carol
-        .sign_certificate(&Delegation::new(Id::from(dan.id()), Id::from(outer), Admin))
+        .sign(&Delegation::new(Id::from(dan.id()), Id::from(outer), Admin))
         .await?;
     alice
         .receive_certificate(Certificate::Delegation(forged.signed().clone()))

@@ -4,7 +4,7 @@
 
 use crate::content::heads::ContentHeads;
 use beekem::operation::CgkaOperation;
-use keyhive_crypto::{content::reference::ContentRef, signed::Signed, verified::Verified};
+use keyhive_crypto::{content::reference::ContentRef, verified::Verified};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ pub struct AddMemberUpdate {
     pub delegation: Arc<Verified<Delegation>>,
 
     /// The adds that seat the new readers.
-    pub cgka_ops: Vec<Signed<CgkaOperation>>,
+    pub cgka_ops: Vec<Arc<Verified<CgkaOperation>>>,
 }
 
 /// What [`Keyhive::revoke_member`](crate::keyhive::Keyhive::revoke_member) produced.
@@ -23,7 +23,7 @@ pub struct AddMemberUpdate {
 pub struct RevokeMemberUpdate<T: ContentRef> {
     pub(crate) revocations: Vec<Arc<Verified<Revocation<ContentHeads<T>>>>>,
     pub(crate) redelegations: Vec<Arc<Verified<Delegation>>>,
-    pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
+    pub(crate) cgka_ops: Vec<Arc<Verified<CgkaOperation>>>,
 }
 
 impl<T: ContentRef> RevokeMemberUpdate<T> {
@@ -40,7 +40,7 @@ impl<T: ContentRef> RevokeMemberUpdate<T> {
     }
 
     /// The removes that unseat the lost readers.
-    pub fn cgka_ops(&self) -> &[Signed<CgkaOperation>] {
+    pub fn cgka_ops(&self) -> &[Arc<Verified<CgkaOperation>>] {
         &self.cgka_ops
     }
 }

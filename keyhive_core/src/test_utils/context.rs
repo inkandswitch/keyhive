@@ -170,6 +170,7 @@ other_from!(
     KeylineStorageError<Infallible>,
     keyhive_crypto::id::InvalidId,
     ReceivePrekeyOpError,
+    keyhive_crypto::verified::SignError,
     SigningError,
 );
 

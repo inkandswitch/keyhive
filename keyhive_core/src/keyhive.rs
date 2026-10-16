@@ -57,11 +57,11 @@ use keyhive_crypto::{
     id::{Id, InvalidId},
     share_key::{ShareKey, ShareSecretKey},
     signable::Signable,
-    signed::{Signed, SigningError, VerificationError},
+    signed::{Signed, SigningError},
     signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
     symmetric_key::SymmetricKey,
     verifiable::Verifiable,
-    verified::{self, Verified, VerifyError},
+    verified::{self, SignError, Verified, VerifyError},
 };
 use keyline::{
     certificate::{Certificate, CertificateId, VerifiedCertificate},
@@ -379,7 +379,7 @@ where
 
     /// Store CGKA operations this replica wrote, and tell the listener about
     /// each one it did not already hold.
-    async fn record_cgka_ops<I: IntoIterator<Item = Arc<Signed<CgkaOperation>>>>(&self, ops: I) {
+    async fn record_cgka_ops<I: IntoIterator<Item = Arc<Verified<CgkaOperation>>>>(&self, ops: I) {
         let mut fresh = Vec::new();
         self.store_cgka_ops(ops, &mut fresh).await;
         for op in &fresh {
@@ -389,10 +389,10 @@ where
 
     /// Store CGKA operations this replica wrote, appending to `fresh` those it
     /// did not already hold, for the listener.
-    async fn store_cgka_ops<I: IntoIterator<Item = Arc<Signed<CgkaOperation>>>>(
+    async fn store_cgka_ops<I: IntoIterator<Item = Arc<Verified<CgkaOperation>>>>(
         &self,
         ops: I,
-        fresh: &mut Vec<Arc<Signed<CgkaOperation>>>,
+        fresh: &mut Vec<Arc<Verified<CgkaOperation>>>,
     ) {
         let mut store = self.cgka_ops.lock().await;
         fresh.extend(ops.into_iter().filter(|op| store.insert(op.dupe())));
@@ -423,7 +423,7 @@ where
         &self,
         batch: &[VerifiedCertificate<ContentHeads<T>>],
         written: Option<DocumentId>,
-    ) -> Result<Vec<Signed<CgkaOperation>>, E> {
+    ) -> Result<Vec<Arc<Verified<CgkaOperation>>>, E> {
         let mut fresh = Vec::new();
         let mut ops = Vec::new();
         let result = {
@@ -438,7 +438,7 @@ where
         for op in &ops {
             self.event_listener.on_cgka_op(op).await;
         }
-        result.map(|()| ops.iter().map(|op| op.as_ref().clone()).collect())
+        result.map(|()| ops)
     }
 
     /// [`Self::insert_and_reconcile`] with the insert lock held. Appends the
@@ -454,7 +454,7 @@ where
         batch: &[VerifiedCertificate<ContentHeads<T>>],
         written: Option<DocumentId>,
         fresh: &mut Vec<VerifiedCertificate<ContentHeads<T>>>,
-        ops: &mut Vec<Arc<Signed<CgkaOperation>>>,
+        ops: &mut Vec<Arc<Verified<CgkaOperation>>>,
     ) -> Result<(), E> {
         // The written document is diffed even when this replica holds no entry
         // for it: if its readers change, reconciliation cannot follow, and says
@@ -513,8 +513,7 @@ where
                     .await
                     .add_cgka_members_from_prekeys(&prekeys, authorization, &signer)
                     .await?;
-                self.store_cgka_ops(made.into_iter().map(Arc::new), ops)
-                    .await;
+                self.store_cgka_ops(made, ops).await;
             }
             for lost in before.difference(&after) {
                 let Some(authorization) = self.revocation_for(doc, batch, *lost).await? else {
@@ -526,8 +525,7 @@ where
                     .await
                     .remove_cgka_member(*lost, authorization, &signer)
                     .await?;
-                self.store_cgka_ops(made.into_iter().map(Arc::new), ops)
-                    .await;
+                self.store_cgka_ops(made, ops).await;
             }
         }
         Ok(())
@@ -712,26 +710,20 @@ where
         }
     }
 
-    /// Sign a Keyline certificate with the active signer. Inside the crate
-    /// only: a certificate reaches the store through [`Keyhive`]'s writes.
+    /// Sign a statement (a Keyline certificate or a CGKA operation) with the
+    /// active signer. Inside the crate only: a statement reaches its store
+    /// through [`Keyhive`]'s writes.
     #[cfg(not(any(test, feature = "test_utils")))]
-    pub(crate) async fn sign_certificate<V: Signable>(
-        &self,
-        value: &V,
-    ) -> Result<Verified<V>, CertificateError> {
+    pub(crate) async fn sign<V: Signable>(&self, value: &V) -> Result<Verified<V>, SignError> {
         let signer = { self.active.signer.clone() };
-        Ok(Verified::sign::<F, S>(value, &signer).await?)
+        Verified::sign::<F, S>(value, &signer).await
     }
 
-    /// Sign a Keyline certificate with the active signer; public for tests
-    /// that forge certificates.
+    /// [`Self::sign`], public for tests that forge statements.
     #[cfg(any(test, feature = "test_utils"))]
-    pub async fn sign_certificate<V: Signable>(
-        &self,
-        value: &V,
-    ) -> Result<Verified<V>, CertificateError> {
+    pub async fn sign<V: Signable>(&self, value: &V) -> Result<Verified<V>, SignError> {
         let signer = { self.active.signer.clone() };
-        Ok(Verified::sign::<F, S>(value, &signer).await?)
+        Verified::sign::<F, S>(value, &signer).await
     }
 
     /// Generate a document: root edges as for a group, and a tree seating
@@ -780,7 +772,7 @@ where
         roots: &[VerifiedCertificate<ContentHeads<T>>],
         initial_content_heads: NonEmpty<T>,
         fresh: &mut Vec<VerifiedCertificate<ContentHeads<T>>>,
-        ops: &mut Vec<Arc<Signed<CgkaOperation>>>,
+        ops: &mut Vec<Arc<Verified<CgkaOperation>>>,
     ) -> Result<(), GenerateDocError<K::Error>> {
         *fresh = self.insert_fresh(reconciled, roots).await?;
 
@@ -836,8 +828,7 @@ where
             .lock()
             .await
             .insert(doc_id, Arc::new(Mutex::new(doc)));
-        self.store_cgka_ops(made.into_iter().map(Arc::new), ops)
-            .await;
+        self.store_cgka_ops(made, ops).await;
         Ok(())
     }
 
@@ -954,7 +945,11 @@ where
 
         let certificate = Delegation::new(to_add, subject, can);
         let certificate = self.unrevoked(issuer, certificate).await?;
-        let delegation = Arc::new(self.sign_certificate(&certificate).await?);
+        let delegation = Arc::new(
+            self.sign(&certificate)
+                .await
+                .map_err(CertificateError::from)?,
+        );
 
         let cgka_ops = self
             .insert_and_reconcile::<AddMemberError<K::Error>>(
@@ -1037,11 +1032,17 @@ where
         for digest in revocable {
             let revocation: Revocation<ContentHeads<T>> =
                 Revocation::new(digest).retaining(retain.clone());
-            revocations.push(Arc::new(self.sign_certificate(&revocation).await?));
+            revocations.push(Arc::new(
+                self.sign(&revocation)
+                    .await
+                    .map_err(CertificateError::from)?,
+            ));
         }
         let mut redelegations = Vec::with_capacity(adopted.len());
         for adoption in &adopted {
-            redelegations.push(Arc::new(self.sign_certificate(adoption).await?));
+            redelegations.push(Arc::new(
+                self.sign(adoption).await.map_err(CertificateError::from)?,
+            ));
         }
 
         // One batch, so no query sees the members cut off before adoption.
@@ -1207,11 +1208,11 @@ where
     /// Returns the update, for the caller to send.
     async fn record_rotation(
         &self,
-        rotation: Option<(Signed<CgkaOperation>, LeafKeyPair)>,
-    ) -> Option<Signed<CgkaOperation>> {
+        rotation: Option<(Arc<Verified<CgkaOperation>>, LeafKeyPair)>,
+    ) -> Option<Arc<Verified<CgkaOperation>>> {
         let (op, (pk, sk)) = rotation?;
         self.active.insert_rotated_secret(pk, sk).await;
-        self.record_cgka_ops([Arc::new(op.clone())]).await;
+        self.record_cgka_ops([op.clone()]).await;
         Some(op)
     }
 
@@ -1331,7 +1332,7 @@ where
     pub async fn force_pcs_update(
         &self,
         doc: DocumentId,
-    ) -> Result<(Signed<CgkaOperation>, LeafKeyPair), EncryptError> {
+    ) -> Result<(Arc<Verified<CgkaOperation>>, LeafKeyPair), EncryptError> {
         let handle = self.document_by_id(doc).await?;
         let signer = { self.active.signer.clone() };
         let (op, new_key_pair) = {
@@ -1344,7 +1345,7 @@ where
         };
         let (pk, sk) = new_key_pair;
         self.active.insert_rotated_secret(pk, sk).await;
-        self.record_cgka_ops([Arc::new(op.clone())]).await;
+        self.record_cgka_ops([op.clone()]).await;
         Ok((op, new_key_pair))
     }
 
@@ -1714,7 +1715,7 @@ where
     pub async fn cgka_ops_reachable_by_agent(
         &self,
         who: impl Into<Id>,
-    ) -> Result<Vec<Arc<Signed<CgkaOperation>>>, KeylineStorageError<K::Error>> {
+    ) -> Result<Vec<Arc<Verified<CgkaOperation>>>, KeylineStorageError<K::Error>> {
         let standing = self.standing_of(who.into()).await?;
         let store = self.cgka_ops.lock().await;
         Ok(standing
@@ -1733,7 +1734,7 @@ where
     pub async fn cgka_ops_for_doc(
         &self,
         doc: &DocumentId,
-    ) -> Option<Vec<Arc<Signed<CgkaOperation>>>> {
+    ) -> Option<Vec<Arc<Verified<CgkaOperation>>>> {
         let store = self.cgka_ops.lock().await;
         store
             .holds(*doc)
@@ -1831,7 +1832,7 @@ where
     pub async fn cgka_ops_for_all_agents(
         &self,
     ) -> Result<AllCgkaOps, KeylineStorageError<K::Error>> {
-        let mut ops: HashMap<Id, Vec<Arc<Signed<CgkaOperation>>>> = HashMap::new();
+        let mut ops: HashMap<Id, Vec<Arc<Verified<CgkaOperation>>>> = HashMap::new();
         let mut index: HashMap<Id, HashSet<Id>> = HashMap::new();
 
         let doc_ids: Vec<DocumentId> = { self.cgka_ops.lock().await.documents().collect() };
@@ -2074,7 +2075,7 @@ where
                 self.receive_prekey_op(&Arc::new(*rot_op).into()).await?
             }
             StaticEvent::CgkaOperation(cgka_op) => {
-                self.receive_cgka_op(*cgka_op).await?;
+                self.receive_cgka_op(cgka_op).await?;
             }
             StaticEvent::Delegated(d) => {
                 self.receive_certificate(Certificate::Delegation(Arc::new(d)))
@@ -2106,15 +2107,15 @@ where
     /// update cites nothing: it rotates its signer's own leaf.
     async fn cgka_op_is_authorized(
         &self,
-        signed_op: &Signed<CgkaOperation>,
+        signed_op: &Verified<CgkaOperation>,
         doc_id: DocumentId,
     ) -> Result<Result<(), CgkaUnauthorized>, KeylineStorageError<K::Error>> {
         use CgkaUnauthorized::{Denied, Pending};
 
         let doc = Id::from(doc_id);
-        let signer = signed_op.issuer;
+        let signer = signed_op.issuer();
 
-        match &signed_op.payload.change {
+        match &signed_op.payload().change {
             CgkaChange::Add {
                 authorization,
                 added_id,
@@ -2282,14 +2283,13 @@ where
     #[instrument(skip_all)]
     pub async fn receive_cgka_op(
         &self,
-        signed_op: Signed<CgkaOperation>,
+        signed_op: verified::Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError<K::Error>> {
-        signed_op.try_verify()?;
-
-        let doc_id = DocumentId::from(signed_op.payload.doc_id);
+        let op = Arc::new(signed_op.verify()?);
+        let doc_id = DocumentId::from(op.payload().doc_id);
 
         // Authorization reads only Keyline, so it needs no tree.
-        match self.cgka_op_is_authorized(&signed_op, doc_id).await? {
+        match self.cgka_op_is_authorized(&op, doc_id).await? {
             Ok(()) => {}
             Err(CgkaUnauthorized::Pending) => {
                 return Err(ReceiveCgkaOpError::PendingCgkaAuthorization(Box::new(
@@ -2305,11 +2305,10 @@ where
         // served on. The first authorized add for a document makes it known:
         // an add is the operation that carries Keyline evidence. Any
         // other operation waits for the document.
-        let op = Arc::new(signed_op);
-        let received = Digest::hash(op.as_ref());
+        let received = op.digest();
         let fresh = {
             let mut store = self.cgka_ops.lock().await;
-            if !store.holds(doc_id) && !matches!(op.payload.change, CgkaChange::Add { .. }) {
+            if !store.holds(doc_id) && !matches!(op.payload().change, CgkaChange::Add { .. }) {
                 return Err(ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)));
             }
             store.insert(op.dupe())
@@ -2332,7 +2331,7 @@ where
     async fn feed_tree(
         &self,
         doc_id: DocumentId,
-        received: Option<Digest<Signed<CgkaOperation>>>,
+        received: Option<Digest<CgkaOperation>>,
     ) -> Result<(), ReceiveCgkaOpError<K::Error>> {
         let me = self.active.id();
         let ops: Vec<_> = {
@@ -2352,7 +2351,7 @@ where
         let invitations: Vec<_> = ops
             .iter()
             .filter(|op| invites(op, me))
-            .map(|op| Digest::hash(op.as_ref()))
+            .map(|op| op.digest())
             .collect();
         if invitations.is_empty() {
             return Ok(());
@@ -2459,7 +2458,7 @@ where
             store
                 .documents()
                 .flat_map(|doc_id| store.ops_for(doc_id))
-                .map(|op| op.as_ref().clone())
+                .map(|op| (**op.signed()).clone())
                 .collect()
         };
 
@@ -2530,7 +2529,7 @@ where
 
         let mut cgka_ops = CgkaOpStore::new();
         for op in archive.cgka_ops.iter() {
-            cgka_ops.insert(Arc::new(op.clone()));
+            cgka_ops.insert(Arc::new(op.clone().verify()?));
         }
 
         let verified: Vec<_> = archive
@@ -2639,12 +2638,7 @@ where
             .certificates
             .into_iter()
             .map(|cert| StaticEvent::from(Event::from(cert)))
-            .chain(
-                archive
-                    .cgka_ops
-                    .into_iter()
-                    .map(|op| StaticEvent::CgkaOperation(Box::new(op))),
-            )
+            .chain(archive.cgka_ops.into_iter().map(StaticEvent::CgkaOperation))
             .collect::<Vec<_>>();
         Ok(self.ingest_unsorted_static_events(events).await)
     }
@@ -2814,7 +2808,7 @@ where
                 }
                 StaticEvent::CgkaOperation(signed) => {
                     pending_cgka_operation += 1;
-                    if IndividualId(signed.issuer) == active_id {
+                    if IndividualId(signed.issuer()) == active_id {
                         pending_cgka_operation_by_active += 1;
                     }
                 }
@@ -3131,8 +3125,7 @@ impl<E: core::error::Error + 'static> ReceiveStaticEventError<E> {
             Self::ReceiveCertificateError(ReceiveCertificateError::Verify(_)) => true,
             Self::ReceiveCertificateError(ReceiveCertificateError::KeylineStorage(_)) => false,
             Self::ReceiveCgkaOpError(e) => match e {
-                ReceiveCgkaOpError::VerificationError(_)
-                | ReceiveCgkaOpError::UnauthorizedCgkaOp(_) => true,
+                ReceiveCgkaOpError::Verify(_) | ReceiveCgkaOpError::UnauthorizedCgkaOp(_) => true,
                 ReceiveCgkaOpError::CgkaError(cgka) => !cgka.is_missing_dependency(),
                 ReceiveCgkaOpError::UnknownDocument(_)
                 | ReceiveCgkaOpError::UnknownInvitePrekey(_)
@@ -3182,9 +3175,9 @@ pub enum TryFromArchiveError<E: core::error::Error + 'static> {
     #[error("the signer's key is not a valid id: {0}")]
     InvalidSigner(#[from] InvalidId),
 
-    /// A certificate in it did not verify.
+    /// A certificate or CGKA operation in it did not verify.
     #[error(transparent)]
-    Certificate(#[from] VerifyError),
+    Verify(#[from] VerifyError),
 
     #[error(transparent)]
     KeylineStorage(#[from] KeylineStorageError<E>),
@@ -3208,10 +3201,10 @@ pub enum GenerateGroupError<E: core::error::Error + 'static> {
 /// arriving early.
 async fn feed_held<T: ContentRef, E: core::error::Error + 'static>(
     doc: &Mutex<DocumentState<T>>,
-    ops: Vec<Arc<Signed<CgkaOperation>>>,
+    ops: Vec<Arc<Verified<CgkaOperation>>>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-    received: Option<Digest<Signed<CgkaOperation>>>,
+    received: Option<Digest<CgkaOperation>>,
 ) -> Result<(), ReceiveCgkaOpError<E>> {
     let mut locked = doc.lock().await;
     let waiting = ops
@@ -3222,13 +3215,13 @@ async fn feed_held<T: ContentRef, E: core::error::Error + 'static>(
 }
 
 /// Whether `tree` has applied `op`.
-fn applied(tree: &Cgka, op: &Arc<Signed<CgkaOperation>>) -> bool {
-    tree.contains_predecessors(&HashSet::from([Digest::hash(op.as_ref())]))
+fn applied(tree: &Cgka, op: &Arc<Verified<CgkaOperation>>) -> bool {
+    tree.contains_predecessors(&HashSet::from([op.digest()]))
 }
 
 /// Whether `op` invites `me`: an add of `me`.
-fn invites(op: &Signed<CgkaOperation>, me: IndividualId) -> bool {
-    matches!(op.payload.change, CgkaChange::Add { added_id, .. } if IndividualId::from(added_id) == me)
+fn invites(op: &Verified<CgkaOperation>, me: IndividualId) -> bool {
+    matches!(op.payload().change, CgkaChange::Add { added_id, .. } if IndividualId::from(added_id) == me)
 }
 
 /// Apply `waiting` to `tree` in causal order, as far as it goes, adopting the
@@ -3238,10 +3231,10 @@ fn invites(op: &Signed<CgkaOperation>, me: IndividualId) -> bool {
 /// Returns `received`'s failure, if it failed other than for arriving early.
 fn apply_in_causal_order<E: core::error::Error + 'static>(
     tree: &mut Cgka,
-    mut waiting: Vec<Arc<Signed<CgkaOperation>>>,
+    mut waiting: Vec<Arc<Verified<CgkaOperation>>>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-    received: Option<Digest<Signed<CgkaOperation>>>,
+    received: Option<Digest<CgkaOperation>>,
 ) -> Option<ReceiveCgkaOpError<E>> {
     let mut failure = None;
     loop {
@@ -3253,7 +3246,7 @@ fn apply_in_causal_order<E: core::error::Error + 'static>(
             }
             Err(ReceiveCgkaOpError::CgkaError(CgkaError::OutOfOrderOperation)) => true,
             Err(error) => {
-                if Some(Digest::hash(op.as_ref())) == received {
+                if Some(op.digest()) == received {
                     failure = Some(error);
                 } else {
                     tracing::debug!(%error, "a stored operation does not apply");
@@ -3273,11 +3266,11 @@ fn apply_in_causal_order<E: core::error::Error + 'static>(
 /// its leaf.
 fn apply_one<E: core::error::Error + 'static>(
     tree: &mut Cgka,
-    op: Arc<Signed<CgkaOperation>>,
+    op: Arc<Verified<CgkaOperation>>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
 ) -> Result<(), ReceiveCgkaOpError<E>> {
-    if let CgkaChange::Add { added_id, pk, .. } = op.payload.change {
+    if let CgkaChange::Add { added_id, pk, .. } = op.payload().change {
         let added = IndividualId::from(added_id);
         if added == me {
             let sk = secrets
@@ -3301,8 +3294,8 @@ fn adopt_own_leaf_secrets(
     let mut keys: Vec<ShareKey> = tree.owner_leaf_key().into_iter().collect();
     if let Ok(batches) = tree.ops() {
         for op in batches.iter().flat_map(|batch| batch.iter()) {
-            if let CgkaChange::Update { new_path, .. } = &op.payload.change {
-                if IndividualId::from(op.issuer) == me {
+            if let CgkaChange::Update { new_path, .. } = &op.payload().change {
+                if IndividualId::from(op.issuer()) == me {
                     keys.push(new_path.leaf_pk);
                 }
             }
@@ -3361,7 +3354,7 @@ pub enum ReceiveCgkaOpError<E: core::error::Error + 'static> {
     CgkaError(#[from] CgkaError),
 
     #[error(transparent)]
-    VerificationError(#[from] VerificationError),
+    Verify(#[from] VerifyError),
 
     #[error("Unknown document recipient for received CGKA op: {0}")]
     UnknownDocument(Box<DocumentId>),
@@ -3385,7 +3378,7 @@ impl<E: core::error::Error + 'static> ReceiveCgkaOpError<E> {
     pub fn is_missing_dependency(&self) -> bool {
         match self {
             Self::CgkaError(e) => e.is_missing_dependency(),
-            Self::VerificationError(_) => false,
+            Self::Verify(_) => false,
             // The document's first add, or a prekey secret another instance
             // of this identity holds, may still arrive.
             Self::UnknownDocument(_) => true,
@@ -3616,7 +3609,7 @@ mod tests {
         assert!(update
             .cgka_ops()
             .iter()
-            .any(|op| matches!(op.payload.change,
+            .any(|op| matches!(op.payload().change,
                 CgkaChange::Remove { id, .. } if IndividualId::from(id) == bob_id
             )));
         assert!(!seated(&owner).await.contains(&bob_id));
@@ -3838,7 +3831,7 @@ mod tests {
                 bob.receive_certificate(cert).await?;
             }
             let carol_by_bob = Delegation::new(carol_id, Id::from(group_id), Power::Read);
-            let signed = bob.sign_certificate(&carol_by_bob).await?;
+            let signed = bob.sign(&carol_by_bob).await?;
             alice
                 .receive_certificate(VerifiedCertificate::from(signed).into_certificate())
                 .await?;
@@ -3919,7 +3912,7 @@ mod tests {
             (&alice, &to_group),
             (&group, &dave_in_group),
         ] {
-            let signed = signer.sign_certificate(d).await?;
+            let signed = signer.sign(d).await?;
             alice
                 .receive_certificate(VerifiedCertificate::from(signed).into_certificate())
                 .await?;
@@ -4621,8 +4614,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_cgka_ops_for_all_agents_matches_per_agent() {
-        use crate::crypto::digest::Digest;
-
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -4695,7 +4686,7 @@ mod tests {
         let all_digests_for = |agent_id: &Id| -> Vec<_> {
             let mut digests: Vec<_> = all_results
                 .ops_for_agent(agent_id)
-                .map(|ops| ops.map(|op| Digest::hash(op.as_ref())).collect())
+                .map(|ops| ops.map(|op| op.digest()).collect())
                 .unwrap_or_default();
             digests.sort();
             digests
@@ -4708,7 +4699,7 @@ mod tests {
                     .cgka_ops_reachable_by_agent($agent)
                     .await
                     .expect("selects events");
-                let mut digests: Vec<_> = ops.iter().map(|op| Digest::hash(op.as_ref())).collect();
+                let mut digests: Vec<_> = ops.iter().map(|op| op.digest()).collect();
                 digests.sort();
                 digests
             }};

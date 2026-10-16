@@ -33,7 +33,9 @@ bolero.workspace = true
 beekem = { path = ".", features = ["arbitrary"] }
 curve25519-dalek = { workspace = true }
 keyhive_codec = { workspace = true, features = ["laws"] }
+keyhive_crypto = { workspace = true, features = ["unchecked"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
+x25519-dalek = { workspace = true }
 
 [features]
 default = ["std"]

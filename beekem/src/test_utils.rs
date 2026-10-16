@@ -19,8 +19,8 @@ use future_form::Local;
 use keyhive_crypto::{
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
     signer::memory::MemorySigner,
+    verified::Verified,
 };
 use rand::rngs::StdRng;
 
@@ -55,8 +55,8 @@ pub struct Group {
     doc_id: TreeId,
     /// Every operation synced so far, in the order it was synced, so a member
     /// added part way through can be given a replica of their own.
-    log: Vec<Arc<Signed<CgkaOperation>>>,
-    logged: BTreeSet<Digest<Signed<CgkaOperation>>>,
+    log: Vec<Arc<Verified<CgkaOperation>>>,
+    logged: BTreeSet<Digest<CgkaOperation>>,
 }
 
 impl Group {
@@ -102,7 +102,7 @@ impl Group {
         author: usize,
         id: MemberId,
         pk: ShareKey,
-    ) -> Arc<Signed<CgkaOperation>> {
+    ) -> Arc<Verified<CgkaOperation>> {
         self.try_add(author, id, pk)
             .await
             .expect("the added member is new")
@@ -115,17 +115,20 @@ impl Group {
         author: usize,
         id: MemberId,
         pk: ShareKey,
-    ) -> Option<Arc<Signed<CgkaOperation>>> {
+    ) -> Option<Arc<Verified<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
             .add::<Local, _>(id, pk, ADD_AUTH, signer)
             .await
             .expect("creating the add succeeds")
-            .map(Arc::new)
     }
 
     /// Create a removal on `author`'s replica without delivering it.
-    pub async fn remove(&mut self, author: usize, target: MemberId) -> Arc<Signed<CgkaOperation>> {
+    pub async fn remove(
+        &mut self,
+        author: usize,
+        target: MemberId,
+    ) -> Arc<Verified<CgkaOperation>> {
         self.try_remove(author, target)
             .await
             .expect("the removed member is present")
@@ -137,17 +140,20 @@ impl Group {
         &mut self,
         author: usize,
         target: MemberId,
-    ) -> Option<Arc<Signed<CgkaOperation>>> {
+    ) -> Option<Arc<Verified<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
             .remove::<Local, _>(target, REMOVE_AUTH, signer)
             .await
             .expect("creating the removal succeeds")
-            .map(Arc::new)
     }
 
     /// Create a rotation on `author`'s replica without delivering it.
-    pub async fn rotate(&mut self, author: usize, rng: &mut StdRng) -> Arc<Signed<CgkaOperation>> {
+    pub async fn rotate(
+        &mut self,
+        author: usize,
+        rng: &mut StdRng,
+    ) -> Arc<Verified<CgkaOperation>> {
         self.try_rotate(author, rng)
             .await
             .expect("the rotating member is present")
@@ -159,7 +165,7 @@ impl Group {
         &mut self,
         author: usize,
         rng: &mut StdRng,
-    ) -> Option<Arc<Signed<CgkaOperation>>> {
+    ) -> Option<Arc<Verified<CgkaOperation>>> {
         let sk = ShareSecretKey::generate(rng);
         let pk = sk.share_key();
         let signer = &self.members[author].signer;
@@ -167,7 +173,7 @@ impl Group {
             .update::<Local, _, StdRng>(pk, sk, signer, rng)
             .await
         {
-            Ok((_pcs_key, op, _)) => Some(Arc::new(op)),
+            Ok((_pcs_key, op, _)) => Some(op),
             Err(CgkaError::IdentifierNotFound) | Err(CgkaError::NoMembers) => None,
             Err(e) => panic!("creating the rotation failed: {e:?}"),
         }
@@ -181,7 +187,7 @@ impl Group {
     }
 
     /// Deliver `op` to the replicas named by `to`, recording it in the log.
-    pub fn deliver(&mut self, op: &Arc<Signed<CgkaOperation>>, to: &[usize]) {
+    pub fn deliver(&mut self, op: &Arc<Verified<CgkaOperation>>, to: &[usize]) {
         let could_not_apply = self.try_deliver(op, to);
         assert!(
             could_not_apply.is_empty(),
@@ -191,7 +197,7 @@ impl Group {
 
     /// Deliver `op` to the replicas named by `to`, recording it in the log, and
     /// report which of them could not apply it.
-    pub fn try_deliver(&mut self, op: &Arc<Signed<CgkaOperation>>, to: &[usize]) -> Vec<usize> {
+    pub fn try_deliver(&mut self, op: &Arc<Verified<CgkaOperation>>, to: &[usize]) -> Vec<usize> {
         let could_not_apply: Vec<usize> = to
             .iter()
             .copied()
@@ -201,14 +207,14 @@ impl Group {
                     .is_err()
             })
             .collect();
-        if could_not_apply.len() < to.len() && self.logged.insert(Digest::hash(op.as_ref())) {
+        if could_not_apply.len() < to.len() && self.logged.insert(op.digest()) {
             self.log.push(op.clone());
         }
         could_not_apply
     }
 
     /// Deliver `op` to every replica.
-    pub fn broadcast(&mut self, op: &Arc<Signed<CgkaOperation>>) {
+    pub fn broadcast(&mut self, op: &Arc<Verified<CgkaOperation>>) {
         self.deliver(op, &Vec::from_iter(0..self.replicas.len()));
     }
 
@@ -418,7 +424,7 @@ pub(crate) fn assert_chain_bookkeeping(cgka: &Cgka, context: &str) {
     let updates: BTreeSet<_> = graph
         .cgka_ops
         .iter()
-        .filter(|(_, op)| op.payload.is_update())
+        .filter(|(_, op)| op.payload().is_update())
         .map(|(op_hash, _)| *op_hash)
         .collect();
     let chainable: BTreeSet<_> = updates
@@ -428,7 +434,7 @@ pub(crate) fn assert_chain_bookkeeping(cgka: &Cgka, context: &str) {
                 .cgka_ops
                 .get(update)
                 .unwrap()
-                .payload
+                .payload()
                 .predecessors
                 .iter()
                 .copied()

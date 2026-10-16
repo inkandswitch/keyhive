@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use beekem::operation::CgkaOperation;
-use keyhive_crypto::{content::reference::ContentRef, signed::Signed};
+use keyhive_crypto::{content::reference::ContentRef, verified};
 use keyline::certificate::Certificate;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ pub struct Archive<T: ContentRef> {
     pub(crate) active: ActiveArchive,
     pub(crate) individuals: HashMap<IndividualId, IndividualState>,
     pub(crate) docs: HashMap<DocumentId, DocumentArchive<T>>,
-    pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
+    pub(crate) cgka_ops: Vec<verified::Signed<CgkaOperation>>,
     pub(crate) certificates: Vec<Certificate<ContentHeads<T>>>,
     pub(crate) pending_events: Vec<StaticEvent<T>>,
 }

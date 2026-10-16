@@ -700,7 +700,7 @@ async fn a_revocation_by_someone_without_reach_is_inert() -> Result<()> {
     // Mallory has no standing over the document. Her revocation is admitted,
     // as every well-signed one is, and reaches no route.
     let forged = mallory
-        .sign_certificate(&Revocation::<ContentHeads<[u8; 32]>>::new(bobs.digest()))
+        .sign(&Revocation::<ContentHeads<[u8; 32]>>::new(bobs.digest()))
         .await?;
     alice
         .receive_static_event(StaticEvent::from(Event::from(Certificate::Revocation(

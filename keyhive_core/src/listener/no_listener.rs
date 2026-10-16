@@ -47,7 +47,7 @@ impl<F: FutureForm, T: ContentRef> MembershipListener<F, T> for NoListener {
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm> CgkaListener<F> for NoListener {
-    fn on_cgka_op<'a>(&'a self, _data: &'a Arc<Signed<CgkaOperation>>) -> F::Future<'a, ()> {
+    fn on_cgka_op<'a>(&'a self, _data: &'a Arc<Verified<CgkaOperation>>) -> F::Future<'a, ()> {
         F::ready(())
     }
 }

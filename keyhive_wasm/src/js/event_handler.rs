@@ -59,7 +59,7 @@ impl MembershipListener<Local, JsChangeId> for JsEventHandler {
 }
 
 impl CgkaListener<Local> for JsEventHandler {
-    fn on_cgka_op<'a>(&'a self, data: &'a Arc<Signed<CgkaOperation>>) -> LocalBoxFuture<'a, ()> {
+    fn on_cgka_op<'a>(&'a self, data: &'a Arc<Verified<CgkaOperation>>) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::CgkaOperation(data.dupe()).into()) })
     }
 }

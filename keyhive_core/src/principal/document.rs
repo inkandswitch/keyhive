@@ -32,11 +32,10 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     id::Id,
     share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
     verifiable::Verifiable,
-    verified::{self},
+    verified::{self, Verified},
 };
 use keyline::{contract::Keyline, delegation::Delegation, power::Power};
 use nonempty::NonEmpty;
@@ -129,7 +128,7 @@ impl<T: ContentRef> DocumentState<T> {
         initial_content_heads: NonEmpty<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Self, Vec<Signed<CgkaOperation>>), GenerateDocError<E>> {
+    ) -> Result<(Self, Vec<Arc<Verified<CgkaOperation>>>), GenerateDocError<E>> {
         let (owner, owner_pk, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
@@ -158,7 +157,7 @@ impl<T: ContentRef> DocumentState<T> {
         prekeys: &HashMap<IndividualId, ShareKey>,
         authorization: CgkaAuthorization,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Arc<Verified<CgkaOperation>>>, CgkaError> {
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
             if let Some(op) = self.cgka.add(*id, *prekey, authorization, signer).await? {
@@ -175,7 +174,7 @@ impl<T: ContentRef> DocumentState<T> {
         id: IndividualId,
         authorization: CgkaAuthorization,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Arc<Verified<CgkaOperation>>>, CgkaError> {
         self.cgka.remove(id, authorization, signer).await
     }
 
@@ -189,7 +188,7 @@ impl<T: ContentRef> DocumentState<T> {
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Signed<CgkaOperation>, LeafKeyPair), EncryptError> {
+    ) -> Result<(Arc<Verified<CgkaOperation>>, LeafKeyPair), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op, new_key_pair) = self
@@ -218,7 +217,7 @@ impl<T: ContentRef> DocumentState<T> {
     ) -> Result<
         (
             EncryptedContent<Vec<u8>, T>,
-            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
+            Option<(Arc<Verified<CgkaOperation>>, LeafKeyPair)>,
         ),
         EncryptInEnvelopeError<T>,
     >
@@ -266,7 +265,7 @@ impl<T: ContentRef> DocumentState<T> {
         (
             EncryptedContent<Vec<u8>, T>,
             SymmetricKey,
-            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
+            Option<(Arc<Verified<CgkaOperation>>, LeafKeyPair)>,
         ),
         EncryptError,
     > {
@@ -598,7 +597,7 @@ impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
-    pub(crate) update_op: Option<Signed<CgkaOperation>>,
+    pub(crate) update_op: Option<Arc<Verified<CgkaOperation>>>,
 }
 
 impl<T: ContentRef> EncryptedContentWithUpdate<T> {
@@ -606,7 +605,7 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
         &self.encrypted_content
     }
 
-    pub fn update_op(&self) -> Option<&Signed<CgkaOperation>> {
+    pub fn update_op(&self) -> Option<&Arc<Verified<CgkaOperation>>> {
         self.update_op.as_ref()
     }
 }

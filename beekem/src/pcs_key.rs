@@ -7,7 +7,7 @@ use crate::{
 use alloc::{format, vec::Vec};
 use keyhive_crypto::{
     content::reference::ContentRef, digest::Digest, separable::Separable,
-    share_key::ShareSecretKey, signed::Signed, siv::Siv, symmetric_key::SymmetricKey,
+    share_key::ShareSecretKey, siv::Siv, symmetric_key::SymmetricKey,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -20,7 +20,7 @@ const PREDECESSOR_SECRETS_CONTEXT: &str = "/keyhive/beekem/predecessor_secrets/"
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
     pcs_key_hash: Digest<PcsKey>,
-    pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
+    pcs_update_op_hash: Digest<CgkaOperation>,
     nonce: Siv,
     content_ref: Cr,
     pred_refs: Digest<Vec<Cr>>,
@@ -31,7 +31,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     pub fn new(
         key: SymmetricKey,
         pcs_key_hash: Digest<PcsKey>,
-        pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
+        pcs_update_op_hash: Digest<CgkaOperation>,
         nonce: Siv,
         content_ref: Cr,
         pred_refs: Digest<Vec<Cr>>,
@@ -98,7 +98,7 @@ impl PcsKey {
         nonce: &Siv,
         content_ref: &Cr,
         pred_refs: &Digest<Vec<Cr>>,
-        pcs_update_op_hash: &Digest<Signed<CgkaOperation>>,
+        pcs_update_op_hash: &Digest<CgkaOperation>,
     ) -> ApplicationSecret<Cr> {
         let pcs_hash = Digest::hash(&self.0);
         let display_ref = Digest::hash(&content_ref);

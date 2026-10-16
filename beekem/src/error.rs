@@ -1,6 +1,6 @@
 //! Error types for CGKA operations.
 
-use keyhive_crypto::signed::SigningError;
+use keyhive_crypto::verified::SignError;
 
 /// Errors arising from CGKA operations.
 #[derive(Debug)]
@@ -82,7 +82,7 @@ pub enum CgkaError {
     WrongDocument,
 
     #[cfg_attr(feature = "thiserror", error(transparent))]
-    SigningError(#[cfg_attr(feature = "thiserror", from)] SigningError),
+    Sign(#[cfg_attr(feature = "thiserror", from)] SignError),
 }
 
 #[cfg(not(feature = "thiserror"))]
@@ -116,15 +116,15 @@ impl core::fmt::Display for CgkaError {
             }
             Self::UnknownPcsKey => write!(f, "Unknown PCS key"),
             Self::WrongDocument => write!(f, "Operation belongs to a different document"),
-            Self::SigningError(e) => write!(f, "{e}"),
+            Self::Sign(e) => write!(f, "{e}"),
         }
     }
 }
 
 #[cfg(not(feature = "thiserror"))]
-impl From<SigningError> for CgkaError {
-    fn from(e: SigningError) -> Self {
-        Self::SigningError(e)
+impl From<SignError> for CgkaError {
+    fn from(e: SignError) -> Self {
+        Self::Sign(e)
     }
 }
 

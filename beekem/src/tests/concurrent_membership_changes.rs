@@ -13,7 +13,7 @@ use bolero::{gen, TypeGenerator, ValueGenerator};
 use future_form::Local;
 use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
+    verified::Verified,
 };
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -323,7 +323,7 @@ struct Scenario {
 /// applied. Panics if a round applies nothing.
 fn deliver_all(
     group: &mut Group,
-    undelivered: &mut Vec<Arc<Signed<CgkaOperation>>>,
+    undelivered: &mut Vec<Arc<Verified<CgkaOperation>>>,
     everyone: &[usize],
 ) {
     let synced = undelivered.len();
@@ -352,7 +352,7 @@ struct ScenarioOutcome {
     expected: BTreeSet<MemberId>,
     /// Ordered list of rotations created during the scenario, represented as
     /// (author_idx, operation, members_at_rotation).
-    rotations: Vec<(usize, Arc<Signed<CgkaOperation>>, BTreeSet<MemberId>)>,
+    rotations: Vec<(usize, Arc<Verified<CgkaOperation>>, BTreeSet<MemberId>)>,
 }
 
 /// Members take turns creating operations, delivering what is outstanding
@@ -498,7 +498,7 @@ fn learn_from(mut known: ShareKeyMap, paths: &[&PathChange]) -> ShareKeyMap {
     }
 }
 
-fn new_path(op: &Signed<CgkaOperation>) -> &PathChange {
+fn new_path(op: &Verified<CgkaOperation>) -> &PathChange {
     match &op.payload().change {
         CgkaChange::Update { new_path, .. } => new_path,
         _ => panic!("a rotation is an update"),

@@ -20,7 +20,6 @@ extern crate std;
 
 pub mod cgka;
 pub mod collections;
-pub mod content_addressed_map;
 pub mod encrypted;
 pub mod error;
 pub mod id;

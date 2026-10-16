@@ -2,7 +2,7 @@ use crate::crypto::digest::Digest;
 use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use dupe::Dupe;
 use futures::lock::Mutex;
-use keyhive_crypto::{content::reference::ContentRef, signed::Signed};
+use keyhive_crypto::content::reference::ContentRef;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -25,7 +25,7 @@ where
 
 #[derive(Debug, Clone)]
 pub struct MemoryCiphertextStoreInner<Cr: ContentRef, P> {
-    pub(crate) ops_to_refs: HashMap<Digest<Signed<CgkaOperation>>, HashSet<Cr>>,
+    pub(crate) ops_to_refs: HashMap<Digest<CgkaOperation>, HashSet<Cr>>,
     pub(crate) refs_to_digests: HashMap<Cr, HashSet<Digest<EncryptedContent<P, Cr>>>>,
 
     #[allow(clippy::type_complexity)]
@@ -63,7 +63,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     #[instrument(level = "debug", skip(self))]
     pub async fn get_by_pcs_update(
         &self,
-        pcs_update_op: &Digest<Signed<CgkaOperation>>,
+        pcs_update_op: &Digest<CgkaOperation>,
     ) -> Vec<Arc<EncryptedContent<P, Cr>>> {
         let locked = self.0.lock().await;
 

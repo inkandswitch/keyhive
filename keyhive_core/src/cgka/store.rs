@@ -6,13 +6,13 @@
 
 use crate::principal::document::id::DocumentId;
 use beekem::operation::CgkaOperation;
-use keyhive_crypto::{digest::Digest, signed::Signed};
+use keyhive_crypto::{digest::Digest, verified::Verified};
 use std::{collections::HashMap, sync::Arc};
 
 /// Content-addressed and unordered, like the certificate set.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CgkaOpStore(
-    HashMap<DocumentId, HashMap<Digest<Signed<CgkaOperation>>, Arc<Signed<CgkaOperation>>>>,
+    HashMap<DocumentId, HashMap<Digest<CgkaOperation>, Arc<Verified<CgkaOperation>>>>,
 );
 
 impl CgkaOpStore {
@@ -21,12 +21,12 @@ impl CgkaOpStore {
     }
 
     /// Store `op` under its document. `true` if it was not already held.
-    pub(crate) fn insert(&mut self, op: Arc<Signed<CgkaOperation>>) -> bool {
-        let doc_id = DocumentId::from(op.payload.doc_id);
+    pub(crate) fn insert(&mut self, op: Arc<Verified<CgkaOperation>>) -> bool {
+        let doc_id = DocumentId::from(op.payload().doc_id);
         self.0
             .entry(doc_id)
             .or_default()
-            .insert(Digest::hash(op.as_ref()), op)
+            .insert(op.digest(), op)
             .is_none()
     }
 
@@ -34,7 +34,7 @@ impl CgkaOpStore {
     pub(crate) fn ops_for(
         &self,
         doc: DocumentId,
-    ) -> impl Iterator<Item = &Arc<Signed<CgkaOperation>>> {
+    ) -> impl Iterator<Item = &Arc<Verified<CgkaOperation>>> {
         self.0.get(&doc).into_iter().flat_map(HashMap::values)
     }
 

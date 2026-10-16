@@ -23,6 +23,9 @@ pub const TAG: [u8; 2] = *b"KH";
 pub struct Kind(u8);
 
 impl Kind {
+    /// A BeeKEM operation: a change to a document's tree.
+    pub const CGKA_OPERATION: Kind = Kind(b'C');
+
     /// A Keyline delegation.
     pub const DELEGATION: Kind = Kind(b'D');
 
@@ -33,7 +36,12 @@ impl Kind {
     pub const CERTIFICATE_SET: Kind = Kind(b'S');
 
     /// Every kind in the registry.
-    pub const ALL: [Kind; 3] = [Kind::DELEGATION, Kind::REVOCATION, Kind::CERTIFICATE_SET];
+    pub const ALL: [Kind; 4] = [
+        Kind::CGKA_OPERATION,
+        Kind::DELEGATION,
+        Kind::REVOCATION,
+        Kind::CERTIFICATE_SET,
+    ];
 
     /// The registered kind with byte `b`, if any.
     pub fn from_u8(b: u8) -> Option<Kind> {

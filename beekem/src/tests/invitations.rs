@@ -5,9 +5,9 @@ use crate::{
     pcs_key::PcsKey,
     test_utils::{member, Group, ADD_AUTH},
 };
-use alloc::{collections::BTreeSet, vec, vec::Vec};
+use alloc::{collections::BTreeSet, sync::Arc, vec, vec::Vec};
 use future_form::Local;
-use keyhive_crypto::{digest::Digest, share_key::ShareSecretKey, signer::async_signer};
+use keyhive_crypto::{share_key::ShareSecretKey, verified::Verified};
 use rand::{rngs::StdRng, SeedableRng};
 
 #[tokio::test]
@@ -16,7 +16,7 @@ async fn changing_owner_records_an_invitation_addressed_to_the_new_one() {
     let mut group = Group::new(2, &mut rng).await;
 
     let op = group.rotate(0, &mut rng).await;
-    let op_hash = Digest::hash(op.as_ref());
+    let op_hash = op.digest();
     let root = group.replicas[0]
         .root_secrets
         .get(&op_hash)
@@ -54,11 +54,11 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
     group.broadcast(&op1);
     let root1 = group.replicas[0]
         .root_secrets
-        .get(&Digest::hash(op1.as_ref()))
+        .get(&op1.digest())
         .expect("the author records the secret its own update produced");
     let op2 = group.rotate(0, &mut rng).await;
     group.broadcast(&op2);
-    let op2_hash = Digest::hash(op2.as_ref());
+    let op2_hash = op2.digest();
     let root2 = group.replicas[0]
         .root_secrets
         .get(&op2_hash)
@@ -92,10 +92,13 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
             }),
         },
     };
-    let sign = |op| async {
-        async_signer::try_sign_async::<Local, _, _>(&alice_signer, op)
-            .await
-            .unwrap()
+    let signer = &alice_signer;
+    let sign = |op: CgkaOperation| async move {
+        Arc::new(
+            Verified::sign::<Local, _>(&op, signer)
+                .await
+                .expect("signing succeeds"),
+        )
     };
 
     // Bob recorded op2's secret from the tree when it arrived, so drop it to
@@ -108,14 +111,14 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
         "precondition: nothing is recorded for op2"
     );
 
-    bob.record_secrets_from_invitation(&sign(create_add_with_invitation_wrapping(root1)).await);
+    bob.record_secrets_from_invitation(&*sign(create_add_with_invitation_wrapping(root1)).await);
     assert_eq!(
         bob.root_secrets.get(&op2_hash),
         None,
         "an invitation pairing op2 with a secret it did not produce should be ignored"
     );
 
-    bob.record_secrets_from_invitation(&sign(create_add_with_invitation_wrapping(root2)).await);
+    bob.record_secrets_from_invitation(&*sign(create_add_with_invitation_wrapping(root2)).await);
     assert_eq!(
         bob.root_secrets.get(&op2_hash),
         Some(root2),
@@ -133,7 +136,7 @@ async fn an_invitation_wraps_every_concurrent_update_head() {
     let mut heads = Vec::new();
     for author in 1..=4 {
         let op = group.rotate(author, &mut rng).await;
-        heads.push(Digest::hash(op.as_ref()));
+        heads.push(op.digest());
         group.deliver(&op, &[0]);
     }
 
@@ -152,7 +155,7 @@ async fn an_invitation_wraps_every_concurrent_update_head() {
 
     let invitee = member(&mut rng);
     let add = group.add(0, invitee.id, invitee.pk).await;
-    let CgkaChange::Add { invitation, .. } = &add.payload.change else {
+    let CgkaChange::Add { invitation, .. } = &add.payload().change else {
         panic!("an add should be an Add op")
     };
     let wrapped: Vec<_> = invitation

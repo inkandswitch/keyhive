@@ -24,13 +24,12 @@ use keyhive_crypto::{
     digest::Digest,
     id::Id,
     share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
+    verified::Verified,
 };
 use nonempty::NonEmpty;
 use rand::{CryptoRng, RngCore};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
@@ -50,8 +49,7 @@ use std::{
 ///
 /// This is a thin wrapper around [`beekem::cgka::Cgka`] that converts between
 /// keyhive_core domain IDs and beekem IDs at the API boundary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cgka(beekem::cgka::Cgka);
 
 impl Hash for Cgka {
@@ -111,7 +109,7 @@ impl Cgka {
     ) -> Result<
         (
             ApplicationSecret<T>,
-            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
+            Option<(Arc<Verified<CgkaOperation>>, LeafKeyPair)>,
         ),
         CgkaError,
     > {
@@ -135,7 +133,7 @@ impl Cgka {
         pk: ShareKey,
         authorization: CgkaAuthorization,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Arc<Verified<CgkaOperation>>>, CgkaError> {
         self.0
             .add(MemberId::from(id), pk, authorization, signer)
             .await
@@ -145,7 +143,7 @@ impl Cgka {
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Arc<Verified<CgkaOperation>>>, CgkaError> {
         let converted = members.map(|(id, pk, auth)| (MemberId::from(id), pk, auth));
         self.0.add_multiple(converted, signer).await
     }
@@ -155,7 +153,7 @@ impl Cgka {
         id: IndividualId,
         authorization: CgkaAuthorization,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Arc<Verified<CgkaOperation>>>, CgkaError> {
         self.0
             .remove(MemberId::from(id), authorization, signer)
             .await
@@ -167,7 +165,7 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>, LeafKeyPair), CgkaError> {
+    ) -> Result<(PcsKey, Arc<Verified<CgkaOperation>>, LeafKeyPair), CgkaError> {
         self.0.update(new_pk, new_sk, signer, csprng).await
     }
 
@@ -186,7 +184,7 @@ impl Cgka {
 
     pub fn merge_concurrent_operation(
         &mut self,
-        op: Arc<Signed<CgkaOperation>>,
+        op: Arc<Verified<CgkaOperation>>,
     ) -> Result<bool, CgkaError> {
         self.0.merge_concurrent_operation(op)
     }
@@ -195,7 +193,7 @@ impl Cgka {
         self.0.ops()
     }
 
-    pub fn contains_predecessors(&self, preds: &HashSet<Digest<Signed<CgkaOperation>>>) -> bool {
+    pub fn contains_predecessors(&self, preds: &HashSet<Digest<CgkaOperation>>) -> bool {
         self.0.contains_predecessors(preds)
     }
 
@@ -203,13 +201,13 @@ impl Cgka {
     /// invitation to it. The added member becomes the owner, holding `sk`.
     pub fn merge_invite(
         &mut self,
-        op: Arc<Signed<CgkaOperation>>,
+        op: Arc<Verified<CgkaOperation>>,
         sk: &ShareSecretKey,
     ) -> Result<bool, CgkaError> {
-        let CgkaChange::Add { added_id, pk, .. } = op.payload.change else {
+        let CgkaChange::Add { added_id, pk, .. } = op.payload().change else {
             return Err(CgkaError::UnexpectedInviteOperation);
         };
-        if !self.contains_predecessors(&op.payload.predecessors.iter().copied().collect()) {
+        if !self.contains_predecessors(&op.payload().predecessors.iter().copied().collect()) {
             return Err(CgkaError::OutOfOrderOperation);
         }
         let mut owner_sks = self.owner_sks().clone();
@@ -240,7 +238,7 @@ impl Merge for Cgka {
 #[derive(Debug)]
 pub struct AllCgkaOps {
     /// CGKA ops per doc, keyed by doc Id.
-    pub ops: HashMap<Id, Vec<Arc<Signed<CgkaOperation>>>>,
+    pub ops: HashMap<Id, Vec<Arc<Verified<CgkaOperation>>>>,
 
     /// For each principal: the set of doc identifiers whose ops are reachable.
     pub index: HashMap<Id, HashSet<Id>>,
@@ -257,7 +255,7 @@ impl AllCgkaOps {
     pub fn ops_for_agent(
         &self,
         agent_id: &Id,
-    ) -> Option<impl Iterator<Item = &Arc<Signed<CgkaOperation>>>> {
+    ) -> Option<impl Iterator<Item = &Arc<Verified<CgkaOperation>>>> {
         self.index.get(agent_id).map(|doc_ids| {
             doc_ids
                 .iter()

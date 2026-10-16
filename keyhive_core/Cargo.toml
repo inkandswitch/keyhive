@@ -15,7 +15,7 @@ rust-version.workspace = true
 # Keyhive
 beekem = { workspace = true, features = ["std"] }
 keyhive_codec = { workspace = true, features = ["std"] }
-keyhive_crypto = { workspace = true, features = ["std"] }
+keyhive_crypto = { workspace = true, features = ["serde", "std"] }
 keyline = { workspace = true, features = ["serde", "std"] }
 # The in-memory Keyline store, for the test helpers.
 keyline_memory = { workspace = true, features = ["std"], optional = true }

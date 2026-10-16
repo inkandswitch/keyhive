@@ -17,9 +17,8 @@ use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
-    digest::Digest,
     signed::Signed,
-    verified::{self},
+    verified::{self, Verified},
 };
 use keyline::{certificate::Certificate, delegation::Delegation, revocation::Revocation};
 use serde::{Serialize, Serializer};
@@ -36,7 +35,7 @@ pub enum Event<T: ContentRef> {
     PrekeyRotated(Arc<Signed<RotateKeyOp>>),
 
     /// A CGKA operation was performed.
-    CgkaOperation(Arc<Signed<CgkaOperation>>),
+    CgkaOperation(Arc<Verified<CgkaOperation>>),
 
     /// A Keyline delegation, in wire form: a store hands out what it holds
     /// without verifying it again.
@@ -57,8 +56,8 @@ impl<T: ContentRef> Event<T> {
 
         for event in new_events {
             if let Event::CgkaOperation(op) = event {
-                let op_digest = Digest::hash(op.as_ref());
-                let doc_id = DocumentId::from(op.payload.doc_id);
+                let op_digest = op.digest();
+                let doc_id = DocumentId::from(op.payload().doc_id);
                 let more = ciphertext_store
                     .get_ciphertext_by_pcs_update(&op_digest)
                     .await?;
@@ -95,9 +94,7 @@ impl<T: ContentRef> From<Event<T>> for StaticEvent<T> {
             Event::Delegated(d) => StaticEvent::Delegated(Arc::unwrap_or_clone(d)),
             Event::Revoked(r) => StaticEvent::Revoked(Arc::unwrap_or_clone(r)),
 
-            Event::CgkaOperation(cgka) => {
-                StaticEvent::CgkaOperation(Box::new(Arc::unwrap_or_clone(cgka)))
-            }
+            Event::CgkaOperation(cgka) => StaticEvent::CgkaOperation((**cgka.signed()).clone()),
 
             Event::PrekeyRotated(pkr) => {
                 StaticEvent::PrekeyRotated(Box::new(Arc::unwrap_or_clone(pkr).map(Into::into)))
@@ -152,44 +149,53 @@ mod tests {
         let doc_id1 = DocumentId::generate(&mut csprng);
         let doc_id2 = DocumentId::generate(&mut csprng);
 
-        let cgka_op_1 = signer.try_sign_sync(CgkaOperation {
-            doc_id: TreeId::from(doc_id1),
-            predecessors: BTreeSet::new(),
-            change: CgkaChange::Add {
-                added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
-                pk: ShareKey::generate(&mut csprng),
-                leaf_index: 42,
-                invitation: None,
-                authorization: CgkaAuthorization::Delegation([0u8; 32]),
+        let cgka_op_1 = Verified::sign_sync(
+            &CgkaOperation {
+                doc_id: TreeId::from(doc_id1),
+                predecessors: BTreeSet::new(),
+                change: CgkaChange::Add {
+                    added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                    pk: ShareKey::generate(&mut csprng),
+                    leaf_index: 42,
+                    invitation: None,
+                    authorization: CgkaAuthorization::Delegation([0u8; 32]),
+                },
             },
-        })?;
+            &signer,
+        )?;
 
-        let cgka_op_2 = signer.try_sign_sync(CgkaOperation {
-            doc_id: TreeId::from(doc_id2),
-            predecessors: BTreeSet::new(),
-            change: CgkaChange::Remove {
-                id: MemberId::from(&SigningKey::generate(&mut csprng)),
-                leaf_idx: 4,
-                removed_keys: BTreeSet::new(),
-                authorization: CgkaAuthorization::Revocation([0u8; 32]),
+        let cgka_op_2 = Verified::sign_sync(
+            &CgkaOperation {
+                doc_id: TreeId::from(doc_id2),
+                predecessors: BTreeSet::new(),
+                change: CgkaChange::Remove {
+                    id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                    leaf_idx: 4,
+                    removed_keys: BTreeSet::new(),
+                    authorization: CgkaAuthorization::Revocation([0u8; 32]),
+                },
             },
-        })?;
+            &signer,
+        )?;
 
-        let cgka_op_3 = signer.try_sign_sync(CgkaOperation {
-            doc_id: TreeId::from(doc_id1),
-            predecessors: BTreeSet::new(),
-            change: CgkaChange::Add {
-                added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
-                pk: ShareKey::generate(&mut csprng),
-                leaf_index: 11,
-                invitation: None,
-                authorization: CgkaAuthorization::Delegation([0u8; 32]),
+        let cgka_op_3 = Verified::sign_sync(
+            &CgkaOperation {
+                doc_id: TreeId::from(doc_id1),
+                predecessors: BTreeSet::new(),
+                change: CgkaChange::Add {
+                    added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                    pk: ShareKey::generate(&mut csprng),
+                    leaf_index: 11,
+                    invitation: None,
+                    authorization: CgkaAuthorization::Delegation([0u8; 32]),
+                },
             },
-        })?;
+            &signer,
+        )?;
 
-        let hash1 = Digest::hash(&cgka_op_1);
-        let hash2 = Digest::hash(&cgka_op_2);
-        let hash3 = Digest::hash(&cgka_op_3);
+        let hash1 = cgka_op_1.digest();
+        let hash2 = cgka_op_2.digest();
+        let hash3 = cgka_op_3.digest();
 
         let id = |key: VerifyingKey| Id::try_from(key).expect("a generated key is a valid point");
         let delegation = Verified::sign_sync(

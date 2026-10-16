@@ -6,17 +6,17 @@ use keyhive_core::{
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext, TestResult as Result},
 };
-use keyhive_crypto::{digest::Digest, signed::Signed};
+use keyhive_crypto::digest::Digest;
 use keyline::power::Power::{Read, Relay};
 use std::collections::BTreeSet;
 
 /// The digests of every CGKA operation `who` holds for a document.
-async fn held_ops(who: &Instance, doc: DocumentId) -> BTreeSet<Digest<Signed<CgkaOperation>>> {
+async fn held_ops(who: &Instance, doc: DocumentId) -> BTreeSet<Digest<CgkaOperation>> {
     who.cgka_ops_for_doc(&doc)
         .await
         .unwrap_or_default()
         .iter()
-        .map(|op| Digest::hash(op.as_ref()))
+        .map(|op| op.digest())
         .collect()
 }
 

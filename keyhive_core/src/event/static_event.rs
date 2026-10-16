@@ -6,11 +6,7 @@ use crate::{
 };
 use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
-use keyhive_crypto::{
-    content::reference::ContentRef,
-    signed::Signed,
-    verified::{self},
-};
+use keyhive_crypto::{content::reference::ContentRef, signed::Signed, verified};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +24,7 @@ pub enum StaticEvent<T: ContentRef> {
     PrekeyRotated(Box<Signed<RotateKeyOp>>),
 
     /// A CGKA operation was performed.
-    CgkaOperation(Box<Signed<CgkaOperation>>),
+    CgkaOperation(verified::Signed<CgkaOperation>),
 
     /// A Keyline delegation, as received: verified on receipt.
     Delegated(verified::Signed<Delegation>),
@@ -44,9 +40,13 @@ impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for 
         match variant {
             0 => Ok(Self::PrekeysExpanded(Box::new(u.arbitrary()?))),
             1 => Ok(Self::PrekeyRotated(Box::new(u.arbitrary()?))),
-            2 => Ok(Self::CgkaOperation(Box::new(u.arbitrary()?))),
+            2 => Ok(Self::CgkaOperation(verified::Signed::from_parts(
+                u.arbitrary()?,
+                keyhive_codec::traits::Encode::encode(&CgkaOperation::arbitrary(u)?),
+                ed25519_dalek::Signature::from_bytes(&u.arbitrary()?),
+            ))),
             // Delegations only: a revocation's watermark type has no
-            // `Arbitrary`, and the signature is junk either way.
+            // `Arbitrary`. Signatures here are junk, as for CGKA operations.
             3 => Ok(Self::Delegated(verified::Signed::from_parts(
                 u.arbitrary()?,
                 keyhive_codec::traits::Encode::encode(&Delegation::arbitrary(u)?),
