@@ -9,7 +9,16 @@ use crate::{
     secret_store::SecretStore,
     treemath,
 };
-use alloc::{collections::BTreeMap, vec, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec,
+    vec::Vec,
+};
+use keyhive_codec::{
+    error::DecodeError,
+    prefixed::{decode_len, encode_len},
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
@@ -20,15 +29,63 @@ pub type InnerNode = SecretStore;
 /// A PathChange represents an update along a path from a leaf to the root.
 /// This includes both the new public keys for each node and the keys that have
 /// been removed as part of this change.
+///
+/// The leaf is the signer's: the operation carrying the path names no member.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct PathChange {
-    pub leaf_id: MemberId,
     pub leaf_idx: u32,
-    pub leaf_pk: NodeKey,
+    /// The leaf's new key. An update rotates its leaf to one fresh key.
+    pub leaf_pk: ShareKey,
     // (u32 inner node index, new inner node)
     pub path: Vec<(u32, InnerNode)>,
-    pub removed_keys: Vec<ShareKey>,
+    pub removed_keys: BTreeSet<ShareKey>,
+}
+
+/// `leaf_idx ‖ leaf_pk ‖ count:bijou32 ‖ (index:bijou32 ‖ node)* ‖ removed_keys`,
+/// the path in the order it was written and the removed keys ascending.
+impl Encode for PathChange {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.leaf_idx.encode_into(out);
+        self.leaf_pk.encode_into(out);
+        encode_len(self.path.len(), out);
+        for (idx, node) in &self.path {
+            idx.encode_into(out);
+            node.encode_into(out);
+        }
+        self.removed_keys.encode_into(out);
+    }
+}
+
+impl Decode for PathChange {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for PathChange {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (leaf_idx, rest) = u32::decode_next(bytes)?;
+        let (leaf_pk, rest) = ShareKey::decode_next(rest)?;
+        let (count, mut rest) = decode_len(rest)?;
+        let mut path = Vec::new();
+        for _ in 0..count {
+            let (idx, after_idx) = u32::decode_next(rest)?;
+            let (node, after_node) = InnerNode::decode_next(after_idx)?;
+            path.push((idx, node));
+            rest = after_node;
+        }
+        let (removed_keys, rest) = BTreeSet::decode_next(rest)?;
+        Ok((
+            PathChange {
+                leaf_idx,
+                leaf_pk,
+                path,
+                removed_keys,
+            },
+            rest,
+        ))
+    }
 }
 
 impl PathChange {
@@ -292,11 +349,10 @@ impl BeeKem {
         let leaf_idx = *self.leaf_index_for_id(id)?;
         debug_assert!(self.id_for_leaf(leaf_idx).unwrap() == id);
         let mut new_path = PathChange {
-            leaf_id: id,
             leaf_idx: leaf_idx.u32(),
-            leaf_pk: NodeKey::ShareKey(pk),
+            leaf_pk: pk,
             path: Vec::new(),
-            removed_keys: self.node_key_for_id(id)?.keys(),
+            removed_keys: self.node_key_for_id(id)?.keys().into_iter().collect(),
         };
         // Wait to write into the tree until the whole path has been encrypted so an
         // error along the way aborts the whole write. Once all encryptions have
@@ -312,7 +368,7 @@ impl BeeKem {
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
             if let Some(store) = self.inner_node(parent_idx) {
-                new_path.removed_keys.append(&mut store.node_key().keys());
+                new_path.removed_keys.extend(store.node_key().keys());
             }
             let new_parent_sk = ShareSecretKey::generate(csprng);
             let new_parent_pk = new_parent_sk.share_key();
@@ -345,42 +401,31 @@ impl BeeKem {
     }
 
     /// Applies a [`PathChange`] representing new public and encrypted secret keys for each
-    /// node on a path.
-    pub fn apply_path(&mut self, new_path: &PathChange) {
+    /// node on a path from `leaf_id`'s leaf: the path's signer.
+    pub fn apply_path(&mut self, leaf_id: MemberId, new_path: &PathChange) {
         // If this id has been concurrently removed, it might no longer be present
         // when we try to apply the concurrent update at that id.
-        if !self.id_to_leaf_idx.contains_key(&new_path.leaf_id) {
+        let Ok(&leaf_idx) = self.leaf_index_for_id(leaf_id) else {
             return;
-        }
-        let leaf_idx = *self
-            .leaf_index_for_id(new_path.leaf_id)
-            .expect("Id should be present");
-        if !self.is_valid_path(new_path) {
+        };
+        let valid = self.is_valid_path(leaf_idx, new_path);
+        let Some(old_leaf) = self.leaf(leaf_idx) else {
+            panic!("Leaf for present ID should not be None");
+        };
+        let new_node_key =
+            NodeKey::from(old_leaf.pk).merge(&new_path.leaf_pk.into(), &new_path.removed_keys);
+        self.insert_leaf_at(leaf_idx, leaf_id, new_node_key);
+        if !valid {
             // Since this path is no longer valid, we can only update the leaf for
             // this id.
-            let Some(leaf) = self.leaf(leaf_idx) else {
-                panic!("Leaf for present ID should not be None");
-            };
-            let new_node_key =
-                NodeKey::from(leaf.pk).merge(&new_path.leaf_pk, &new_path.removed_keys);
-            self.insert_leaf_at(leaf_idx, new_path.leaf_id, new_node_key);
             self.blank_path(treemath::parent(leaf_idx.into()));
             return;
         }
 
-        let old_leaf = self.leaf(leaf_idx).as_ref().unwrap();
-        let new_leaf_pk = new_path.leaf_pk.clone();
-        self.insert_leaf_at(
-            leaf_idx,
-            new_path.leaf_id,
-            NodeKey::from(old_leaf.pk).merge(&new_leaf_pk, &new_path.removed_keys),
-        );
-
-        let removed_keys_set: Set<ShareKey> = Set::from_iter(new_path.removed_keys.iter().copied());
         for (idx, node) in &new_path.path {
             let current_idx = InnerNodeIndex::new(*idx);
             if let Some(current_node) = self.inner_node_mut(current_idx) {
-                current_node.merge(node, &removed_keys_set);
+                current_node.merge(node, &new_path.removed_keys);
             } else {
                 self.insert_inner_node_at(current_idx, node.clone());
             }
@@ -586,17 +631,13 @@ impl BeeKem {
 
     /// Whether the [`PathChange`] still makes sense given the state of the tree
     /// we are attempting to merge it into.
-    fn is_valid_path(&self, new_path: &PathChange) -> bool {
-        debug_assert!(self.id_to_leaf_idx.contains_key(&new_path.leaf_id));
-        let leaf_idx = self
-            .leaf_index_for_id(new_path.leaf_id)
-            .expect("Id should be present");
+    fn is_valid_path(&self, leaf_idx: LeafNodeIndex, new_path: &PathChange) -> bool {
         leaf_idx.u32() == new_path.leaf_idx
             && new_path
                 .path
                 .iter()
                 .map(|(idx, _)| *idx)
-                .eq(treemath::direct_path((*leaf_idx).into(), self.tree_size)
+                .eq(treemath::direct_path(leaf_idx.into(), self.tree_size)
                     .into_iter()
                     .map(|idx| idx.u32()))
     }
@@ -844,8 +885,8 @@ mod tests {
 
     #[test]
     fn removals_of_one_member_at_two_leaves_blank_both_paths() {
-        let (mut seeded_tree, [_owner, _alice, _bob, carol], new_path) = seeded();
-        seeded_tree.apply_path(&new_path);
+        let (mut seeded_tree, [owner, _alice, _bob, carol], new_path) = seeded();
+        seeded_tree.apply_path(owner, &new_path);
         // Leaf 0's path fills inner node 0, the parent of leaves 0 and 1.
         assert!(seeded_tree.inner_node(InnerNodeIndex::new(0)).is_some());
 
@@ -906,14 +947,16 @@ mod tests {
         forged.removed_keys = tree
             .node_key_for_id(owner)
             .expect("the owner is placed")
-            .keys();
+            .keys()
+            .into_iter()
+            .collect();
 
-        tree.apply_path(&forged);
+        tree.apply_path(owner, &forged);
 
         assert_eq!(
             tree.node_key_for_id(owner).expect("the owner is placed"),
-            genuine.leaf_pk,
-            "the leaf it names is still its own to rotate"
+            genuine.leaf_pk.into(),
+            "the leaf is still its signer's to rotate"
         );
         for idx in mine {
             assert!(tree.inner_node(idx).is_none(), "the path was not blanked");
@@ -923,7 +966,7 @@ mod tests {
 
     #[test]
     fn a_member_should_not_write_to_other_paths() {
-        let (tree, _, genuine) = seeded();
+        let (tree, [owner, ..], genuine) = seeded();
         assert_eq!(
             genuine.path.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
             vec![0, 1],
@@ -931,7 +974,7 @@ mod tests {
         );
 
         let mut accepted = tree.clone();
-        accepted.apply_path(&genuine);
+        accepted.apply_path(owner, &genuine);
         assert!(accepted.has_root_key(), "a genuine path was not applied");
 
         // Inner node 2 is the parent of leaves 2 and 3. It should not be
@@ -939,17 +982,34 @@ mod tests {
         let mut forged = genuine;
         forged.path[0].0 = 2;
         let mut denied = tree;
-        denied.apply_path(&forged);
+        denied.apply_path(owner, &forged);
         assert!(
             denied.inner_node(InnerNodeIndex::new(2)).is_none(),
             "a secret store was merged into another member's node"
         );
     }
 
+    /// An update rotates its signer's leaf. A path written from another
+    /// member's position, signed by someone else, leaves that member's leaf alone.
+    #[test]
+    fn a_path_from_another_members_leaf_rotates_only_the_signers() {
+        let (mut tree, [owner, alice, ..], genuine) = seeded();
+        let owners_key = tree.node_key_for_id(owner).expect("the owner is placed");
+
+        tree.apply_path(alice, &genuine);
+
+        assert_eq!(
+            tree.node_key_for_id(owner).expect("the owner is placed"),
+            owners_key,
+            "a path signed by alice rotated the owner's leaf"
+        );
+        assert_eq!(tree.member_count(), 4, "nobody was removed");
+    }
+
     #[test]
     fn removing_every_member_empties_the_tree() {
         let (mut tree, ids, path) = seeded();
-        tree.apply_path(&path);
+        tree.apply_path(ids[0], &path);
         assert!(
             tree.has_root_key(),
             "the fixture should start with a root key"

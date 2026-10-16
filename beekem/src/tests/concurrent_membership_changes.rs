@@ -4,7 +4,7 @@ use crate::{
     encrypted::EncryptedSecret,
     id::MemberId,
     keys::{NodeKey, ShareKeyMap},
-    operation::CgkaOperation,
+    operation::{CgkaChange, CgkaOperation},
     test_utils::{member, name_for, Group, Member, ADD_AUTH, REMOVE_AUTH},
     tree::PathChange,
 };
@@ -499,8 +499,8 @@ fn learn_from(mut known: ShareKeyMap, paths: &[&PathChange]) -> ShareKeyMap {
 }
 
 fn new_path(op: &Signed<CgkaOperation>) -> &PathChange {
-    match op.payload() {
-        CgkaOperation::Update { new_path, .. } => new_path,
+    match &op.payload().change {
+        CgkaChange::Update { new_path, .. } => new_path,
         _ => panic!("a rotation is an update"),
     }
 }

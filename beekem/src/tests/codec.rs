@@ -5,6 +5,7 @@ use crate::{
     encrypted::EncryptedSecret,
     operation::{CgkaAuthorization, Invitation, InvitationSecret, PredecessorSecret},
     secret_store::{SecretStore, SecretStoreVersion},
+    tree::PathChange,
     treemath::TreeNodeIndex,
 };
 use alloc::{collections::BTreeMap, vec::Vec};
@@ -67,6 +68,11 @@ fn invitation_laws() {
 #[test]
 fn predecessor_secret_laws() {
     laws::<PredecessorSecret>();
+}
+
+#[test]
+fn path_change_laws() {
+    laws::<PathChange>();
 }
 
 #[test]

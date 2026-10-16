@@ -4,7 +4,7 @@ use crate::{
     cgka::Cgka,
     collections::Set,
     keys::ShareKeyMap,
-    operation::{CgkaOperation, PredecessorSecret},
+    operation::{CgkaChange, CgkaOperation, PredecessorSecret},
     pcs_key::PcsKey,
     test_utils::{assert_chain_bookkeeping, for_each_seed, member, Group, Member},
     transact::{Fork, Merge},
@@ -36,10 +36,10 @@ async fn rotate<S: AsyncSigner<Local>, R: rand::CryptoRng + rand::RngCore>(
 }
 
 fn predecessor_secrets(op: &Signed<CgkaOperation>) -> &[PredecessorSecret] {
-    let CgkaOperation::Update {
+    let CgkaChange::Update {
         predecessor_secrets,
         ..
-    } = &op.payload
+    } = &op.payload.change
     else {
         panic!("an update should be an Update op")
     };
@@ -67,21 +67,16 @@ async fn with_entries(
     op: &Signed<CgkaOperation>,
     entries: Vec<PredecessorSecret>,
 ) -> Signed<CgkaOperation> {
-    let CgkaOperation::Update {
-        id,
-        ref new_path,
-        ref predecessors,
-        ..
-    } = op.payload
-    else {
+    let CgkaChange::Update { ref new_path, .. } = op.payload.change else {
         panic!("an update should be an Update op")
     };
-    let rebuilt = CgkaOperation::Update {
-        id,
-        new_path: new_path.clone(),
-        predecessor_secrets: entries,
-        predecessors: predecessors.clone(),
-        doc_id: *op.payload.doc_id(),
+    let rebuilt = CgkaOperation {
+        doc_id: op.payload.doc_id,
+        predecessors: op.payload.predecessors.clone(),
+        change: CgkaChange::Update {
+            new_path: new_path.clone(),
+            predecessor_secrets: entries,
+        },
     };
     async_signer::try_sign_async::<Local, _, _>(signer, rebuilt)
         .await
@@ -285,7 +280,7 @@ fn an_invitation_leaves_out_an_update_already_in_the_chain() {
 
         let invitee = member(&mut rng);
         let add = group.add(0, invitee.id, invitee.pk).await;
-        let CgkaOperation::Add { invitation, .. } = &add.payload else {
+        let CgkaChange::Add { invitation, .. } = &add.payload.change else {
             panic!("an add should be an Add op")
         };
         let wrapped: Vec<_> = invitation

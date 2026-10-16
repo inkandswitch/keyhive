@@ -418,13 +418,21 @@ pub(crate) fn assert_chain_bookkeeping(cgka: &Cgka, context: &str) {
     let updates: BTreeSet<_> = graph
         .cgka_ops
         .iter()
-        .filter(|(_, op)| matches!(op.payload, CgkaOperation::Update { .. }))
+        .filter(|(_, op)| op.payload.is_update())
         .map(|(op_hash, _)| *op_hash)
         .collect();
     let chainable: BTreeSet<_> = updates
         .iter()
         .flat_map(|update| {
-            let predecessors = graph.cgka_ops.get(update).unwrap().payload.predecessors();
+            let predecessors = graph
+                .cgka_ops
+                .get(update)
+                .unwrap()
+                .payload
+                .predecessors
+                .iter()
+                .copied()
+                .collect();
             graph.nearest_update_ancestors(&predecessors)
         })
         .collect();

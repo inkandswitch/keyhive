@@ -1,5 +1,5 @@
 use crate::{content::heads::ContentHeads, crypto::digest::Digest, event::Event};
-use beekem::operation::CgkaOperation;
+use beekem::operation::CgkaChange;
 use keyhive_codec::traits::StreamDecode;
 use keyhive_crypto::content::reference::ContentRef;
 use keyline::{delegation::Delegation, revocation::Revocation};
@@ -176,15 +176,19 @@ impl DebugEventRow {
                 let payload = signed.payload();
                 let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
                 let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
-                let doc_id = Hash::new(payload.doc_id().as_bytes(), nicknames);
+                let doc_id = Hash::new(payload.doc_id.as_bytes(), nicknames);
+                let predecessors: Vec<_> = payload
+                    .predecessors
+                    .iter()
+                    .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
+                    .collect();
 
-                let (op_type, op_details) = match payload {
-                    CgkaOperation::Add {
+                let (op_type, op_details) = match &payload.change {
+                    CgkaChange::Add {
                         added_id,
                         pk,
                         leaf_index,
                         invitation,
-                        predecessors,
                         ..
                     } => {
                         let op_details = CgkaOperationDetails::Add {
@@ -201,18 +205,14 @@ impl DebugEventRow {
                                     Hash::new(invited.update_op_hash.as_slice(), nicknames)
                                 })
                                 .collect(),
-                            predecessors: predecessors
-                                .iter()
-                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
-                                .collect(),
+                            predecessors,
                         };
                         ("Add", op_details)
                     }
-                    CgkaOperation::Remove {
+                    CgkaChange::Remove {
                         id,
                         leaf_idx,
                         removed_keys,
-                        predecessors,
                         ..
                     } => {
                         let op_details = CgkaOperationDetails::Remove {
@@ -222,36 +222,16 @@ impl DebugEventRow {
                                 .iter()
                                 .map(|key| Hash::new(key.as_bytes(), nicknames))
                                 .collect(),
-                            predecessors: predecessors
-                                .iter()
-                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
-                                .collect(),
+                            predecessors,
                         };
                         ("Remove", op_details)
                     }
-                    CgkaOperation::Update {
-                        id,
-                        new_path,
-                        predecessors,
-                        ..
-                    } => {
-                        let new_keys = match &new_path.leaf_pk {
-                            beekem::keys::NodeKey::ShareKey(share_key) => {
-                                vec![Hash::new(share_key.as_bytes(), nicknames)]
-                            }
-                            beekem::keys::NodeKey::ConflictKeys(conflict_keys) => conflict_keys
-                                .iter()
-                                .map(|k| Hash::new(k.as_bytes(), nicknames))
-                                .collect(),
-                        };
+                    CgkaChange::Update { new_path, .. } => {
                         let op_details = CgkaOperationDetails::Update {
-                            id: Hash::new(id.as_bytes(), nicknames),
-                            new_keys,
+                            id: issuer.clone(),
+                            new_keys: vec![Hash::new(new_path.leaf_pk.as_bytes(), nicknames)],
                             path_length: new_path.path.len(),
-                            predecessors: predecessors
-                                .iter()
-                                .map(|predecessor| Hash::new(predecessor.as_slice(), nicknames))
-                                .collect(),
+                            predecessors,
                         };
                         ("Update", op_details)
                     }

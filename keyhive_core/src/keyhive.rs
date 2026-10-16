@@ -44,7 +44,7 @@ use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaOperation},
+    operation::{CgkaAuthorization, CgkaChange, CgkaOperation},
     pcs_key::PcsKey,
 };
 use dupe::{Dupe, OptionDupedExt};
@@ -2103,7 +2103,7 @@ where
     ///
     /// An add cites a delegation that routes to the added member, and a remove
     /// a revocation that covers a delegation routing to the removed one. An
-    /// update cites nothing and is checked against the leaf it rotates.
+    /// update cites nothing: it rotates its signer's own leaf.
     async fn cgka_op_is_authorized(
         &self,
         signed_op: &Signed<CgkaOperation>,
@@ -2114,8 +2114,8 @@ where
         let doc = Id::from(doc_id);
         let signer = signed_op.issuer;
 
-        match &signed_op.payload {
-            CgkaOperation::Add {
+        match &signed_op.payload.change {
+            CgkaChange::Add {
                 authorization,
                 added_id,
                 ..
@@ -2157,7 +2157,7 @@ where
                 }
                 Ok(Ok(()))
             }
-            CgkaOperation::Remove {
+            CgkaChange::Remove {
                 authorization, id, ..
             } => {
                 let CgkaAuthorization::Revocation(digest) = authorization else {
@@ -2197,15 +2197,8 @@ where
                 }
                 Ok(Ok(()))
             }
-            CgkaOperation::Update { id, new_path, .. } => {
-                if *id != new_path.leaf_id {
-                    return Ok(Err(Denied));
-                }
-                // An update must be signed by the owner of the leaf it rotates.
-                if new_path.leaf_id.id() != signed_op.issuer {
-                    return Ok(Err(Denied));
-                }
-                // Its leaf is checked against the tree on merge. A relay has no
+            CgkaChange::Update { .. } => {
+                // It rotates its signer's own leaf, which is checked against the tree on merge. A relay has no
                 // tree, so the signer must also read the document in Keyline's
                 // positive graph.
                 Ok(ensure(self.reads_ever(doc, signer).await?, Pending))
@@ -2293,7 +2286,7 @@ where
     ) -> Result<(), ReceiveCgkaOpError<K::Error>> {
         signed_op.try_verify()?;
 
-        let doc_id: DocumentId = (*signed_op.payload.doc_id()).into();
+        let doc_id = DocumentId::from(signed_op.payload.doc_id);
 
         // Authorization reads only Keyline, so it needs no tree.
         match self.cgka_op_is_authorized(&signed_op, doc_id).await? {
@@ -2316,7 +2309,7 @@ where
         let received = Digest::hash(op.as_ref());
         let fresh = {
             let mut store = self.cgka_ops.lock().await;
-            if !store.holds(doc_id) && !matches!(op.payload, CgkaOperation::Add { .. }) {
+            if !store.holds(doc_id) && !matches!(op.payload.change, CgkaChange::Add { .. }) {
                 return Err(ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)));
             }
             store.insert(op.dupe())
@@ -3235,7 +3228,7 @@ fn applied(tree: &Cgka, op: &Arc<Signed<CgkaOperation>>) -> bool {
 
 /// Whether `op` invites `me`: an add of `me`.
 fn invites(op: &Signed<CgkaOperation>, me: IndividualId) -> bool {
-    matches!(op.payload, CgkaOperation::Add { added_id, .. } if IndividualId::from(added_id) == me)
+    matches!(op.payload.change, CgkaChange::Add { added_id, .. } if IndividualId::from(added_id) == me)
 }
 
 /// Apply `waiting` to `tree` in causal order, as far as it goes, adopting the
@@ -3284,7 +3277,7 @@ fn apply_one<E: core::error::Error + 'static>(
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
 ) -> Result<(), ReceiveCgkaOpError<E>> {
-    if let CgkaOperation::Add { added_id, pk, .. } = op.payload {
+    if let CgkaChange::Add { added_id, pk, .. } = op.payload.change {
         let added = IndividualId::from(added_id);
         if added == me {
             let sk = secrets
@@ -3308,9 +3301,9 @@ fn adopt_own_leaf_secrets(
     let mut keys: Vec<ShareKey> = tree.owner_leaf_key().into_iter().collect();
     if let Ok(batches) = tree.ops() {
         for op in batches.iter().flat_map(|batch| batch.iter()) {
-            if let CgkaOperation::Update { id, new_path, .. } = &op.payload {
-                if IndividualId::from(*id) == me {
-                    keys.extend(new_path.leaf_pk.keys());
+            if let CgkaChange::Update { new_path, .. } = &op.payload.change {
+                if IndividualId::from(op.issuer) == me {
+                    keys.push(new_path.leaf_pk);
                 }
             }
         }
@@ -3442,7 +3435,7 @@ mod tests {
         listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
         test_utils::Hive, transact::transact_async,
     };
-    use beekem::operation::CgkaOperation;
+    use beekem::operation::CgkaChange;
     use future_form::Sendable;
     use keyhive_codec::traits::Decode;
     use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
@@ -3620,10 +3613,12 @@ mod tests {
         );
 
         let update = owner.revoke_member(alice_id, false, doc).await?;
-        assert!(update.cgka_ops().iter().any(|op| matches!(
-            op.payload,
-            CgkaOperation::Remove { id, .. } if IndividualId::from(id) == bob_id
-        )));
+        assert!(update
+            .cgka_ops()
+            .iter()
+            .any(|op| matches!(op.payload.change,
+                CgkaChange::Remove { id, .. } if IndividualId::from(id) == bob_id
+            )));
         assert!(!seated(&owner).await.contains(&bob_id));
         Ok(())
     }
@@ -4797,8 +4792,8 @@ mod tests {
         let removed_vks: HashSet<_> = update
             .cgka_ops()
             .iter()
-            .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove { id, .. } => Some(id.verifying_key()),
+            .filter_map(|op| match &op.payload().change {
+                CgkaChange::Remove { id, .. } => Some(id.verifying_key()),
                 _ => None,
             })
             .collect();
@@ -4836,8 +4831,8 @@ mod tests {
         let removed_vks: HashSet<_> = update
             .cgka_ops()
             .iter()
-            .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove { id, .. } => Some(id.verifying_key()),
+            .filter_map(|op| match &op.payload().change {
+                CgkaChange::Remove { id, .. } => Some(id.verifying_key()),
                 _ => None,
             })
             .collect();

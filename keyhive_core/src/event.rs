@@ -58,7 +58,7 @@ impl<T: ContentRef> Event<T> {
         for event in new_events {
             if let Event::CgkaOperation(op) = event {
                 let op_digest = Digest::hash(op.as_ref());
-                let doc_id: DocumentId = (*op.payload.doc_id()).into();
+                let doc_id = DocumentId::from(op.payload.doc_id);
                 let more = ciphertext_store
                     .get_ciphertext_by_pcs_update(&op_digest)
                     .await?;
@@ -129,7 +129,7 @@ mod tests {
     };
     use beekem::{
         id::{MemberId, TreeId},
-        operation::CgkaAuthorization,
+        operation::{CgkaAuthorization, CgkaChange},
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
@@ -139,6 +139,7 @@ mod tests {
     };
     use keyline::power::Power;
     use rand::rngs::OsRng;
+    use std::collections::BTreeSet;
     use test_utils::init_logging;
     use testresult::TestResult;
 
@@ -151,33 +152,39 @@ mod tests {
         let doc_id1 = DocumentId::generate(&mut csprng);
         let doc_id2 = DocumentId::generate(&mut csprng);
 
-        let cgka_op_1 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
-            pk: ShareKey::generate(&mut csprng),
-            leaf_index: 42,
-            invitation: None,
-            predecessors: vec![],
+        let cgka_op_1 = signer.try_sign_sync(CgkaOperation {
             doc_id: TreeId::from(doc_id1),
-            authorization: CgkaAuthorization::Delegation([0u8; 32]),
+            predecessors: BTreeSet::new(),
+            change: CgkaChange::Add {
+                added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                pk: ShareKey::generate(&mut csprng),
+                leaf_index: 42,
+                invitation: None,
+                authorization: CgkaAuthorization::Delegation([0u8; 32]),
+            },
         })?;
 
-        let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
-            id: MemberId::from(&SigningKey::generate(&mut csprng)),
-            leaf_idx: 4,
-            predecessors: vec![],
-            removed_keys: vec![],
+        let cgka_op_2 = signer.try_sign_sync(CgkaOperation {
             doc_id: TreeId::from(doc_id2),
-            authorization: CgkaAuthorization::Revocation([0u8; 32]),
+            predecessors: BTreeSet::new(),
+            change: CgkaChange::Remove {
+                id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                leaf_idx: 4,
+                removed_keys: BTreeSet::new(),
+                authorization: CgkaAuthorization::Revocation([0u8; 32]),
+            },
         })?;
 
-        let cgka_op_3 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
-            pk: ShareKey::generate(&mut csprng),
-            leaf_index: 11,
-            invitation: None,
-            predecessors: vec![],
+        let cgka_op_3 = signer.try_sign_sync(CgkaOperation {
             doc_id: TreeId::from(doc_id1),
-            authorization: CgkaAuthorization::Delegation([0u8; 32]),
+            predecessors: BTreeSet::new(),
+            change: CgkaChange::Add {
+                added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                pk: ShareKey::generate(&mut csprng),
+                leaf_index: 11,
+                invitation: None,
+                authorization: CgkaAuthorization::Delegation([0u8; 32]),
+            },
         })?;
 
         let hash1 = Digest::hash(&cgka_op_1);

@@ -43,6 +43,8 @@ Holds valid `Read` or `Edit`. May try to escalate, grief others, or break conver
 
 _Mitigations_: effective power is the minimum along a route, so delegating above your own level grants nothing extra; a revocation acts only on routes through its issuer's admin reach, or on a certificate the issuer signed or is named by; all certificates and CGKA operations are signed and content-addressed. The certificate set is a state-based CRDT, so concurrent membership changes converge ([Keyline]).
 
+_Residual_: a member can publish a BeeKEM update whose encrypted path secrets do not match its public keys, so others cannot derive that update's root secret until a later update. This costs availability (a non-goal), not confidentiality or convergence: every replica applies the same update the same way.
+
 ### A4. Compromised device
 
 Exfiltrates a member's signing key and share keys, becoming indistinguishable from that member (A3) until revoked (A2).

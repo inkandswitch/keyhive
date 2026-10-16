@@ -1,6 +1,6 @@
 use beekem::{
     id::{MemberId, TreeId},
-    operation::{CgkaAuthorization, CgkaOperation},
+    operation::{CgkaAuthorization, CgkaChange, CgkaOperation},
     tree::PathChange,
 };
 use future_form::Sendable;
@@ -25,18 +25,21 @@ use keyline::{
     revocation::Revocation,
 };
 use nonempty::nonempty;
-use std::{collections::HashSet, convert::Infallible};
+use std::{
+    collections::{BTreeSet, HashSet},
+    convert::Infallible,
+};
 use testresult::TestResult;
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
-async fn cgka_heads(observer: &Hive, doc: DocumentId) -> Vec<Digest<Signed<CgkaOperation>>> {
+async fn cgka_heads(observer: &Hive, doc: DocumentId) -> BTreeSet<Digest<Signed<CgkaOperation>>> {
     let ops = observer
         .cgka_ops_for_doc(&doc)
         .await
         .expect("the observer holds the document");
     let referenced: HashSet<_> = ops
         .iter()
-        .flat_map(|op| op.payload.predecessors())
+        .flat_map(|op| op.payload.predecessors.iter().copied())
         .collect();
     ops.iter()
         .map(|op| Digest::hash(op.as_ref()))
@@ -86,7 +89,7 @@ async fn doc_with_alice_and_bob() -> TestResult<(Hive, Hive, DocumentId)> {
 }
 
 /// A legitimate `PathChange` from a document of `who`'s, for retargeting elsewhere.
-async fn intercepted_path(who: &Hive) -> Box<PathChange> {
+async fn intercepted_path(who: &Hive) -> PathChange {
     let doc_id = who
         .generate_doc(vec![], nonempty![[7u8; 32]])
         .await
@@ -98,8 +101,8 @@ async fn intercepted_path(who: &Hive) -> Box<PathChange> {
         .await
         .expect("the writer holds the document")
         .iter()
-        .find_map(|op| match op.payload() {
-            CgkaOperation::Update { new_path, .. } => Some(new_path.clone()),
+        .find_map(|op| match &op.payload().change {
+            CgkaChange::Update { new_path, .. } => Some(new_path.clone()),
             _ => None,
         })
         .expect("an update op was produced")
@@ -214,14 +217,16 @@ async fn a_non_member_cannot_add_themselves() -> TestResult {
 
     // Mallory cites a real delegation, but Alice issued it, not Mallory.
     let bob_delegation = keyline_grant(&alice, doc_id, bob.id()).await;
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: bob_delegation,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Add {
+            added_id: MemberId::from(mallory.id()),
+            pk: own_prekey(&mallory, doc_id).await,
+            leaf_index: 0,
+            invitation: None,
+            authorization: bob_delegation,
+        },
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
@@ -240,13 +245,15 @@ async fn a_non_member_cannot_remove_a_member() -> TestResult {
         .revoke_member(Id::from(bob.id()), true, doc_id)
         .await?;
     let bob_revocation = keyline_revocation(&alice, doc_id, bob.id()).await;
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob.id()),
-        leaf_idx: 1,
-        removed_keys: vec![],
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: bob_revocation,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Remove {
+            id: MemberId::from(bob.id()),
+            leaf_idx: 1,
+            removed_keys: BTreeSet::new(),
+            authorization: bob_revocation,
+        },
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
@@ -256,22 +263,24 @@ async fn a_non_member_cannot_remove_a_member() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_non_member_cannot_update_another_members_leaf() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+async fn a_non_members_update_is_pending() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
 
-    let mut path = intercepted_path(&mallory).await;
-    path.leaf_id = MemberId::from(bob.id());
-    let op = CgkaOperation::Update {
-        id: MemberId::from(bob.id()),
-        new_path: path,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&alice, doc_id).await,
+    // An update rotates its signer's own leaf, and Mallory has none here.
+    let path = intercepted_path(&mallory).await;
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Update {
+            new_path: path,
+            predecessor_secrets: Vec::new(),
+        },
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
-    assert!(is_denied(&result), "{result:?}");
+    assert!(is_pending(&result), "{result:?}");
+    assert!(!contains_op_from(&alice, doc_id, Id::from(mallory.id())).await);
     Ok(())
 }
 
@@ -282,14 +291,16 @@ async fn an_add_cannot_target_the_wrong_subject() -> TestResult {
 
     let bob_delegation = keyline_grant(&alice, doc_id, bob.id()).await;
 
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: bob_delegation,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Add {
+            added_id: MemberId::from(mallory.id()),
+            pk: own_prekey(&mallory, doc_id).await,
+            leaf_index: 0,
+            invitation: None,
+            authorization: bob_delegation,
+        },
     };
     let signed = alice.try_sign(op).await?;
     let result = alice.receive_cgka_op(signed.clone()).await;
@@ -320,19 +331,21 @@ async fn a_remove_cannot_evict_the_wrong_subject() -> TestResult {
         .await
         .unwrap_or_default()
         .iter()
-        .find_map(|op| match op.payload() {
-            CgkaOperation::Remove { authorization, .. } => Some(*authorization),
+        .find_map(|op| match &op.payload().change {
+            CgkaChange::Remove { authorization, .. } => Some(*authorization),
             _ => None,
         })
         .expect("a remove op for bob");
 
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(carol.id()),
-        leaf_idx: 1,
-        removed_keys: vec![],
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: bob_revocation,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Remove {
+            id: MemberId::from(carol.id()),
+            leaf_idx: 1,
+            removed_keys: BTreeSet::new(),
+            authorization: bob_revocation,
+        },
     };
     let signed = alice.try_sign(op).await?;
     let result = alice.receive_cgka_op(signed.clone()).await;
@@ -370,14 +383,16 @@ async fn an_add_citing_a_delegation_over_another_resource_is_pending() -> TestRe
     let (_, elsewhere) = own_group_with(&mallory, mallory.id().into()).await?;
     leak_to(&mallory, &alice).await;
 
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: elsewhere,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Add {
+            added_id: MemberId::from(mallory.id()),
+            pk: own_prekey(&mallory, doc_id).await,
+            leaf_index: 0,
+            invitation: None,
+            authorization: elsewhere,
+        },
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
@@ -397,37 +412,20 @@ async fn a_remove_citing_a_revocation_over_another_resource_is_pending() -> Test
     let rev_hash = keyline_revocation(&mallory, group_id, bob_id).await;
     leak_to(&mallory, &alice).await;
 
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob.id()),
-        leaf_idx: 1,
-        removed_keys: vec![],
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: rev_hash,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Remove {
+            id: MemberId::from(bob.id()),
+            leaf_idx: 1,
+            removed_keys: BTreeSet::new(),
+            authorization: rev_hash,
+        },
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
     assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, Id::from(mallory.id())).await);
-    Ok(())
-}
-
-#[tokio::test]
-async fn the_creator_cannot_update_another_members_leaf() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-
-    let mut path = intercepted_path(&alice).await;
-    path.leaf_id = MemberId::from(bob.id());
-    let op = CgkaOperation::Update {
-        id: MemberId::from(bob.id()),
-        new_path: path,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-    };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
-
-    assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
 
@@ -440,14 +438,16 @@ async fn an_add_cannot_cite_a_delegation_below_read() -> TestResult {
     alice.add_member(carol_id, doc_id, Power::Relay).await?;
     let authorization = keyline_grant(&alice, doc_id, carol_id).await;
 
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(carol.id()),
-        pk: own_prekey(&carol, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Add {
+            added_id: MemberId::from(carol.id()),
+            pk: own_prekey(&carol, doc_id).await,
+            leaf_index: 0,
+            invitation: None,
+            authorization,
+        },
     };
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
@@ -469,14 +469,16 @@ async fn an_add_granting_more_than_its_subject_reaches_here_is_pending() -> Test
     alice.add_member(group_id, doc_id, Power::Relay).await?;
     alice.add_member(mallory_id, group_id, Power::Admin).await?;
 
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: keyline_grant(&alice, group_id, mallory_id).await,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Add {
+            added_id: MemberId::from(mallory.id()),
+            pk: own_prekey(&mallory, doc_id).await,
+            leaf_index: 0,
+            invitation: None,
+            authorization: keyline_grant(&alice, group_id, mallory_id).await,
+        },
     };
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
@@ -495,14 +497,16 @@ async fn a_founding_delegation_cannot_seat_an_outsider() -> TestResult {
 
     // The root edge to Alice, signed by the document's own key.
     let founding = keyline_grant(&alice, doc_id, alice.id()).await;
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: founding,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Add {
+            added_id: MemberId::from(mallory.id()),
+            pk: own_prekey(&mallory, doc_id).await,
+            leaf_index: 0,
+            invitation: None,
+            authorization: founding,
+        },
     };
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
@@ -519,11 +523,9 @@ async fn a_founding_delegation_cannot_seat_an_outsider() -> TestResult {
 
 /// The causal root of `doc`'s operations, which is its creator's add of themselves.
 async fn creators_own_add(observer: &Hive, doc: DocumentId) -> Signed<CgkaOperation> {
-    op_where(
-        observer,
-        doc,
-        |op| matches!(op, CgkaOperation::Add { predecessors, .. } if predecessors.is_empty()),
-    )
+    op_where(observer, doc, |op| {
+        matches!(op.change, CgkaChange::Add { .. }) && op.predecessors.is_empty()
+    })
     .await
 }
 
@@ -598,13 +600,15 @@ async fn a_remove_citing_a_revocation_that_covers_nothing_is_pending() -> TestRe
         .iter()
         .position(|id| *id == bob_id)
         .expect("bob seated") as u32;
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob_id),
-        leaf_idx,
-        removed_keys: vec![],
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: CgkaAuthorization::Revocation(inert_digest.into()),
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Remove {
+            id: MemberId::from(bob_id),
+            leaf_idx,
+            removed_keys: BTreeSet::new(),
+            authorization: CgkaAuthorization::Revocation(inert_digest.into()),
+        },
     };
     let result = alice.receive_cgka_op(relay.try_sign(op).await?).await;
 
@@ -635,7 +639,7 @@ async fn an_add_through_a_group_is_still_applied_to_cgka_graph_after_member_revo
     alice.add_member(bob_id, group_id, Power::Read).await?;
     alice.add_member(group_id, doc_id, Power::Read).await?;
     let add_of_bob = op_where(&alice, doc_id, |op| {
-        matches!(op, CgkaOperation::Add { added_id, .. }
+        matches!(&op.change, CgkaChange::Add { added_id, .. }
             if *added_id == MemberId::from(bob.id()))
     })
     .await;
@@ -684,7 +688,7 @@ async fn an_add_through_an_individual_is_applied_once_the_individual_is_promoted
         .await?;
     alice.add_member(group_id, doc_id, Power::Read).await?;
     let add_of_carol = op_where(&alice, doc_id, |op| {
-        matches!(op, CgkaOperation::Add { added_id, .. }
+        matches!(&op.change, CgkaChange::Add { added_id, .. }
             if *added_id == MemberId::from(carol.id()))
     })
     .await;
@@ -741,7 +745,7 @@ async fn a_remove_through_an_individual_is_applied_once_the_individual_is_promot
     alice.add_member(group_id, doc_id, Power::Read).await?;
     alice.revoke_member(group_id, true, doc_id).await?;
     let remove_of_carol = op_where(&alice, doc_id, |op| {
-        matches!(op, CgkaOperation::Remove { id, .. }
+        matches!(&op.change, CgkaChange::Remove { id, .. }
             if *id == MemberId::from(carol.id()))
     })
     .await;
@@ -769,43 +773,6 @@ async fn a_remove_through_an_individual_is_applied_once_the_individual_is_promot
 }
 
 #[tokio::test]
-async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-
-    let mut path = intercepted_path(&alice).await;
-    path.leaf_id = MemberId::from(bob.id());
-    let op = CgkaOperation::Update {
-        id: MemberId::from(bob.id()),
-        new_path: path,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-    };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
-
-    assert!(is_denied(&result), "{result:?}");
-    assert!(!result.unwrap_err().is_missing_dependency());
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_rotation_whose_id_differs_from_its_path_leaf_is_denied() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-
-    let op = CgkaOperation::Update {
-        id: MemberId::from(alice.id()),
-        new_path: intercepted_path(&bob).await,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-    };
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
-
-    assert!(is_denied(&result), "{result:?}");
-    Ok(())
-}
-
-#[tokio::test]
 async fn a_remove_citing_a_revocation_of_access_below_read_is_denied() -> TestResult {
     let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
     let bob = keyhive_core::test_utils::make_simple_keyhive().await?;
@@ -814,13 +781,15 @@ async fn a_remove_citing_a_revocation_of_access_below_read_is_denied() -> TestRe
     alice.add_member(bob_id, doc_id, Power::Relay).await?;
     alice.revoke_member(Id::from(bob_id), true, doc_id).await?;
 
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob.id()),
-        leaf_idx: 1,
-        removed_keys: vec![],
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: keyline_revocation(&alice, doc_id, bob_id).await,
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Remove {
+            id: MemberId::from(bob.id()),
+            leaf_idx: 1,
+            removed_keys: BTreeSet::new(),
+            authorization: keyline_revocation(&alice, doc_id, bob_id).await,
+        },
     };
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
@@ -832,13 +801,15 @@ async fn a_remove_citing_a_revocation_of_access_below_read_is_denied() -> TestRe
 async fn a_remove_citing_a_revocation_not_yet_received_is_pending() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob.id()),
-        leaf_idx: 1,
-        removed_keys: vec![],
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: CgkaAuthorization::Revocation([0u8; 32]),
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Remove {
+            id: MemberId::from(bob.id()),
+            leaf_idx: 1,
+            removed_keys: BTreeSet::new(),
+            authorization: CgkaAuthorization::Revocation([0u8; 32]),
+        },
     };
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
@@ -851,14 +822,16 @@ async fn an_add_citing_a_delegation_not_yet_received_is_pending() -> TestResult 
     let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
 
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        authorization: CgkaAuthorization::Delegation([0u8; 32]),
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Add {
+            added_id: MemberId::from(mallory.id()),
+            pk: own_prekey(&mallory, doc_id).await,
+            leaf_index: 0,
+            invitation: None,
+            authorization: CgkaAuthorization::Delegation([0u8; 32]),
+        },
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
@@ -875,16 +848,10 @@ async fn an_add_through_a_delegation_to_ourselves_for_someone_else_is_pending() 
     learn(&alice, &mallory).await;
 
     let mut op = creators_own_add(&alice, doc_id).await.payload().clone();
-    if let CgkaOperation::Add {
-        added_id,
-        pk,
-        predecessors,
-        ..
-    } = &mut op
-    {
+    op.predecessors = cgka_heads(&alice, doc_id).await;
+    if let CgkaChange::Add { added_id, pk, .. } = &mut op.change {
         *added_id = MemberId::from(mallory.id());
         *pk = own_prekey(&mallory, doc_id).await;
-        *predecessors = cgka_heads(&alice, doc_id).await;
     }
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 

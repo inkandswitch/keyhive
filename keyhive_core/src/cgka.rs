@@ -14,7 +14,7 @@ use beekem::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
+    operation::{CgkaAuthorization, CgkaBatch, CgkaChange, CgkaOperation},
     pcs_key::{ApplicationSecret, PcsKey},
     transact::Merge as _,
 };
@@ -206,16 +206,10 @@ impl Cgka {
         op: Arc<Signed<CgkaOperation>>,
         sk: &ShareSecretKey,
     ) -> Result<bool, CgkaError> {
-        let CgkaOperation::Add {
-            added_id,
-            pk,
-            ref predecessors,
-            ..
-        } = op.payload
-        else {
+        let CgkaChange::Add { added_id, pk, .. } = op.payload.change else {
             return Err(CgkaError::UnexpectedInviteOperation);
         };
-        if !self.contains_predecessors(&predecessors.iter().cloned().collect()) {
+        if !self.contains_predecessors(&op.payload.predecessors.iter().copied().collect()) {
             return Err(CgkaError::OutOfOrderOperation);
         }
         let mut owner_sks = self.owner_sks().clone();

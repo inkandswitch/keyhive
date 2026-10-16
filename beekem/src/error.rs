@@ -69,7 +69,7 @@ pub enum CgkaError {
     #[cfg_attr(feature = "thiserror", error("Unexpected key conflict"))]
     UnexpectedKeyConflict,
 
-    #[cfg_attr(feature = "thiserror", error("Expected CgkaOperation::Add for invite"))]
+    #[cfg_attr(feature = "thiserror", error("Expected CgkaChange::Add for invite"))]
     UnexpectedInviteOperation,
 
     #[cfg_attr(feature = "thiserror", error("Unknown PCS key"))]
@@ -112,7 +112,7 @@ impl core::fmt::Display for CgkaError {
             Self::Serialize(msg) => write!(f, "Serialization failed: {msg}"),
             Self::UnexpectedKeyConflict => write!(f, "Unexpected key conflict"),
             Self::UnexpectedInviteOperation => {
-                write!(f, "Expected CgkaOperation::Add for invite")
+                write!(f, "Expected CgkaChange::Add for invite")
             }
             Self::UnknownPcsKey => write!(f, "Unknown PCS key"),
             Self::WrongDocument => write!(f, "Operation belongs to a different document"),

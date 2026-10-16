@@ -1,7 +1,6 @@
 //! Secret store for inner tree nodes.
 
 use crate::{
-    collections::Set,
     encrypted::EncryptedSecret,
     error::CgkaError,
     keys::{share_secret_key_from_decrypted_secret, ConflictKeys, NodeKey, ShareKeyMap},
@@ -141,7 +140,7 @@ impl SecretStore {
     }
 
     /// Drop the versions corresponding to `removed_keys` and then merge `other`.
-    pub fn merge(&mut self, other: &SecretStore, removed_keys: &Set<ShareKey>) {
+    pub fn merge(&mut self, other: &SecretStore, removed_keys: &BTreeSet<ShareKey>) {
         let mut versions = other.versions.clone();
         versions.extend(
             self.versions

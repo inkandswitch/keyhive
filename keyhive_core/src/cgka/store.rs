@@ -22,7 +22,7 @@ impl CgkaOpStore {
 
     /// Store `op` under its document. `true` if it was not already held.
     pub(crate) fn insert(&mut self, op: Arc<Signed<CgkaOperation>>) -> bool {
-        let doc_id = DocumentId::from(*op.payload.doc_id());
+        let doc_id = DocumentId::from(op.payload.doc_id);
         self.0
             .entry(doc_id)
             .or_default()

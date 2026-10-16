@@ -1,6 +1,6 @@
 //! Syncing events between keyhives.
 
-use beekem::operation::CgkaOperation;
+use beekem::operation::CgkaChange;
 use keyhive_core::{
     event::Event,
     principal::{document::id::DocumentId, individual::id::IndividualId},
@@ -493,8 +493,8 @@ async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_
     let update = dave.revoke_member(grace.id(), true, design_doc).await?;
     assert!(
         update.cgka_ops().iter().any(|op| matches!(
-            op.payload(),
-            CgkaOperation::Remove { id, .. } if IndividualId::from(*id) == grace.id()
+            &op.payload().change,
+            CgkaChange::Remove { id, .. } if IndividualId::from(*id) == grace.id()
         )),
         "the revocation produced no CGKA removal for the member it revoked"
     );
