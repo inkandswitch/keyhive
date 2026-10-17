@@ -470,7 +470,11 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     // causal root of the operation graph.
     {
         let bob_active_id = bob.active().id();
-        let bob_pk = bob.active().pick_prekey(doc_id).await;
+        let bob_pk = bob
+            .active()
+            .pick_prekey(doc_id)
+            .await
+            .expect("bob has prekeys");
         // Bob's founding delegation: the document's Keyline root edge to him.
         let doc_kl = Id::from(doc_id);
         let bob_founding: [u8; 32] =

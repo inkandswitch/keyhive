@@ -130,10 +130,21 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         &self,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Verified<RotateKeyOp>, SignError> {
-        let share_key = {
+        let picked = {
             // TODO total hack
             let locked = self.individual.lock().await;
-            locked.pick_prekey(DocumentId(self.id().into())).dupe()
+            locked.pick_prekey(DocumentId(self.id().into())).copied()
+        };
+        // With no live prekey (rotations can retire every one), publish one
+        // to rotate.
+        let share_key = match picked {
+            Some(share_key) => share_key,
+            None => {
+                self.expand_prekeys(csprng.dupe())
+                    .await?
+                    .payload()
+                    .share_key
+            }
         };
         let contact_key = self.rotate_prekey(share_key, csprng.dupe()).await?;
         self.rotate_prekey(contact_key.payload().new, csprng)
@@ -141,26 +152,33 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         Ok(contact_key)
     }
 
-    /// Pseudorandomly select a prekey out of the current prekeys.
-    pub async fn pick_prekey(&self, doc_id: DocumentId) -> ShareKey {
+    /// Select a prekey out of the current prekeys, as
+    /// [`IndividualState::pick_prekey`] does, preferring one whose secret this
+    /// instance holds. `None` if there are no live prekeys.
+    pub async fn pick_prekey(&self, doc_id: DocumentId) -> Option<ShareKey> {
         tracing::trace!("picking prekey for document {doc_id}",);
         let (picked, published) = {
             let locked = self.individual.lock().await;
-            (*locked.pick_prekey(doc_id), locked.prekeys().clone())
+            (
+                locked.pick_prekey(doc_id).copied()?,
+                locked.prekeys().clone(),
+            )
         };
         // It's possible a sibling instance for our keyhive identity has not yet
         // shared the secret for `picked`. If we don't have it, we pick a prekey
         // we do have the secret for.
         let local_pairs = self.key_pairs.lock().await;
         if local_pairs.contains_key(&picked) {
-            return picked;
+            return Some(picked);
         }
-        published
-            .iter()
-            .filter(|pk| local_pairs.contains_key(pk))
-            .min()
-            .copied()
-            .unwrap_or(picked)
+        Some(
+            published
+                .iter()
+                .filter(|pk| local_pairs.contains_key(pk))
+                .min()
+                .copied()
+                .unwrap_or(picked),
+        )
     }
 
     /// Replace a particular prekey with a new one.

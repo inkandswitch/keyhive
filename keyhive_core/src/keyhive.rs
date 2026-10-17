@@ -506,7 +506,9 @@ where
                     tracing::warn!(%doc_id, "no certificate in the batch explains a new reader");
                     continue;
                 };
-                let prekey = *individual.lock().await.pick_prekey(doc_id);
+                let Some(prekey) = individual.lock().await.pick_prekey(doc_id).copied() else {
+                    continue; // no live prekeys to seat them with
+                };
                 let prekeys = HashMap::from([(*added, prekey)]);
                 let made = state
                     .lock()
@@ -791,6 +793,7 @@ where
             let sks = active.key_pairs.lock().await.clone();
             (active.signer.clone(), active.id(), owner_pk, sks)
         };
+        let owner_pk = owner_pk.ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
         let owner_sk = *owner_sks
             .get(&owner_pk)
             .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
@@ -811,7 +814,9 @@ where
                 let Some(individual) = self.individual_state(reader).await else {
                     continue;
                 };
-                let prekey = *individual.lock().await.pick_prekey(doc_id);
+                let Some(prekey) = individual.lock().await.pick_prekey(doc_id).copied() else {
+                    continue; // no live prekeys to seat them with
+                };
                 prekey
             };
             founders.push((reader, prekey, authorization));

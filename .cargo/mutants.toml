@@ -45,6 +45,10 @@ additional_cargo_args = ["--features", "test_utils"]
 # `Arbitrary` impls generate test data: mutating one only changes which
 # inputs a property test draws.
 #
+# `uniform_index` accepts a draw `< limit`; `<=` differs only when a draw is
+# exactly `limit`, which happens with probability 2^-64 and then still yields an
+# index in range (`limit` is a multiple of `len`), so no test can tell them apart.
+#
 # `applied` lets `feed_held` skip operations a tree already has. Feeding them
 # anyway changes nothing: a known operation is ignored, and a known invite
 # re-adopts the same owner with the same secrets (`key_pairs` only grows).
@@ -57,6 +61,7 @@ exclude_re = [
   "replace != with == in Keyhive<[^>]*>::reconcile_locked",
   "replace applied -> bool with false",
   "replace \\|\\| with && in Keyhive<[^>]*>::subject_views",
+  "replace < with <= in uniform_index",
 ]
 
 timeout_multiplier = 3.0
