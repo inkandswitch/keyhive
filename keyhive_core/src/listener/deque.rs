@@ -25,12 +25,14 @@ impl<T: ContentRef> Deque<T> {
         self.0.lock().await.push_back(event)
     }
 
+    /// The event pushed last.
     pub async fn pop_latest(&self) -> Option<Event<T>> {
-        self.0.lock().await.pop_front()
+        self.0.lock().await.pop_back()
     }
 
+    /// The event pushed first.
     pub async fn pop_earliest(&self) -> Option<Event<T>> {
-        self.0.lock().await.pop_back()
+        self.0.lock().await.pop_front()
     }
 
     pub async fn is_empty(&self) -> bool {
@@ -95,5 +97,43 @@ impl<F: FutureForm, T: ContentRef + Send + Sync> MembershipListener<F, T> for De
 impl<F: FutureForm, T: ContentRef + Send + Sync> CgkaListener<F> for Deque<T> {
     fn on_cgka_op<'a>(&'a self, data: &'a Arc<Signed<CgkaOperation>>) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::CgkaOperation(data.dupe())).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::principal::individual::op::add_key::AddKeyOp;
+    use keyhive_crypto::{share_key::ShareSecretKey, signer::memory::MemorySigner};
+    use rand::rngs::OsRng;
+
+    fn event() -> Event<[u8; 32]> {
+        let op = AddKeyOp {
+            share_key: ShareSecretKey::generate(&mut OsRng).share_key(),
+        };
+        let signed = MemorySigner::generate(&mut OsRng)
+            .try_sign_sync(op)
+            .expect("signing succeeds");
+        Event::PrekeysExpanded(Arc::new(signed))
+    }
+
+    #[tokio::test]
+    async fn the_deque_pops_from_the_end_each_name_says() {
+        let deque = Deque::new();
+        assert!(deque.is_empty().await);
+        let (first, second, third) = (event(), event(), event());
+        for e in [&first, &second, &third] {
+            deque.push(e.clone()).await;
+        }
+        assert_eq!(deque.len().await, 3);
+        assert!(!deque.is_empty().await);
+
+        assert_eq!(deque.pop_latest().await, Some(third));
+        assert_eq!(deque.pop_earliest().await, Some(first));
+        assert_eq!(deque.len().await, 1);
+
+        deque.clear().await;
+        assert!(deque.is_empty().await);
+        assert_eq!(deque.pop_latest().await, None);
     }
 }
