@@ -1,7 +1,11 @@
 //! Saving an instance to an archive and rebuilding it.
 
+use future_form::Sendable;
 use keyhive_core::test_utils::{CausalDecryptionExt, TestContext, TestError, TestResult as Result};
-use keyline::power::Power::{Admin, Edit, Read};
+use keyline::{
+    contract::Keyline,
+    power::Power::{Admin, Edit, Read},
+};
 
 #[tokio::test]
 async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Result<()> {
@@ -253,6 +257,58 @@ async fn a_rebuilt_instance_can_write_and_walk_back() -> Result<()> {
         walked.missing(),
         0,
         "the rebuilt instance holds the ancestor it just wrote"
+    );
+    Ok(())
+}
+
+/// An instance that holds a document's operations but could not build its
+/// tree, because its invitation used a prekey only another instance held,
+/// builds it when it is loaded once it holds that secret, though nothing new
+/// arrives. Delivered straight to `receive_cgka_op`, the failed invitation is
+/// not pending, so importing the secret alone builds nothing.
+#[tokio::test]
+async fn a_tree_unbuilt_for_want_of_a_secret_is_built_on_load() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&bob, "design_doc").await?;
+    bob.add_member(alice.id(), design_doc, Read).await?;
+    let ct = ctx.encrypt(&bob, design_doc, b"for alice").await?;
+    // After bob's add, so he invited alice at a prekey of hers, not the replica's.
+    let replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
+
+    let certificates = Keyline::<Sendable>::certificates(bob.keyline())
+        .await
+        .map_err(TestError::from)?
+        .value;
+    for cert in certificates {
+        replica.receive_certificate(cert).await?;
+    }
+    let ops = bob
+        .cgka_ops_for_doc(&design_doc)
+        .await
+        .ok_or("bob holds his document's operations")?;
+    // Twice: an operation that arrives before any add of its document is not
+    // stored, so the first pass stores the adds and the second the rest. The
+    // add of alice fails both times: its prekey secret is alice's, not the
+    // replica's.
+    for op in ops.iter().chain(&ops) {
+        let _ = replica.receive_cgka_op(op.as_ref().clone()).await;
+    }
+    ctx.share_prekey_secrets(&alice, &replica).await?;
+    assert!(
+        replica.try_decrypt_content(design_doc, &ct).await.is_err(),
+        "precondition: the replica holds the secret but has no tree"
+    );
+
+    let restored = ctx
+        .rebuild_from_archive(&replica.into_archive().await?, "alice-restored")
+        .await?;
+    assert_eq!(
+        restored.try_decrypt_content(design_doc, &ct).await?,
+        b"for alice".to_vec()
     );
     Ok(())
 }

@@ -141,6 +141,7 @@ mod tests {
 
         let emitted = log.len().await;
         assert!(emitted > 0, "creating a document emits events");
+        assert!(!log.is_empty().await);
 
         let mut drained = 0;
         while log.pop().await.is_some() {

@@ -101,6 +101,18 @@ mod tests {
     use alloc::collections::BTreeSet;
 
     #[test]
+    fn every_kind_is_found_by_its_byte() {
+        for kind in Kind::ALL {
+            assert_eq!(Kind::from_u8(kind.to_u8()), Some(kind));
+        }
+        assert_eq!(
+            Kind::from_u8(b'I'),
+            None,
+            "reserved: an archive starts with KHIV"
+        );
+    }
+
+    #[test]
     fn kinds_are_distinct() {
         let distinct: BTreeSet<u8> = Kind::ALL.iter().map(|k| k.to_u8()).collect();
         assert_eq!(distinct.len(), Kind::ALL.len());

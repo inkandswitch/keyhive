@@ -118,7 +118,17 @@ impl<T: StreamDecode> Decode for ContentHeads<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::BTreeMap, fmt};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fmt,
+    };
+
+    #[test]
+    fn heads_iterate_as_they_were_given() {
+        let given = BTreeSet::from([[1u8; 2], [2u8; 2], [3u8; 2]]);
+        let heads = ContentHeads::from_iter(given.iter().copied());
+        assert_eq!(heads.into_iter().collect::<BTreeSet<_>>(), given);
+    }
 
     /// A short head, so arbitrary bytes often decode and canonicality is
     /// exercised on real watermarks.

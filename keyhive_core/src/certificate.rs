@@ -70,8 +70,9 @@ pub(crate) async fn route_through<F: FutureForm, K: Keyline<F>>(
         return Ok(false);
     }
 
-    // `closure(doc)` holds every delegation about every subject with standing
-    // over `doc`; keep those about subjects the route can pass through.
+    // Keep the delegations about subjects between `subject` and `doc`: those
+    // the route can pass through. `closure(doc)` holds at least those; a
+    // store may return more, so both bounds are checked here.
     let mut edges: Vec<(Id, Delegation)> = Vec::new();
     for cert in keyline.closure(doc).await?.value {
         let Certificate::Delegation(signed) = cert else {
@@ -269,7 +270,12 @@ mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
     use future_form::Sendable;
-    use keyline::certificate::{CertificateId, VerifiedCertificate};
+    use keyhive_crypto::digest::Digest;
+    use keyline::{
+        certificate::{CertificateId, VerifiedCertificate},
+        contract::{CertificateSet, Query, Version},
+        revocation::RevocationId,
+    };
     use keyline_memory::MemoryKeyline;
     use tokio::runtime::Builder;
 
@@ -396,6 +402,176 @@ mod tests {
                 });
             });
     }
+    /// A route stays between the delegation's subject and the document. Here
+    /// the document is itself a member of `outside`, so it stands over
+    /// `outside`, but `outside` does not stand over it: mallory, a member of
+    /// `outside` only, has no route to the document through its grant to
+    /// `readers`.
+    #[test]
+    fn a_route_does_not_pass_through_a_subject_the_document_stands_over() {
+        use keyline::test_utils::{assume_verified, delegation, id};
+
+        let (alice, mallory, doc, readers, outside) = (id(1), id(2), id(3), id(4), id(5));
+        let grant = delegation(alice, readers, doc, Power::Read);
+        let certs = [
+            delegation(doc, alice, doc, Power::Admin),
+            delegation(readers, alice, readers, Power::Admin),
+            delegation(outside, alice, outside, Power::Admin),
+            grant,
+            delegation(alice, doc, outside, Power::Read),
+            delegation(alice, mallory, outside, Power::Read),
+        ];
+        let runtime = Builder::new_current_thread()
+            .build()
+            .expect("a runtime starts");
+        runtime.block_on(async {
+            let keyline = memory_store(certs.into_iter().map(assume_verified).collect()).await;
+            let standing = Keyline::<Sendable>::positive_power(&keyline, doc, mallory)
+                .await
+                .expect("the memory store does not fail")
+                .value;
+            assert_eq!(
+                standing, None,
+                "precondition: mallory has no standing over the document"
+            );
+            let routed =
+                route_through::<Sendable, _>(&keyline, doc, grant.issuer, &grant.payload, mallory)
+                    .await
+                    .expect("the memory store does not fail");
+            assert!(!routed, "mallory is reached only at `outside`");
+
+            // The same with a store whose closure is every certificate it
+            // holds: still sufficient, but not exact.
+            let wide = WideClosure(keyline);
+            let routed =
+                route_through::<Sendable, _>(&wide, doc, grant.issuer, &grant.payload, mallory)
+                    .await
+                    .expect("the memory store does not fail");
+            assert!(!routed, "a wider closure adds no route");
+        });
+    }
+
+    /// A delegation issued by a member of a reached group carries the route:
+    /// carol, admitted by bob, a member of `group`, reaches the document only
+    /// through alice's grant to `group`.
+    #[test]
+    fn a_member_of_a_reached_group_carries_the_route() {
+        use keyline::test_utils::{assume_verified, delegation, id};
+
+        let (alice, bob, carol, doc, group) = (id(1), id(2), id(3), id(4), id(5));
+        let grant = delegation(alice, group, doc, Power::Admin);
+        let certs = [
+            delegation(doc, alice, doc, Power::Admin),
+            delegation(group, bob, group, Power::Admin),
+            grant,
+            delegation(bob, carol, doc, Power::Read),
+        ];
+        let runtime = Builder::new_current_thread()
+            .build()
+            .expect("a runtime starts");
+        runtime.block_on(async {
+            let keyline = memory_store(certs.into_iter().map(assume_verified).collect()).await;
+            let routed =
+                route_through::<Sendable, _>(&keyline, doc, grant.issuer, &grant.payload, carol)
+                    .await
+                    .expect("the memory store does not fail");
+            assert!(
+                routed,
+                "carol's route passes through the grant to the group"
+            );
+        });
+    }
+
+    /// `MemoryKeyline`, except that `closure` returns every certificate:
+    /// what `Keyline::closure` allows, more than what it needs.
+    struct WideClosure(MemoryKeyline<u64>);
+
+    impl Keyline<Sendable> for WideClosure {
+        type RetentionWatermark = u64;
+        type Error = <MemoryKeyline<u64> as Keyline<Sendable>>::Error;
+
+        fn version(&self) -> <Sendable as FutureForm>::Future<'_, Result<Version, Self::Error>> {
+            Keyline::<Sendable>::version(&self.0)
+        }
+
+        fn insert(
+            &self,
+            batch: Vec<VerifiedCertificate<u64>>,
+        ) -> <Sendable as FutureForm>::Future<'_, Result<Version, Self::Error>> {
+            Keyline::<Sendable>::insert(&self.0, batch)
+        }
+
+        fn contains(&self, cert: CertificateId) -> Query<'_, Sendable, bool, Self::Error> {
+            Keyline::<Sendable>::contains(&self.0, cert)
+        }
+
+        fn get(
+            &self,
+            cert: CertificateId,
+        ) -> Query<'_, Sendable, Option<Certificate<u64>>, Self::Error> {
+            Keyline::<Sendable>::get(&self.0, cert)
+        }
+
+        fn certificates(&self) -> Query<'_, Sendable, Vec<Certificate<u64>>, Self::Error> {
+            Keyline::<Sendable>::certificates(&self.0)
+        }
+
+        fn revocations_of(
+            &self,
+            delegation: Digest<Delegation>,
+        ) -> Query<'_, Sendable, BTreeSet<Digest<RevocationId>>, Self::Error> {
+            Keyline::<Sendable>::revocations_of(&self.0, delegation)
+        }
+
+        fn delegations_to(
+            &self,
+            subject: Id,
+            audience: Id,
+        ) -> Query<'_, Sendable, BTreeMap<Digest<Delegation>, (Id, Delegation)>, Self::Error>
+        {
+            Keyline::<Sendable>::delegations_to(&self.0, subject, audience)
+        }
+
+        fn effective_power(
+            &self,
+            subject: Id,
+            audience: Id,
+        ) -> Query<'_, Sendable, Option<Power>, Self::Error> {
+            Keyline::<Sendable>::effective_power(&self.0, subject, audience)
+        }
+
+        fn members(&self, subject: Id) -> Query<'_, Sendable, BTreeMap<Id, Power>, Self::Error> {
+            Keyline::<Sendable>::members(&self.0, subject)
+        }
+
+        fn subjects(&self) -> Query<'_, Sendable, BTreeSet<Id>, Self::Error> {
+            Keyline::<Sendable>::subjects(&self.0)
+        }
+
+        fn is_live(
+            &self,
+            delegation: Digest<Delegation>,
+        ) -> Query<'_, Sendable, bool, Self::Error> {
+            Keyline::<Sendable>::is_live(&self.0, delegation)
+        }
+
+        fn positive_power(
+            &self,
+            subject: Id,
+            audience: Id,
+        ) -> Query<'_, Sendable, Option<Power>, Self::Error> {
+            Keyline::<Sendable>::positive_power(&self.0, subject, audience)
+        }
+
+        fn closure(&self, _subject: Id) -> Query<'_, Sendable, Vec<Certificate<u64>>, Self::Error> {
+            Keyline::<Sendable>::certificates(&self.0)
+        }
+
+        fn digest(&self) -> Query<'_, Sendable, Digest<CertificateSet>, Self::Error> {
+            Keyline::<Sendable>::digest(&self.0)
+        }
+    }
+
     /// The explanation sent to a principal that lost its standing is
     /// sufficient: a store holding only it agrees with the full store that
     /// the principal once stood over the subject (the same positive power) and

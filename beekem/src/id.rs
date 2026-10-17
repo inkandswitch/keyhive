@@ -244,6 +244,26 @@ mod tests {
         keyhive_codec::laws::stream::<TreeId>();
     }
 
+    /// A key comes back out as it went in, through `verifying_key` and
+    /// through the conversion, for members and trees alike.
+    #[test]
+    fn keys_round_trip() {
+        bolero::check!().with_type::<[u8; 32]>().for_each(|seed| {
+            let key = SigningKey::from_bytes(seed);
+            let vk = key.verifying_key();
+
+            let member = MemberId::from(&key);
+            assert_eq!(member.verifying_key(), vk);
+            assert_eq!(VerifyingKey::from(member), vk);
+            assert_eq!(MemberId::try_from(vk), Ok(member));
+
+            let tree = TreeId::from(&key);
+            assert_eq!(tree.verifying_key(), vk);
+            assert_eq!(VerifyingKey::from(tree), vk);
+            assert_eq!(TreeId::try_from(vk), Ok(tree));
+        });
+    }
+
     #[test]
     fn a_small_order_key_is_not_a_member() {
         use curve25519_dalek::constants::EIGHT_TORSION;

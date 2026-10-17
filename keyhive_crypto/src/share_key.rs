@@ -292,6 +292,20 @@ mod tests {
         }
     }
 
+    /// The canonical range ends just below p: with the top byte at 0x7f, a
+    /// u-coordinate is p or more only when every byte between is 0xff and
+    /// the low byte is at least 0xed.
+    #[test]
+    fn canonical_u_ends_just_below_p() {
+        assert!(is_canonical_u(&near_p(0xec, 0x7f)), "p - 1");
+        assert!(!is_canonical_u(&near_p(0xed, 0x7f)), "p");
+        assert!(!is_canonical_u(&near_p(0xff, 0x7f)), "p + 18");
+        let mut between = near_p(0xff, 0x7f);
+        between[1] = 0xfe;
+        assert!(is_canonical_u(&between), "a byte between below 0xff");
+        assert!(!is_canonical_u(&near_p(0x00, 0x80)), "the top bit set");
+    }
+
     #[test]
     fn refuses_other_forms_of_a_key() {
         let mut high = [9; 32];

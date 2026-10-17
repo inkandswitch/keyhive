@@ -4624,6 +4624,143 @@ mod tests {
         Ok(())
     }
 
+    /// Which receive failures may resolve and which never will: a missing
+    /// dependency waits; a broken, forged or unauthorized event is dropped.
+    #[test]
+    fn receive_failures_are_classified() {
+        use core::convert::Infallible;
+
+        let doc = DocumentId::generate(&mut rand::rngs::OsRng);
+        let cases: [(ReceiveStaticEventError<Infallible>, bool, bool); 5] = [
+            (
+                ReceiveCgkaOpError::UnknownDocument(Box::new(doc)).into(),
+                true,
+                false,
+            ),
+            (
+                ReceiveCgkaOpError::CgkaError(CgkaError::OutOfOrderOperation).into(),
+                true,
+                false,
+            ),
+            (
+                ReceiveCgkaOpError::CgkaError(CgkaError::InvalidPathLength).into(),
+                false,
+                true,
+            ),
+            (
+                ReceiveCgkaOpError::UnauthorizedCgkaOp(Box::new(doc)).into(),
+                false,
+                true,
+            ),
+            (
+                ReceiveCertificateError::Verify(VerifyError::BadSignature).into(),
+                false,
+                true,
+            ),
+        ];
+        for (error, missing, finished) in cases {
+            assert_eq!(error.is_missing_dependency(), missing, "{error}");
+            assert_eq!(error.is_final(), finished, "{error}");
+        }
+    }
+
+    /// `stats` counts groups (not documents or individuals) and each kind of
+    /// certificate, and among the events waiting on something, each kind and
+    /// how many of them the active identity issued.
+    #[tokio::test]
+    async fn stats_count_groups_certificates_and_pending_events() -> TestResult {
+        use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
+        use beekem::{
+            id::{MemberId, TreeId},
+            operation::CgkaAuthorization,
+        };
+        use keyhive_crypto::share_key::ShareSecretKey;
+        use rand::rngs::OsRng;
+
+        let hive = make_keyhive().await;
+        let group = hive.generate_group(vec![]).await?;
+        hive.generate_group(vec![]).await?;
+        let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let indie_sk = MemorySigner::generate(&mut OsRng);
+        let indie = IndividualState::generate::<Sendable, _, _>(&indie_sk, &mut OsRng).await?;
+        hive.register_individual(indie.clone()).await;
+        hive.add_member(indie.id(), group, Power::Read).await?;
+        hive.revoke_member(indie.id(), false, group).await?;
+
+        let share_key = || ShareSecretKey::generate(&mut OsRng).share_key();
+        let pending_from = |signer: &MemorySigner| -> TestResult<Vec<StaticEvent<[u8; 32]>>> {
+            let added = signer.try_sign_sync(AddKeyOp {
+                share_key: share_key(),
+            })?;
+            let rotated = signer.try_sign_sync(RotateKeyOp {
+                old: share_key(),
+                new: share_key(),
+            })?;
+            let cgka = signer.try_sign_sync(CgkaOperation::Add {
+                added_id: MemberId::from(&signer.0),
+                pk: share_key(),
+                leaf_index: 0,
+                invitation: None,
+                predecessors: Vec::new(),
+                doc_id: TreeId::from(doc),
+                authorization: CgkaAuthorization::Delegation([0; 32]),
+            })?;
+            let delegation = Delegation::new(Id::from(indie.id()), Id::from(doc), Power::Read);
+            let delegated = Verified::sign_sync(&delegation, signer)?;
+            let revocation: Revocation<ContentHeads<[u8; 32]>> =
+                Revocation::new(delegated.digest());
+            let revoked = Verified::sign_sync(&revocation, signer)?;
+            Ok(vec![
+                StaticEvent::PrekeysExpanded(Box::new(added)),
+                StaticEvent::PrekeyRotated(Box::new(rotated)),
+                StaticEvent::CgkaOperation(Box::new(cgka)),
+                StaticEvent::Delegated(delegated.signed().as_ref().clone()),
+                StaticEvent::Revoked(revoked.signed().as_ref().clone()),
+            ])
+        };
+        let mine = pending_from(&hive.active.signer)?;
+        let theirs = pending_from(&MemorySigner::generate(&mut OsRng))?;
+        hive.pending_events
+            .lock()
+            .await
+            .extend(mine.into_iter().chain(theirs).map(Arc::new));
+
+        let stats = hive.stats().await;
+        assert_eq!(stats.groups, 2, "two groups; a document is not one");
+        assert_eq!(stats.revocations, 1);
+        assert_eq!(
+            (
+                stats.pending_prekeys_expanded,
+                stats.pending_prekeys_expanded_by_active
+            ),
+            (2, 1)
+        );
+        assert_eq!(
+            (
+                stats.pending_prekey_rotated,
+                stats.pending_prekey_rotated_by_active
+            ),
+            (2, 1)
+        );
+        assert_eq!(
+            (
+                stats.pending_cgka_operation,
+                stats.pending_cgka_operation_by_active
+            ),
+            (2, 1)
+        );
+        assert_eq!(
+            (stats.pending_delegated, stats.pending_delegated_by_active),
+            (2, 1)
+        );
+        assert_eq!(
+            (stats.pending_revoked, stats.pending_revoked_by_active),
+            (2, 1)
+        );
+        assert_eq!(stats.pending_total(), 10);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_cgka_ops_for_all_agents_matches_per_agent() {
         use crate::crypto::digest::Digest;

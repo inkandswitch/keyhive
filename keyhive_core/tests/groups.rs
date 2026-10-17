@@ -487,6 +487,52 @@ async fn adoption_is_capped_at_the_revokers_power() -> Result<()> {
     Ok(())
 }
 
+/// Documents are Keyline subjects too, but not groups.
+#[tokio::test]
+async fn a_document_is_not_a_group() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let g1 = ctx.group(&alice, "g1").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    assert!(alice.has_group(g1).await?);
+    assert!(!alice.has_group(GroupId::new(Id::from(design_doc))).await?);
+    Ok(())
+}
+
+/// Adoption re-issues only the grants the removed member made to others: a
+/// member the revoker admitted itself keeps its own grant, and the removed
+/// member's grant to the revoker is not re-issued to the revoker.
+#[tokio::test]
+async fn adoption_reissues_only_the_removed_members_grants() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let dan = ctx.individual("dan").await?;
+    let eve = ctx.individual("eve").await?;
+    let g1 = ctx.group(&alice, "g1").await?;
+
+    alice.add_member(bob.id(), g1, Admin).await?;
+    alice.add_member(eve.id(), g1, Read).await?;
+    ctx.sync_all_unsent().await?;
+    bob.add_member(dan.id(), g1, Read).await?;
+    bob.add_member(alice.id(), g1, Read).await?;
+    ctx.sync_all_unsent().await?;
+
+    let update = alice.revoke_member(bob.id(), true, g1).await?;
+    let adopted: Vec<Id> = update
+        .redelegations()
+        .iter()
+        .map(|d| d.payload().audience)
+        .collect();
+    assert_eq!(
+        adopted,
+        vec![Id::from(dan.id())],
+        "only bob's grant to dan is adopted"
+    );
+    Ok(())
+}
+
 /// An adoption identical to a delegation revoked earlier is re-issued past
 /// that revocation, so the adopted member keeps access.
 #[tokio::test]

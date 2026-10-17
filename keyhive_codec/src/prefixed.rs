@@ -225,9 +225,27 @@ mod tests {
         );
     }
 
+    /// `decode_bytes` reads back what `encode_bytes` wrote, and the rest
+    /// after it, whatever follows.
+    #[test]
+    fn bytes_round_trip_and_stream() {
+        bolero::check!()
+            .with_type::<(Vec<u8>, Vec<u8>)>()
+            .for_each(|(bytes, rest)| {
+                let mut out = Vec::new();
+                encode_bytes(bytes, &mut out);
+                let written = out.len();
+                out.extend_from_slice(rest);
+                assert_eq!(decode_bytes(&out), Ok((bytes.as_slice(), rest.as_slice())));
+                assert!(written > bytes.len(), "the length is written first");
+            });
+    }
+
     #[test]
     fn lengths_beyond_the_input_fail() {
         assert_eq!(decode_bytes(&[3, 1, 2]), Err(DecodeError::UnexpectedEnd));
+        // Exactly as many bytes as declared, and nothing after.
+        assert_eq!(decode_bytes(&[2, 1, 2]), Ok((&[1, 2][..], &[][..])));
         assert_eq!(decode_bytes(&[2, 1, 2, 9]), Ok((&[1, 2][..], &[9][..])));
     }
 

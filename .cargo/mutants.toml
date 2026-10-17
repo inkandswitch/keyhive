@@ -5,10 +5,13 @@
 
 # keyhive_wasm only runs on wasm32 (its tests need a JS runtime), so its
 # mutants cannot be tested by the host `cargo test`. test-utils,
-# beekem/src/test_utils.rs, and keyline's test_utils (fixtures, generator,
-# conformance suite) are test tooling, not product code.
+# beekem/src/test_utils.rs, keyhive_codec's laws (the harness that perturbs
+# encodings for the codec property tests), and keyline's test_utils
+# (fixtures, generator, conformance suite) are test tooling, not product
+# code.
 exclude_globs = [
   "beekem/src/test_utils.rs",
+  "keyhive_codec/src/laws.rs",
   "keyhive_wasm/**",
   "keyline/src/test_utils.rs",
   "keyline/src/test_utils/**",
@@ -22,9 +25,38 @@ additional_cargo_args = ["--features", "test_utils"]
 #
 # `Context::excludes_an_endpoint` is a shortcut whose answer the following
 # search recomputes, so its mutants are equivalent (see its doc comment).
+#
+# `Keyhive::keyline` and `Keyhive::sign_certificate` have two definitions,
+# public for `test_utils` builds and `pub(crate)` otherwise. Mutants build
+# with `test_utils`, so the second copy is never compiled and its mutants are
+# missed by construction; both are one-line delegations every test calls.
+#
+# The one `!=` in `Keyhive::reconcile_locked` only decides whether to log
+# that the Keyline store changed outside this keyhive.
+#
+# `SigningError`'s `From<InvalidId>` is written by hand only without `std`;
+# with it, `thiserror` derives it, so the hand-written one is never compiled.
+#
+# `Keyhive::subject_views` skips live members and principals that never had
+# standing only to save work: a live member's explanation is part of the
+# closure it is sent anyway, and a principal with no positive standing has no
+# route to explain, so its explanation is empty.
+#
+# `Arbitrary` impls generate test data: mutating one only changes which
+# inputs a property test draws.
+#
+# `applied` lets `feed_held` skip operations a tree already has. Feeding them
+# anyway changes nothing: a known operation is ignored, and a known invite
+# re-adopts the same owner with the same secrets (`key_pairs` only grows).
 exclude_re = [
+  "<impl From<InvalidId> for SigningError>::from",
   "Context::excludes_an_endpoint",
+  "Keyhive<[^>]*>::(keyline|sign_certificate) ",
+  "impl (arbitrary::)?Arbitrary",
   "impl (core::|std::)?(fmt::)?(Debug|Display) for",
+  "replace != with == in Keyhive<[^>]*>::reconcile_locked",
+  "replace applied -> bool with false",
+  "replace \\|\\| with && in Keyhive<[^>]*>::subject_views",
 ]
 
 timeout_multiplier = 3.0

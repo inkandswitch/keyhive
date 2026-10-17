@@ -254,6 +254,7 @@ mod tests {
         let revocation: Issued<Revocation<()>> = r(CAROL, &alice_member);
         assert!(state.insert(assume_verified(revocation.clone())));
         assert!(state.version() > v);
+        assert_eq!(state.len(), 3, "two delegations and a revocation");
         assert_eq!(
             state.revocation(&revocation.digest()).map(|v| v.payload()),
             Some(&revocation.payload)

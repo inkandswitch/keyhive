@@ -414,3 +414,251 @@ fn signing_input<T: Signable, S: Verifiable>(
     let bytes = message::<T>(&issuer, encoded.as_bytes());
     Ok((issuer, encoded, bytes))
 }
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+    use crate::signable::Kind;
+    use alloc::vec;
+    use core::hash::BuildHasher;
+    use ed25519_dalek::SigningKey;
+    use std::collections::hash_map::RandomState;
+
+    /// A four-byte payload, framed with the delegation kind for these tests.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Note([u8; 4]);
+
+    impl Kinded for Note {
+        const KIND: Kind = Kind::DELEGATION;
+        const VERSION: u8 = 0;
+    }
+
+    impl Encode for Note {
+        fn encode_into(&self, out: &mut Vec<u8>) {
+            out.extend_from_slice(&self.0);
+        }
+    }
+
+    impl Decode for Note {
+        fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+            <[u8; 4]>::decode(bytes).map(Note)
+        }
+    }
+
+    /// A payload whose decoder ignores trailing bytes, so some inputs are not
+    /// its canonical encoding.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Loose(u8);
+
+    impl Kinded for Loose {
+        const KIND: Kind = Kind::DELEGATION;
+        const VERSION: u8 = 0;
+    }
+
+    impl Encode for Loose {
+        fn encode_into(&self, out: &mut Vec<u8>) {
+            out.push(self.0);
+        }
+    }
+
+    impl Decode for Loose {
+        fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+            bytes
+                .first()
+                .map(|b| Loose(*b))
+                .ok_or(DecodeError::UnexpectedEnd)
+        }
+    }
+
+    fn key(n: u8) -> SigningKey {
+        SigningKey::from_bytes(&[n; 32])
+    }
+
+    fn signed(n: u8, note: Note) -> Signed<Note> {
+        Verified::sign_sync(&note, &key(n))
+            .expect("a valid key signs")
+            .signed()
+            .as_ref()
+            .clone()
+    }
+
+    fn frame(n: u8, note: Note) -> Vec<u8> {
+        signed(n, note).encode().into_bytes()
+    }
+
+    fn hash_of<T: Hash>(value: &T, state: &RandomState) -> u64 {
+        state.hash_one(value)
+    }
+
+    #[test]
+    fn a_header_is_the_kind_and_version_after_the_tag() {
+        assert_eq!(header(b"KHD\x00rest"), Ok((b'D', 0)));
+        assert_eq!(header(b"KHR\x07"), Ok((b'R', 7)));
+    }
+
+    #[test]
+    fn a_header_refuses_what_is_not_keyhive() {
+        assert_eq!(header(b"KXD\x00"), Err(DecodeError::NotKeyhive));
+        assert_eq!(header(b"XH"), Err(DecodeError::NotKeyhive));
+        assert_eq!(header(b"X"), Err(DecodeError::NotKeyhive));
+    }
+
+    #[test]
+    fn a_header_cut_short_is_unexpected_end() {
+        for short in [&b""[..], b"K", b"KH", b"KHD"] {
+            assert_eq!(header(short), Err(DecodeError::UnexpectedEnd), "{short:?}");
+        }
+    }
+
+    #[test]
+    fn a_frame_streams() {
+        let s = signed(1, Note([1, 2, 3, 4]));
+        assert_eq!(
+            Signed::<Note>::decode(&s.encode().into_bytes()),
+            Ok(s.clone())
+        );
+        let mut bytes = s.encode().into_bytes();
+        bytes.extend_from_slice(b"next");
+        assert_eq!(Signed::<Note>::decode_next(&bytes), Ok((s, &b"next"[..])));
+    }
+
+    #[test]
+    fn a_frame_of_another_kind_or_version_is_refused() {
+        let mut other_kind = frame(1, Note([0; 4]));
+        other_kind[2] = b'R';
+        assert_eq!(
+            Signed::<Note>::decode(&other_kind),
+            Err(DecodeError::UnexpectedKind(b'R'))
+        );
+
+        let mut other_version = frame(1, Note([0; 4]));
+        other_version[3] = 1;
+        assert_eq!(
+            Signed::<Note>::decode(&other_version),
+            Err(DecodeError::UnsupportedVersion {
+                kind: b'D',
+                version: 1
+            })
+        );
+    }
+
+    #[test]
+    fn a_frame_with_an_invalid_issuer_is_refused() {
+        let mut bytes = frame(1, Note([0; 4]));
+        // The issuer follows the tag, kind and version.
+        bytes[4..4 + Id::LEN].copy_from_slice(&[0x02; Id::LEN]);
+        assert_eq!(
+            Signed::<Note>::decode(&bytes),
+            Err(DecodeError::InvalidField("issuer"))
+        );
+    }
+
+    #[test]
+    fn a_frame_cut_short_is_unexpected_end() {
+        let bytes = frame(1, Note([0; 4]));
+        // The payload length is one byte here: four.
+        let payload_at = 4 + Id::LEN + 1;
+        for cut in [payload_at + 2, payload_at + 4, bytes.len() - 1] {
+            assert_eq!(
+                Signed::<Note>::decode(&bytes[..cut]),
+                Err(DecodeError::UnexpectedEnd),
+                "cut at {cut}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_declared_length_past_the_input_is_unexpected_end() {
+        let mut bytes = frame(1, Note([0; 4]));
+        bytes[4 + Id::LEN] = 0x7f;
+        assert_eq!(
+            Signed::<Note>::decode(&bytes),
+            Err(DecodeError::UnexpectedEnd)
+        );
+    }
+
+    #[test]
+    fn equality_is_by_issuer_bytes_and_signature() {
+        let s = signed(1, Note([1; 4]));
+        assert_eq!(s, s.clone());
+
+        let other_issuer = signed(2, Note([1; 4]));
+        let other_bytes = signed(1, Note([2; 4]));
+        let other_signature =
+            Signed::from_parts(s.issuer(), s.encoded().clone(), other_bytes.signature);
+        for different in [&other_issuer, &other_bytes, &other_signature] {
+            assert_ne!(&s, different);
+        }
+    }
+
+    #[test]
+    fn hashing_follows_equality() {
+        let state = RandomState::new();
+        let s = signed(1, Note([1; 4]));
+        assert_eq!(hash_of(&s, &state), hash_of(&s.clone(), &state));
+
+        let other_issuer = signed(2, Note([1; 4]));
+        let other_bytes = signed(1, Note([2; 4]));
+        let other_signature =
+            Signed::from_parts(s.issuer(), s.encoded().clone(), other_bytes.signature);
+        for different in [&other_issuer, &other_bytes, &other_signature] {
+            assert_ne!(hash_of(&s, &state), hash_of(different, &state));
+        }
+    }
+
+    #[test]
+    fn verified_values_compare_and_hash_by_what_was_signed() {
+        let state = RandomState::new();
+        let note = Note([3; 4]);
+        let a = Verified::sign_sync(&note, &key(1)).expect("a valid key signs");
+        let again = Verified::sign_sync(&note, &key(1)).expect("a valid key signs");
+        let other = Verified::sign_sync(&note, &key(2)).expect("a valid key signs");
+
+        assert_eq!(a, again);
+        assert_eq!(hash_of(&a, &state), hash_of(&again, &state));
+        assert_ne!(a, other);
+        assert_ne!(hash_of(&a, &state), hash_of(&other, &state));
+    }
+
+    #[test]
+    fn a_verified_value_answers_with_its_issuer_key() {
+        let verified = Verified::sign_sync(&Note([0; 4]), &key(5)).expect("a valid key signs");
+        assert_eq!(Verifiable::verifying_key(&verified), key(5).verifying_key());
+    }
+
+    #[test]
+    fn verification_needs_the_issuer_signature() {
+        let s = signed(1, Note([1; 4]));
+        let swapped = Signed::from_parts(
+            signed(2, Note([1; 4])).issuer(),
+            s.encoded().clone(),
+            s.signature,
+        );
+        assert_eq!(swapped.verify(), Err(VerifyError::BadSignature));
+    }
+
+    #[test]
+    fn verification_needs_the_canonical_encoding() {
+        let canonical = Verified::sign_sync(&Loose(7), &key(1)).expect("a valid key signs");
+        assert_eq!(canonical.payload(), &Loose(7));
+
+        let padded = Encoded::<Loose>::from_bytes_unchecked(vec![7, 0]);
+        let bytes = message::<Loose>(&Id::from(&key(1)), padded.as_bytes());
+        let signature =
+            SyncSignerBasic::try_sign_bytes_sync_basic(&key(1), &bytes).expect("a key signs");
+        let signed = Signed::from_parts(Id::from(&key(1)), padded, signature);
+        assert_eq!(
+            signed.verify(),
+            Err(VerifyError::Decode(DecodeError::NonCanonical))
+        );
+    }
+
+    #[cfg(feature = "unchecked")]
+    #[test]
+    fn an_assumed_value_keeps_its_payload_and_digest() {
+        let s = signed(1, Note([9; 4]));
+        let assumed = Verified::assume(s.clone());
+        assert_eq!(assumed.payload(), &Note([9; 4]));
+        assert_eq!(assumed.digest(), s.digest());
+    }
+}

@@ -1,4 +1,5 @@
 use beekem::{
+    error::CgkaError,
     id::{MemberId, TreeId},
     operation::{CgkaAuthorization, CgkaOperation},
     tree::PathChange,
@@ -892,5 +893,139 @@ async fn an_add_through_a_delegation_to_ourselves_for_someone_else_is_pending() 
     // Mallory could still gain a route through Alice. She is not seated.
     assert!(is_pending(&result), "{result:?}");
     assert!(!tree_members(&alice, doc_id).await.contains(&mallory.id()));
+    Ok(())
+}
+
+/// An authorized operation the tree refuses reports the tree's own error to
+/// whoever delivered it: a member's update that names no predecessors.
+#[tokio::test]
+async fn an_update_with_no_predecessors_is_refused_with_the_trees_error() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+
+    let op = CgkaOperation::Update {
+        id: MemberId::from(bob.id()),
+        new_path: intercepted_path(&bob).await,
+        predecessor_secrets: Vec::new(),
+        predecessors: Vec::new(),
+        doc_id: TreeId::from(doc_id),
+    };
+    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+
+    assert!(
+        matches!(
+            result,
+            Err(ReceiveCgkaOpError::CgkaError(CgkaError::InvalidOperation))
+        ),
+        "{result:?}"
+    );
+    Ok(())
+}
+
+// A remove is accepted when its revocation covers the delegation it names by
+// any one of the rules Keyline uses. One test per rule.
+
+/// The audience: a reader leaves by revoking the delegation to themselves and
+/// removing their own leaf. (`revoke_member` does not offer this, so the
+/// certificates and the operation are built here.)
+#[tokio::test]
+async fn a_reader_can_remove_themselves_by_revoking_their_own_delegation() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+    let bob_id = bob.id();
+    let to_bob = keyline_delegations(&alice, doc_id, bob_id)
+        .await
+        .into_iter()
+        .next()
+        .expect("alice's grant to bob");
+    let leaving: Revocation<ContentHeads<[u8; 32]>> = Revocation::new(to_bob);
+    let signed = bob.sign_certificate(&leaving).await?;
+    let digest = signed.digest();
+    alice
+        .receive_certificate(VerifiedCertificate::from(signed).into_certificate())
+        .await?;
+
+    let leaf_idx = tree_members(&alice, doc_id)
+        .await
+        .iter()
+        .position(|id| *id == bob_id)
+        .expect("bob seated") as u32;
+    let op = CgkaOperation::Remove {
+        id: MemberId::from(bob_id),
+        leaf_idx,
+        removed_keys: vec![],
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId::from(doc_id),
+        authorization: CgkaAuthorization::Revocation(digest.into()),
+    };
+    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert!(!tree_members(&alice, doc_id).await.contains(&bob_id));
+    Ok(())
+}
+
+/// The issuer: a reader who admitted someone takes them out again, and their
+/// remove is accepted by the document's owner.
+#[tokio::test]
+async fn a_reader_can_remove_whom_they_admitted() -> TestResult {
+    use keyhive_core::test_utils::TestContext;
+
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let doc = ctx.doc(&alice, "doc").await?;
+    alice.add_member(bob.id(), doc, Power::Read).await?;
+    ctx.sync_all_unsent().await?;
+    bob.add_member(carol.id(), doc, Power::Read).await?;
+    ctx.sync_all_unsent().await?;
+    assert!(tree_members(&alice, doc).await.contains(&carol.id()));
+
+    bob.revoke_member(carol.id(), false, doc).await?;
+    ctx.sync_all_unsent().await?;
+
+    assert_eq!(alice.access_for_doc(carol.id(), doc).await?, None);
+    assert!(
+        !tree_members(&alice, doc).await.contains(&carol.id()),
+        "bob's remove was accepted"
+    );
+    Ok(())
+}
+
+/// Admin over the delegation's subject: a group's admin removes a member that
+/// another admin admitted, from a document the group reads, though they are
+/// not an admin of the document.
+#[tokio::test]
+async fn a_group_admin_can_remove_a_member_from_the_groups_documents() -> TestResult {
+    use keyhive_core::test_utils::TestContext;
+
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let dave = ctx.individual("dave").await?;
+    let frank = ctx.individual("frank").await?;
+    let eve = ctx.individual("eve").await?;
+    let group = ctx.group(&dave, "group").await?;
+    dave.add_member(frank.id(), group, Power::Admin).await?;
+    // So that alice hears of the group.
+    dave.add_member(alice.id(), group, Power::Read).await?;
+    ctx.sync_all_unsent().await?;
+    frank.add_member(eve.id(), group, Power::Read).await?;
+    ctx.sync_all_unsent().await?;
+    let doc = ctx.doc(&alice, "doc").await?;
+    alice.add_member(group, doc, Power::Read).await?;
+    ctx.sync_all_unsent().await?;
+    assert!(tree_members(&alice, doc).await.contains(&eve.id()));
+    assert_eq!(
+        alice.access_for_doc(dave.id(), doc).await?,
+        Some(Power::Read)
+    );
+
+    dave.revoke_member(eve.id(), false, group).await?;
+    ctx.sync_all_unsent().await?;
+
+    assert_eq!(alice.access_for_doc(eve.id(), doc).await?, None);
+    assert!(
+        !tree_members(&alice, doc).await.contains(&eve.id()),
+        "dave's remove was accepted"
+    );
     Ok(())
 }

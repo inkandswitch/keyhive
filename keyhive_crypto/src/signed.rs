@@ -339,6 +339,23 @@ mod tests {
     use alloc::string::ToString;
     use rand::rngs::OsRng;
 
+    /// The partial order agrees with the total one: issuer first.
+    #[test]
+    fn partial_order_agrees_with_order() {
+        use super::Signed;
+        use crate::id::Id;
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signed_by = |n: u8| {
+            let key = SigningKey::from_bytes(&[n; 32]);
+            Signed::new(5u8, Id::from(&key), key.sign(b"payload"))
+        };
+        let (a, b) = (signed_by(1), signed_by(2));
+        assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));
+        assert_eq!(b.partial_cmp(&a), Some(b.cmp(&a)));
+        assert_ne!(a.partial_cmp(&b), Some(core::cmp::Ordering::Equal));
+    }
+
     #[test]
     fn test_memoized_digest_equals_computed_digest() {
         let mut csprng = OsRng;

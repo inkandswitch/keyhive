@@ -105,6 +105,45 @@ mod tests {
         assert_eq!(GroupId::try_from(weak), Err(InvalidId::SmallOrder));
     }
 
+    /// A typed id is its key: its bytes, slice and verifying key all come back
+    /// as the key went in.
+    #[test]
+    fn typed_ids_are_their_keys() {
+        bolero::check!().with_type::<[u8; 32]>().for_each(|seed| {
+            let key = SigningKey::from_bytes(seed);
+            let (vk, bytes) = (key.verifying_key(), key.verifying_key().to_bytes());
+
+            let individual = IndividualId::from(&key);
+            assert_eq!(
+                (
+                    individual.as_slice(),
+                    individual.as_bytes(),
+                    individual.to_bytes()
+                ),
+                (&bytes[..], &bytes, bytes)
+            );
+            assert_eq!(individual.verifying_key(), vk);
+
+            let document = DocumentId::from(&key);
+            assert_eq!(
+                (
+                    document.as_slice(),
+                    document.as_bytes(),
+                    document.to_bytes()
+                ),
+                (&bytes[..], &bytes, bytes)
+            );
+            assert_eq!(document.verifying_key(), vk);
+
+            let group = GroupId::from(&key);
+            assert_eq!(
+                (group.as_slice(), group.as_bytes(), group.to_bytes()),
+                (&bytes[..], &bytes, bytes)
+            );
+            assert_eq!(group.verifying_key(), vk);
+        });
+    }
+
     /// JS `toString` and its callers' map keys read the whole key.
     #[test]
     fn principals_display_as_the_whole_key() {

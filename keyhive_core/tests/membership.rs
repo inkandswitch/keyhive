@@ -5,7 +5,7 @@ use keyhive_core::{
     test_utils::{AddMemberUpdateExt, Instance, TestContext, TestError, TestResult as Result},
 };
 use keyline::power::Power::{Admin, Edit, Read};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Write new content and report which of `cast` can read it.
 ///
@@ -767,6 +767,85 @@ async fn a_cascading_revocation_removes_the_member_it_names() -> Result<()> {
         readers_after_writing(&mut ctx, &alice, design_doc, b"after", &cast).await?,
         named(&["alice"]),
         "and out of the document the group holds"
+    );
+    Ok(())
+}
+
+/// A member revokes a grant it made while holding no Admin. Issuing the
+/// grant is enough to revoke it, so the writer's replica accepts the removal
+/// and carol no longer reads.
+#[tokio::test]
+async fn a_non_admin_who_revokes_its_own_grant_removes_the_reader() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let cast = [&alice, &bob, &carol];
+
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), design_doc, Edit).await?;
+    ctx.sync_all_unsent().await?;
+    bob.add_member(carol.id(), design_doc, Read).await?;
+    ctx.sync_all_unsent().await?;
+    bob.revoke_member(carol.id(), false, design_doc).await?;
+    ctx.sync_all_unsent().await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, design_doc, b"after", &cast).await?,
+        named(&["alice", "bob"]),
+        "bob's revocation of his own grant removed carol on alice's replica"
+    );
+    Ok(())
+}
+
+/// A group's admin, who only reads the document, revokes a grant within the
+/// group that someone else made. Admin over the group is enough, so the
+/// writer's replica accepts the removal and carol no longer reads.
+#[tokio::test]
+async fn a_group_admin_removes_a_member_from_a_document_it_only_reads() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let carol = ctx.individual("carol").await?;
+    let dave = ctx.individual("dave").await?;
+    let cast = [&alice, &carol, &dave];
+
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(engineering, design_doc, Read).await?;
+    alice.add_member(dave.id(), engineering, Admin).await?;
+    alice.add_member(carol.id(), engineering, Read).await?;
+    ctx.sync_all_unsent().await?;
+    dave.revoke_member(carol.id(), false, engineering).await?;
+    ctx.sync_all_unsent().await?;
+
+    assert_eq!(
+        readers_after_writing(&mut ctx, &alice, design_doc, b"after", &cast).await?,
+        named(&["alice", "dave"]),
+        "dave's revocation within engineering removed carol on alice's replica"
+    );
+    Ok(())
+}
+
+/// A reader reaches each document it can read at the power its route
+/// gives: one through a group, clamped to the group's grant, one directly,
+/// and none it was never given.
+#[tokio::test]
+async fn reachable_docs_lists_each_readable_document_at_its_power() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let budget = ctx.doc(&alice, "budget").await?;
+    let _roadmap = ctx.doc(&alice, "roadmap").await?;
+    alice.add_member(engineering, design_doc, Read).await?;
+    alice.add_member(bob.id(), engineering, Admin).await?;
+    alice.add_member(bob.id(), budget, Edit).await?;
+    ctx.sync_all_unsent().await?;
+
+    assert_eq!(
+        bob.reachable_docs().await?,
+        BTreeMap::from([(design_doc, Read), (budget, Edit)])
     );
     Ok(())
 }

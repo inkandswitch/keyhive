@@ -9,7 +9,7 @@ use crate::{
     event::static_event::StaticEvent,
     keyhive::{
         CausalDecryptError, EncryptContentError, GenerateGroupError, Keyhive,
-        ReceiveStaticEventError,
+        ReceiveCertificateError, ReceiveStaticEventError,
     },
     listener::no_listener::NoListener,
     principal::{
@@ -169,6 +169,7 @@ other_from!(
     CertificateError,
     KeylineStorageError<Infallible>,
     keyhive_crypto::id::InvalidId,
+    ReceiveCertificateError<Infallible>,
     ReceivePrekeyOpError,
     SigningError,
 );

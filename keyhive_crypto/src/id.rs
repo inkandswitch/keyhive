@@ -220,7 +220,18 @@ pub enum InvalidId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
+    use alloc::{
+        format,
+        string::{String, ToString},
+    };
+
+    #[test]
+    fn lower_hex_is_the_whole_key() {
+        let id = Id::from(&SigningKey::from_bytes(&[7; 32]));
+        let hex: String = id.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(format!("{id:x}"), hex);
+        assert_eq!(format!("{id:#x}"), format!("0x{hex}"));
+    }
 
     #[test]
     fn rejects_non_curve_points() {
