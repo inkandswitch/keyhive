@@ -1,8 +1,10 @@
 //! Saving an instance to an archive and rebuilding it.
 
-use keyhive_core::{
-    access::Access::{Admin, Edit, Read},
-    test_utils::{CausalDecryptionExt, TestContext, TestError, TestResult as Result},
+use future_form::Sendable;
+use keyhive_core::test_utils::{CausalDecryptionExt, TestContext, TestError, TestResult as Result};
+use keyline::{
+    contract::Keyline,
+    power::Power::{Admin, Edit, Read},
 };
 
 #[tokio::test]
@@ -14,27 +16,27 @@ async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Resu
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let engineering = ctx.group(&alice, "engineering").await?;
 
-    alice.add_member(engineering, design_doc, Edit, &[]).await?;
-    alice.add_member(bob.id(), engineering, Read, &[]).await?;
-    alice.add_member(carol.id(), design_doc, Admin, &[]).await?;
+    alice.add_member(engineering, design_doc, Edit).await?;
+    alice.add_member(bob.id(), engineering, Read).await?;
+    alice.add_member(carol.id(), design_doc, Admin).await?;
     let ct = ctx
         .encrypt(&alice, design_doc, b"before the archive")
         .await?;
     ctx.sync_all_unsent().await?;
 
-    let members_before = ctx.named(alice.reachable_members(design_doc).await);
-    let archive = alice.into_archive().await;
+    let members_before = ctx.named(alice.reachable_members(design_doc).await?);
+    let archive = alice.into_archive().await?;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
 
     assert_eq!(
-        ctx.named(alice.reachable_members(design_doc).await),
+        ctx.named(restored.reachable_members(design_doc).await?),
         members_before,
         "the same people, at the same levels"
     );
     for who in [&bob, &carol] {
         assert_eq!(
-            restored.access_for_doc(who, design_doc).await,
-            alice.access_for_doc(who, design_doc).await,
+            restored.access_for_doc(who, design_doc).await?,
+            alice.access_for_doc(who, design_doc).await?,
             "the restored instance disagrees about {}",
             who.name()
         );
@@ -55,16 +57,14 @@ async fn a_restored_instance_can_still_issue_delegations() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     ctx.sync_all_unsent().await?;
 
-    let archive = alice.into_archive().await;
+    let archive = alice.into_archive().await?;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
 
-    restored
-        .add_member(dave.id(), design_doc, Edit, &[])
-        .await?;
+    restored.add_member(dave.id(), design_doc, Edit).await?;
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.access_for_doc(dave.id(), design_doc).await,
+        alice.access_for_doc(dave.id(), design_doc).await?,
         Some(Edit),
         "the original instance honors what the restored one signed"
     );
@@ -79,18 +79,18 @@ async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
     let carol = ctx.individual("carol").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    let old = alice.into_archive().await;
+    alice.add_member(bob.id(), design_doc, Read).await?;
+    let old = alice.into_archive().await?;
 
     // More happens after the archive is created.
-    alice.add_member(carol.id(), design_doc, Admin, &[]).await?;
+    alice.add_member(carol.id(), design_doc, Admin).await?;
     alice.revoke_member(bob.id(), true, design_doc).await?;
 
     let restored = ctx
         .rebuild_from_archive(&old, "alice-from-old-archive")
         .await?;
     assert_eq!(
-        restored.access_for_doc(carol.id(), design_doc).await,
+        restored.access_for_doc(carol.id(), design_doc).await?,
         None,
         "the archive predates carol's delegation"
     );
@@ -98,12 +98,12 @@ async fn an_old_archive_merged_with_later_events_converges() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        restored.access_for_doc(carol.id(), design_doc).await,
-        alice.access_for_doc(carol.id(), design_doc).await
+        restored.access_for_doc(carol.id(), design_doc).await?,
+        alice.access_for_doc(carol.id(), design_doc).await?
     );
     assert_eq!(
-        restored.access_for_doc(bob.id(), design_doc).await,
-        alice.access_for_doc(bob.id(), design_doc).await,
+        restored.access_for_doc(bob.id(), design_doc).await?,
+        alice.access_for_doc(bob.id(), design_doc).await?,
         "including the revocation it never saw"
     );
     Ok(())
@@ -117,22 +117,105 @@ async fn ingesting_an_archive_merges_into_a_live_instance() -> Result<()> {
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let notes = ctx.doc(&bob, "notes").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
-    bob.add_member(alice.id(), notes, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
+    bob.add_member(alice.id(), notes, Read).await?;
 
-    let from_bob = bob.into_archive().await;
+    let from_bob = bob.into_archive().await?;
     let pending = alice.ingest_archive(from_bob).await?.len();
 
     assert_eq!(pending, 0, "nothing in bob's archive was unusable to alice");
     assert_eq!(
-        alice.access_for_doc(alice.id(), notes).await,
+        alice.access_for_doc(alice.id(), notes).await?,
         Some(Read),
         "alice learned about bob's document"
     );
     assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await,
+        alice.access_for_doc(bob.id(), design_doc).await?,
         Some(Read),
         "and kept what she already knew"
+    );
+    Ok(())
+}
+
+/// Ingesting another identity's archive adds that identity as an individual;
+/// it does not merge into our own. Our next archive still loads.
+#[tokio::test]
+async fn after_ingesting_another_identitys_archive_ours_still_loads() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let own_card = alice.get_existing_contact_card().await;
+
+    alice.ingest_archive(bob.into_archive().await?).await?;
+    assert_eq!(
+        alice.get_existing_contact_card().await.id(),
+        own_card.id(),
+        "alice's own individual is still only hers"
+    );
+    assert!(alice.has_individual(bob.id()).await, "bob is an individual");
+
+    let bytes = bincode::serialize(&alice.into_archive().await?)
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    let archive = bincode::deserialize(&bytes).map_err(|e| TestError::Other(e.to_string()))?;
+    let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
+    assert_eq!(restored.id(), alice.id());
+    assert!(restored.has_individual(bob.id()).await);
+    Ok(())
+}
+
+/// The same, from an identity this keyhive has never met: the archive is how
+/// it learns of them.
+#[tokio::test]
+async fn ingesting_a_strangers_archive_adds_them_as_an_individual() -> Result<()> {
+    use keyhive_core::test_utils::make_simple_keyhive;
+
+    let alice = make_simple_keyhive()
+        .await
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    let bob = make_simple_keyhive()
+        .await
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    let own_card = alice.get_existing_contact_card().await;
+    assert!(
+        !alice.has_individual(bob.id()).await,
+        "precondition: strangers"
+    );
+
+    alice.ingest_archive(bob.into_archive().await?).await?;
+    assert!(alice.has_individual(bob.id()).await);
+    assert_eq!(alice.get_existing_contact_card().await.id(), own_card.id());
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_archive_does_not_load_with_another_identitys_signer() -> Result<()> {
+    use keyhive_core::{
+        keyhive::Keyhive, listener::no_listener::NoListener,
+        store::ciphertext::memory::MemoryCiphertextStore, test_utils::KeylineStore,
+    };
+    use keyhive_crypto::signer::memory::MemorySigner;
+    use std::sync::Arc;
+
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let archive = alice.into_archive().await?;
+
+    let result = Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, _, _, _>::try_from_archive(
+        &archive,
+        MemorySigner::generate(&mut rand::rngs::OsRng),
+        MemoryCiphertextStore::new(),
+        NoListener,
+        KeylineStore::new(),
+        Arc::new(futures::lock::Mutex::new(rand::rngs::OsRng)),
+    )
+    .await;
+    assert!(
+        matches!(
+            result,
+            Err(keyhive_core::keyhive::TryFromArchiveError::NotTheSigner { .. })
+        ),
+        "{:?}",
+        result.err()
     );
     Ok(())
 }
@@ -142,7 +225,7 @@ async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
-    let early = alice.into_archive().await;
+    let early = alice.into_archive().await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let ct = ctx.encrypt(&alice, design_doc, b"hello world").await?;
@@ -182,7 +265,7 @@ async fn an_archive_merged_into_a_rebuild_reaches_a_readable_state() -> Result<(
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
-    let early = alice.into_archive().await;
+    let early = alice.into_archive().await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let ct = ctx
@@ -190,7 +273,7 @@ async fn an_archive_merged_into_a_rebuild_reaches_a_readable_state() -> Result<(
         .await?;
 
     let restored = ctx.rebuild_from_archive(&early, "alice-restored").await?;
-    let latest = alice.into_archive().await;
+    let latest = alice.into_archive().await?;
     let pending = restored.ingest_archive(latest).await?.len();
     assert_eq!(pending, 0, "the later archive was ingested completely");
 
@@ -208,23 +291,22 @@ async fn an_archive_merged_into_a_rebuild_reaches_a_readable_state() -> Result<(
 }
 
 #[tokio::test]
-#[ignore = "ingesting an archive brings the membership graph but not the key state"]
 async fn ingesting_an_archive_carries_the_key_state_as_well_as_the_graph() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
 
-    let early = alice.into_archive().await;
+    let early = alice.into_archive().await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     let ct = ctx.encrypt(&alice, design_doc, b"hello world").await?;
 
     let restored = ctx.rebuild_from_archive(&early, "alice-restored").await?;
-    let latest = alice.into_archive().await;
+    let latest = alice.into_archive().await?;
     let pending = restored.ingest_archive(latest).await?.len();
 
     assert_eq!(pending, 0, "the archive was ingested completely");
     assert_eq!(
-        restored.access_for_doc(alice.id(), design_doc).await,
+        restored.access_for_doc(alice.id(), design_doc).await?,
         Some(Admin),
         "and it believes it is an admin of the document"
     );
@@ -241,7 +323,7 @@ async fn a_rebuilt_instance_can_write_and_walk_back() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    let archive = alice.into_archive().await;
+    let archive = alice.into_archive().await?;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
 
     let genesis = ctx
@@ -258,6 +340,58 @@ async fn a_rebuilt_instance_can_write_and_walk_back() -> Result<()> {
         walked.missing(),
         0,
         "the rebuilt instance holds the ancestor it just wrote"
+    );
+    Ok(())
+}
+
+/// An instance that holds a document's operations but could not build its
+/// tree, because its invitation used a prekey only another instance held,
+/// builds it when it is loaded once it holds that secret, though nothing new
+/// arrives. Delivered straight to `receive_cgka_op`, the failed invitation is
+/// not pending, so importing the secret alone builds nothing.
+#[tokio::test]
+async fn a_tree_unbuilt_for_want_of_a_secret_is_built_on_load() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&bob, "design_doc").await?;
+    bob.add_member(alice.id(), design_doc, Read).await?;
+    let ct = ctx.encrypt(&bob, design_doc, b"for alice").await?;
+    // After bob's add, so he invited alice at a prekey of hers, not the replica's.
+    let replica = ctx
+        .new_keyhive_instance_for(&alice, "alice-replica")
+        .await?;
+
+    let certificates = Keyline::<Sendable>::certificates(bob.keyline())
+        .await
+        .map_err(TestError::from)?
+        .value;
+    for cert in certificates {
+        replica.receive_certificate(cert).await?;
+    }
+    let ops = bob
+        .cgka_ops_for_doc(&design_doc)
+        .await
+        .ok_or("bob holds his document's operations")?;
+    // Twice: an operation that arrives before any add of its document is not
+    // stored, so the first pass stores the adds and the second the rest. The
+    // add of alice fails both times: its prekey secret is alice's, not the
+    // replica's.
+    for op in ops.iter().chain(&ops) {
+        let _ = replica.receive_cgka_op(op.as_ref().clone()).await;
+    }
+    ctx.share_prekey_secrets(&alice, &replica).await?;
+    assert!(
+        replica.try_decrypt_content(design_doc, &ct).await.is_err(),
+        "precondition: the replica holds the secret but has no tree"
+    );
+
+    let restored = ctx
+        .rebuild_from_archive(&replica.into_archive().await?, "alice-restored")
+        .await?;
+    assert_eq!(
+        restored.try_decrypt_content(design_doc, &ct).await?,
+        b"for alice".to_vec()
     );
     Ok(())
 }

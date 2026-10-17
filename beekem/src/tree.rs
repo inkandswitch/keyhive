@@ -234,11 +234,7 @@ impl BeeKem {
         owner_id: MemberId,
         owner_sks: &mut ShareKeyMap,
     ) -> Result<ShareSecretKey, CgkaError> {
-        let leaf_idx = match self.leaf_index_for_id(owner_id) {
-            Ok(idx) => *idx,
-            Err(CgkaError::IdentifierNotFound) => *self.leaf_index_for_id(MemberId::public())?,
-            Err(e) => return Err(e),
-        };
+        let leaf_idx = *self.leaf_index_for_id(owner_id)?;
         if !self.has_root_key() {
             return Err(CgkaError::NoRootKey);
         }
@@ -726,7 +722,7 @@ mod tests {
         rng: &mut StdRng,
         sks: &mut ShareKeyMap,
     ) -> (MemberId, ShareKey) {
-        let id = MemberId::from(SigningKey::generate(rng).verifying_key());
+        let id = MemberId::from(&SigningKey::generate(rng));
         let sk = ShareSecretKey::generate(rng);
         sks.insert(sk.share_key(), sk);
         (id, sk.share_key())
@@ -790,7 +786,7 @@ mod tests {
     }
 
     fn one_member_tree(rng: &mut StdRng, sks: &mut ShareKeyMap) -> (BeeKem, MemberId) {
-        let doc_id = TreeId::from(SigningKey::generate(rng).verifying_key());
+        let doc_id = TreeId::from(&SigningKey::generate(rng));
         let (owner, owner_pk) = join_new_member_to_share_key_map(rng, sks);
         let mut tree = BeeKem::new(doc_id);
         tree.push_leaf(owner, owner_pk.into());
@@ -802,13 +798,13 @@ mod tests {
     /// `encrypt_path` wrote that path into the publisher's own.
     fn seeded() -> (BeeKem, [MemberId; 4], PathChange) {
         fn member(rng: &mut StdRng) -> (MemberId, ShareKey, ShareSecretKey) {
-            let id = MemberId::from(SigningKey::generate(rng).verifying_key());
+            let id = MemberId::from(&SigningKey::generate(rng));
             let sk = ShareSecretKey::generate(rng);
             (id, sk.share_key(), sk)
         }
 
         let mut rng = StdRng::seed_from_u64(0);
-        let doc_id = TreeId::from(SigningKey::generate(&mut rng).verifying_key());
+        let doc_id = TreeId::from(&SigningKey::generate(&mut rng));
         let (owner, owner_pk, owner_sk) = member(&mut rng);
         let mut tree = BeeKem::new(doc_id);
         tree.push_leaf(owner, owner_pk.into());

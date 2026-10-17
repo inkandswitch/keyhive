@@ -92,21 +92,13 @@ test.describe("Signer", async () => {
         return { key, manualKey };
       };
 
-      test("initializes successfully", async ({ page, browserName }) => {
-        test.skip(
-          browserName === "chromium",
-          "waiting for Ed25519 to come out of feature flag",
-        );
+      test("initializes successfully", async ({ page }) => {
 
         const out = await page.evaluate(scenario);
         expect(out.key).toBeDefined();
       });
 
-      test("loads from manual key", async ({ page, browserName }) => {
-        test.skip(
-          browserName === "chromium",
-          "waiting for Ed25519 to come out of feature flag",
-        );
+      test("loads from manual key", async ({ page }) => {
 
         const out = await page.evaluate(scenario);
         expect(out.manualKey).toBeDefined();
@@ -120,11 +112,7 @@ test.describe("Signer", async () => {
         return { input, key, vKey: key.verifyingKey };
       };
 
-      test("has a verifying key", async ({ page, browserName }) => {
-        test.skip(
-          browserName === "chromium",
-          "waiting for Ed25519 to come out of feature flag",
-        );
+      test("has a verifying key", async ({ page }) => {
 
         const out = await page.evaluate(scenario, { toSign });
         expect(out.vKey).toBeDefined();
@@ -139,21 +127,13 @@ test.describe("Signer", async () => {
         return { payload: signed.payload(), signature: signed.signature };
       };
 
-      test("has a signature", async ({ page, browserName }) => {
-        test.skip(
-          browserName === "chromium",
-          "waiting for Ed25519 to come out of feature flag",
-        );
+      test("has a signature", async ({ page }) => {
 
         const out = await page.evaluate(scenario, { toSign });
         expect(out.signature).toBeDefined();
       });
 
-      test("embeds the payload unchanged", async ({ page, browserName }) => {
-        test.skip(
-          browserName === "chromium",
-          "waiting for Ed25519 to come out of feature flag",
-        );
+      test("embeds the payload unchanged", async ({ page }) => {
 
         const out = await page.evaluate(scenario, { toSign });
         expect(Object.values(out.payload)).toStrictEqual(toSign);

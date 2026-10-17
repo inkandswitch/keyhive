@@ -3,6 +3,11 @@
 use crate::{error::CgkaError, operation::CgkaOperation, pcs_key::PcsKey};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use keyhive_codec::{
+    error::DecodeError,
+    prefixed::{decode_bytes, encode_bytes},
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
@@ -145,6 +150,33 @@ impl PairedKey {
             key: sk.derive_symmetric_key(paired_pk),
             paired_pk: *paired_pk,
         }
+    }
+}
+
+/// `nonce ‖ ciphertext_len:bijou32 ‖ ciphertext ‖ paired_pk`.
+impl<T> Encode for EncryptedSecret<T> {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.nonce.encode_into(out);
+        encode_bytes(&self.ciphertext, out);
+        self.paired_pk.encode_into(out);
+    }
+}
+
+impl<T> Decode for EncryptedSecret<T> {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl<T> StreamDecode for EncryptedSecret<T> {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (nonce, rest) = Siv::decode_next(bytes)?;
+        let (ciphertext, rest) = decode_bytes(rest)?;
+        let (paired_pk, rest) = ShareKey::decode_next(rest)?;
+        Ok((
+            EncryptedSecret::new(nonce, ciphertext.to_vec(), paired_pk),
+            rest,
+        ))
     }
 }
 

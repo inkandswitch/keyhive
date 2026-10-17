@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
+    fmt,
     fmt::{Debug, Display},
     sync::Arc,
 };
@@ -22,8 +23,8 @@ use thiserror::Error;
 /// An async storage interface for ciphertexts.
 ///
 /// The `F: FutureForm` parameter determines whether the returned
-/// futures are `Send` ([`Sendable`](future_form::Sendable)) or
-/// `!Send` ([`Local`](future_form::Local)).
+/// futures are `Send` ([`Sendable`]) or
+/// `!Send` ([`Local`]).
 ///
 /// This includes functionality for "causal decryption":
 /// the ability to decrypt a set of causally-related ciphertexts.
@@ -333,11 +334,6 @@ impl<F: FutureForm, T: Clone + 'static, Cr: ContentRef + 'static> CiphertextStor
     }
 }
 
-pub trait Isomorphic<T> {
-    fn pure(inner: T) -> Self;
-    fn extract(self) -> T;
-}
-
 #[derive(Debug, Error)]
 pub struct CausalDecryptionError<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> {
     pub cannot: HashMap<Cr, ErrorReason<F, Cr, T, S>>,
@@ -348,7 +344,7 @@ pub struct CausalDecryptionError<F: FutureForm, Cr: ContentRef, T, S: Ciphertext
 impl<F: FutureForm, Cr: ContentRef + Debug, T: Debug, S: CiphertextStore<F, Cr, T>> Display
     for CausalDecryptionError<F, Cr, T, S>
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let x = self.cannot.iter().collect::<Vec<_>>();
         write!(f, "CausalDecryptionError({:?})", x)
     }

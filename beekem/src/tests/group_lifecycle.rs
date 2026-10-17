@@ -1,7 +1,7 @@
 use crate::{
     cgka::Cgka,
     error::CgkaError,
-    id::{MemberId, TreeId},
+    id::TreeId,
     keys::ShareKeyMap,
     test_utils::{for_each_seed, member, Group, Member, ADD_AUTH, REMOVE_AUTH},
     transact::{Fork, Merge},
@@ -9,9 +9,7 @@ use crate::{
 use alloc::{sync::Arc, vec::Vec};
 use core::hash::{Hash, Hasher};
 use future_form::Local;
-use keyhive_crypto::{
-    digest::Digest, share_key::ShareSecretKey, signer::memory::MemorySigner, verifiable::Verifiable,
-};
+use keyhive_crypto::{digest::Digest, share_key::ShareSecretKey, signer::memory::MemorySigner};
 use rand::{rngs::StdRng, SeedableRng};
 use std::hash::DefaultHasher;
 
@@ -84,7 +82,7 @@ async fn an_operation_for_another_document_is_refused() {
     let owner = member(&mut rng);
     let tree_for = |rng: &mut StdRng| {
         Cgka::new(
-            TreeId(MemorySigner::generate(rng).verifying_key()),
+            TreeId::from(&MemorySigner::generate(rng).0),
             owner.id,
             ShareKeyMap::new(),
         )
@@ -120,7 +118,7 @@ async fn a_removed_member_can_merge_a_fork_after_a_rotation() {
 }
 
 fn cgka_with_no_operations(owner: &Member) -> Cgka {
-    Cgka::new(TreeId(owner.id.0), owner.id, ShareKeyMap::new())
+    Cgka::new(TreeId::from(owner.id.id()), owner.id, ShareKeyMap::new())
 }
 
 #[test]
@@ -183,20 +181,20 @@ async fn a_write_rotates_only_when_there_is_no_current_key() {
     let signer = group.members[0].signer.clone();
 
     group.rotate(0, &mut rng).await;
-    let (_, op, _) = group.replicas[0]
+    let (_, rotation) = group.replicas[0]
         .new_app_secret_for::<Local, _, u32, _>(&1, b"content", &Vec::new(), &signer, &mut rng)
         .await
         .expect("a member can write");
-    assert!(op.is_none(), "a write should reuse the current key");
+    assert!(rotation.is_none(), "a write should reuse the current key");
 
     let carol = member(&mut rng);
     group.add(0, carol.id, carol.pk).await;
-    let (_, op, _) = group.replicas[0]
+    let (_, rotation) = group.replicas[0]
         .new_app_secret_for::<Local, _, u32, _>(&2, b"content", &Vec::new(), &signer, &mut rng)
         .await
         .expect("a member can write");
     assert!(
-        op.is_some(),
+        rotation.is_some(),
         "an add blanks the root, so the next write should rotate"
     );
 }
@@ -270,35 +268,6 @@ fn merging_a_fork_keeps_the_root_secrets_it_recorded() {
             trunk.root_secrets.get(&op_hash),
             Some(secret),
             "the secret recorded on the fork was lost in the merge"
-        );
-    });
-}
-
-#[test]
-fn a_merge_records_the_root_secret_for_a_reader_outside_the_tree_through_public() {
-    for_each_seed(|mut rng| async move {
-        let mut group = Group::new(1, &mut rng).await;
-        let public = member(&mut rng);
-        group.add(0, MemberId::public(), public.pk).await;
-        let mut reader_sks = ShareKeyMap::new();
-        reader_sks.insert(public.pk, public.sk);
-        let mut reader_view = group.replicas[0]
-            .with_new_owner(member(&mut rng).id, reader_sks)
-            .unwrap();
-        let op_hash = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
-        let secret = group.replicas[0]
-            .root_secrets
-            .get(&op_hash)
-            .expect("the author records the secret its own update produced");
-        let mut fork = group.replicas[0].fork();
-        fork.root_secrets.clear();
-
-        reader_view.merge(fork);
-
-        assert_eq!(
-            reader_view.root_secrets.get(&op_hash),
-            Some(secret),
-            "the replay after a merge should record the secret through Public's leaf"
         );
     });
 }

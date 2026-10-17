@@ -1,12 +1,12 @@
 //! Reading a chain of content by walking back through the ancestors each write lists.
 
 use keyhive_core::{
-    access::Access::Read,
     principal::document::id::DocumentId,
     test_utils::{
         decrypt_with_key, CausalDecryptionExt, Instance, TestContext, TestResult as Result,
     },
 };
+use keyline::power::Power::Read;
 use std::{collections::BTreeSet, sync::Arc};
 
 async fn setup_writer_and_reader() -> Result<(TestContext, Instance, Instance, DocumentId)> {
@@ -14,7 +14,7 @@ async fn setup_writer_and_reader() -> Result<(TestContext, Instance, Instance, D
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
     Ok((ctx, alice, bob, design_doc))
 }
@@ -74,7 +74,7 @@ async fn traversing_from_a_write_reports_its_ancestors() -> Result<()> {
         .encrypt_in_envelope(&alice, design_doc, &[], b"written before bob")
         .await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     let entry_point = ctx
@@ -111,7 +111,7 @@ async fn a_reader_can_reference_an_ancestor_they_decrypted_rather_than_wrote() -
     let bob = ctx.individual("bob").await?;
     let carol = ctx.individual("carol").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     let genesis = ctx
@@ -126,7 +126,7 @@ async fn a_reader_can_reference_an_ancestor_they_decrypted_rather_than_wrote() -
         "bob can open the genesis write"
     );
 
-    alice.add_member(carol.id(), design_doc, Read, &[]).await?;
+    alice.add_member(carol.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     // Bob writes a successor referencing the genesis, which means putting its key in the envelope.
@@ -372,7 +372,7 @@ async fn two_missing_ancestors_are_each_reported_with_their_own_key() -> Result<
     Ok(())
 }
 
-/// `Document::try_causal_decrypt_content` collects the entrypoint's missing ancestors into
+/// `DocumentState::try_causal_decrypt_content` collects the entrypoint's missing ancestors into
 /// a local `CausalDecryptionState` and then returns the store walk's own state instead,
 /// dropping what it collected. So a reader passed a write before the content it points at
 /// is told there is nothing outstanding when what it needs is exactly that list and the

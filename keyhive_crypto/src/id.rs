@@ -1,25 +1,28 @@
-//! Node identity: an Ed25519 verifying key.
+//! Identity: a validated Ed25519 verifying key, with a canonical codec.
 
+use crate::verifiable::Verifiable;
 use alloc::vec::Vec;
-use core::{cmp::Ordering, fmt};
-use ed25519_dalek::VerifyingKey;
+use core::fmt;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use keyhive_codec::{
     error::DecodeError,
-    traits::{Decode, Encode},
+    traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use keyhive_crypto::verifiable::Verifiable;
 
-/// A node in the authority graph.
+/// An Ed25519 verifying key that names a principal.
 ///
-/// Every principal, role, document, and group is an `Id`. Keyline attaches no
-/// meaning to which is which; the layer above does.
+/// Every principal, document, and group is an `Id`; so is every node of
+/// Keyline's authority graph. The type attaches no meaning to which is which.
 ///
 /// Stored as the 32-byte compressed key, not as [`VerifyingKey`] (which caches
 /// the decompressed point and is roughly 200 bytes). Every constructor checks
 /// that the bytes are the canonical encoding of a curve point outside the
 /// small-order subgroup, so [`Id::verifying_key`] cannot fail and each key has
 /// exactly one `Id`.
-// TODO(keyhive_types): unify with `keyhive_core::Identifier` and `beekem::MemberId`.
+///
+/// Formatting: [`Debug`](fmt::Debug) and [`LowerHex`](fmt::LowerHex) show the
+/// whole key (`{:#x}` adds `0x`); [`Display`](fmt::Display) shows the first
+/// four bytes, for logs.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Id([u8; Self::LEN]);
 
@@ -61,7 +64,7 @@ impl Id {
 
     /// [`Id::decode`] for a named field of a larger encoding, so that an
     /// invalid key reports which field it was.
-    pub(crate) fn decode_field(bytes: &[u8], field: &'static str) -> Result<Self, DecodeError> {
+    pub fn decode_field(bytes: &[u8], field: &'static str) -> Result<Self, DecodeError> {
         Id::decode(bytes).map_err(|e| match e {
             DecodeError::InvalidField(_) => DecodeError::InvalidField(field),
             other => other,
@@ -70,8 +73,8 @@ impl Id {
 }
 
 /// A signing key's verifying key is always canonical and of prime order.
-impl From<&ed25519_dalek::SigningKey> for Id {
-    fn from(key: &ed25519_dalek::SigningKey) -> Self {
+impl From<&SigningKey> for Id {
+    fn from(key: &SigningKey) -> Self {
         Id(key.verifying_key().to_bytes())
     }
 }
@@ -116,6 +119,13 @@ impl fmt::Display for Id {
     }
 }
 
+/// The whole key in hex; `{:#x}` prefixes `0x`.
+impl fmt::LowerHex for Id {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        crate::hex::bytes_as_hex(self.0.iter(), f)
+    }
+}
+
 impl Encode for Id {
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.0);
@@ -124,24 +134,26 @@ impl Encode for Id {
 
 impl Decode for Id {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        let arr: [u8; Id::LEN] = bytes
-            .try_into()
-            .map_err(|_| match bytes.len().cmp(&Id::LEN) {
-                Ordering::Less => DecodeError::UnexpectedEnd,
-                _ => DecodeError::TrailingBytes,
-            })?;
-        Id::from_bytes(arr).map_err(|_| DecodeError::InvalidField("id"))
+        decode_exact(bytes)
     }
 }
 
-#[cfg(feature = "serde")]
+/// Fixed-width, so prefix-free.
+impl StreamDecode for Id {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (raw, rest) = <[u8; Id::LEN]>::decode_next(bytes)?;
+        Id::from_bytes(raw)
+            .map(|id| (id, rest))
+            .map_err(|_| DecodeError::InvalidField("id"))
+    }
+}
+
 impl serde::Serialize for Id {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_bytes(&self.0)
     }
 }
 
-#[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for Id {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         d.deserialize_bytes(IdVisitor)
@@ -151,10 +163,8 @@ impl<'de> serde::Deserialize<'de> for Id {
 /// Reads what [`Id`]'s `Serialize` writes: a byte string. Self-describing
 /// formats that render bytes as a list (JSON) arrive as a sequence instead.
 /// Both paths check the length and that the bytes are a curve point.
-#[cfg(feature = "serde")]
 struct IdVisitor;
 
-#[cfg(feature = "serde")]
 impl<'de> serde::de::Visitor<'de> for IdVisitor {
     type Value = Id;
 
@@ -210,8 +220,18 @@ pub enum InvalidId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "serde")]
-    use alloc::string::ToString;
+    use alloc::{
+        format,
+        string::{String, ToString},
+    };
+
+    #[test]
+    fn lower_hex_is_the_whole_key() {
+        let id = Id::from(&SigningKey::from_bytes(&[7; 32]));
+        let hex: String = id.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(format!("{id:x}"), hex);
+        assert_eq!(format!("{id:#x}"), format!("0x{hex}"));
+    }
 
     #[test]
     fn rejects_non_curve_points() {
@@ -283,7 +303,6 @@ mod tests {
     /// Through a positional format with no type tags, where a disagreement
     /// between `Serialize` and `Deserialize` misreads instead of erroring.
     #[test]
-    #[cfg(feature = "serde")]
     fn serde_round_trips_through_postcard() {
         let id = sample();
         let bytes = postcard::to_allocvec(&id).expect("serialize");
@@ -294,7 +313,6 @@ mod tests {
 
     /// The sequence path, as a self-describing format like JSON delivers it.
     #[test]
-    #[cfg(feature = "serde")]
     fn serde_accepts_a_byte_sequence_of_exactly_the_right_length() {
         use serde::{de::value::SeqDeserializer, Deserialize};
         type Seq<I> = SeqDeserializer<I, serde::de::value::Error>;
@@ -318,6 +336,14 @@ mod tests {
 
         let not_a_point = Seq::new([0x02u8; 32].into_iter());
         assert!(Id::deserialize(not_a_point).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "arbitrary")]
+    fn codec_laws() {
+        keyhive_codec::laws::round_trip::<Id>();
+        keyhive_codec::laws::canonical_near::<Id>();
+        keyhive_codec::laws::stream::<Id>();
     }
 
     #[test]

@@ -8,7 +8,6 @@
 use super::Levels;
 use crate::{
     delegation::Delegation,
-    id::Id,
     power::Power,
     test_utils::{
         conformance::gen::{ids, CertSet},
@@ -16,7 +15,7 @@ use crate::{
     },
 };
 use alloc::{collections::BTreeSet, vec::Vec};
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, id::Id};
 
 type Ctx = Option<Digest<Delegation>>;
 

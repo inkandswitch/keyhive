@@ -1,26 +1,29 @@
-use crate::principal::individual::{id::IndividualId, op::KeyOp, Individual};
+use crate::principal::individual::{id::IndividualId, op::KeyOp, IndividualState};
 use derive_more::{From, Into};
+use ed25519_dalek::{Signature, VerifyingKey};
 use keyhive_crypto::{
     hex::{self, ToHexString},
     share_key::ShareKey,
     verifiable::Verifiable,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
+/// An individual's introduction: one of its prekey operations, verified.
+/// Deserializing one checks its signature.
 #[derive(Debug, Clone, PartialEq, Eq, From, Into, Hash, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct ContactCard(pub(crate) KeyOp);
 
 impl ContactCard {
     pub fn id(&self) -> IndividualId {
-        self.0.issuer().into()
+        IndividualId::from(self.0.issuer())
     }
 
     pub fn share_key(&self) -> &ShareKey {
         self.0.new_key()
     }
 
-    pub fn signature(&self) -> &ed25519_dalek::Signature {
+    pub fn signature(&self) -> &Signature {
         self.0.signature()
     }
 
@@ -38,27 +41,27 @@ impl ToHexString for ContactCard {
     }
 }
 
-impl std::fmt::Display for ContactCard {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ContactCard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ContactCard for ",)?;
         hex::bytes_as_hex(self.0.issuer().as_bytes().iter(), f)
     }
 }
 
-impl From<&ContactCard> for Individual {
-    fn from(contact_card: &ContactCard) -> Individual {
-        Individual::new(contact_card.0.clone())
+impl From<&ContactCard> for IndividualState {
+    fn from(contact_card: &ContactCard) -> IndividualState {
+        IndividualState::new(contact_card.0.clone())
     }
 }
 
-impl From<ContactCard> for Individual {
-    fn from(contact_card: ContactCard) -> Individual {
-        Individual::new(contact_card.0)
+impl From<ContactCard> for IndividualState {
+    fn from(contact_card: ContactCard) -> IndividualState {
+        IndividualState::new(contact_card.0)
     }
 }
 
 impl Verifiable for ContactCard {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.0.verifying_key()
     }
 }

@@ -1,49 +1,43 @@
-use super::{
-    access::JsAccess, agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler,
-    history::JsHistory, signed_delegation::JsSignedDelegation, signer::JsSigner,
-};
-use derive_more::{From, Into};
-use dupe::Dupe;
-use future_form::Local;
-use keyhive_core::principal::group::delegation::{Delegation, DelegationError};
-use thiserror::Error;
+use super::{identifier::JsIdentifier, power::JsPower};
+use keyhive_crypto::id::Id;
+use keyline::delegation::Delegation;
 use wasm_bindgen::prelude::*;
 
+/// A Keyline delegation: `issuer` asserts that `delegate` may exercise `can`
+/// over `subject`, attenuated to the issuer's own power over it.
 #[wasm_bindgen(js_name = Delegation)]
-#[derive(Debug, Clone, From, Into)]
-pub struct JsDelegation(pub(crate) Delegation<Local, JsSigner, JsChangeId, JsEventHandler>);
+#[derive(Debug, Clone, Copy)]
+pub struct JsDelegation {
+    pub(crate) issuer: Id,
+    pub(crate) delegation: Delegation,
+}
 
 #[wasm_bindgen(js_class = Delegation)]
 impl JsDelegation {
     #[wasm_bindgen(getter)]
-    pub fn delegate(&self) -> JsAgent {
-        self.0.delegate().dupe().into()
+    pub fn issuer(&self) -> JsIdentifier {
+        JsIdentifier(self.issuer)
+    }
+
+    /// Who receives the power: the delegation's audience.
+    #[wasm_bindgen(getter)]
+    pub fn delegate(&self) -> JsIdentifier {
+        JsIdentifier(self.delegation.audience)
     }
 
     #[wasm_bindgen(getter)]
-    pub fn can(&self) -> JsAccess {
-        self.0.can().into()
+    pub fn subject(&self) -> JsIdentifier {
+        JsIdentifier(self.delegation.subject)
     }
 
     #[wasm_bindgen(getter)]
-    pub fn proof(&self) -> Option<JsSignedDelegation> {
-        Some(self.0.proof()?.dupe().into())
+    pub fn can(&self) -> JsPower {
+        JsPower(self.delegation.power)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn after(&self) -> JsHistory {
-        self.0.after().into()
-    }
-}
-
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct JsDelegationError(#[from] DelegationError);
-
-impl From<JsDelegationError> for JsValue {
-    fn from(err: JsDelegationError) -> Self {
-        let err = js_sys::Error::new(&err.to_string());
-        err.set_name("DelegationError");
-        err.into()
+    /// Whether this re-issues a delegation identical to a revoked one.
+    #[wasm_bindgen(getter, js_name = isReissue)]
+    pub fn is_reissue(&self) -> bool {
+        self.delegation.citation.is_some()
     }
 }

@@ -1,21 +1,31 @@
-//! A single user agent.
+//! An individual: a single key, with no members.
 
 pub mod id;
 pub mod op;
 pub mod state;
 
 use self::op::KeyOp;
-use super::{agent::id::AgentId, document::id::DocumentId};
+use super::document::id::DocumentId;
 use crate::{
     contact_card::ContactCard,
+    content::heads::ContentHeads,
+    keyhive::Keyhive,
+    listener::membership::MembershipListener,
+    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
 use derivative::Derivative;
 use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
+use future_form::FutureForm;
 use id::IndividualId;
-use keyhive_crypto::{share_key::ShareKey, signed::VerificationError, verifiable::Verifiable};
+use keyhive_codec::traits::{Encode, StreamDecode};
+use keyhive_crypto::{
+    content::reference::ContentRef, id::Id, share_key::ShareKey, signer::async_signer::AsyncSigner,
+    verifiable::Verifiable, verified::VerifyError,
+};
+use keyline::contract::Keyline;
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::{collections::HashSet, sync::Arc};
@@ -23,49 +33,57 @@ use thiserror::Error;
 use tracing::instrument;
 
 #[cfg(any(feature = "test_utils", test))]
-use future_form::FutureForm;
-#[cfg(any(feature = "test_utils", test))]
-use keyhive_crypto::{signed::SigningError, signer::async_signer::AsyncSigner};
+use keyhive_crypto::verified::SignError;
 
+use rand::{CryptoRng, RngCore};
 #[cfg(any(feature = "test_utils", test))]
 use std::num::NonZeroUsize;
+use std::{
+    cmp::Ordering,
+    hash::{Hash, Hasher},
+};
 
-/// Single agents with no internal membership.
+/// A single key, with no members.
 ///
-/// `Individual`s can be thought of as the terminal agents. They represent
+/// `IndividualState`s can be thought of as the terminal principals. They represent
 /// keys that may sign ops, be delegated capabilities to
-/// [`Document`][super::document::Document]s and [`Group`][super::group::Group]s.
+/// [`DocumentState`][super::document::DocumentState]s and [`Group`][super::group::Group]s.
+///
+/// Serialized as its prekey operations alone: the id and the live prekeys
+/// follow from them, and deserializing checks that every operation verifies
+/// and has the same issuer.
 #[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
 #[derivative(PartialEq, Eq)]
-pub struct Individual {
+#[serde(into = "PrekeyState", try_from = "PrekeyState")]
+pub struct IndividualState {
     /// The public key identifier.
     pub(crate) id: IndividualId,
 
     /// [`ShareKey`] pre-keys.
     ///
-    /// Prekeys are used to invite this `Individual` to [`Document`] read access trees.
-    /// The core idea is that the invited `Individual` is offline, but needs to be added to
-    /// the encryption tree for a particular [`Document`]. They publish a set of public keys
+    /// Prekeys are used to invite this `IndividualState` to [`DocumentState`] read access trees.
+    /// The core idea is that the invited `IndividualState` is offline, but needs to be added to
+    /// the encryption tree for a particular [`DocumentState`]. They publish a set of public keys
     /// in advance. The inviter can then deterministically select one, and use it as the
     /// initial key for the invitee's BeeKEM entry. The next time they're online, the invitee
-    /// should then remove the prekey from their public set and rotate the BeeKEM key on the [`Document`].
+    /// should then remove the prekey from their public set and rotate the BeeKEM key on the [`DocumentState`].
     ///
-    /// The use of unique prekeys for each new [`Document`] invite isolates each [`Document`] from
-    /// the compromise of one prekey affecting the security of other [`Document`]s. Since we operate
+    /// The use of unique prekeys for each new [`DocumentState`] invite isolates each [`DocumentState`] from
+    /// the compromise of one prekey affecting the security of other [`DocumentState`]s. Since we operate
     /// in a fully concurrent context with causal consistency, we cannot guarantee that a prekey will
-    /// not be reused in multiple [`Document`]s, but we can tune the probability of this happening.
+    /// not be reused in multiple [`DocumentState`]s, but we can tune the probability of this happening.
     ///
-    /// [`Document`]: super::document::Document
+    /// [`DocumentState`]: super::document::DocumentState
     pub(crate) prekeys: HashSet<ShareKey>,
 
     /// The state used to materialize `prekeys`.
     pub(crate) prekey_state: PrekeyState,
 }
 
-impl Individual {
+impl IndividualState {
     #[instrument]
     pub fn new(initial_op: KeyOp) -> Self {
-        let id = IndividualId(initial_op.verifying_key().into());
+        let id = IndividualId::from(initial_op.issuer());
         let prekey_state = PrekeyState::new(initial_op);
 
         Self {
@@ -77,15 +95,15 @@ impl Individual {
 
     #[cfg(any(feature = "test_utils", test))]
     #[instrument(skip_all)]
-    pub async fn generate<F: FutureForm, R: rand::CryptoRng + rand::RngCore, S: AsyncSigner<F>>(
+    pub async fn generate<F: FutureForm, R: CryptoRng + RngCore, S: AsyncSigner<F>>(
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Self, SigningError> {
+    ) -> Result<Self, SignError> {
         let prekey_state =
             PrekeyState::generate::<F, _, _>(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
 
         Ok(Self {
-            id: IndividualId(signer.verifying_key().into()),
+            id: IndividualId::try_from(signer.verifying_key())?,
             prekeys: prekey_state.build(),
             prekey_state,
         })
@@ -100,30 +118,31 @@ impl Individual {
         self.id
     }
 
-    pub fn agent_id(&self) -> AgentId {
-        AgentId::IndividualId(self.id)
-    }
-
     #[instrument(skip(self), fields(indie_id = %self.id))]
     pub fn receive_prekey_op(&mut self, op: op::KeyOp) -> Result<(), ReceivePrekeyOpError> {
-        if op.verifying_key() != self.id.verifying_key() {
+        if op.issuer() != Id::from(self.id) {
             return Err(ReceivePrekeyOpError::IncorrectSigner);
         }
 
-        self.prekey_state.insert_op(op)?;
+        self.prekey_state.insert_op(op);
         self.prekeys = self.prekey_state.build();
         Ok(())
     }
 
+    /// The prekey to seat this individual with in `doc_id`'s tree, or `None`
+    /// if it has no live prekeys (rotations can retire every one).
+    ///
+    /// Chosen from the live prekeys in sorted order by a hash of this
+    /// individual and the document: every replica holding the same prekeys
+    /// picks the same one, and different documents spread across them.
     #[instrument(skip(self), fields(indie_id = %self.id))]
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
-        let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
-        bytes.extend_from_slice(&doc_id.to_bytes());
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> Option<&ShareKey> {
+        let mut seed: Vec<u8> = self.id.to_bytes().to_vec();
+        seed.extend_from_slice(&doc_id.to_bytes());
 
-        let prekeys_len = self.prekeys.len();
-        let idx = pseudorandom_in_range(bytes.as_slice(), prekeys_len);
-
-        self.prekeys.iter().nth(idx).expect("index to be in range")
+        let mut sorted: Vec<&ShareKey> = self.prekeys.iter().collect();
+        sorted.sort_unstable();
+        uniform_index(&seed, sorted.len()).map(|i| sorted[i])
     }
 
     pub fn prekey_ops(&self) -> &CaMap<KeyOp> {
@@ -133,7 +152,7 @@ impl Individual {
     /// The live prekeys, after applying every op in the prekey state.
     ///
     /// A key that has been rotated away is absent, and the iteration order is not
-    /// meaningful. Use [`Individual::prekey_ops`] for the log that produced them.
+    /// meaningful. Use [`IndividualState::prekey_ops`] for the log that produced them.
     pub fn prekeys(&self) -> &HashSet<ShareKey> {
         &self.prekeys
     }
@@ -144,8 +163,43 @@ impl Individual {
     }
 }
 
-impl std::hash::Hash for Individual {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl From<IndividualState> for PrekeyState {
+    fn from(individual: IndividualState) -> Self {
+        individual.prekey_state
+    }
+}
+
+impl TryFrom<PrekeyState> for IndividualState {
+    type Error = InvalidPrekeyState;
+
+    fn try_from(prekey_state: PrekeyState) -> Result<Self, Self::Error> {
+        let mut issuers = prekey_state.ops().values().map(|op| op.issuer());
+        let id = issuers.next().ok_or(InvalidPrekeyState::Empty)?;
+        if issuers.any(|issuer| issuer != id) {
+            return Err(InvalidPrekeyState::MixedIssuers);
+        }
+        Ok(Self {
+            id: IndividualId::from(id),
+            prekeys: prekey_state.build(),
+            prekey_state,
+        })
+    }
+}
+
+/// Why prekey operations do not make an [`IndividualState`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum InvalidPrekeyState {
+    /// There are none.
+    #[error("an individual needs at least one prekey operation")]
+    Empty,
+
+    /// They were signed by more than one key.
+    #[error("prekey operations from more than one issuer")]
+    MixedIssuers,
+}
+
+impl Hash for IndividualState {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
         self.prekey_state.hash(state);
         for pk in self.prekeys.iter() {
@@ -154,25 +208,25 @@ impl std::hash::Hash for Individual {
     }
 }
 
-impl PartialOrd for Individual {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+impl PartialOrd for IndividualState {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for Individual {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+impl Ord for IndividualState {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.id.to_bytes().cmp(&other.id.to_bytes())
     }
 }
 
-impl Verifiable for Individual {
+impl Verifiable for IndividualState {
     fn verifying_key(&self) -> VerifyingKey {
         self.id.verifying_key()
     }
 }
 
-impl Fork for Individual {
+impl Fork for IndividualState {
     type Forked = Self;
 
     fn fork(&self) -> Self::Forked {
@@ -180,10 +234,82 @@ impl Fork for Individual {
     }
 }
 
-impl Merge for Individual {
+/// Merges only the same individual's state: another individual's prekey
+/// operations are ignored, so an individual never holds two issuers' ops.
+impl Merge for IndividualState {
     fn merge(&mut self, fork: Self::Forked) {
+        if fork.id != self.id {
+            tracing::warn!(ours = %self.id, theirs = %fork.id, "not merging another individual's prekeys");
+            return;
+        }
         self.prekey_state.merge(fork.prekey_state);
         self.rebuild()
+    }
+}
+
+/// An individual, as a transient handle over the keyhive: one whose prekeys
+/// this replica holds.
+#[derive(Debug, Clone)]
+pub struct Individual<KH> {
+    keyhive: KH,
+    id: IndividualId,
+}
+
+impl<KH> Individual<KH> {
+    pub(crate) fn new(keyhive: KH, id: IndividualId) -> Self {
+        Individual { keyhive, id }
+    }
+
+    /// The keyhive this handle reads through.
+    pub fn keyhive(&self) -> &KH {
+        &self.keyhive
+    }
+
+    pub fn id(&self) -> Id {
+        self.id.into()
+    }
+
+    pub fn individual_id(&self) -> IndividualId {
+        self.id
+    }
+}
+
+impl<F, S, T, P, C, L, R, K> Individual<Keyhive<F, S, T, P, C, L, R, K>>
+where
+    F: FutureForm,
+    S: AsyncSigner<F> + Clone,
+    T: ContentRef + Encode + StreamDecode,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
+    L: MembershipListener<F, T>,
+    R: CryptoRng + RngCore,
+    K: Keyline<F, RetentionWatermark = ContentHeads<T>>,
+    K::Error: Send + Sync + 'static,
+{
+    /// The prekey this individual is seated with in `doc`'s tree.
+    pub async fn pick_prekey(&self, doc: DocumentId) -> Option<ShareKey> {
+        if self.id == self.keyhive.id() {
+            return self.keyhive.active().pick_prekey(doc).await;
+        }
+        let state = self.keyhive.individual_state(self.id).await?;
+        let prekey = state.lock().await.pick_prekey(doc).copied();
+        prekey
+    }
+
+    /// The prekeys this replica holds for this individual.
+    pub async fn prekeys(&self) -> HashSet<ShareKey> {
+        match self.keyhive.individual_state(self.id).await {
+            Some(state) => state.lock().await.prekeys().clone(),
+            None => HashSet::new(),
+        }
+    }
+
+    /// Every prekey operation this replica holds for this individual.
+    pub async fn prekey_ops(&self) -> CaMap<KeyOp> {
+        match self.keyhive.individual_state(self.id).await {
+            Some(state) => state.lock().await.prekey_ops().clone(),
+            None => CaMap::new(),
+        }
     }
 }
 
@@ -192,148 +318,177 @@ pub enum ReceivePrekeyOpError {
     #[error("The op was not signed by the expected individual.")]
     IncorrectSigner,
 
+    /// It did not decode canonically, or its signature did not verify.
     #[error(transparent)]
-    VerificationError(#[from] VerificationError),
+    Verify(#[from] VerifyError),
 }
 
-fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
-    let bound = u64::from_be_bytes(bytes)
-        .checked_shl(offset_bits as u32)
-        .unwrap_or(0);
-
-    usize::from_be(bound as usize)
-}
-
-fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
-    let digits: u8 = max
-        .checked_ilog2()
-        .unwrap_or(0)
-        .try_into()
-        .expect("usize has at most 64 bits (< 256)");
-
-    let shiftsize: u8 = 64 - digits;
-
-    let mut hash_stream = blake3::Hasher::new().update(seed).finalize_xof();
-    let mut buf = [0; 8]; // usize max
-    let mut idx = None;
-
-    // NOTE this strategy looks odd at first, but it's an established way to
-    // avoid the biases that you get when sampling a (P)RNG and using a modulous
-    // to clamp to a range. Because the range (idx in our case) is likely not
-    // the same size as the RNG, a modulous will bias towards the lower end of the range.
-    // We use resampling here instead is a way to avoid this bias.
-    //
-    // Naively reampling from `usize` would be very inefficient when the
-    // range is small because it's so unlikely to get a random number in that range.
-    // to fix this, we first truncate the random number to the closest power of 2,
-    // which gives us a >=50% chance of getting a number in the range.
-    while idx.is_none() {
-        hash_stream.fill(&mut buf);
-        let raw_idx: usize = clamp(buf, shiftsize);
-        if raw_idx <= max {
-            idx = Some(raw_idx)
+/// An index below `len`, uniform and fixed by `seed`; `None` when `len` is 0.
+///
+/// Rejection sampling over BLAKE3's output stream: a draw at or above the
+/// largest multiple of `len` that fits in a `u64` is redrawn, so reducing
+/// modulo `len` has no bias.
+fn uniform_index(seed: &[u8], len: usize) -> Option<usize> {
+    let n = u64::try_from(len).ok().filter(|&n| n > 0)?;
+    let limit = u64::MAX - u64::MAX % n;
+    let mut stream = blake3::Hasher::new_derive_key("keyhive prekey selection v1")
+        .update(seed)
+        .finalize_xof();
+    let mut buf = [0; 8];
+    loop {
+        stream.fill(&mut buf);
+        let draw = u64::from_le_bytes(buf);
+        if draw < limit {
+            return Some(usize::try_from(draw % n).expect("below `len`, a `usize`"));
         }
     }
-
-    idx.expect("index to be Some due to the check above")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::principal::individual::op::add_key::AddKeyOp;
-    use keyhive_crypto::signer::memory::MemorySigner;
+    use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
+    use keyhive_crypto::{
+        share_key::ShareSecretKey, signer::memory::MemorySigner, verified::Verified,
+    };
+    use std::collections::BTreeSet;
+
+    fn add(signer: &MemorySigner, share_key: ShareKey) -> KeyOp {
+        KeyOp::Add(Verified::sign_sync(&AddKeyOp { share_key }, signer).expect("signs"))
+    }
+
+    fn rotate(signer: &MemorySigner, old: ShareKey, new: ShareKey) -> KeyOp {
+        KeyOp::Rotate(Verified::sign_sync(&RotateKeyOp { old, new }, signer).expect("signs"))
+    }
+
+    fn key() -> ShareKey {
+        ShareSecretKey::generate(&mut rand::thread_rng()).share_key()
+    }
+
+    /// An individual with `n` live prekeys, its ops inserted in shuffled order.
+    fn with_prekeys(signer: &MemorySigner, n: usize) -> IndividualState {
+        use rand::seq::SliceRandom;
+        let mut ops: Vec<KeyOp> = (0..n).map(|_| add(signer, key())).collect();
+        ops.shuffle(&mut rand::thread_rng());
+        let mut ops = ops.into_iter();
+        let mut individual = IndividualState::new(ops.next().expect("at least one"));
+        for op in ops {
+            individual.receive_prekey_op(op).expect("same issuer");
+        }
+        individual
+    }
+
+    fn doc() -> DocumentId {
+        DocumentId(
+            Id::try_from(MemorySigner::generate(&mut rand::thread_rng()).verifying_key())
+                .expect("a generated key is a valid id"),
+        )
+    }
 
     #[test]
     fn test_to_bytes() {
         test_utils::init_logging();
         let mut csprng = rand::thread_rng();
         let sk = MemorySigner::generate(&mut csprng);
-        let op = sk.try_sign_sync(AddKeyOp::generate(&mut csprng)).unwrap();
-        let individual: Individual = Individual::new(Arc::new(op).into());
+        let op = Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &sk).unwrap();
+        let individual: IndividualState = IndividualState::new(KeyOp::Add(op));
         assert_eq!(individual.id.to_bytes(), sk.verifying_key().to_bytes());
     }
 
     #[test]
-    fn test_clamp_sequence() {
-        test_utils::init_logging();
-
-        let a = clamp([0xFF; 8], 0);
-        let b = clamp([0xFF; 8], 1);
-        let c = clamp([0xFF; 8], 8);
-        let d = clamp([0xFF; 8], 16);
-        let e = clamp([0xFF; 8], 32);
-        let f = clamp([0xFF; 8], 48);
-        let g = clamp([0xFF; 8], 64);
-
-        assert_eq!(a, usize::MAX);
-        assert!(a > b);
-        assert!(b > c);
-        assert!(c > d);
-        assert!(d > e);
-        assert!(e > f);
-        assert!(f > g);
-        assert_eq!(g, 0);
+    fn a_uniform_index_is_below_its_bound() {
+        bolero::check!()
+            .with_type::<(Vec<u8>, u16)>()
+            .for_each(|(seed, len)| {
+                let len = usize::from(*len);
+                match uniform_index(seed, len) {
+                    None => assert_eq!(len, 0),
+                    Some(i) => assert!(i < len, "{i} < {len}"),
+                }
+            });
     }
 
+    /// Every count of prekeys, including powers of two, picks one of them.
     #[test]
-    fn test_clamp_keeps_in_range() {
-        test_utils::init_logging();
-
-        let x = clamp([0xFF; 8], 48);
-        assert!(x <= 2usize.pow(64 - 48));
-        assert_eq!(x, 65535);
+    fn a_prekey_is_picked_for_every_count() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        for n in 1..=33 {
+            let individual = with_prekeys(&signer, n);
+            for _ in 0..16 {
+                let picked = individual.pick_prekey(doc()).expect("it has prekeys");
+                assert!(individual.prekeys().contains(picked));
+            }
+        }
     }
 
+    /// The pick depends on the prekeys and the document, not on the order the
+    /// ops arrived in, so replicas holding the same prekeys agree.
     #[test]
-    fn test_clamp_keeps_in_range_2() {
-        test_utils::init_logging();
-
-        let buf: [u8; 8] = rand::random();
-        let x = clamp(buf, 48);
-        assert!(x <= 2usize.pow(64 - 48));
+    fn replicas_with_the_same_prekeys_pick_the_same_one() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let keys: Vec<ShareKey> = (0..12).map(|_| key()).collect();
+        let build = |order: &[usize]| {
+            let mut ops = order.iter().map(|&i| add(&signer, keys[i]));
+            let mut individual = IndividualState::new(ops.next().expect("nonempty"));
+            for op in ops {
+                individual.receive_prekey_op(op).expect("same issuer");
+            }
+            individual
+        };
+        let forward = build(&(0..12).collect::<Vec<_>>());
+        let backward = build(&(0..12).rev().collect::<Vec<_>>());
+        for _ in 0..32 {
+            let d = doc();
+            assert_eq!(forward.pick_prekey(d), backward.pick_prekey(d));
+        }
     }
 
+    /// Different documents spread across the prekeys.
     #[test]
-    fn test_pseudorandom_in_range() {
-        test_utils::init_logging();
-
-        let arr = 0..39; // Not byte aligned
-        let seed: [u8; 32] = rand::random();
-        let index = pseudorandom_in_range(&seed, arr.len());
-        assert!(index < arr.len());
+    fn documents_spread_across_prekeys() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let individual = with_prekeys(&signer, 8);
+        let picked: BTreeSet<ShareKey> = (0..200)
+            .map(|_| *individual.pick_prekey(doc()).expect("it has prekeys"))
+            .collect();
+        // Missing one of 8 keys in 200 uniform picks has probability below 1e-10.
+        assert_eq!(picked.len(), 8);
     }
 
+    /// Merging the same individual's state adds its prekeys; another
+    /// individual's state is ignored, so no individual holds two issuers' ops.
     #[test]
-    fn test_pseudorandom_generates_random_values() {
-        test_utils::init_logging();
+    fn an_individual_merges_only_its_own_state() {
+        let alice = MemorySigner::generate(&mut rand::thread_rng());
+        let mallory = MemorySigner::generate(&mut rand::thread_rng());
+        let (a, b) = (key(), key());
+        let mut ours = IndividualState::new(add(&alice, a));
 
-        let arr = 0..39; // Not byte aligned
+        ours.merge(IndividualState::new(add(&alice, b)));
+        assert_eq!(ours.prekeys(), &HashSet::from([a, b]));
 
-        let seed1: [u8; 32] = [0u8; 32];
-        let seed2: [u8; 32] = [1u8; 32];
-        let seed3: [u8; 32] = [2u8; 32];
-
-        let index1 = pseudorandom_in_range(&seed1, arr.len());
-        let index2 = pseudorandom_in_range(&seed2, arr.len());
-        let index3 = pseudorandom_in_range(&seed3, arr.len());
-
-        assert_ne!(index1, index2);
-        assert_ne!(index1, index3);
-        assert_ne!(index2, index3);
+        ours.merge(IndividualState::new(add(&mallory, key())));
+        assert_eq!(ours.prekeys(), &HashSet::from([a, b]));
+        assert!(ours
+            .prekey_ops()
+            .values()
+            .all(|op| op.issuer() == Id::from(ours.id())));
     }
 
+    /// Rotations that retire each other's keys leave no live prekey: nothing to
+    /// pick, rather than a panic.
     #[test]
-    fn test_pseudorandom_generates_stays_in_range() {
-        test_utils::init_logging();
-
-        let seed1: [u8; 32] = rand::random();
-        let seed2: [u8; 32] = rand::random();
-
-        let index1 = pseudorandom_in_range(&seed1, 0);
-        let index2 = pseudorandom_in_range(&seed2, 0);
-
-        assert_eq!(index1, 0);
-        assert_eq!(index1, index2);
+    fn an_individual_with_no_live_prekeys_has_none_to_pick() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let (a, b) = (key(), key());
+        let mut individual = IndividualState::new(add(&signer, a));
+        individual
+            .receive_prekey_op(rotate(&signer, a, b))
+            .expect("same issuer");
+        individual
+            .receive_prekey_op(rotate(&signer, b, a))
+            .expect("same issuer");
+        assert!(individual.prekeys().is_empty());
+        assert_eq!(individual.pick_prekey(doc()), None);
     }
 }

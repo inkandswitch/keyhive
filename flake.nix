@@ -230,9 +230,7 @@
 
           ci-doc = mkCheck "ci-doc" ''
             cargo test --doc --workspace --features mermaid_docs,test_utils
-            # TODO: add RUSTDOCFLAGS="-D warnings" once the pre-existing broken
-            # intra-doc links (`F::ready`, `SyncSigner`, ...) are fixed.
-            cargo doc --workspace --no-deps --features mermaid_docs
+            RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features mermaid_docs
           '';
 
           ci-wasm = mkCheck "ci-wasm" ''

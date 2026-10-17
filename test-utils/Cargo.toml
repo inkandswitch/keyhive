@@ -8,7 +8,10 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-lazy_static = "1.5.0"
-nu-ansi-term = "0.50.1"
-tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+lazy_static = { workspace = true }
+nu-ansi-term = { workspace = true }
+tracing = { workspace = true, features = ["attributes", "std"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[lints]
+workspace = true

@@ -1,17 +1,22 @@
 //! Revocations: signed withdrawals of a delegation by hash.
 
-use crate::{delegation::Delegation, id::Id};
+use crate::delegation::Delegation;
 use alloc::{collections::BTreeMap, vec::Vec};
 use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verifiable};
+use keyhive_crypto::{
+    digest::Digest,
+    id::Id,
+    signable::{Kind, Kinded},
+};
 
 /// A signed statement that a delegation no longer holds.
 ///
 /// Validity is unconditional: any well-signed revocation is admitted to the
-/// set. Its _effect_ is scoped by the issuer's admin reach: the target is
+/// set. Its issuer is whoever signs it, carried in the signed envelope. Its
+/// _effect_ is scoped by the issuer's admin reach: the target is
 /// dead on every route that transits a node the issuer ever held `Admin` over,
 /// or the issuer's own node, and inert elsewhere. A revocation signed by the
 /// target's audience is total instead. Admin reach is computed on the
@@ -44,9 +49,6 @@ use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verif
     ))
 )]
 pub struct Revocation<W> {
-    /// Signer. Determines the admin reach that scopes the effect.
-    pub issuer: Id,
-
     /// The delegation being revoked, by content address.
     pub revoke: Digest<Delegation>,
 
@@ -55,11 +57,10 @@ pub struct Revocation<W> {
 }
 
 impl<W> Revocation<W> {
-    /// `issuer` withdraws the delegation with this payload digest, naming no
-    /// retention watermarks.
-    pub fn new(issuer: Id, revoke: Digest<Delegation>) -> Self {
+    /// Withdraw the delegation with this digest, naming no retention
+    /// watermarks. Whoever signs it is the issuer.
+    pub fn new(revoke: Digest<Delegation>) -> Self {
         Revocation {
-            issuer,
             revoke,
             retain: BTreeMap::new(),
         }
@@ -71,42 +72,28 @@ impl<W> Revocation<W> {
     }
 }
 
-impl<W: Encode> Revocation<W> {
-    /// The revocation's identity: what a re-issued [`Delegation::citation`]
-    /// names, and its key in the set ([`crate::certificate::CertificateId`]).
-    ///
-    /// Typed as [`RevocationId`] rather than `Digest<Revocation<W>>` so that a
-    /// [`Delegation`] can name a revocation without being parameterized by a
-    /// watermark type it never uses.
-    pub fn digest(&self) -> Digest<RevocationId> {
-        Digest::of(&self.encode()).coerce()
-    }
-}
-
-/// The identity of a revocation, independent of the watermark type it carries.
+/// The identity of a revocation, independent of the watermark type it carries:
+/// what a re-issued [`Delegation::citation`] names. Typed apart from
+/// `Digest<Revocation<W>>` so that a [`Delegation`] can name a revocation
+/// without being parameterized by a watermark type it never uses.
 ///
 /// Only ever a phantom parameter of [`Digest`]; it has no values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RevocationId {}
 
-impl<W> Domain for Revocation<W> {
-    const CONTEXT: &'static str = "keyline/v0/revocation";
+impl<W> Kinded for Revocation<W> {
+    const KIND: Kind = Kind::REVOCATION;
+    const VERSION: u8 = 0;
 }
 
-impl<W> Verifiable for Revocation<W> {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.issuer.verifying_key()
-    }
-}
-
-// Layout:  issuer ‖ revoke ‖ count:bijou32 ‖ entry*
+// Layout:  revoke ‖ count:bijou32 ‖ entry*
 //   entry: id ‖ len:bijou32 ‖ value
 //
 // `retain` is the crate's only variable-length field, so it is the only place
 // canonicality is not free. bijou32 has one encoding per number by
 // construction; `decode` rejects unsorted or repeated subjects and unconsumed
 // bytes; `W::decode` rejects a non-canonical value.
-const FIXED_LEN: usize = Id::LEN + Digest::<Delegation>::LEN;
+const FIXED_LEN: usize = Digest::<Delegation>::LEN;
 
 /// The smallest an entry can be: a subject and a one-byte length, with an
 /// empty value.
@@ -144,7 +131,6 @@ fn len_at(bytes: &[u8], at: usize) -> Result<(usize, usize), DecodeError> {
 
 impl<W: Encode> Encode for Revocation<W> {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.issuer.encode_into(out);
         out.extend_from_slice(self.revoke.as_slice());
         put_len(self.retain.len(), out);
         // `BTreeMap` iterates in ascending key order, which is the canonical one.
@@ -162,8 +148,7 @@ impl<W: Decode> Decode for Revocation<W> {
         if bytes.len() < FIXED_LEN {
             return Err(DecodeError::UnexpectedEnd);
         }
-        let issuer = Id::decode_field(&bytes[..Id::LEN], "issuer")?;
-        let raw: [u8; Digest::<Delegation>::LEN] = bytes[Id::LEN..FIXED_LEN]
+        let raw: [u8; Digest::<Delegation>::LEN] = bytes[..FIXED_LEN]
             .try_into()
             .expect("FIXED_LEN bytes are present");
         let (count, mut at) = len_at(bytes, FIXED_LEN)?;
@@ -192,7 +177,6 @@ impl<W: Decode> Decode for Revocation<W> {
         }
 
         Ok(Revocation {
-            issuer,
             revoke: Digest::from(raw),
             retain,
         })
@@ -204,7 +188,6 @@ impl<'a, W: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Revocation<W>
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let raw: [u8; Digest::<Delegation>::LEN] = u.arbitrary()?;
         Ok(Revocation {
-            issuer: u.arbitrary()?,
             revoke: Digest::from(raw),
             retain: u.arbitrary()?,
         })
@@ -214,28 +197,25 @@ impl<'a, W: arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Revocation<W>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        signed::Verified,
-        test_utils::{id, signing_key},
-    };
+    use crate::test_utils::{id, signing_key};
+    use alloc::string::String;
+    use keyhive_crypto::verified::Verified;
 
     /// A watermark type with a variable-length encoding, so the `retain` codec is
     /// exercised on values of differing size rather than a fixed stand-in.
     type Watermark = Vec<u8>;
 
     fn sample() -> Revocation<Watermark> {
-        Revocation::new(id(1), Digest::from([3u8; 32]))
+        Revocation::new(Digest::from([3u8; 32]))
     }
 
-    /// A revocation names its own issuer, and only that issuer's key signs
-    /// and verifies it.
+    /// Whoever signs a revocation is its issuer.
     #[test]
-    fn signs_and_verifies_only_as_its_issuer() {
+    fn its_signer_is_its_issuer() {
         let r = sample();
-        assert_eq!(Verifiable::verifying_key(&r), id(1).verifying_key());
-        let verified = Verified::sign_sync(&r, &signing_key(1)).expect("the issuer's key signs");
+        let verified = Verified::sign_sync(&r, &signing_key(1)).expect("any key signs");
         assert_eq!(verified.payload(), &r);
-        assert!(Verified::sign_sync(&r, &signing_key(2)).is_err());
+        assert_eq!(verified.issuer(), id(1));
     }
 
     /// The bytes after `FIXED_LEN` with `count` and the entries replaced.
@@ -268,32 +248,33 @@ mod tests {
             FIXED_LEN + 1 + (Id::LEN + 1 + 3) + (Id::LEN + 1)
         );
         assert_ne!(
-            sample().digest(),
-            r.digest(),
+            Digest::of(&id(1), &sample().encode()),
+            Digest::of(&id(1), &r.encode()),
             "`retain` is covered by the digest"
         );
     }
 
-    /// Pins the wire encoding and the domain-separated digest of one fixed
-    /// revocation with a watermark. Changing the codec or the context must
-    /// change this test on purpose.
+    /// Pins the wire encoding and the digest of one fixed revocation with a
+    /// watermark. Changing the codec, the version or the kind must change this
+    /// test on purpose.
     #[test]
     fn known_answer() {
-        let hex = |bytes: &[u8]| -> alloc::string::String {
-            bytes.iter().map(|b| alloc::format!("{b:02x}")).collect()
-        };
+        let hex =
+            |bytes: &[u8]| -> String { bytes.iter().map(|b| alloc::format!("{b:02x}")).collect() };
         let r = sample().retaining(BTreeMap::from([(id(2), alloc::vec![7, 8])]));
         let encoded = hex(r.encode().as_bytes());
-        let issuer = hex(id(1).as_bytes());
         let subject = hex(id(2).as_bytes());
         assert_eq!(
             encoded,
-            alloc::format!("{issuer}{}01{subject}020708", "03".repeat(32))
+            alloc::format!("{}01{subject}020708", "03".repeat(32))
         );
-        assert_eq!(hex(r.digest().as_slice()), KNOWN_DIGEST);
+        assert_eq!(
+            hex(Digest::of(&id(1), &r.encode()).as_slice()),
+            KNOWN_DIGEST
+        );
     }
 
-    const KNOWN_DIGEST: &str = "0d58712e2502462cc7b5320db755ce508547a9bd8953e831aa3587fd32aef271";
+    const KNOWN_DIGEST: &str = "32de113d53e8397022058bc3ddf65d574cc92cbf0ca2687ed741b236dc7f07b7";
 
     #[test]
     fn rejects_wrong_lengths() {
@@ -409,6 +390,6 @@ mod tests {
     #[test]
     #[cfg(feature = "arbitrary")]
     fn decode_is_canonical() {
-        crate::test_utils::decode_is_canonical_near::<Revocation<Watermark>>();
+        keyhive_codec::laws::canonical_near::<Revocation<Watermark>>();
     }
 }

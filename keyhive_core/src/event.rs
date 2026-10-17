@@ -4,62 +4,54 @@ pub mod static_event;
 
 use self::static_event::StaticEvent;
 use crate::{
-    listener::{membership::MembershipListener, no_listener::NoListener},
+    content::heads::ContentHeads,
     principal::{
         document::id::DocumentId,
-        group::{
-            delegation::Delegation, membership_operation::MembershipOperation,
-            revocation::Revocation,
-        },
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
     },
     store::ciphertext::CiphertextStore,
 };
 use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use derive_more::{From, TryInto};
-use derive_where::derive_where;
 use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, signed::Signed,
-    signer::async_signer::AsyncSigner,
+    content::reference::ContentRef,
+    digest::Digest,
+    signed::Signed,
+    verified::{self},
 };
-use serde::Serialize;
+use keyline::{certificate::Certificate, delegation::Delegation, revocation::Revocation};
+use serde::{Serialize, Serializer};
 use std::{collections::HashMap, sync::Arc};
 use tracing::instrument;
 
 /// Top-level event variants.
-#[derive(PartialEq, Eq, From, TryInto)]
-#[derive_where(Debug, Hash; T)]
-pub enum Event<
-    F: FutureForm,
-    S: AsyncSigner<F>,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
-> {
-    /// Prekeys were expanded.
-    PrekeysExpanded(Arc<Signed<AddKeyOp>>),
+#[derive(Clone, Debug, Hash, PartialEq, Eq, From, TryInto)]
+pub enum Event<T: ContentRef> {
+    /// Prekeys were expanded, in wire form: verified before it became an
+    /// event.
+    PrekeysExpanded(Arc<verified::Signed<AddKeyOp>>),
 
-    /// A prekey was rotated.
-    PrekeyRotated(Arc<Signed<RotateKeyOp>>),
+    /// A prekey was rotated, in wire form.
+    PrekeyRotated(Arc<verified::Signed<RotateKeyOp>>),
 
     /// A CGKA operation was performed.
     CgkaOperation(Arc<Signed<CgkaOperation>>),
 
-    /// A delegation was created.
-    Delegated(Arc<Signed<Delegation<F, S, T, L>>>),
+    /// A Keyline delegation, in wire form: a store hands out what it holds
+    /// without verifying it again.
+    Delegated(Arc<verified::Signed<Delegation>>),
 
-    /// A delegation was revoked.
-    Revoked(Arc<Signed<Revocation<F, S, T, L>>>),
+    /// A Keyline revocation, in wire form.
+    Revoked(Arc<verified::Signed<Revocation<ContentHeads<T>>>>),
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    Event<F, S, T, L>
-{
+impl<T: ContentRef> Event<T> {
     #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
-    pub async fn now_decryptable<P, C: CiphertextStore<F, T, P>>(
-        new_events: &[Event<F, S, T, L>],
+    pub async fn now_decryptable<F: FutureForm, P, C: CiphertextStore<F, T, P>>(
+        new_events: &[Event<T>],
         ciphertext_store: &C,
     ) -> Result<HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>>, C::GetCiphertextError> {
         let mut acc: HashMap<DocumentId, Vec<Arc<EncryptedContent<P, T>>>> = HashMap::new();
@@ -80,77 +72,47 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> From<KeyOp>
-    for Event<F, S, T, L>
-{
+impl<T: ContentRef> From<KeyOp> for Event<T> {
     fn from(key_op: KeyOp) -> Self {
         match key_op {
-            KeyOp::Add(add) => Event::PrekeysExpanded(add),
-            KeyOp::Rotate(rot) => Event::PrekeyRotated(rot),
+            KeyOp::Add(add) => Event::PrekeysExpanded(add.signed().dupe()),
+            KeyOp::Rotate(rot) => Event::PrekeyRotated(rot.signed().dupe()),
         }
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<MembershipOperation<F, S, T, L>> for Event<F, S, T, L>
-{
-    fn from(op: MembershipOperation<F, S, T, L>) -> Self {
-        match op {
-            MembershipOperation::Delegation(d) => Event::Delegated(d),
-            MembershipOperation::Revocation(r) => Event::Revoked(r),
+impl<T: ContentRef> From<Certificate<ContentHeads<T>>> for Event<T> {
+    fn from(cert: Certificate<ContentHeads<T>>) -> Self {
+        match cert {
+            Certificate::Delegation(d) => Event::Delegated(d),
+            Certificate::Revocation(r) => Event::Revoked(r),
         }
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<Event<F, S, T, L>> for StaticEvent<T>
-{
-    fn from(op: Event<F, S, T, L>) -> Self {
+impl<T: ContentRef> From<Event<T>> for StaticEvent<T> {
+    fn from(op: Event<T>) -> Self {
         match op {
-            Event::Delegated(d) => StaticEvent::Delegated(Arc::unwrap_or_clone(d).map(Into::into)),
-            Event::Revoked(r) => StaticEvent::Revoked(Arc::unwrap_or_clone(r).map(Into::into)),
+            Event::Delegated(d) => StaticEvent::Delegated(Arc::unwrap_or_clone(d)),
+            Event::Revoked(r) => StaticEvent::Revoked(Arc::unwrap_or_clone(r)),
 
             Event::CgkaOperation(cgka) => {
                 StaticEvent::CgkaOperation(Box::new(Arc::unwrap_or_clone(cgka)))
             }
 
-            Event::PrekeyRotated(pkr) => {
-                StaticEvent::PrekeyRotated(Box::new(Arc::unwrap_or_clone(pkr).map(Into::into)))
-            }
-            Event::PrekeysExpanded(pke) => {
-                StaticEvent::PrekeysExpanded(Box::new(Arc::unwrap_or_clone(pke).map(Into::into)))
-            }
+            Event::PrekeyRotated(pkr) => StaticEvent::PrekeyRotated(Arc::unwrap_or_clone(pkr)),
+            Event::PrekeysExpanded(pke) => StaticEvent::PrekeysExpanded(Arc::unwrap_or_clone(pke)),
         }
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Serialize
-    for Event<F, S, T, L>
-{
-    fn serialize<Z: serde::Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
+impl<T: ContentRef> Serialize for Event<T> {
+    fn serialize<Z: Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
         StaticEvent::from(self.clone()).serialize(serializer)
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Clone
-    for Event<F, S, T, L>
-{
-    fn clone(&self) -> Self {
-        match self {
-            Event::Delegated(d) => Event::Delegated(Arc::clone(d)),
-            Event::Revoked(r) => Event::Revoked(Arc::clone(r)),
-
-            Event::CgkaOperation(cgka) => Event::CgkaOperation(Arc::clone(cgka)),
-
-            Event::PrekeyRotated(pkr) => Event::PrekeyRotated(Arc::clone(pkr)),
-            Event::PrekeysExpanded(pke) => Event::PrekeysExpanded(Arc::clone(pke)),
-        }
-    }
-}
-
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>> Dupe
-    for Event<F, S, T, L>
-{
+impl<T: ContentRef> Dupe for Event<T> {
     fn dupe(&self) -> Self {
         self.clone()
     }
@@ -160,25 +122,20 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 mod tests {
     use super::*;
     use crate::{
-        access::Access,
-        principal::{
-            agent::Agent,
-            individual::{id::IndividualId, Individual},
-        },
-        store::ciphertext::memory::MemoryCiphertextStore,
+        principal::individual::id::IndividualId, store::ciphertext::memory::MemoryCiphertextStore,
     };
     use beekem::{
         id::{MemberId, TreeId},
         operation::CgkaAuthorization,
     };
+    use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
-    use futures::lock::Mutex;
     use keyhive_crypto::{
-        share_key::ShareKey, signer::memory::MemorySigner, siv::Siv, symmetric_key::SymmetricKey,
-        verifiable::Verifiable,
+        id::Id, share_key::ShareKey, signer::memory::MemorySigner, siv::Siv,
+        symmetric_key::SymmetricKey, verifiable::Verifiable, verified::Verified,
     };
+    use keyline::power::Power;
     use rand::rngs::OsRng;
-    use std::collections::BTreeMap;
     use test_utils::init_logging;
     use testresult::TestResult;
 
@@ -192,31 +149,31 @@ mod tests {
         let doc_id2 = DocumentId::generate(&mut csprng);
 
         let cgka_op_1 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
+            added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 42,
             invitation: None,
             predecessors: vec![],
-            doc_id: TreeId(doc_id1.verifying_key()),
+            doc_id: TreeId::from(doc_id1),
             authorization: CgkaAuthorization::Delegation([0u8; 32]),
         })?;
 
         let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
-            id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
+            id: MemberId::from(&SigningKey::generate(&mut csprng)),
             leaf_idx: 4,
             predecessors: vec![],
             removed_keys: vec![],
-            doc_id: TreeId(doc_id2.verifying_key()),
+            doc_id: TreeId::from(doc_id2),
             authorization: CgkaAuthorization::Revocation([0u8; 32]),
         })?;
 
         let cgka_op_3 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
+            added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 11,
             invitation: None,
             predecessors: vec![],
-            doc_id: TreeId(doc_id1.verifying_key()),
+            doc_id: TreeId::from(doc_id1),
             authorization: CgkaAuthorization::Delegation([0u8; 32]),
         })?;
 
@@ -224,26 +181,34 @@ mod tests {
         let hash2 = Digest::hash(&cgka_op_2);
         let hash3 = Digest::hash(&cgka_op_3);
 
-        let indie = Individual::generate::<Sendable, _, _>(&signer, &mut csprng).await?;
-        let events: Vec<Event<Sendable, MemorySigner, [u8; 32], NoListener>> = vec![
+        let id = |key: VerifyingKey| Id::try_from(key).expect("a generated key is a valid point");
+        let delegation = Verified::sign_sync(
+            &Delegation::new(
+                id(IndividualId::generate(&mut csprng).verifying_key()),
+                id(doc_id1.verifying_key()),
+                Power::Read,
+            ),
+            &signer,
+        )?;
+        let events: Vec<Event<[u8; 32]>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
-            Event::PrekeysExpanded(Arc::new(
-                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
-            )),
-            Event::PrekeysExpanded(Arc::new(
-                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
-            )),
-            Event::PrekeysExpanded(Arc::new(
-                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
-            )),
-            Event::Delegated(Arc::new(signer.try_sign_sync(Delegation {
-                delegate: Agent::Individual(indie.id(), Arc::new(Mutex::new(indie))),
-                can: Access::Read,
-                proof: None,
-                after_revocations: vec![],
-                after_content: BTreeMap::new(),
-            })?)),
+            Event::PrekeysExpanded(
+                Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
+                    .signed()
+                    .dupe(),
+            ),
+            Event::PrekeysExpanded(
+                Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
+                    .signed()
+                    .dupe(),
+            ),
+            Event::PrekeysExpanded(
+                Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
+                    .signed()
+                    .dupe(),
+            ),
+            Event::Delegated(delegation.signed().dupe()),
         ];
 
         let ciphertext1 = Arc::new(EncryptedContent::new(
@@ -292,7 +257,7 @@ mod tests {
             )))
             .await;
 
-        let decryptable = Event::now_decryptable(&events, &store).await?;
+        let decryptable = Event::now_decryptable::<Sendable, _, _>(&events, &store).await?;
         tracing::info!("decryptable: {:?}", decryptable);
         assert_eq!(decryptable.len(), 2);
         assert!(decryptable.contains_key(&doc_id1));

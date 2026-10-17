@@ -2,11 +2,14 @@ use future_form::Local;
 use std::collections::HashMap;
 
 use keyhive_core::{
-    access::Access, event::static_event::StaticEvent, keyhive::Keyhive, listener::log::Log,
-    principal::public::Public, store::ciphertext::memory::MemoryCiphertextStore,
+    content::heads::ContentHeads, event::static_event::StaticEvent, keyhive::Keyhive,
+    listener::log::Log, store::ciphertext::memory::MemoryCiphertextStore,
 };
 use keyhive_crypto::{digest::Digest, signer::memory::MemorySigner};
+use keyline::power::Power;
+use keyline_memory::MemoryKeyline;
 use nonempty::nonempty;
+use rand::rngs::ThreadRng;
 use testresult::TestResult;
 
 #[allow(clippy::type_complexity)]
@@ -16,8 +19,9 @@ async fn make_keyhive() -> Keyhive<
     [u8; 32],
     Vec<u8>,
     MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-    Log<Local, MemorySigner>,
-    rand::rngs::ThreadRng,
+    Log<[u8; 32]>,
+    ThreadRng,
+    MemoryKeyline<ContentHeads<[u8; 32]>>,
 > {
     make_keyhive_with_signer(MemorySigner::generate(&mut rand::thread_rng())).await
 }
@@ -31,14 +35,21 @@ async fn make_keyhive_with_signer(
     [u8; 32],
     Vec<u8>,
     MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-    Log<Local, MemorySigner>,
-    rand::rngs::ThreadRng,
+    Log<[u8; 32]>,
+    ThreadRng,
+    MemoryKeyline<ContentHeads<[u8; 32]>>,
 > {
     let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
-    let log = Log::<Local, _, _>::new();
-    Keyhive::<Local, _, _, _, _, _, _>::generate(sk, store, log, rand::thread_rng())
-        .await
-        .unwrap()
+    let log = Log::<[u8; 32]>::new();
+    Keyhive::<Local, _, _, _, _, _, _, _>::generate(
+        sk,
+        store,
+        log,
+        MemoryKeyline::new(),
+        rand::thread_rng(),
+    )
+    .await
+    .unwrap()
 }
 
 /// One identity running two instances, where the second instance's events are collected
@@ -52,49 +63,42 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
 
     // The second instance keeps a Log listener, which is how a sync protocol collects
     // what an instance produced.
-    let worker_log = Log::<Local, MemorySigner>::new();
-    let alice_worker = Keyhive::<Local, _, _, _, _, _, _>::generate(
+    let worker_log = Log::<[u8; 32]>::new();
+    let alice_worker = Keyhive::<Local, _, _, _, _, _, _, _>::generate(
         alice_signer.clone(),
         MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
         worker_log.clone(),
+        MemoryKeyline::new(),
         rand::thread_rng(),
     )
     .await
     .unwrap();
-
-    let prekey_bytes = alice.export_prekey_secrets().await?;
-    alice_worker.import_prekey_secrets(&prekey_bytes).await?;
 
     let bob = make_keyhive().await;
 
     let init_content = b"log-based sync test".to_vec();
     let init_hash: [u8; 32] = *blake3::hash(&init_content).as_bytes();
 
-    // The first instance makes the document public, revokes that, and grants it again, so
-    // there are revocations in the graph the second instance has to apply.
+    // The first instance adds Bob, revokes him, and adds him again, so there are
+    // revocations in the graph the second instance has to apply.
+    let bob_id = alice
+        .receive_contact_card(&bob.get_existing_contact_card().await)
+        .await?;
     let doc_id = alice.generate_doc(vec![], nonempty![init_hash]).await?;
-
-    alice
-        .add_member(Public.id(), doc_id, Access::Read, &[])
-        .await?;
-
-    alice
-        .revoke_member(
-            keyhive_core::principal::public::Public.individual().id(),
-            true,
-            doc_id,
-        )
-        .await?;
-
-    alice
-        .add_member(Public.id(), doc_id, Access::Read, &[])
-        .await?;
+    alice.add_member(bob_id, doc_id, Power::Read).await?;
+    alice.revoke_member(bob_id, true, doc_id).await?;
+    alice.add_member(bob_id, doc_id, Power::Read).await?;
 
     alice.force_pcs_update(doc_id).await?;
 
+    // The second instance holds the first's secrets, including the leaf it just rotated,
+    // like two clients sharing storage.
+    let prekey_bytes = alice.export_prekey_secrets().await?;
+    alice_worker.import_prekey_secrets(&prekey_bytes).await?;
+
     // The first instance's events to the second.
-    let alice_id = { alice.active().lock().await.id() };
-    let alice_events = alice.static_events_for_agent(alice_id).await;
+    let alice_id = { alice.active().id() };
+    let alice_events = alice.static_events_for_agent(alice_id).await?;
 
     // Emptied first, so the log holds only what this ingestion fires.
     while worker_log.pop().await.is_some() {}
@@ -120,7 +124,7 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
     }
 
     // Bob gets the first instance's events and the second's log events together.
-    let alice_events_for_bob = alice.static_events_for_agent(Public.id()).await;
+    let alice_events_for_bob = alice.static_events_for_agent(bob_id).await?;
 
     // One set collected from state, the other from the log.
     let mut all_events: HashMap<Digest<StaticEvent<[u8; 32]>>, StaticEvent<[u8; 32]>> =

@@ -10,26 +10,38 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-keyhive_codec = { version = "0.1.0", path = "../keyhive_codec", default-features = false }
-keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", default-features = false }
-keyline = { version = "0.1.0", path = "../keyline", default-features = false }
-tracing = { version = "0.1.40", default-features = false, features = [
-  "attributes",
-] }
+async-lock = { workspace = true }
+future_form = { workspace = true }
+# `#[future_form]` expands to paths in `futures`.
+futures = { workspace = true }
+keyhive_codec = { workspace = true }
+keyhive_crypto = { workspace = true }
+keyline = { workspace = true }
+# `race::OnceBox` holds the evaluation cache; it is `Sync` and needs no `std`.
+once_cell = { workspace = true }
+tracing = { workspace = true, features = ["attributes"] }
 
 [dev-dependencies]
-divan = "0.1.15"
+divan = { workspace = true }
 # The scenarios run in every configuration, including `--no-default-features`.
-keyline = { version = "0.1.0", path = "../keyline", default-features = false, features = [
-  "conformance",
-] }
+keyline = { workspace = true, features = ["conformance"] }
 
 [features]
 default = ["std"]
-std = ["keyhive_codec/std", "keyhive_crypto/std", "keyline/std", "tracing/std"]
+std = [
+  "async-lock/std",
+  "keyhive_codec/std",
+  "keyhive_crypto/std",
+  "keyline/std",
+  "once_cell/std",
+  "tracing/std",
+]
 # The full conformance suite, including the `bolero` laws.
 test_utils = ["keyline/test_utils"]
 
 [[bench]]
 name = "bench_evaluate"
 harness = false
+
+[lints]
+workspace = true

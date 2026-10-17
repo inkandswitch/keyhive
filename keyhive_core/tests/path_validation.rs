@@ -7,26 +7,29 @@ use beekem::{
     tree::PathChange,
 };
 use keyhive_core::{
-    access::Access::Read,
     crypto::digest::Digest,
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext},
 };
-use keyhive_crypto::{share_key::ShareKey, signed::Signed, verifiable::Verifiable};
-use std::collections::BTreeMap;
+use keyhive_crypto::{share_key::ShareKey, signed::Signed};
+use keyline::power::Power::Read;
+use std::collections::{BTreeMap, HashSet};
 use testresult::TestResult;
 
 /// One of `who`'s own prekeys it would use to join `doc`.
 async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
-    let indie = who.get_individual(who.id()).await.unwrap();
-    let guard = indie.lock().await;
-    *guard.pick_prekey(doc)
+    who.get_individual(who.id())
+        .await
+        .expect("an instance holds its own prekeys")
+        .pick_prekey(doc)
+        .await
+        .expect("an individual has a prekey")
 }
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
 async fn cgka_heads(observer: &Instance, doc: DocumentId) -> Vec<Digest<Signed<CgkaOperation>>> {
-    let ops = observer.cgka_ops_for_doc(&doc).await.unwrap().unwrap();
-    let referenced: std::collections::HashSet<_> = ops
+    let ops = observer.cgka_ops_for_doc(&doc).await.unwrap();
+    let referenced: HashSet<_> = ops
         .iter()
         .flat_map(|op| op.payload.predecessors())
         .collect();
@@ -40,7 +43,6 @@ async fn cgka_heads(observer: &Instance, doc: DocumentId) -> Vec<Digest<Signed<C
 async fn an_update(who: &Instance, doc: DocumentId) -> (MemberId, Box<PathChange>) {
     who.cgka_ops_for_doc(&doc)
         .await
-        .unwrap()
         .unwrap()
         .iter()
         .find_map(|op| match op.payload() {
@@ -57,7 +59,7 @@ async fn doc_shared_with_bob(
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.encrypt(&alice, design_doc, b"warm up").await?;
     ctx.sync_all_unsent().await?;
     Ok((alice, bob, design_doc))
@@ -79,7 +81,7 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
         new_path,
         predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&bob, design_doc).await,
-        doc_id: TreeId(design_doc.verifying_key()),
+        doc_id: TreeId::from(design_doc),
     };
 
     // We should ignore the forged path and not panic.

@@ -10,19 +10,25 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-serde = { version = "1.0", default-features = false, features = [
-  "alloc",
-], optional = true }
-# TODO(thiserror-2): the workspace pins thiserror 1, which is std-only. Pin 2 here
-# (no_std-capable) until the rest of the workspace migrates; then use `workspace = true`.
-thiserror = { version = "2", default-features = false }
+arbitrary = { workspace = true, optional = true }
+bolero = { workspace = true, optional = true }
+bijoux = { workspace = true }
+serde = { workspace = true, features = ["alloc"], optional = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
-postcard = { version = "1", default-features = false, features = ["alloc"] }
+arbitrary = { workspace = true }
+bolero = { workspace = true }
+postcard = { workspace = true, features = ["alloc"] }
 
 [features]
 default = ["std"]
 std = ["serde?/std", "thiserror/std"]
 serde = ["dep:serde"]
+# Property tests for the codec laws, for other crates' test suites.
+laws = ["dep:arbitrary", "dep:bolero"]
 # Everything the full test suite needs, including the serde tests.
-test_utils = ["serde"]
+test_utils = ["laws", "serde"]
+
+[lints]
+workspace = true

@@ -1,51 +1,44 @@
-use super::{
-    access::JsAccess, agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler,
-    signer::JsSigner,
-};
-use dupe::Dupe;
-use future_form::Local;
-use keyhive_core::{
-    access::Access,
-    principal::{agent::Agent, identifier::Identifier},
-};
-use std::collections::HashMap;
+use super::{keyhive::InnerKeyhive, power::JsPower, principal::JsPrincipal};
+use keyhive_core::principal::individual::id::IndividualId;
+use keyhive_crypto::id::Id;
+use keyline::power::Power;
+use std::collections::BTreeMap;
 use wasm_bindgen::prelude::*;
 
-/// The individuals in a transitive membership, other than `skip`, which is the
-/// group or document the membership was taken from.
-#[allow(clippy::type_complexity)]
-pub(crate) fn individual_memberships(
-    transitive: HashMap<Identifier, (Agent<Local, JsSigner, JsChangeId, JsEventHandler>, Access)>,
-    skip: Identifier,
-) -> Vec<Membership> {
-    transitive
-        .into_iter()
-        .filter(|(id, _)| *id != skip)
-        .filter_map(|(_, (agent, access))| {
-            matches!(agent, Agent::Individual(_, _) | Agent::Active(_, _)).then(|| Membership {
-                who: agent,
-                can: access,
-            })
-        })
-        .collect()
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct Membership {
+    pub(crate) who: JsPrincipal,
+    pub(crate) can: Power,
 }
 
-#[wasm_bindgen]
-#[derive(Debug, Clone, Dupe)]
-pub struct Membership {
-    pub(crate) who: Agent<Local, JsSigner, JsChangeId, JsEventHandler>,
-    pub(crate) can: Access,
+impl Membership {
+    /// The individuals among `members` whose prekeys this keyhive holds, with
+    /// their power. A member whose prekeys have not arrived is left out.
+    pub(crate) async fn individuals(
+        keyhive: &InnerKeyhive,
+        members: BTreeMap<Id, Power>,
+    ) -> Vec<Membership> {
+        let mut memberships = Vec::new();
+        for (id, can) in members {
+            if keyhive.has_individual(IndividualId(id)).await {
+                let who = JsPrincipal::new(keyhive.get_principal(id)).await;
+                memberships.push(Membership { who, can });
+            }
+        }
+        memberships
+    }
 }
 
 #[wasm_bindgen]
 impl Membership {
     #[wasm_bindgen(getter)]
-    pub fn who(&self) -> JsAgent {
-        JsAgent(self.who.dupe())
+    pub fn who(&self) -> JsPrincipal {
+        self.who.clone()
     }
 
     #[wasm_bindgen(getter)]
-    pub fn can(&self) -> JsAccess {
-        JsAccess(self.can.dupe())
+    pub fn can(&self) -> JsPower {
+        JsPower(self.can)
     }
 }

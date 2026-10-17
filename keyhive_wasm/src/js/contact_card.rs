@@ -1,11 +1,12 @@
 use derive_more::{Deref, Display, From, Into};
-use keyhive_core::{contact_card::ContactCard, event::Event, principal::identifier::Identifier};
-use keyhive_crypto::verifiable::Verifiable;
+use keyhive_core::{contact_card::ContactCard, event::Event};
+use keyhive_crypto::{id::Id, verifiable::Verifiable};
 use wasm_bindgen::prelude::*;
 
 use crate::js::{event::JsEvent, identifier::JsIdentifier};
 
 use super::{individual_id::JsIndividualId, share_key::JsShareKey};
+use ed25519_dalek::VerifyingKey;
 
 #[wasm_bindgen(js_name = ContactCard)]
 #[derive(Debug, Clone, From, Into, Deref, Display)]
@@ -15,7 +16,7 @@ pub struct JsContactCard(ContactCard);
 impl JsContactCard {
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIdentifier {
-        let identifier = Identifier::from(self.0.id());
+        let identifier = Id::from(self.0.id());
         JsIdentifier(identifier)
     }
 
@@ -56,7 +57,7 @@ impl JsContactCard {
 }
 
 impl Verifiable for JsContactCard {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.0.verifying_key()
     }
 }

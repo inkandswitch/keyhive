@@ -1,60 +1,50 @@
-//! Every event each agent can reach, gathered once and deduplicated.
+//! Every event each principal can reach, gathered once and deduplicated.
 
-use crate::{
-    event::Event,
-    listener::{membership::MembershipListener, no_listener::NoListener},
-    principal::identifier::Identifier,
-};
-use derive_where::derive_where;
-use future_form::FutureForm;
-use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, signer::async_signer::AsyncSigner,
-};
+use crate::event::Event;
+use keyhive_crypto::{content::reference::ContentRef, digest::Digest, id::Id};
 use std::collections::{HashMap, HashSet};
 
 /// The digest an event is known by when it is sent.
-pub type EventDigest<F, S, T, L> = Digest<Event<F, S, T, L>>;
+pub type EventDigest<T> = Digest<Event<T>>;
 
-/// Which events each agent can reach, and one copy of each.
+/// Which events each principal can reach, and one copy of each.
 ///
 /// The three kinds are kept apart because a source contributes to only one of them. A
 /// caller that already holds a source's events can skip it without walking the rest.
-#[derive_where(Debug; T)]
-pub struct AllAgentEvents<
-    F: FutureForm,
-    S: AsyncSigner<F>,
-    T: ContentRef = [u8; 32],
-    L: MembershipListener<F, S, T> = NoListener,
-> {
+#[derive(Debug)]
+pub struct AllAgentEvents<T: ContentRef> {
     /// Every distinct event, keyed by the digest it is sent under.
-    pub events: HashMap<EventDigest<F, S, T, L>, Event<F, S, T, L>>,
+    pub events: HashMap<EventDigest<T>, Event<T>>,
 
-    /// Per group, document or agent, the membership events it contributes.
-    pub membership_sources: HashMap<Identifier, Vec<EventDigest<F, S, T, L>>>,
+    /// Per group or document, the Keyline certificates in its closure.
+    pub membership_sources: HashMap<Id, Vec<EventDigest<T>>>,
+
+    /// Per principal cut off from a group or document it stood over, the
+    /// Keyline certificates that explain that, and nothing that came after.
+    pub explanations: HashMap<Id, Vec<EventDigest<T>>>,
 
     /// Per identifier, the prekey events it contributes.
-    pub prekey_sources: HashMap<Identifier, Vec<EventDigest<F, S, T, L>>>,
+    pub prekey_sources: HashMap<Id, Vec<EventDigest<T>>>,
 
     /// Per document, the key agreement events it contributes.
-    pub cgka_sources: HashMap<Identifier, Vec<EventDigest<F, S, T, L>>>,
+    pub cgka_sources: HashMap<Id, Vec<EventDigest<T>>>,
 
-    /// For each agent, the membership sources it reaches.
-    pub membership_index: HashMap<Identifier, HashSet<Identifier>>,
+    /// For each principal, the groups and documents it stands over (itself
+    /// included), whose certificates it is sent.
+    pub membership_index: HashMap<Id, HashSet<Id>>,
 
-    /// For each agent, the prekey sources it reaches.
-    pub prekey_index: HashMap<Identifier, HashSet<Identifier>>,
+    /// For each principal, the prekey sources it reaches.
+    pub prekey_index: HashMap<Id, HashSet<Id>>,
 
-    /// For each agent, the key agreement sources it reaches.
-    pub cgka_index: HashMap<Identifier, HashSet<Identifier>>,
+    /// For each principal, the key agreement sources it reaches.
+    pub cgka_index: HashMap<Id, HashSet<Id>>,
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    AllAgentEvents<F, S, T, L>
-{
-    /// Every event `agent` can reach, across all three kinds.
+impl<T: ContentRef> AllAgentEvents<T> {
+    /// Every event `agent` can reach, across all kinds.
     ///
-    /// Empty for an agent this instance has never heard of.
-    pub fn digests_for(&self, agent: Identifier) -> HashSet<EventDigest<F, S, T, L>> {
+    /// Empty for a principal this instance has never heard of.
+    pub fn digests_for(&self, agent: Id) -> HashSet<EventDigest<T>> {
         let mut out = HashSet::new();
         for (index, sources) in [
             (&self.membership_index, &self.membership_sources),
@@ -65,6 +55,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 out.extend(sources.get(source_id).into_iter().flatten().copied());
             }
         }
+        out.extend(self.explanations.get(&agent).into_iter().flatten().copied());
         out
     }
 
@@ -74,7 +65,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     /// Every agent that reaches at least one event.
-    pub fn agents(&self) -> HashSet<Identifier> {
+    pub fn agents(&self) -> HashSet<Id> {
         self.membership_index
             .keys()
             .chain(self.prekey_index.keys())

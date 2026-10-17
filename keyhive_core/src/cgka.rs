@@ -1,12 +1,11 @@
 //! Thin wrapper around [`beekem::cgka::Cgka`] that converts between
 //! keyhive_core domain IDs ([`IndividualId`] / [`DocumentId`]) and
-//! beekem IDs ([`MemberId`](beekem::id::MemberId) /
-//! [`TreeId`](beekem::id::TreeId)) at the API boundary.
+//! beekem IDs ([`beekem::id::MemberId`] /
+//! [`beekem::id::TreeId`]) at the API boundary.
 
-use crate::{
-    principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
-    transact::{fork::Fork, merge::Merge},
-};
+pub mod store;
+
+use crate::principal::{document::id::DocumentId, individual::id::IndividualId};
 use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
@@ -19,17 +18,17 @@ use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
+    id::Id,
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
-    verifiable::Verifiable,
 };
 use nonempty::NonEmpty;
+use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -50,27 +49,13 @@ use std::{
 #[serde(transparent)]
 pub struct Cgka(beekem::cgka::Cgka);
 
-impl Hash for Cgka {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-    }
-}
-
 impl Cgka {
-    fn insert_public_sks(cgka: &mut beekem::cgka::Cgka) {
-        use crate::principal::public::Public;
-        cgka.owner_sks
-            .insert(Public.share_key(), Public.share_secret_key());
-    }
-
     pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
-        let mut inner = beekem::cgka::Cgka::new(
-            TreeId(doc_id.verifying_key()),
-            MemberId(owner_id.verifying_key()),
+        Cgka(beekem::cgka::Cgka::new(
+            TreeId::from(doc_id),
+            MemberId::from(owner_id),
             owner_sks,
-        );
-        Self::insert_public_sks(&mut inner);
-        Cgka(inner)
+        ))
     }
 
     pub fn with_new_owner(
@@ -78,11 +63,9 @@ impl Cgka {
         my_id: IndividualId,
         owner_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
-        let mut inner = self
-            .0
-            .with_new_owner(MemberId(my_id.verifying_key()), owner_sks)?;
-        Self::insert_public_sks(&mut inner);
-        Ok(Cgka(inner))
+        Ok(Cgka(
+            self.0.with_new_owner(MemberId::from(my_id), owner_sks)?,
+        ))
     }
 
     pub fn ops_count(&self) -> usize {
@@ -102,12 +85,11 @@ impl Cgka {
         &mut self.0.owner_sks
     }
 
-    #[allow(clippy::type_complexity)]
     pub async fn new_app_secret_for<
         F: FutureForm,
         S: AsyncSigner<F>,
         T: ContentRef,
-        R: rand::CryptoRng + rand::RngCore,
+        R: CryptoRng + RngCore,
     >(
         &mut self,
         content_ref: &T,
@@ -118,8 +100,7 @@ impl Cgka {
     ) -> Result<
         (
             ApplicationSecret<T>,
-            Option<Signed<CgkaOperation>>,
-            Option<LeafKeyPair>,
+            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
         ),
         CgkaError,
     > {
@@ -145,7 +126,7 @@ impl Cgka {
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         self.0
-            .add(MemberId(id.verifying_key()), pk, authorization, signer)
+            .add(MemberId::from(id), pk, authorization, signer)
             .await
     }
 
@@ -154,7 +135,7 @@ impl Cgka {
         members: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
-        let converted = members.map(|(id, pk, auth)| (MemberId(id.verifying_key()), pk, auth));
+        let converted = members.map(|(id, pk, auth)| (MemberId::from(id), pk, auth));
         self.0.add_multiple(converted, signer).await
     }
 
@@ -165,18 +146,17 @@ impl Cgka {
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         self.0
-            .remove(MemberId(id.verifying_key()), authorization, signer)
+            .remove(MemberId::from(id), authorization, signer)
             .await
     }
 
-    #[allow(clippy::type_complexity)]
-    pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: CryptoRng + RngCore>(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>, Option<LeafKeyPair>), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>, LeafKeyPair), CgkaError> {
         self.0.update(new_pk, new_sk, signer, csprng).await
     }
 
@@ -207,46 +187,57 @@ impl Cgka {
     pub fn contains_predecessors(&self, preds: &HashSet<Digest<Signed<CgkaOperation>>>) -> bool {
         self.0.contains_predecessors(preds)
     }
-}
 
-impl Fork for Cgka {
-    type Forked = Self;
-
-    fn fork(&self) -> Self::Forked {
-        self.clone()
+    /// Merge an add of a leaf whose secret `sk` this replica holds: an
+    /// invitation to it. The added member becomes the owner, holding `sk`.
+    pub fn merge_invite(
+        &mut self,
+        op: Arc<Signed<CgkaOperation>>,
+        sk: &ShareSecretKey,
+    ) -> Result<bool, CgkaError> {
+        let CgkaOperation::Add {
+            added_id,
+            pk,
+            ref predecessors,
+            ..
+        } = op.payload
+        else {
+            return Err(CgkaError::UnexpectedInviteOperation);
+        };
+        if !self.contains_predecessors(&predecessors.iter().cloned().collect()) {
+            return Err(CgkaError::OutOfOrderOperation);
+        }
+        let mut owner_sks = self.owner_sks().clone();
+        owner_sks.insert(pk, *sk);
+        *self = self.with_new_owner(added_id.into(), owner_sks)?;
+        self.merge_concurrent_operation(op)
     }
 }
 
-impl Merge for Cgka {
-    fn merge(&mut self, fork: Self::Forked) {
-        beekem::transact::Merge::merge(&mut self.0, fork.0);
-    }
-}
-
-/// CGKA ops for all agents, with shared storage.
+/// CGKA ops for all principals, with shared storage.
 ///
-/// CGKA ops are stored per document. Each agent has an index pointing to the
-/// documents whose CGKA ops it can reach (via `transitive_members`).
+/// CGKA ops are stored per document. Each principal has an index pointing to the
+/// documents it has standing over in Keyline.
 #[derive(Debug)]
 pub struct AllCgkaOps {
-    /// CGKA ops per doc, keyed by doc Identifier.
-    pub ops: HashMap<Identifier, Vec<Arc<Signed<CgkaOperation>>>>,
+    /// CGKA ops per doc, keyed by doc Id.
+    pub ops: HashMap<Id, Vec<Arc<Signed<CgkaOperation>>>>,
 
-    /// For each agent: the set of doc identifiers whose ops are reachable.
-    pub index: HashMap<Identifier, HashSet<Identifier>>,
+    /// For each principal: the set of doc identifiers whose ops are reachable.
+    pub index: HashMap<Id, HashSet<Id>>,
 }
 
 impl AllCgkaOps {
-    /// Returns the set of agent identifiers that have reachable CGKA ops.
-    pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
+    /// Returns the set of principal identifiers that have reachable CGKA ops.
+    pub fn agents(&self) -> impl Iterator<Item = &Id> {
         self.index.keys()
     }
 
-    /// Returns an iterator over all reachable CGKA ops for the given agent
-    /// (flattened across all documents), or `None` if the agent is not in the index.
+    /// Returns an iterator over all reachable CGKA ops for the given principal
+    /// (flattened across all documents), or `None` if the principal is not in the index.
     pub fn ops_for_agent(
         &self,
-        agent_id: &Identifier,
+        agent_id: &Id,
     ) -> Option<impl Iterator<Item = &Arc<Signed<CgkaOperation>>>> {
         self.index.get(agent_id).map(|doc_ids| {
             doc_ids

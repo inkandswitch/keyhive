@@ -1,36 +1,38 @@
-use super::{
-    change_id::JsChangeId, event_handler::JsEventHandler, history::JsHistory,
-    identifier::JsIdentifier, signed_delegation::JsSignedDelegation, signer::JsSigner,
-};
-use derive_more::{From, Into};
-use dupe::Dupe;
-use future_form::Local;
-use keyhive_core::principal::group::revocation::Revocation;
+use super::{change_id::JsChangeId, document_id::JsDocumentId, identifier::JsIdentifier};
+use keyhive_core::content::heads::ContentHeads;
+use keyhive_crypto::id::Id;
+use keyline::revocation::Revocation;
 use wasm_bindgen::prelude::*;
 
+/// A Keyline revocation: `issuer` withdraws the delegation `revoked` names.
 #[wasm_bindgen(js_name = Revocation)]
-#[derive(Debug, Clone, From, Into)]
-pub struct JsRevocation(pub(crate) Revocation<Local, JsSigner, JsChangeId, JsEventHandler>);
+#[derive(Debug, Clone)]
+pub struct JsRevocation {
+    pub(crate) issuer: Id,
+    pub(crate) revocation: Revocation<ContentHeads<JsChangeId>>,
+}
 
 #[wasm_bindgen(js_class = Revocation)]
 impl JsRevocation {
-    #[wasm_bindgen(getter, js_name = subjectId)]
-    pub fn subject_id(&self) -> JsIdentifier {
-        self.0.subject_id().into()
+    #[wasm_bindgen(getter)]
+    pub fn issuer(&self) -> JsIdentifier {
+        JsIdentifier(self.issuer)
     }
 
+    /// The digest of the delegation revoked.
     #[wasm_bindgen(getter)]
-    pub fn revoked(&self) -> JsSignedDelegation {
-        self.0.revoked().dupe().into()
+    pub fn revoked(&self) -> Vec<u8> {
+        self.revocation.revoke.as_slice().to_vec()
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn proof(&self) -> Option<JsSignedDelegation> {
-        Some(self.0.proof()?.dupe().into())
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn after(&self) -> JsHistory {
-        self.0.after().into()
+    /// The content heads of `doc` the issuer had seen when revoking, if the
+    /// revocation records them: content from the revoked member that does not
+    /// causally precede them came after the revocation.
+    pub fn retained(&self, doc: &JsDocumentId) -> Option<Vec<JsChangeId>> {
+        let doc = Id::from(doc.0);
+        self.revocation
+            .retain
+            .get(&doc)
+            .map(|heads| heads.as_slice().to_vec())
     }
 }

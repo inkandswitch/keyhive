@@ -38,6 +38,7 @@ pub mod test_utils;
 
 #[cfg(test)]
 mod tests {
+    mod codec;
     mod concurrent_membership_changes;
     mod concurrent_updates;
     mod group_lifecycle;

@@ -1,9 +1,7 @@
 //! Expanding and rotating prekeys.
 
-use keyhive_core::{
-    access::Access::Read,
-    test_utils::{PrekeyOp, TestContext, TestResult as Result},
-};
+use keyhive_core::test_utils::{PrekeyOp, TestContext, TestResult as Result};
+use keyline::power::Power::Read;
 
 #[tokio::test]
 async fn expanding_prekeys_adds_a_distinct_key() -> Result<()> {
@@ -53,7 +51,7 @@ async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     let old = alice.expand_prekeys().await?.payload().share_key;
@@ -145,5 +143,71 @@ async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
             observer.name()
         );
     }
+    Ok(())
+}
+
+/// Sixteen prekeys (seven at creation, nine more) used to pick an index one
+/// past the end for about half of all documents, and panic.
+#[tokio::test]
+async fn a_member_with_sixteen_prekeys_can_be_added_to_any_document() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    for _ in 0..9 {
+        bob.expand_prekeys().await?;
+    }
+    ctx.sync_all_unsent().await?;
+    assert_eq!(ctx.prekeys_of(&alice, bob.id()).await?.len(), 16);
+
+    for i in 0..24 {
+        let doc = ctx.doc(&alice, &format!("doc-{i}")).await?;
+        alice.add_member(bob.id(), doc, Read).await?;
+    }
+    Ok(())
+}
+
+/// Rotations that retire each other's keys leave an individual with no live
+/// prekey. Adding them is still a delegation; they are just not seated.
+#[tokio::test]
+async fn a_member_with_no_live_prekeys_is_added_but_not_seated() -> Result<()> {
+    use keyhive_core::principal::individual::op::{
+        add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp,
+    };
+    use keyhive_crypto::{
+        id::Id, share_key::ShareSecretKey, signer::memory::MemorySigner, verifiable::Verifiable,
+        verified::Verified,
+    };
+
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let carol = MemorySigner::generate(&mut rand::rngs::OsRng);
+    let key = || ShareSecretKey::generate(&mut rand::rngs::OsRng).share_key();
+    let (a, b) = (key(), key());
+    for op in [
+        KeyOp::Add(Verified::sign_sync(&AddKeyOp { share_key: a }, &carol)?),
+        KeyOp::Rotate(Verified::sign_sync(
+            &RotateKeyOp { old: a, new: b },
+            &carol,
+        )?),
+        KeyOp::Rotate(Verified::sign_sync(
+            &RotateKeyOp { old: b, new: a },
+            &carol,
+        )?),
+    ] {
+        alice.receive_prekey_op(&op).await?;
+    }
+    let carol_id = Id::try_from(carol.verifying_key())?;
+    assert!(ctx.prekeys_of(&alice, carol_id.into()).await?.is_empty());
+
+    let doc = ctx.doc(&alice, "doc").await?;
+    alice.add_member(carol_id, doc, Read).await?;
+    assert!(
+        !alice
+            .cgka_members_for(doc)
+            .await?
+            .expect("alice holds the tree")
+            .contains(&carol_id.into()),
+        "nobody to seat"
+    );
     Ok(())
 }
