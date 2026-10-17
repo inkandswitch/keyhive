@@ -101,6 +101,12 @@ x25519-dalek = { version = "2.0", features = [
   "static_secrets",
 ] }
 
+[workspace.lints.clippy]
+# Long doc list continuations are indented for reading as plain text.
+doc_overindented_list_items = "allow"
+# Types are spelled out rather than hidden behind aliases.
+type_complexity = "allow"
+
 [profile.release]
 lto = true
 

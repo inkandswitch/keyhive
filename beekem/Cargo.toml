@@ -53,5 +53,5 @@ std = [
 arbitrary = ["dep:arbitrary", "keyhive_crypto/arbitrary"]
 test_utils = ["rand/std_rng"]
 
-[lints.clippy]
-doc_overindented_list_items = "allow"
+[lints]
+workspace = true
