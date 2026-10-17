@@ -830,7 +830,7 @@ impl TestContext {
         }
     }
 
-    /// What `from` would send `to`, by kind, without sending it (including public events).
+    /// What `from` would send `to`, by kind, without sending it.
     ///
     /// This is what `to`'s memberships entitle it to hear about. A sync client wants the
     /// events themselves, from [`Hive::static_events_for_agent`]; a test wants to count them

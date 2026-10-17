@@ -229,7 +229,8 @@ pub trait Keyline<F: FutureForm> {
     fn effective_power(&self, subject: Id, audience: Id) -> Query<'_, F, Option<Power>, Self::Error>;
     fn members(&self, subject: Id) -> Query<'_, F, BTreeMap<Id, Power>, Self::Error>;
     fn is_live(&self, delegation: Digest<Delegation>) -> Query<'_, F, bool, Self::Error>;
-$1    fn subjects(&self) -> Query<'_, F, BTreeSet<Id>, Self::Error>;
+    fn subjects(&self) -> Query<'_, F, BTreeSet<Id>, Self::Error>;
+    fn positive_power(&self, subject: Id, audience: Id) -> Query<'_, F, Option<Power>, Self::Error>;
     fn closure(&self, subject: Id) -> Query<'_, F, Vec<Certificate<Self::RetentionWatermark>>, Self::Error>;
     fn digest(&self) -> Query<'_, F, Digest<CertificateSet>, Self::Error>;
 }
@@ -249,7 +250,8 @@ $1    fn subjects(&self) -> Query<'_, F, BTreeSet<Id>, Self::Error>;
 | `effective_power`    | `audience`'s effective power over `subject`: max over live routes of min along each. `None` if unreachable.                     |
 | `members`            | Every `Id` other than `subject` itself with a live route to `subject`, with its effective power. The materialized view.         |
 | `is_live`            | Whether `delegation` survives evaluation.                                                                                       |
-$1| `subjects`           | The subject of every delegation in the set, live or not: everything the set says something about. Monotone in the set.        |
+| `subjects`           | The subject of every delegation in the set, live or not: everything the set says something about. Monotone in the set.        |
+| `positive_power`     | `audience`'s power over `subject` with every revocation ignored. Monotone, so a `Some` never goes away; not, on its own, "still authorized". |
 | `closure`            | The subject's [closure](README.md#what-a-replica-must-hold), in id order: what sync sends.                                      |
 | `digest`             | A digest of the set, comparable across replicas. `CertificateSet` is an uninhabited marker.                                     |
 

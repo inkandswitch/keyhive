@@ -151,9 +151,12 @@ pub trait Keyline<F: FutureForm> {
     /// [`Keyline::effective_power`], but with every revocation ignored.
     ///
     /// Monotone in the set: adding certificates never lowers it, so a `Some`
-    /// read at one version holds at every later one. That is what makes it
-    /// safe for decisions that must not be undone, such as authorizing an
-    /// operation in another protocol.
+    /// read at one version holds at every later one. That makes it usable in
+    /// decisions that must not be undone, such as authorizing an operation in
+    /// another protocol, but not sufficient for one on its own: it ignores
+    /// every revocation, so a revoked principal keeps its positive power
+    /// forever. Such a check needs something more to stand for "still
+    /// authorized".
     fn positive_power(&self, subject: Id, audience: Id)
         -> Query<'_, F, Option<Power>, Self::Error>;
 

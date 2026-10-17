@@ -17,18 +17,19 @@ several instances, and they share its signing key and its identifier.
 
 ## Example test
 
+In a test file, mark the function `#[tokio::test]`. Here it runs as a doctest.
+
 ```rust
 use keyhive_core::test_utils::{TestContext, TestResult as Result};
 use keyline::power::Power::Read;
 
-#[tokio::test]
 async fn a_reader_reads_what_a_member_wrote() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"hello world").await?;
     ctx.sync_all_unsent().await?;
 
@@ -38,6 +39,7 @@ async fn a_reader_reads_what_a_member_wrote() -> Result<()> {
     );
     Ok(())
 }
+# tokio_test::block_on(a_reader_reads_what_a_member_wrote()).unwrap();
 ```
 
 ## Creating identities, groups and documents
@@ -62,8 +64,7 @@ events rather than introductions.
 * `sync_all_unsent()` delivers every outstanding event to every keyhive instance.
   This will be the most common way to sync events in tests.
 * `ctx.sync(&from, &to)` sends, in one direction, what `to`'s own memberships entitle
-  it to plus what is public.
-* `ctx.sync_as_public(&from, &to)` sends only what a public reader may see.
+  it to.
 * `ctx.sync_without(&from, &to, kind)` withholds one `EventKind` from what it
   delivers (e.g., to simulate a case where no CGKA ops were received yet).
 * `ctx.sync_in_batches(..)` delivers in partial batches.
@@ -77,7 +78,7 @@ The `TestContext` has one unified error vocabulary for failure reasons we want t
 assert on. To match, you can use `map_err`:
 
 ```text
-match bob.add_member(carol.id(), design_doc, Read, &[]).await.map_err(TestError::from) {
+match bob.add_member(carol.id(), design_doc, Read).await.map_err(TestError::from) {
     Err(TestError::NoAuthority) => {}
     other => panic!("expected no authority, got {other:?}"),
 }
