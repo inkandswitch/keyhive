@@ -4,6 +4,12 @@
 //! that you want all-or-nothing semantics for. This keeps you from needing to do
 //! any cleanup if there's an error, but does come with nontrivial overhead at the
 //! start and end of the transaction.
+//!
+//! The guarantee is only as strong as the type's fork: a fork that copies
+//! everything gives all-or-nothing semantics. A
+//! [`Keyhive`](crate::keyhive::Keyhive)'s fork shares its Keyline store, so a
+//! transaction on one is not isolated for membership; see its
+//! [`ForkAsync`](fork::ForkAsync) implementation.
 
 pub mod fork;
 pub mod merge;
@@ -49,8 +55,10 @@ pub fn transact_blocking<T: Merge, Error, F: FnMut(&mut T::Forked) -> Result<(),
 ///
 /// This is meant for types that are wrapped in e.g. `Arc<RefCell<T>>` or `Arc<Mutex<T>>`.
 ///
-/// Everything in the transaction happens on a clean, disconnected fork of the original,
-/// so there is no need to worry about interleaving between other transactions or trunk.
+/// Everything in the transaction happens on a fork of the original. When the fork is a
+/// clean, disconnected copy, there is no need to worry about interleaving between other
+/// transactions or trunk; a [`Keyhive`](crate::keyhive::Keyhive)'s fork is not (see
+/// the module docs).
 ///
 /// ```rust
 /// # use std::{

@@ -144,9 +144,8 @@ pub struct KeyhiveState<
 
     /// The Keyline store, with the lock that serializes inserts into it.
     ///
-    /// A fork shares it rather than copying it: certificates are monotone
-    /// facts, so an abandoned fork leaves only certificates that change
-    /// nothing until something cites them.
+    /// A fork shares it rather than copying it, so a transaction is not
+    /// isolated for certificates: see [`ForkAsync`] for `Keyhive`.
     certificates: Arc<Certificates<K>>,
 
     _plaintext_phantom: PhantomData<P>,
@@ -414,8 +413,10 @@ where
     /// so writing to one changes the readers of those it reaches.
     ///
     /// The insert lock is held throughout, so the diff is exactly this batch's
-    /// effect, and concurrent writes reach the trees in the order they reached
-    /// the store. Each operation is stored as soon as it is made, so a failure
+    /// effect, and concurrent writes on this keyhive reach its trees in the
+    /// order they reached the store. That does not hold between a fork and its
+    /// trunk, which share the store but not the trees (see [`ForkAsync`] for
+    /// `Keyhive`). Each operation is stored as soon as it is made, so a failure
     /// partway leaves no tree holding an operation the store lacks. The
     /// listener hears of the new certificates and operations once the lock is
     /// released, whether or not reconciliation finished.
@@ -2972,6 +2973,26 @@ where
 {
     type AsyncForked = Keyhive<F, S, T, P, C, Log<T>, R, K>;
 
+    /// A fork for [`transact_async`](crate::transact::transact_async). It
+    /// copies this keyhive's state but _shares its Keyline store_, so a
+    /// transaction on a `Keyhive` is neither isolated nor all-or-nothing for
+    /// membership:
+    ///
+    /// - A certificate the fork writes takes effect in the trunk at once: a
+    ///   delegation or revocation changes membership as soon as it is
+    ///   inserted. It stays if the transaction fails, and the trunk's
+    ///   listener is told of it only when the fork is merged.
+    /// - The fork's CGKA operations and trees are its own and are dropped if
+    ///   the transaction fails. A failed transaction that revoked a reader can
+    ///   so leave them seated in the trunk's tree while Keyline says they no
+    ///   longer read.
+    /// - Writes on the trunk while the fork is alive see the fork's
+    ///   certificates but not its trees; merging replays the fork's
+    ///   operations, which can seat a member the trunk has since revoked, or
+    ///   unseat one it has re-added.
+    ///
+    /// Use it only for transactions that do not change membership, or that
+    /// cannot fail once they have.
     async fn fork_async(&self) -> Self::AsyncForked {
         let signer = { self.active.signer.clone() };
         Keyhive::from_archive_sharing(
@@ -3355,11 +3376,13 @@ fn adopt_own_leaf_secrets(
 struct Certificates<K> {
     store: K,
 
-    /// The store version the CGKA trees here reflect, or `None` before the
-    /// first insert. Held across every insert and the tree changes that follow
-    /// it, so a CGKA diff brackets exactly one batch and concurrent writes
-    /// reach the trees in store order. Level 0 in the lock order: nothing
-    /// takes it while holding any other lock.
+    /// The store version the CGKA trees of the last keyhive to write reflect,
+    /// or `None` before the first insert. Held across every insert and the
+    /// tree changes that follow it, so a CGKA diff brackets exactly one batch
+    /// and one keyhive's concurrent writes reach its trees in store order. A
+    /// fork and its trunk share it but not their trees (see [`ForkAsync`] for
+    /// `Keyhive`). Level 0 in the lock order: nothing takes it while holding
+    /// any other lock.
     reconciled: async_lock::Mutex<Option<Version>>,
 }
 
