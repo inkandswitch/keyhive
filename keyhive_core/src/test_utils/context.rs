@@ -172,6 +172,7 @@ other_from!(
     ReceiveCertificateError<Infallible>,
     ReceivePrekeyOpError,
     SigningError,
+    keyhive_crypto::verified::SignError,
 );
 
 impl From<GenerateDocError<Infallible>> for TestError {

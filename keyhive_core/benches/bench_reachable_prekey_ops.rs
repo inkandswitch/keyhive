@@ -1,5 +1,4 @@
 use divan::Bencher;
-use dupe::Dupe;
 use keyhive_core::{principal::individual::op::KeyOp, test_utils::make_simple_keyhive};
 use keyline::power::Power;
 use nonempty::nonempty;
@@ -45,7 +44,7 @@ fn reachable_prekey_ops_for_agent(bencher: Bencher, (n_peers, n_docs): (usize, u
             for _ in 0..PREKEY_ROTATIONS_PER_PEER {
                 let add_op = peer.expand_prekeys().await.unwrap();
                 alice
-                    .receive_prekey_op(&KeyOp::Add(add_op.dupe()))
+                    .receive_prekey_op(&KeyOp::Add(add_op.clone()))
                     .await
                     .unwrap();
 

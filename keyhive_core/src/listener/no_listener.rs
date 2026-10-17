@@ -9,7 +9,11 @@ use beekem::operation::CgkaOperation;
 use derive_more::derive::Debug;
 use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
-use keyhive_crypto::{content::reference::ContentRef, signed::Signed, verified::Verified};
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    signed::Signed,
+    verified::{self, Verified},
+};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -22,11 +26,17 @@ pub struct NoListener;
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm> PrekeyListener<F> for NoListener {
-    fn on_prekeys_expanded<'a>(&'a self, _e: &'a Arc<Signed<AddKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        _e: &'a Arc<verified::Signed<AddKeyOp>>,
+    ) -> F::Future<'a, ()> {
         F::ready(())
     }
 
-    fn on_prekey_rotated<'a>(&'a self, _e: &'a Arc<Signed<RotateKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        _e: &'a Arc<verified::Signed<RotateKeyOp>>,
+    ) -> F::Future<'a, ()> {
         F::ready(())
     }
 }

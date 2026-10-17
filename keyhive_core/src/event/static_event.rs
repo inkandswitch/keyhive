@@ -21,11 +21,11 @@ use serde::{Deserialize, Serialize};
 /// dependencies, unlike [`Event`][super::Event]s.
 #[derive(Debug, Clone, PartialEq, Eq, From, Hash, TryInto, Serialize, Deserialize)]
 pub enum StaticEvent<T: ContentRef> {
-    /// Prekeys were expanded.
-    PrekeysExpanded(Box<Signed<AddKeyOp>>),
+    /// Prekeys were expanded, as received: verified on receipt.
+    PrekeysExpanded(verified::Signed<AddKeyOp>),
 
-    /// A prekey was rotated.
-    PrekeyRotated(Box<Signed<RotateKeyOp>>),
+    /// A prekey was rotated, as received: verified on receipt.
+    PrekeyRotated(verified::Signed<RotateKeyOp>),
 
     /// A CGKA operation was performed.
     CgkaOperation(Box<Signed<CgkaOperation>>),
@@ -40,18 +40,25 @@ pub enum StaticEvent<T: ContentRef> {
 #[cfg(any(test, feature = "arbitrary"))]
 impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for StaticEvent<T> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        // Signatures are junk: these exercise encoding, not verification.
+        fn junk<'a, V: arbitrary::Arbitrary<'a> + keyhive_codec::traits::Encode>(
+            u: &mut arbitrary::Unstructured<'a>,
+        ) -> arbitrary::Result<verified::Signed<V>> {
+            Ok(verified::Signed::from_parts(
+                u.arbitrary()?,
+                keyhive_codec::traits::Encode::encode(&V::arbitrary(u)?),
+                ed25519_dalek::Signature::from_bytes(&u.arbitrary()?),
+            ))
+        }
+
         let variant = u.int_in_range(0..=3)?;
         match variant {
-            0 => Ok(Self::PrekeysExpanded(Box::new(u.arbitrary()?))),
-            1 => Ok(Self::PrekeyRotated(Box::new(u.arbitrary()?))),
+            0 => Ok(Self::PrekeysExpanded(junk::<AddKeyOp>(u)?)),
+            1 => Ok(Self::PrekeyRotated(junk::<RotateKeyOp>(u)?)),
             2 => Ok(Self::CgkaOperation(Box::new(u.arbitrary()?))),
             // Delegations only: a revocation's watermark type has no
-            // `Arbitrary`, and the signature is junk either way.
-            3 => Ok(Self::Delegated(verified::Signed::from_parts(
-                u.arbitrary()?,
-                keyhive_codec::traits::Encode::encode(&Delegation::arbitrary(u)?),
-                ed25519_dalek::Signature::from_bytes(&u.arbitrary()?),
-            ))),
+            // `Arbitrary`.
+            3 => Ok(Self::Delegated(junk::<Delegation>(u)?)),
             _ => unreachable!(),
         }
     }

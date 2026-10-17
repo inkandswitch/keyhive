@@ -29,11 +29,12 @@ use tracing::instrument;
 /// Top-level event variants.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, From, TryInto)]
 pub enum Event<T: ContentRef> {
-    /// Prekeys were expanded.
-    PrekeysExpanded(Arc<Signed<AddKeyOp>>),
+    /// Prekeys were expanded, in wire form: verified before it became an
+    /// event.
+    PrekeysExpanded(Arc<verified::Signed<AddKeyOp>>),
 
-    /// A prekey was rotated.
-    PrekeyRotated(Arc<Signed<RotateKeyOp>>),
+    /// A prekey was rotated, in wire form.
+    PrekeyRotated(Arc<verified::Signed<RotateKeyOp>>),
 
     /// A CGKA operation was performed.
     CgkaOperation(Arc<Signed<CgkaOperation>>),
@@ -74,8 +75,8 @@ impl<T: ContentRef> Event<T> {
 impl<T: ContentRef> From<KeyOp> for Event<T> {
     fn from(key_op: KeyOp) -> Self {
         match key_op {
-            KeyOp::Add(add) => Event::PrekeysExpanded(add),
-            KeyOp::Rotate(rot) => Event::PrekeyRotated(rot),
+            KeyOp::Add(add) => Event::PrekeysExpanded(add.signed().dupe()),
+            KeyOp::Rotate(rot) => Event::PrekeyRotated(rot.signed().dupe()),
         }
     }
 }
@@ -99,12 +100,8 @@ impl<T: ContentRef> From<Event<T>> for StaticEvent<T> {
                 StaticEvent::CgkaOperation(Box::new(Arc::unwrap_or_clone(cgka)))
             }
 
-            Event::PrekeyRotated(pkr) => {
-                StaticEvent::PrekeyRotated(Box::new(Arc::unwrap_or_clone(pkr).map(Into::into)))
-            }
-            Event::PrekeysExpanded(pke) => {
-                StaticEvent::PrekeysExpanded(Box::new(Arc::unwrap_or_clone(pke).map(Into::into)))
-            }
+            Event::PrekeyRotated(pkr) => StaticEvent::PrekeyRotated(Arc::unwrap_or_clone(pkr)),
+            Event::PrekeysExpanded(pke) => StaticEvent::PrekeysExpanded(Arc::unwrap_or_clone(pke)),
         }
     }
 }
@@ -196,15 +193,21 @@ mod tests {
         let events: Vec<Event<[u8; 32]>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
-            Event::PrekeysExpanded(Arc::new(
-                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
-            )),
-            Event::PrekeysExpanded(Arc::new(
-                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
-            )),
-            Event::PrekeysExpanded(Arc::new(
-                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
-            )),
+            Event::PrekeysExpanded(
+                Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
+                    .signed()
+                    .dupe(),
+            ),
+            Event::PrekeysExpanded(
+                Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
+                    .signed()
+                    .dupe(),
+            ),
+            Event::PrekeysExpanded(
+                Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
+                    .signed()
+                    .dupe(),
+            ),
             Event::Delegated(delegation.signed().dupe()),
         ];
 

@@ -22,7 +22,7 @@ The byte string `/keyhive/` (`keyhive_crypto::domain_separator::SEPARATOR`) is u
 
 Application secrets additionally use the context `/keyhive/beekem/app_secret/` for their first derivation stage, and the key an update wraps earlier root secrets under uses `/keyhive/beekem/predecessor_secrets/` (see below).
 
-Content-addressing digests (`Digest::hash`) and signing digests (`signed::Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level. Types migrated to the canonical codec (Keyline certificates so far) instead travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature` and sign and hash the frame without its signature (`keyhive_crypto::signable`); see [Keyline's implementation notes](./keyline/implementation.md#domain-separation).
+Content-addressing digests (`Digest::hash`) and signing digests (`signed::Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level. Types migrated to the canonical codec (Keyline certificates and prekey operations so far) instead travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature` and sign and hash the frame without its signature (`keyhive_crypto::signable`); see [Keyline's implementation notes](./keyline/implementation.md#domain-separation).
 
 ## Synthetic Nonce and Key Commitment
 

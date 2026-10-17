@@ -10,7 +10,10 @@ use keyhive_core::{
     listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
     principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
-use keyhive_crypto::{signed::Signed, verified::Verified};
+use keyhive_crypto::{
+    signed::Signed,
+    verified::{self, Verified},
+};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
@@ -36,11 +39,17 @@ impl Dupe for JsEventHandler {
 }
 
 impl PrekeyListener<Local> for JsEventHandler {
-    fn on_prekeys_expanded<'a>(&'a self, e: &'a Arc<Signed<AddKeyOp>>) -> LocalBoxFuture<'a, ()> {
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        e: &'a Arc<verified::Signed<AddKeyOp>>,
+    ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeysExpanded(e.dupe()).into()) })
     }
 
-    fn on_prekey_rotated<'a>(&'a self, e: &'a Arc<Signed<RotateKeyOp>>) -> LocalBoxFuture<'a, ()> {
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        e: &'a Arc<verified::Signed<RotateKeyOp>>,
+    ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeyRotated(e.dupe()).into()) })
     }
 }

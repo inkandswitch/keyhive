@@ -9,13 +9,14 @@ use keyhive_crypto::{
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// An individual's introduction: one of its prekey operations, verified.
+/// Deserializing one checks its signature.
 #[derive(Debug, Clone, PartialEq, Eq, From, Into, Hash, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct ContactCard(pub(crate) KeyOp);
 
 impl ContactCard {
     pub fn id(&self) -> IndividualId {
-        IndividualId::from(*self.0.issuer())
+        IndividualId::from(self.0.issuer())
     }
 
     pub fn share_key(&self) -> &ShareKey {

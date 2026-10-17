@@ -61,7 +61,7 @@ use keyhive_crypto::{
     signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
     symmetric_key::SymmetricKey,
     verifiable::Verifiable,
-    verified::{self, Verified, VerifyError},
+    verified::{self, SignError, Verified, VerifyError},
 };
 use keyline::{
     certificate::{Certificate, CertificateId, VerifiedCertificate},
@@ -233,7 +233,7 @@ where
         event_listener: L,
         keyline: K,
         mut csprng: R,
-    ) -> Result<Self, SigningError> {
+    ) -> Result<Self, SignError> {
         let inner_active = Active::generate(signer, event_listener.clone(), &mut csprng).await?;
         let active_id = inner_active.id();
 
@@ -846,7 +846,7 @@ where
     /// Use [`Keyhive::get_existing_contact_card`] to read a current contact card without
     /// generating one.
     #[instrument(skip_all)]
-    pub async fn generate_contact_card(&self) -> Result<ContactCard, SigningError> {
+    pub async fn generate_contact_card(&self) -> Result<ContactCard, SignError> {
         let rot_key_op = self
             .active
             .generate_private_prekey(self.csprng.dupe())
@@ -878,10 +878,12 @@ where
 
         match contact_card.op() {
             KeyOp::Add(add_op) => {
-                self.event_listener.on_prekeys_expanded(add_op).await;
+                self.event_listener
+                    .on_prekeys_expanded(add_op.signed())
+                    .await;
             }
             KeyOp::Rotate(rot_op) => {
-                self.event_listener.on_prekey_rotated(rot_op).await;
+                self.event_listener.on_prekey_rotated(rot_op.signed()).await;
             }
         }
 
@@ -892,12 +894,12 @@ where
     pub async fn rotate_prekey(
         &self,
         prekey: ShareKey,
-    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<Verified<RotateKeyOp>, SignError> {
         self.active.rotate_prekey(prekey, self.csprng.dupe()).await
     }
 
     #[instrument(skip_all)]
-    pub async fn expand_prekeys(&self) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
+    pub async fn expand_prekeys(&self) -> Result<Verified<AddKeyOp>, SignError> {
         self.active.expand_prekeys(self.csprng.dupe()).await
     }
 
@@ -2045,9 +2047,13 @@ where
         self.individuals.lock().await.contains_key(&id)
     }
 
+    /// Receive a prekey operation. It is a [`KeyOp`], so its signature was
+    /// checked against its issuer:
+    /// [`SignedKeyOp::verify`](crate::principal::individual::op::SignedKeyOp::verify)
+    /// makes one from what a peer sent.
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
-        let id = *key_op.issuer();
+        let id = key_op.issuer();
         // Prekeys are an individual's, whatever else its identifier names.
         // The active individual is in the table too.
         match self.individual_state(IndividualId(id)).await {
@@ -2068,10 +2074,12 @@ where
     ) -> Result<(), ReceiveStaticEventError<K::Error>> {
         match static_event {
             StaticEvent::PrekeysExpanded(add_op) => {
-                self.receive_prekey_op(&Arc::new(*add_op).into()).await?
+                let key_op = KeyOp::Add(add_op.verify().map_err(ReceivePrekeyOpError::from)?);
+                self.receive_prekey_op(&key_op).await?
             }
             StaticEvent::PrekeyRotated(rot_op) => {
-                self.receive_prekey_op(&Arc::new(*rot_op).into()).await?
+                let key_op = KeyOp::Rotate(rot_op.verify().map_err(ReceivePrekeyOpError::from)?);
+                self.receive_prekey_op(&key_op).await?
             }
             StaticEvent::CgkaOperation(cgka_op) => {
                 self.receive_cgka_op(*cgka_op).await?;
@@ -2527,11 +2535,20 @@ where
         shared: Arc<Certificates<K>>,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, TryFromArchiveError<K::Error>> {
+        let signer_id = IndividualId::try_from(signer.verifying_key())?;
+        if signer_id != archive.id() {
+            return Err(TryFromArchiveError::NotTheSigner {
+                archive: archive.id(),
+                signer: signer_id,
+            });
+        }
         let raw_active = Active::from_archive(&archive.active, signer, listener.clone())?;
 
         let mut individuals = HashMap::new();
-        for (id, indie) in archive.individuals.iter() {
-            individuals.insert(*id, Arc::new(Mutex::new(indie.clone())));
+        for indie in archive.individuals.values() {
+            // Keyed by the issuer of its verified operations, not the
+            // archive's key for it.
+            individuals.insert(indie.id(), Arc::new(Mutex::new(indie.clone())));
         }
         individuals.insert(archive.active.individual.id(), raw_active.individual.dupe());
 
@@ -2614,25 +2631,21 @@ where
         archive: Archive<T>,
     ) -> Result<Vec<Arc<StaticEvent<T>>>, ReceiveStaticEventError<K::Error>> {
         tracing::debug!("Keyhive::ingest_archive()");
-        {
-            let locked_active = &self.active;
-            {
-                locked_active
-                    .key_pairs
-                    .lock()
-                    .await
-                    .extend(archive.active.key_pairs);
-            }
-            {
-                locked_active
-                    .individual
-                    .lock()
-                    .await
-                    .merge(archive.active.individual);
-            }
-        }
-
-        for (id, indie) in archive.individuals {
+        self.active
+            .key_pairs
+            .lock()
+            .await
+            .extend(archive.active.key_pairs);
+        // The archive's own individual goes through the table like the rest:
+        // ours is there too, sharing the active individual's state, so an
+        // archive of this identity merges into it, and another identity's
+        // adds one more individual rather than merging into ours.
+        let archived = archive
+            .individuals
+            .into_values()
+            .chain(std::iter::once(archive.active.individual));
+        for indie in archived {
+            let id = indie.id();
             let mut locked_indies = self.individuals.lock().await;
             if let Some(our_indie) = locked_indies.get_mut(&id) {
                 our_indie.merge_async(indie).await;
@@ -2809,13 +2822,13 @@ where
             match event.as_ref() {
                 StaticEvent::PrekeysExpanded(signed) => {
                     pending_prekeys_expanded += 1;
-                    if IndividualId(signed.issuer) == active_id {
+                    if IndividualId(signed.issuer()) == active_id {
                         pending_prekeys_expanded_by_active += 1;
                     }
                 }
                 StaticEvent::PrekeyRotated(signed) => {
                     pending_prekey_rotated += 1;
-                    if IndividualId(signed.issuer) == active_id {
+                    if IndividualId(signed.issuer()) == active_id {
                         pending_prekey_rotated_by_active += 1;
                     }
                 }
@@ -3192,6 +3205,13 @@ pub enum TryFromArchiveError<E: core::error::Error + 'static> {
     /// A certificate in it did not verify.
     #[error(transparent)]
     Certificate(#[from] VerifyError),
+
+    /// The archive is another identity's: only its own signer can load it.
+    #[error("archive of {archive} cannot be loaded with the signer of {signer}")]
+    NotTheSigner {
+        archive: IndividualId,
+        signer: IndividualId,
+    },
 
     #[error(transparent)]
     KeylineStorage(#[from] KeylineStorageError<E>),
@@ -4406,10 +4426,13 @@ mod tests {
 
         let bob_add_op = bob.expand_prekeys().await.unwrap();
         let bob_rotate_op1 = bob
-            .rotate_prekey(bob_add_op.payload.share_key)
+            .rotate_prekey(bob_add_op.payload().share_key)
             .await
             .unwrap();
-        let bob_rotate_op2 = bob.rotate_prekey(bob_rotate_op1.payload.new).await.unwrap();
+        let bob_rotate_op2 = bob
+            .rotate_prekey(bob_rotate_op1.payload().new)
+            .await
+            .unwrap();
 
         let bob_on_alice_for_delegation = IndividualState::new(KeyOp::Add(bob_add_op.clone()));
         assert!(
@@ -4467,8 +4490,8 @@ mod tests {
         // Register all individuals on alice, with varying numbers of prekey rotations
         // so that op counts differ across agents.
         let bob_add_op = bob.expand_prekeys().await?;
-        let bob_rot1 = bob.rotate_prekey(bob_add_op.payload.share_key).await?;
-        let bob_rot2 = bob.rotate_prekey(bob_rot1.payload.new).await?;
+        let bob_rot1 = bob.rotate_prekey(bob_add_op.payload().share_key).await?;
+        let bob_rot2 = bob.rotate_prekey(bob_rot1.payload().new).await?;
         let mut bob_individual = IndividualState::new(KeyOp::Add(bob_add_op));
         bob_individual.receive_prekey_op(KeyOp::Rotate(bob_rot1))?;
         bob_individual.receive_prekey_op(KeyOp::Rotate(bob_rot2))?;
@@ -4477,7 +4500,9 @@ mod tests {
         let bob_id = bob_indie.id();
 
         let carol_add_op = carol.expand_prekeys().await?;
-        let carol_rot1 = carol.rotate_prekey(carol_add_op.payload.share_key).await?;
+        let carol_rot1 = carol
+            .rotate_prekey(carol_add_op.payload().share_key)
+            .await?;
         let mut carol_individual = IndividualState::new(KeyOp::Add(carol_add_op));
         carol_individual.receive_prekey_op(KeyOp::Rotate(carol_rot1))?;
         let carol_indie = carol_individual;
@@ -4490,9 +4515,9 @@ mod tests {
             .await?;
 
         let eve_add_op = eve.expand_prekeys().await?;
-        let eve_rot1 = eve.rotate_prekey(eve_add_op.payload.share_key).await?;
-        let eve_rot2 = eve.rotate_prekey(eve_rot1.payload.new).await?;
-        let eve_rot3 = eve.rotate_prekey(eve_rot2.payload.new).await?;
+        let eve_rot1 = eve.rotate_prekey(eve_add_op.payload().share_key).await?;
+        let eve_rot2 = eve.rotate_prekey(eve_rot1.payload().new).await?;
+        let eve_rot3 = eve.rotate_prekey(eve_rot2.payload().new).await?;
         let mut eve_individual = IndividualState::new(KeyOp::Add(eve_add_op));
         eve_individual.receive_prekey_op(KeyOp::Rotate(eve_rot1))?;
         eve_individual.receive_prekey_op(KeyOp::Rotate(eve_rot2))?;
@@ -4504,8 +4529,10 @@ mod tests {
         // Frank: registered but not added to any doc or group, with extra ops
         let frank = make_keyhive().await;
         let frank_add_op = frank.expand_prekeys().await?;
-        let frank_rot1 = frank.rotate_prekey(frank_add_op.payload.share_key).await?;
-        let frank_rot2 = frank.rotate_prekey(frank_rot1.payload.new).await?;
+        let frank_rot1 = frank
+            .rotate_prekey(frank_add_op.payload().share_key)
+            .await?;
+        let frank_rot2 = frank.rotate_prekey(frank_rot1.payload().new).await?;
         let frank_indie = IndividualState::new(KeyOp::Add(frank_add_op));
         assert!(alice.register_individual(frank_indie.clone()).await);
         let frank_id = frank_indie.id();
@@ -4689,13 +4716,19 @@ mod tests {
 
         let share_key = || ShareSecretKey::generate(&mut OsRng).share_key();
         let pending_from = |signer: &MemorySigner| -> TestResult<Vec<StaticEvent<[u8; 32]>>> {
-            let added = signer.try_sign_sync(AddKeyOp {
-                share_key: share_key(),
-            })?;
-            let rotated = signer.try_sign_sync(RotateKeyOp {
-                old: share_key(),
-                new: share_key(),
-            })?;
+            let added = Verified::sign_sync(
+                &AddKeyOp {
+                    share_key: share_key(),
+                },
+                signer,
+            )?;
+            let rotated = Verified::sign_sync(
+                &RotateKeyOp {
+                    old: share_key(),
+                    new: share_key(),
+                },
+                signer,
+            )?;
             let cgka = signer.try_sign_sync(CgkaOperation::Add {
                 added_id: MemberId::from(&signer.0),
                 pk: share_key(),
@@ -4711,19 +4744,24 @@ mod tests {
                 Revocation::new(delegated.digest());
             let revoked = Verified::sign_sync(&revocation, signer)?;
             Ok(vec![
-                StaticEvent::PrekeysExpanded(Box::new(added)),
-                StaticEvent::PrekeyRotated(Box::new(rotated)),
+                StaticEvent::PrekeysExpanded(added.signed().as_ref().clone()),
+                StaticEvent::PrekeyRotated(rotated.signed().as_ref().clone()),
                 StaticEvent::CgkaOperation(Box::new(cgka)),
                 StaticEvent::Delegated(delegated.signed().as_ref().clone()),
                 StaticEvent::Revoked(revoked.signed().as_ref().clone()),
             ])
         };
+        // Twice as many of the active identity's as anyone else's, so that
+        // counting the wrong side changes every `_by_active` count.
         let mine = pending_from(&hive.active.signer)?;
+        let mine_again = pending_from(&hive.active.signer)?;
         let theirs = pending_from(&MemorySigner::generate(&mut OsRng))?;
-        hive.pending_events
-            .lock()
-            .await
-            .extend(mine.into_iter().chain(theirs).map(Arc::new));
+        hive.pending_events.lock().await.extend(
+            mine.into_iter()
+                .chain(mine_again)
+                .chain(theirs)
+                .map(Arc::new),
+        );
 
         let stats = hive.stats().await;
         assert_eq!(stats.groups, 2, "two groups; a document is not one");
@@ -4733,31 +4771,31 @@ mod tests {
                 stats.pending_prekeys_expanded,
                 stats.pending_prekeys_expanded_by_active
             ),
-            (2, 1)
+            (3, 2)
         );
         assert_eq!(
             (
                 stats.pending_prekey_rotated,
                 stats.pending_prekey_rotated_by_active
             ),
-            (2, 1)
+            (3, 2)
         );
         assert_eq!(
             (
                 stats.pending_cgka_operation,
                 stats.pending_cgka_operation_by_active
             ),
-            (2, 1)
+            (3, 2)
         );
         assert_eq!(
             (stats.pending_delegated, stats.pending_delegated_by_active),
-            (2, 1)
+            (3, 2)
         );
         assert_eq!(
             (stats.pending_revoked, stats.pending_revoked_by_active),
-            (2, 1)
+            (3, 2)
         );
-        assert_eq!(stats.pending_total(), 10);
+        assert_eq!(stats.pending_total(), 15);
         Ok(())
     }
 

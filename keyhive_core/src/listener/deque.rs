@@ -8,7 +8,11 @@ use beekem::operation::CgkaOperation;
 use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
-use keyhive_crypto::{content::reference::ContentRef, signed::Signed, verified::Verified};
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    signed::Signed,
+    verified::{self, Verified},
+};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::{collections::VecDeque, sync::Arc};
 
@@ -66,14 +70,14 @@ impl<T: ContentRef> Default for Deque<T> {
 impl<F: FutureForm, T: ContentRef + Send + Sync> PrekeyListener<F> for Deque<T> {
     fn on_prekeys_expanded<'a>(
         &'a self,
-        new_prekey: &'a Arc<Signed<AddKeyOp>>,
+        new_prekey: &'a Arc<verified::Signed<AddKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey.dupe())).await })
     }
 
     fn on_prekey_rotated<'a>(
         &'a self,
-        rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+        rotate_key: &'a Arc<verified::Signed<RotateKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeyRotated(rotate_key.dupe())).await })
     }
@@ -111,10 +115,9 @@ mod tests {
         let op = AddKeyOp {
             share_key: ShareSecretKey::generate(&mut OsRng).share_key(),
         };
-        let signed = MemorySigner::generate(&mut OsRng)
-            .try_sign_sync(op)
+        let verified = Verified::sign_sync(&op, &MemorySigner::generate(&mut OsRng))
             .expect("signing succeeds");
-        Event::PrekeysExpanded(Arc::new(signed))
+        Event::PrekeysExpanded(verified.signed().dupe())
     }
 
     #[tokio::test]

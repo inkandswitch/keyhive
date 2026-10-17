@@ -7,8 +7,8 @@ use future_form::FutureForm;
 use futures::{prelude::*, stream::FuturesUnordered};
 use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
-    signed::{SigningError, VerificationError},
-    signer::{async_signer, async_signer::AsyncSigner},
+    signer::async_signer::AsyncSigner,
+    verified::{SignError, Verified},
 };
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -39,23 +39,11 @@ impl PrekeyState {
         Self { ops }
     }
 
-    /// Extend a [`PrekeyState`] with elements of an iterator of [`Signed<KeyOp>`](keyhive_crypto::signed::Signed)s.
-    ///
-    /// # Arguments
-    ///
-    /// * `iter` - An iterator of [`Signed<KeyOp>`](keyhive_crypto::signed::Signed)s.
-    ///
-    /// # Returns
-    ///
-    /// A new [`PrekeyState`] with the operations from `iter`.
-    pub fn extend(
-        &mut self,
-        iterable: impl IntoIterator<Item = KeyOp>,
-    ) -> Result<(), VerificationError> {
+    /// Extend a [`PrekeyState`] with verified [`KeyOp`]s.
+    pub fn extend(&mut self, iterable: impl IntoIterator<Item = KeyOp>) {
         for op in iterable {
-            self.insert_op(op)?;
+            self.insert_op(op);
         }
-        Ok(())
     }
 
     /// Initialize a [`PrekeyState`] with a set number of randomly-generated [`ShareSecretKey`]s.
@@ -72,20 +60,20 @@ impl PrekeyState {
     ///
     /// # Errors
     ///
-    /// Returns a [`SigningError`] if the operation could not be signed.
+    /// Returns a [`SignError`] if an operation could not be signed.
     pub async fn generate<F: FutureForm, S: AsyncSigner<F>, R: CryptoRng + RngCore>(
         signer: &S,
         size: NonZeroUsize,
         csprng: &mut R,
-    ) -> Result<Self, SigningError> {
+    ) -> Result<Self, SignError> {
         let mut futs = FuturesUnordered::new();
         for sk in (0..size.into()).map(|_| ShareSecretKey::generate(csprng)) {
             futs.push(async move {
-                async_signer::try_sign_async::<F, _, _>(
-                    signer,
-                    AddKeyOp {
+                Verified::sign::<F, S>(
+                    &AddKeyOp {
                         share_key: sk.share_key(),
                     },
+                    signer,
                 )
                 .await
             });
@@ -93,8 +81,7 @@ impl PrekeyState {
 
         let mut ops = CaMap::new();
         while let Some(res) = futs.next().await {
-            let op = Arc::new(res?);
-            ops.insert(Arc::new(KeyOp::from(op)));
+            ops.insert(Arc::new(KeyOp::Add(res?)));
         }
 
         Ok(Self { ops })
@@ -110,11 +97,9 @@ impl PrekeyState {
         self.ops.values().map(|op| *op.new_key()).collect()
     }
 
-    /// Insert a new [`Signed<KeyOp>`](keyhive_crypto::signed::Signed) into the [`PrekeyState`].
-    pub fn insert_op(&mut self, op: KeyOp) -> Result<(), VerificationError> {
-        op.try_verify()?;
+    /// Insert a verified [`KeyOp`] into the [`PrekeyState`].
+    pub fn insert_op(&mut self, op: KeyOp) {
         self.ops.insert(Arc::new(op));
-        Ok(())
     }
 
     /// Check if a [`ShareKey`] is in the [`PrekeyState`].
@@ -130,11 +115,11 @@ impl PrekeyState {
         for op in self.ops.values() {
             match op.as_ref() {
                 KeyOp::Add(add) => {
-                    keys.insert(add.payload.share_key);
+                    keys.insert(add.payload().share_key);
                 }
                 KeyOp::Rotate(rot) => {
-                    to_drop.push(rot.payload.old);
-                    keys.insert(rot.payload.new);
+                    to_drop.push(rot.payload().old);
+                    keys.insert(rot.payload().new);
                 }
             }
         }
@@ -204,61 +189,66 @@ mod tests {
         let share_key_4 = ShareKey::generate(&mut rando);
         let share_key_5 = ShareKey::generate(&mut rando);
 
-        let op1: KeyOp = Arc::new(
-            signer
-                .try_sign_sync(AddKeyOp {
+        let op1 = KeyOp::Add(
+            Verified::sign_sync(
+                &AddKeyOp {
                     share_key: share_key_1,
-                })
-                .unwrap(),
-        )
-        .into();
+                },
+                &signer,
+            )
+            .unwrap(),
+        );
 
         let mut state = PrekeyState::new(op1.dupe());
 
-        let op2 = Arc::new(
-            signer
-                .try_sign_sync(AddKeyOp {
+        let op2 = KeyOp::Add(
+            Verified::sign_sync(
+                &AddKeyOp {
                     share_key: share_key_2,
-                })
-                .unwrap(),
-        )
-        .into();
+                },
+                &signer,
+            )
+            .unwrap(),
+        );
 
-        let op3 = Arc::new(
-            signer
-                .try_sign_sync(RotateKeyOp {
+        let op3 = KeyOp::Rotate(
+            Verified::sign_sync(
+                &RotateKeyOp {
                     old: share_key_1,
                     new: share_key_3,
-                })
-                .unwrap(),
-        )
-        .into();
+                },
+                &signer,
+            )
+            .unwrap(),
+        );
 
-        let op4 = Arc::new(
-            signer
-                .try_sign_sync(RotateKeyOp {
+        let op4 = KeyOp::Rotate(
+            Verified::sign_sync(
+                &RotateKeyOp {
                     old: share_key_1,
                     new: share_key_4,
-                })
-                .unwrap(),
-        )
-        .into();
+                },
+                &signer,
+            )
+            .unwrap(),
+        );
 
-        let op5 = Arc::new(
-            signer
-                .try_sign_sync(RotateKeyOp {
+        let op5 = KeyOp::Rotate(
+            Verified::sign_sync(
+                &RotateKeyOp {
                     old: share_key_4,
                     new: share_key_5,
-                })
-                .unwrap(),
-        )
-        .into();
+                },
+                &signer,
+            )
+            .unwrap(),
+        );
 
-        state.insert_op(op1).unwrap();
-        state.insert_op(op2).unwrap();
-        state.insert_op(op3).unwrap();
-        state.insert_op(op4).unwrap();
-        state.insert_op(op5).unwrap();
+        state.insert_op(op1);
+        state.insert_op(op2);
+        state.insert_op(op3);
+        state.insert_op(op4);
+        state.insert_op(op5);
 
         let built = state.build();
         assert_eq!(built.len(), 3);

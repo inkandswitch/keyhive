@@ -6,17 +6,17 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => !!window.keyhive);
 });
 
-const getTestContactCard = () => `
-  {
-    "Rotate": {
-      "payload": {
-        "old": [162,145,165,196,36,224,73,112,145,188,239,44,86,166,20,30,132,108,154,237,83,69,195,21,41,18,247,146,217,79,21,65],
-        "new": [65,22,115,210,58,181,17,14,148,30,90,73,154,200,20,81,107,120,237,144,159,70,19,25,122,11,238,169,191,239,222,18]
-      },
-      "issuer": [89,148,210,47,52,105,242,130,40,253,172,205,17,39,98,47,171,251,25,33,19,205,115,101,160,144,209,139,13,6,168,3],
-      "signature": [26,42,5,188,200,86,129,50,162,87,200,64,152,180,93,59,70,150,87,12,222,93,165,249,110,150,52,123,169,222,138,253,72,64,83,74,88,60,147,178,135,64,14,77,40,61,89,164,119,235,73,71,34,184,248,172,125,3,144,248,177,72,65,13]
-    }
-  }`;
+// A rotation signed by the Ed25519 key with secret bytes [7; 32]; `encoded`
+// is `old ‖ new`, the two share keys.
+const testContactCard = {
+  Rotate: {
+    issuer: [234,74,108,99,226,156,82,10,190,245,80,123,19,46,197,249,149,71,118,174,190,190,123,146,66,30,234,105,20,70,210,44],
+    encoded: [65,72,98,244,93,220,223,84,102,12,226,149,30,120,221,84,15,181,6,15,254,54,104,135,40,99,37,27,176,207,119,88,84,127,25,212,176,19,41,32,72,136,105,120,233,7,111,204,55,87,25,251,66,71,167,254,158,220,219,86,10,38,186,104],
+    signature: [139,75,216,43,101,202,118,100,70,50,115,75,239,211,175,199,24,1,208,203,124,29,221,64,231,113,90,162,203,128,148,206,9,105,158,217,214,150,20,220,90,234,106,184,150,62,147,194,177,42,111,96,176,110,214,254,225,173,132,221,17,34,66,9],
+  },
+};
+
+const getTestContactCard = () => JSON.stringify(testContactCard);
 
 test.describe("Keyhive", async () => {
   test("constructor", async ({ page }) => {
@@ -165,6 +165,22 @@ test.describe("Keyhive", async () => {
 
     expect(out.archiveBytesIsUint8Array).toBe(true);
     expect(out.keyhive.id).toBe(out.roundTrip.id);
+  });
+
+  test("a contact card whose signature does not verify is refused", async ({ page }) => {
+    const forged = structuredClone(testContactCard);
+    forged.Rotate.signature[0] ^= 1;
+    const out = await page.evaluate(async (json) => {
+      const { ContactCard } = window.keyhive;
+      try {
+        ContactCard.fromJson(json);
+        return { error: null };
+      } catch (e) {
+        return { error: String(e) };
+      }
+    }, JSON.stringify(forged));
+
+    expect(out.error).toContain("signature does not verify");
   });
 
   test("receiveContactCard returns the id for the card", async ({ page }) => {

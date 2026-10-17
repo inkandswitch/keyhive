@@ -8,7 +8,11 @@ use beekem::operation::CgkaOperation;
 use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
-use keyhive_crypto::{content::reference::ContentRef, signed::Signed, verified::Verified};
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    signed::Signed,
+    verified::{self, Verified},
+};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
 
@@ -60,14 +64,14 @@ impl<T: ContentRef> Default for Log<T> {
 impl<F: FutureForm, T: ContentRef + Send + Sync> PrekeyListener<F> for Log<T> {
     fn on_prekeys_expanded<'a>(
         &'a self,
-        new_prekey: &'a Arc<Signed<AddKeyOp>>,
+        new_prekey: &'a Arc<verified::Signed<AddKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey.dupe())).await })
     }
 
     fn on_prekey_rotated<'a>(
         &'a self,
-        rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+        rotate_key: &'a Arc<verified::Signed<RotateKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeyRotated(rotate_key.dupe())).await })
     }

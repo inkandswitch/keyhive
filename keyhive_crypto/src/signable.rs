@@ -32,8 +32,21 @@ impl Kind {
     /// A digest of a Keyline certificate set: hashed, never signed or sent.
     pub const CERTIFICATE_SET: Kind = Kind(b'S');
 
+    /// A prekey an individual adds to the set it publishes.
+    pub const ADD_KEY: Kind = Kind(b'P');
+
+    /// A prekey an individual retires and replaces (`T` for "turn over":
+    /// `R` is taken).
+    pub const ROTATE_KEY: Kind = Kind(b'T');
+
     /// Every kind in the registry.
-    pub const ALL: [Kind; 3] = [Kind::DELEGATION, Kind::REVOCATION, Kind::CERTIFICATE_SET];
+    pub const ALL: [Kind; 5] = [
+        Kind::DELEGATION,
+        Kind::REVOCATION,
+        Kind::CERTIFICATE_SET,
+        Kind::ADD_KEY,
+        Kind::ROTATE_KEY,
+    ];
 
     /// The registered kind with byte `b`, if any.
     pub fn from_u8(b: u8) -> Option<Kind> {
