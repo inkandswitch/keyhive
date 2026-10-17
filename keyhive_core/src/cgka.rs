@@ -5,10 +5,7 @@
 
 pub mod store;
 
-use crate::{
-    principal::{document::id::DocumentId, individual::id::IndividualId},
-    transact::{fork::Fork, merge::Merge},
-};
+use crate::principal::{document::id::DocumentId, individual::id::IndividualId};
 use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
@@ -16,7 +13,6 @@ use beekem::{
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
     pcs_key::{ApplicationSecret, PcsKey},
-    transact::Merge as _,
 };
 use future_form::FutureForm;
 use keyhive_crypto::{
@@ -33,7 +29,6 @@ use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -53,12 +48,6 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Cgka(beekem::cgka::Cgka);
-
-impl Hash for Cgka {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-    }
-}
 
 impl Cgka {
     pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
@@ -222,20 +211,6 @@ impl Cgka {
         owner_sks.insert(pk, *sk);
         *self = self.with_new_owner(added_id.into(), owner_sks)?;
         self.merge_concurrent_operation(op)
-    }
-}
-
-impl Fork for Cgka {
-    type Forked = Self;
-
-    fn fork(&self) -> Self::Forked {
-        self.clone()
-    }
-}
-
-impl Merge for Cgka {
-    fn merge(&mut self, fork: Self::Forked) {
-        self.0.merge(fork.0);
     }
 }
 

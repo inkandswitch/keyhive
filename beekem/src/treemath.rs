@@ -371,12 +371,6 @@ pub(crate) fn parent(x: TreeNodeIndex) -> InnerNodeIndex {
     InnerNodeIndex::from_tree_index(index)
 }
 
-// /// Re-exported for testing.
-// #[cfg(any(feature = "test_utils", test))]
-// pub(crate) fn test_parent(index: TreeNodeIndex) -> InnerNodeIndex {
-//     parent(index)
-// }
-
 pub(crate) fn sibling(index: TreeNodeIndex) -> TreeNodeIndex {
     let p = parent(index);
     match index.u32().cmp(&p.to_tree_index()) {

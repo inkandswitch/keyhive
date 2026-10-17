@@ -24,7 +24,6 @@ use beekem::{
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
 };
-use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use id::DocumentId;
 use keyhive_codec::traits::{Encode, StreamDecode};
@@ -35,7 +34,6 @@ use keyhive_crypto::{
     signed::Signed,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
-    verifiable::Verifiable,
     verified::{self},
 };
 use keyline::{contract::Keyline, delegation::Delegation, power::Power};
@@ -44,7 +42,6 @@ use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    hash::{Hash, Hasher},
     sync::Arc,
 };
 use thiserror::Error;
@@ -378,21 +375,6 @@ impl<T: ContentRef> DocumentState<T> {
             content_heads: self.content_heads.clone(),
             content_state: self.content_state.clone(),
         }
-    }
-}
-
-impl<T: ContentRef> Verifiable for DocumentState<T> {
-    fn verifying_key(&self) -> VerifyingKey {
-        self.id.verifying_key()
-    }
-}
-
-impl<T: ContentRef> Hash for DocumentState<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-        crate::util::hasher::hash_set(&self.content_heads, state);
-        crate::util::hasher::hash_set(&self.content_state, state);
-        self.cgka.hash(state);
     }
 }
 
