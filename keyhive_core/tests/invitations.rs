@@ -52,7 +52,11 @@ async fn an_invitation_is_useless_to_a_non_member() -> Result<()> {
         .await;
 
     assert!(
-        !carol.can_decrypt_content(design_doc, &ct).await?,
+        !carol.has_document(design_doc).await,
+        "carol is not a member, so she holds no tree for the document"
+    );
+    assert!(
+        !matches!(carol.can_decrypt_content(design_doc, &ct).await, Ok(true)),
         "carol has no secret for the prekey the invitation is encrypted to"
     );
     ctx.sync(&alice, &bob).await?;

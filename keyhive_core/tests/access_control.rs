@@ -134,8 +134,10 @@ async fn relay_never_permits_decryption() -> Result<()> {
         let ct = ctx.encrypt(&alice, design_doc, b"top secret").await?;
         ctx.sync_all_unsent().await?;
 
+        // Without `Read`, bob is not a member and holds no tree for the
+        // document, so he cannot decrypt either way.
         assert_eq!(
-            bob.can_decrypt_content(design_doc, &ct).await?,
+            matches!(bob.can_decrypt_content(design_doc, &ct).await, Ok(true)),
             may_read,
             "decryption at {doc_to_group:?}/{group_to_bob:?}"
         );

@@ -251,8 +251,10 @@ async fn a_replica_takes_in_a_delegation_to_a_member_known_by_contact_card() -> 
     Ok(())
 }
 
+/// Membership reaches bob through a relay that knows everyone only by contact
+/// card; the key agreement, which a relay does not hold, comes from alice.
 #[tokio::test]
-async fn a_member_decrypts_what_it_receives_from_a_relay_known_by_contact_card() -> TestResult {
+async fn a_member_decrypts_with_membership_from_a_relay_known_by_contact_card() -> TestResult {
     let alice = make_simple_keyhive().await?;
     let relay = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
@@ -271,12 +273,21 @@ async fn a_member_decrypts_what_it_receives_from_a_relay_known_by_contact_card()
         0,
         "the relay received everything"
     );
-    // Bob never hears from alice directly.
     assert_eq!(
         sync_to(&relay, &bob).await,
         0,
-        "bob received everything from the relay"
+        "bob received everything the relay holds"
     );
+    assert_eq!(
+        bob.access_for_doc(bob_id, doc_id).await?,
+        Some(Power::Edit),
+        "and knows he is a member"
+    );
+    assert!(
+        !bob.has_document(doc_id).await,
+        "a relay holds no key agreement to pass on"
+    );
+    sync_to(&alice, &bob).await;
     assert_eq!(
         bob.try_decrypt_content(doc_id, encrypted.encrypted_content())
             .await?,

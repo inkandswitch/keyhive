@@ -22,7 +22,7 @@ pub(crate) async fn direct_members(
     let subject_id = Id::from(subject);
     let mut best: BTreeMap<Id, Capability> = BTreeMap::new();
     for signed in keyhive.delegations_about(subject).await? {
-        let (issuer, d): (_, Delegation) = decode_stored(&signed);
+        let (issuer, d): (_, Delegation) = decode_stored(&signed)?;
         let can = if issuer == subject_id {
             d.power
         } else {

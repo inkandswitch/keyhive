@@ -95,8 +95,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     let ct = ctx.encrypt(&bob, design_doc, b"invitation content").await?;
     ctx.sync_all_unsent().await?;
 
-    // Both instances know the document and both are members.
-    assert!(alice_replica.has_document(design_doc).await);
+    // Both instances are members.
     assert_eq!(
         bob.access_for_doc(alice_replica.id(), design_doc).await?,
         Some(Read)
@@ -114,6 +113,11 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     } else {
         (&alice_replica, &alice)
     };
+    assert!(invited.has_document(design_doc).await);
+    assert!(
+        !sibling.has_document(design_doc).await,
+        "the sibling cannot open the invitation yet, so it holds no tree"
+    );
 
     let stuck = sibling.stats().await.pending_total();
     assert!(
@@ -139,6 +143,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
         "importing the secrets drained exactly those"
     );
     assert_eq!(sibling.stats().await.pending_total(), 0);
+    assert!(sibling.has_document(design_doc).await);
     assert!(
         sibling.can_decrypt_content(design_doc, &ct).await?,
         "and now the sibling can read it"

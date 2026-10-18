@@ -615,25 +615,31 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
 /// A document that is a member of another document is known as a document
 /// once its key agreement is authorized, whatever order its events arrive in.
 ///
-/// Doc A's genesis key agreement cites its root edge. Delivered without the
-/// root edge, it waits, and Doc A is not yet a document; once the root edge
-/// arrives, it applies.
+/// Doc A's genesis key agreement cites its root edge. Delivered to an invited
+/// member without the root edge, it waits, and the member does not hold Doc A
+/// yet; once the root edge arrives, it applies.
 #[tokio::test]
 async fn test_document_waits_for_its_defining_delegation() -> TestResult {
     test_utils::init_logging();
 
     let alice = make_simple_keyhive().await?;
+    let carol = make_simple_keyhive().await?;
+    alice
+        .receive_contact_card(&carol.get_existing_contact_card().await)
+        .await?;
 
-    // Alice owns Doc A and Doc B, and adds Doc A as a Read member of Doc B.
+    // Alice owns Doc A and Doc B, adds Doc A as a Read member of Doc B, and
+    // invites Carol to Doc A.
     let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
     alice.add_member(doc_a_id, doc_b_id, Power::Read).await?;
+    alice.add_member(carol.id(), doc_a_id, Power::Read).await?;
 
-    // Collect all of Alice's events, then split out Doc A's defining (root)
+    // Collect what Carol is sent, then split out Doc A's defining (root)
     // delegation, i.e. the one issued by Doc A itself, so it is delivered last.
     let alice_id = { alice.active().id() };
-    let all_events = alice.static_events_for_agent(alice_id).await?;
+    let all_events = alice.static_events_for_agent(carol.id()).await?;
 
     let doc_a_ident: Id = doc_a_id.into();
     let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];
@@ -652,8 +658,7 @@ async fn test_document_waits_for_its_defining_delegation() -> TestResult {
         "expected exactly one root delegation defining Doc A"
     );
 
-    // Fresh peer receives everything except Doc A's defining delegation first.
-    let carol = make_simple_keyhive().await?;
+    // Carol receives everything except Doc A's defining delegation first.
     let pending = carol.ingest_unsorted_static_events(rest).await;
 
     // Doc A's genesis key agreement cites its root edge, so without it the
@@ -668,7 +673,6 @@ async fn test_document_waits_for_its_defining_delegation() -> TestResult {
     );
 
     // Deliver Doc A's defining delegation; the waiting events go through.
-    // Carol is not invited, so she knows Doc A as a relay does: no tree.
     carol.ingest_unsorted_static_events(defining).await;
     assert!(
         carol.has_document(doc_a_id).await,
@@ -701,13 +705,19 @@ async fn test_group_member_is_known_before_its_defining_delegation() -> TestResu
     alice.add_member(group_id, doc_b_id, Power::Read).await?;
 
     // Split out Group G's defining (root) delegation, issued by G itself.
+    // Key agreement operations are left out: Carol is not a member of Doc B,
+    // and certificates are what this is about.
     let alice_id = { alice.active().id() };
     let all_events = alice.static_events_for_agent(alice_id).await?;
+    let all_events: Vec<_> = all_events
+        .into_values()
+        .filter(|event| !matches!(event, StaticEvent::CgkaOperation(_)))
+        .collect();
 
     let group_ident: Id = group_id.into();
     let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];
     let mut rest: Vec<StaticEvent<[u8; 32]>> = vec![];
-    for event in all_events.into_values() {
+    for event in all_events {
         match &event {
             StaticEvent::Delegated(signed) if issued_by(signed, group_ident) => {
                 defining.push(event);

@@ -807,15 +807,15 @@ impl TestContext {
         observer: &Instance,
         subject: impl Into<MemberedId>,
     ) -> TestResult<Vec<DelegationSummary>> {
-        Ok(observer
+        observer
             .delegations_about(Id::from(subject.into()))
             .await?
             .iter()
             .map(|signed| {
-                let (issuer, d) = decode_stored(signed);
-                DelegationSummary::new(issuer, &d)
+                let (issuer, d) = decode_stored::<_, Infallible>(signed)?;
+                Ok(DelegationSummary::new(issuer, &d))
             })
-            .collect())
+            .collect()
     }
 
     /// How many events of one kind `who` holds that it cannot yet apply.

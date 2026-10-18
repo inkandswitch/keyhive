@@ -3,8 +3,6 @@
 //! beekem IDs ([`beekem::id::MemberId`] /
 //! [`beekem::id::TreeId`]) at the API boundary.
 
-pub mod store;
-
 use crate::principal::{document::id::DocumentId, individual::id::IndividualId};
 use beekem::{
     encrypted::EncryptedContent,

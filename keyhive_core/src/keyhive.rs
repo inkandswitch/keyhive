@@ -7,7 +7,7 @@ use crate::{
         decode_stored, explanation, root_edges, route_through, CertificateError,
         KeylineStorageError,
     },
-    cgka::{store::CgkaOpStore, AllCgkaOps, Cgka},
+    cgka::{AllCgkaOps, Cgka},
     contact_card::ContactCard,
     content::heads::ContentHeads,
     error::not_found::NotFound,
@@ -126,9 +126,11 @@ pub struct KeyhiveState<
     #[allow(clippy::type_complexity)]
     documents: Mutex<HashMap<DocumentId, Arc<Mutex<DocumentState<T>>>>>,
 
-    /// Every authorized CGKA operation this replica holds, applied to a tree
-    /// or not. Sync serves from here, so a relay need not build trees.
-    cgka_ops: Mutex<CgkaOpStore>,
+    /// Trees for documents this replica can read but whose invitation (an add
+    /// of this replica) has not merged yet. Operations merge here as they
+    /// arrive, in causal order; the tree moves to `documents` once the
+    /// invitation merges.
+    awaiting_invitation: Mutex<HashMap<DocumentId, Cgka>>,
 
     /// [`StaticEvent`]s that are still awaiting dependencies.
     pending_events: Mutex<Vec<Arc<StaticEvent<T>>>>,
@@ -243,7 +245,7 @@ where
             )])),
             active: inner_active,
             documents: Mutex::new(HashMap::new()),
-            cgka_ops: Mutex::new(CgkaOpStore::new()),
+            awaiting_invitation: Mutex::new(HashMap::new()),
             pending_events: Mutex::new(Vec::new()),
             ciphertext_store,
             event_listener,
@@ -376,25 +378,12 @@ where
         Ok(fresh)
     }
 
-    /// Store CGKA operations this replica wrote, and tell the listener about
-    /// each one it did not already hold.
+    /// Tell the listener about CGKA operations this replica wrote. They are
+    /// already in its tree.
     async fn record_cgka_ops<I: IntoIterator<Item = Arc<Signed<CgkaOperation>>>>(&self, ops: I) {
-        let mut fresh = Vec::new();
-        self.store_cgka_ops(ops, &mut fresh).await;
-        for op in &fresh {
-            self.event_listener.on_cgka_op(op).await;
+        for op in ops {
+            self.event_listener.on_cgka_op(&op).await;
         }
-    }
-
-    /// Store CGKA operations this replica wrote, appending to `fresh` those it
-    /// did not already hold, for the listener.
-    async fn store_cgka_ops<I: IntoIterator<Item = Arc<Signed<CgkaOperation>>>>(
-        &self,
-        ops: I,
-        fresh: &mut Vec<Arc<Signed<CgkaOperation>>>,
-    ) {
-        let mut store = self.cgka_ops.lock().await;
-        fresh.extend(ops.into_iter().filter(|op| store.insert(op.dupe())));
     }
 
     /// Tell the listener about a certificate this replica holds for the first
@@ -416,10 +405,10 @@ where
     /// effect, and concurrent writes on this keyhive reach its trees in the
     /// order they reached the store. That does not hold between a fork and its
     /// trunk, which share the store but not the trees (see [`ForkAsync`] for
-    /// `Keyhive`). Each operation is stored as soon as it is made, so a failure
-    /// partway leaves no tree holding an operation the store lacks. The
-    /// listener hears of the new certificates and operations once the lock is
-    /// released, whether or not reconciliation finished.
+    /// `Keyhive`). Each operation is collected as soon as it is made, so the
+    /// listener hears of every operation a tree took, together with the new
+    /// certificates, once the lock is released, whether or not reconciliation
+    /// finished.
     async fn insert_and_reconcile<E: From<KeylineStorageError<K::Error>> + From<CgkaError>>(
         &self,
         batch: &[VerifiedCertificate<ContentHeads<T>>],
@@ -516,8 +505,7 @@ where
                     .await
                     .add_cgka_members_from_prekeys(&prekeys, authorization, &signer)
                     .await?;
-                self.store_cgka_ops(made.into_iter().map(Arc::new), ops)
-                    .await;
+                ops.extend(made.into_iter().map(Arc::new));
             }
             for lost in before.difference(&after) {
                 let Some(authorization) = self.revocation_for(doc, batch, *lost).await? else {
@@ -529,8 +517,7 @@ where
                     .await
                     .remove_cgka_member(*lost, authorization, &signer)
                     .await?;
-                self.store_cgka_ops(made.into_iter().map(Arc::new), ops)
-                    .await;
+                ops.extend(made.into_iter().map(Arc::new));
             }
         }
         Ok(())
@@ -665,7 +652,7 @@ where
             let Certificate::Delegation(signed) = cert else {
                 continue;
             };
-            let (admitted_issuer, admitted): (Id, Delegation) = decode_stored(&signed);
+            let (admitted_issuer, admitted): (Id, Delegation) = decode_stored(&signed)?;
             if admitted_issuer != removed
                 || admitted.subject != subject
                 || admitted.audience == removed
@@ -842,8 +829,7 @@ where
             .lock()
             .await
             .insert(doc_id, Arc::new(Mutex::new(doc)));
-        self.store_cgka_ops(made.into_iter().map(Arc::new), ops)
-            .await;
+        ops.extend(made.into_iter().map(Arc::new));
         Ok(())
     }
 
@@ -1108,8 +1094,8 @@ where
     /// content itself, so the application sets the heads it has seen. An empty
     /// set means none are known, and revocations leave the document out.
     ///
-    /// Errors if this replica holds no tree for `doc`: it is unknown, or only
-    /// relayed here.
+    /// Errors if this replica holds no tree for `doc`: it is not a member, or
+    /// its invitation has not merged yet.
     pub async fn set_content_heads<I: IntoIterator<Item = T>>(
         &self,
         doc: DocumentId,
@@ -1211,7 +1197,7 @@ where
     }
 
     /// Keep what a write's rotation produced: its leaf key among the secrets this
-    /// identity's other instances can import, and its update in the operation store.
+    /// identity's other instances can import. Its update is already in the tree.
     /// Returns the update, for the caller to send.
     async fn record_rotation(
         &self,
@@ -1223,8 +1209,8 @@ where
         Some(op)
     }
 
-    /// The identities in `doc`'s encryption tree. `None` if this replica holds
-    /// no tree for it (a relay).
+    /// The identities in `doc`'s encryption tree. `None` if this replica can
+    /// read it but its invitation has not merged yet.
     ///
     /// Returns an error if `doc` is not known.
     #[cfg(any(test, feature = "test_utils"))]
@@ -1306,7 +1292,7 @@ where
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
         let Some(doc) = self.member_document(doc).await? else {
-            return Err(DecryptError::KeyNotFound); // a relay holds no keys
+            return Err(DecryptError::KeyNotFound); // invited, no keys yet
         };
         let out = doc.lock().await.try_decrypt_content_keyed(encrypted);
         out
@@ -1323,7 +1309,7 @@ where
         P: Serialize + Clone,
     {
         let Some(doc) = self.member_document(doc).await? else {
-            // A relay holds no keys.
+            // Invited, no keys yet.
             return Err(DocCausalDecryptionError::from(DecryptError::KeyNotFound).into());
         };
         let out = {
@@ -1445,7 +1431,7 @@ where
             let Certificate::Delegation(signed) = cert else {
                 continue;
             };
-            let (_, d): (Id, Delegation) = decode_stored(&signed);
+            let (_, d): (Id, Delegation) = decode_stored(&signed)?;
             if d.subject != subject {
                 continue;
             }
@@ -1484,7 +1470,7 @@ where
             let Certificate::Delegation(signed) = cert else {
                 continue;
             };
-            let (_, d): (Id, Delegation) = decode_stored(&signed);
+            let (_, d): (Id, Delegation) = decode_stored(&signed)?;
             if d.subject != subject || members.contains_key(&d.audience) {
                 continue;
             }
@@ -1543,7 +1529,7 @@ where
                 continue;
             };
             let id = subject;
-            let kind = if self.cgka_ops.lock().await.holds(DocumentId(id)) {
+            let kind = if self.has_document(DocumentId(id)).await {
                 MemberedId::DocumentId(DocumentId(id))
             } else {
                 MemberedId::GroupId(GroupId(id))
@@ -1635,7 +1621,10 @@ where
         for subject in self.subjects().await? {
             let closure = self.closure(subject).await?;
             let live: BTreeSet<Id> = self.members_of(subject).await?.into_keys().collect();
-            let named: BTreeSet<Id> = closure.iter().flat_map(named_by).collect();
+            let mut named: BTreeSet<Id> = BTreeSet::new();
+            for cert in &closure {
+                named.extend(named_by(cert)?);
+            }
             let mut cut = Vec::new();
             for audience in named {
                 let id = audience;
@@ -1645,9 +1634,7 @@ where
                 {
                     continue;
                 }
-                let explained = explanation(self.keyline(), subject, audience)
-                    .await
-                    .map_err(KeylineStorageError::new)?;
+                let explained = explanation(self.keyline(), subject, audience).await?;
                 cut.push((id, explained));
             }
             views.push(SubjectView {
@@ -1691,10 +1678,7 @@ where
         }
         let audience = who;
         for subject in cut {
-            for cert in explanation(self.keyline(), subject, audience)
-                .await
-                .map_err(KeylineStorageError::new)?
-            {
+            for cert in explanation(self.keyline(), subject, audience).await? {
                 certs.insert(cert.id(), cert);
             }
         }
@@ -1716,36 +1700,40 @@ where
             .collect())
     }
 
-    /// The CGKA operations of every document `who` has standing over, from the
-    /// operation store: applied or not, so a relay serves what it holds.
+    /// The CGKA operations of every document this replica holds that `who` can
+    /// read, from the document's tree. A relay is sent none: it neither holds
+    /// nor serves them.
     #[instrument(skip_all)]
     pub async fn cgka_ops_reachable_by_agent(
         &self,
         who: impl Into<Id>,
     ) -> Result<Vec<Arc<Signed<CgkaOperation>>>, KeylineStorageError<K::Error>> {
         let standing = self.standing_of(who.into()).await?;
-        let store = self.cgka_ops.lock().await;
-        Ok(standing
-            .keys()
-            .filter_map(|id| match id {
-                MemberedId::DocumentId(doc_id) => Some(*doc_id),
-                MemberedId::GroupId(_) => None,
-            })
-            .flat_map(|doc_id| store.ops_for(doc_id).cloned().collect::<Vec<_>>())
-            .collect())
+        let mut ops = Vec::new();
+        for (id, can) in standing {
+            let MemberedId::DocumentId(doc_id) = id else {
+                continue;
+            };
+            if !can.is_reader() {
+                continue;
+            }
+            if let Some(doc) = self.document_state(doc_id).await {
+                ops.extend(tree_ops(doc.lock().await.cgka()));
+            }
+        }
+        Ok(ops)
     }
 
-    /// Every CGKA operation held for `doc`, applied or not. `None` if this
-    /// replica holds none.
+    /// Every CGKA operation in this replica's tree for `doc`. `None` if it
+    /// holds no tree for it.
     #[instrument(skip_all)]
     pub async fn cgka_ops_for_doc(
         &self,
         doc: &DocumentId,
     ) -> Option<Vec<Arc<Signed<CgkaOperation>>>> {
-        let store = self.cgka_ops.lock().await;
-        store
-            .holds(*doc)
-            .then(|| store.ops_for(*doc).cloned().collect())
+        let state = self.document_state(*doc).await?;
+        let ops = tree_ops(state.lock().await.cgka());
+        Some(ops)
     }
 
     /// Every prekey op `who` needs, grouped by the identifier they belong to:
@@ -1833,8 +1821,8 @@ where
         }
     }
 
-    /// Compute CGKA ops for all principals in a single pass: each stored document's
-    /// operations, sent to everyone with standing over it in Keyline.
+    /// Compute CGKA ops for all principals in a single pass: each held document's
+    /// operations, sent to everyone who can read it in Keyline.
     #[instrument(skip_all)]
     pub async fn cgka_ops_for_all_agents(
         &self,
@@ -1842,20 +1830,25 @@ where
         let mut ops: HashMap<Id, Vec<Arc<Signed<CgkaOperation>>>> = HashMap::new();
         let mut index: HashMap<Id, HashSet<Id>> = HashMap::new();
 
-        let doc_ids: Vec<DocumentId> = { self.cgka_ops.lock().await.documents().collect() };
-        for doc_id in doc_ids {
-            let doc_ops: Vec<_> = {
-                let store = self.cgka_ops.lock().await;
-                store.ops_for(doc_id).cloned().collect()
-            };
+        let docs: Vec<(DocumentId, Arc<Mutex<DocumentState<T>>>)> = {
+            let documents = self.documents.lock().await;
+            documents
+                .iter()
+                .map(|(id, doc)| (*id, doc.dupe()))
+                .collect()
+        };
+        for (doc_id, doc) in docs {
+            let doc_ops = tree_ops(doc.lock().await.cgka());
             if doc_ops.is_empty() {
                 continue;
             }
             let members = self.members_of(doc_id.into()).await?;
 
             let source_id: Id = doc_id.into();
-            for agent_id in members.keys() {
-                index.entry(*agent_id).or_default().insert(source_id);
+            for (agent_id, can) in &members {
+                if can.is_reader() {
+                    index.entry(*agent_id).or_default().insert(source_id);
+                }
             }
             ops.insert(source_id, doc_ops);
         }
@@ -2001,8 +1994,8 @@ where
             .then(|| Group::new(self.clone(), id)))
     }
 
-    /// A document this replica holds an authorized key agreement operation for,
-    /// as a member or a relay.
+    /// A document this replica holds: it is a member whose creation or
+    /// invitation has merged.
     #[instrument(skip_all)]
     pub async fn get_document(&self, id: DocumentId) -> Option<Document<Self>> {
         self.has_document(id)
@@ -2026,11 +2019,12 @@ where
         self.documents.lock().await.get(&id).duped()
     }
 
-    /// Whether a document with this id is known: this replica holds an
-    /// authorized key agreement operation for it, as a member or a relay.
+    /// Whether this replica holds the document: it is a member, and its
+    /// creation or invitation has merged into its tree. To a replica that does
+    /// not, such as a relay, a document is a Keyline subject like a group.
     #[instrument(skip_all)]
     pub async fn has_document(&self, id: DocumentId) -> bool {
-        self.cgka_ops.lock().await.holds(id)
+        self.documents.lock().await.contains_key(&id)
     }
 
     /// Whether a group with this id is known: a Keyline subject that is
@@ -2219,9 +2213,10 @@ where
                 if new_path.leaf_id.id() != signed_op.issuer {
                     return Ok(Err(Denied));
                 }
-                // Its leaf is checked against the tree on merge. A relay has no
-                // tree, so the signer must also read the document in Keyline's
-                // positive graph.
+                // Its leaf is checked against the tree on merge. A replica that
+                // is still awaiting its invitation has no complete tree, so the
+                // signer must also read the document in Keyline's positive
+                // graph.
                 Ok(ensure(self.reads_ever(doc, signer).await?, Pending))
             }
         }
@@ -2259,9 +2254,7 @@ where
         delegation: &Delegation,
         who: Id,
     ) -> Result<bool, KeylineStorageError<K::Error>> {
-        route_through(self.keyline(), doc, issuer, delegation, who)
-            .await
-            .map_err(KeylineStorageError::new)
+        route_through(self.keyline(), doc, issuer, delegation, who).await
     }
 
     /// The Keyline delegation with this digest and its issuer, if this replica
@@ -2277,7 +2270,7 @@ where
             .map_err(KeylineStorageError::new)?
             .value;
         Ok(match cert {
-            Some(Certificate::Delegation(signed)) => Some(decode_stored(&signed)),
+            Some(Certificate::Delegation(signed)) => Some(decode_stored(&signed)?),
             _ => None,
         })
     }
@@ -2295,7 +2288,7 @@ where
             .map_err(KeylineStorageError::new)?
             .value;
         Ok(match cert {
-            Some(Certificate::Revocation(signed)) => Some(decode_stored(&signed)),
+            Some(Certificate::Revocation(signed)) => Some(decode_stored(&signed)?),
             _ => None,
         })
     }
@@ -2322,88 +2315,70 @@ where
             }
         }
 
-        // Stored whether or not it can be applied yet, so it can be
-        // served on. The first authorized add for a document makes it known:
-        // an add is the operation that carries Keyline evidence. Any
-        // other operation waits for the document.
+        // A member merges it into its tree. An operation that arrives before
+        // its predecessors fails `OutOfOrderOperation` and waits in the pending
+        // queue, as does one for a document this replica does not hold.
         let op = Arc::new(signed_op);
-        let received = Digest::hash(op.as_ref());
-        let fresh = {
-            let mut store = self.cgka_ops.lock().await;
-            if !store.holds(doc_id) && !matches!(op.payload, CgkaOperation::Add { .. }) {
-                return Err(ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)));
-            }
-            store.insert(op.dupe())
-        };
-        if fresh {
-            self.event_listener.on_cgka_op(&op).await;
-        }
-        self.feed_tree(doc_id, Some(received)).await
-    }
-
-    /// Bring this replica's tree for `doc_id` up to the operation store.
-    ///
-    /// A member's tree takes every stored operation it can, in causal order.
-    /// A replica with no tree builds one, as a value, once an invitation to it
-    /// (an add of itself) is stored, and holds the document only
-    /// once that invitation has merged: a relay never builds one.
-    ///
-    /// Only `received`'s failure is reported, other than for arriving early;
-    /// the others were reported when they arrived. `None` reports nothing.
-    async fn feed_tree(
-        &self,
-        doc_id: DocumentId,
-        received: Option<Digest<Signed<CgkaOperation>>>,
-    ) -> Result<(), ReceiveCgkaOpError<K::Error>> {
         let me = self.active.id();
-        let ops: Vec<_> = {
-            self.cgka_ops
-                .lock()
-                .await
-                .ops_for(doc_id)
-                .cloned()
-                .collect()
-        };
-        let held = { self.documents.lock().await.get(&doc_id).duped() };
-        if let Some(doc) = held {
-            let secrets = self.active.key_pairs.lock().await.clone();
-            return feed_held(&doc, ops, me, &secrets, received).await;
-        }
-
-        let invitations: Vec<_> = ops
-            .iter()
-            .filter(|op| invites(op, me))
-            .map(|op| Digest::hash(op.as_ref()))
-            .collect();
-        if invitations.is_empty() {
+        let secrets = self.active.key_pairs.lock().await.clone();
+        if let Some(doc) = self.document_state(doc_id).await {
+            let merged = {
+                let mut locked = doc.lock().await;
+                merge_one(locked.cgka_mut(), op.dupe(), me, &secrets)?
+            };
+            if merged {
+                self.event_listener.on_cgka_op(&op).await;
+            }
             return Ok(());
         }
-        let secrets = self.active.key_pairs.lock().await.clone();
-        let mut tree = Cgka::new(doc_id, me, ShareKeyMap::new());
-        let failure = apply_in_causal_order(&mut tree, ops.clone(), me, &secrets, received);
-        if !tree.contains_predecessors(&invitations.into_iter().collect()) {
-            return failure.map_or(Ok(()), Err);
-        }
-        let winner = {
-            match self.documents.lock().await.entry(doc_id) {
-                Entry::Vacant(entry) => {
-                    entry.insert(Arc::new(Mutex::new(DocumentState::with_tree(
+
+        // Not a member yet. If this replica can read the document in Keyline,
+        // an invitation is due: its operations merge into a tree awaiting it
+        // as they come, in causal order, and the tree becomes this replica's
+        // document once the invitation has merged. Starting it on the first
+        // operation, not only on the invitation, lets every arriving operation
+        // make progress. A replica that cannot read it, such as a relay, keeps
+        // the operation pending.
+        let can_join = invites(&op, me) || self.reads_ever(doc_id.into(), me.into()).await?;
+        let (merged, joined) = {
+            let mut awaiting = self.awaiting_invitation.lock().await;
+            let tree = match awaiting.entry(doc_id) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) if can_join => {
+                    entry.insert(Cgka::new(doc_id, me, ShareKeyMap::new()))
+                }
+                Entry::Vacant(_) => {
+                    return Err(ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)))
+                }
+            };
+            let merged = merge_one(tree, op.dupe(), me, &secrets)?;
+            // The invitation is in the tree's operation graph now. (The tree
+            // itself may replay it lazily, so its leaves are not the test.)
+            let joined = if invites(&op, me) {
+                awaiting.remove(&doc_id)
+            } else {
+                None
+            };
+            (merged, joined)
+        };
+        if let Some(tree) = joined {
+            self.documents
+                .lock()
+                .await
+                .entry(doc_id)
+                .or_insert_with(|| {
+                    Arc::new(Mutex::new(DocumentState::with_tree(
                         doc_id,
                         tree,
                         HashSet::new(),
                         HashSet::new(),
-                    ))));
-                    None
-                }
-                Entry::Occupied(entry) => Some(entry.get().dupe()),
-            }
-        };
-        match winner {
-            // Another call published a tree first; it may lack operations this
-            // one applied, so feed it the same ones.
-            Some(doc) => feed_held(&doc, ops, me, &secrets, received).await,
-            None => failure.map_or(Ok(()), Err),
+                    )))
+                });
         }
+        if merged {
+            self.event_listener.on_cgka_op(&op).await;
+        }
+        Ok(())
     }
 
     /// Adopt into every held tree the secrets this identity holds for its own
@@ -2468,21 +2443,19 @@ where
             individuals.insert(*id, indie.lock().await.clone());
         }
 
+        // The operations of every tree: each held document's, and each one
+        // still awaiting its invitation, whose operations are no longer
+        // pending.
         let mut docs = HashMap::new();
+        let mut cgka_ops: Vec<Signed<CgkaOperation>> = Vec::new();
         for (id, doc) in self.documents.lock().await.iter() {
-            docs.insert(*id, doc.lock().await.into_archive());
+            let locked = doc.lock().await;
+            docs.insert(*id, locked.into_archive());
+            cgka_ops.extend(tree_ops(locked.cgka()).iter().map(|op| op.as_ref().clone()));
         }
-
-        // Every operation held, a relay's included: not only those of
-        // documents with a tree here.
-        let cgka_ops = {
-            let store = self.cgka_ops.lock().await;
-            store
-                .documents()
-                .flat_map(|doc_id| store.ops_for(doc_id))
-                .map(|op| op.as_ref().clone())
-                .collect()
-        };
+        for tree in self.awaiting_invitation.lock().await.values() {
+            cgka_ops.extend(tree_ops(tree).iter().map(|op| op.as_ref().clone()));
+        }
 
         let pending_events = self
             .pending_events
@@ -2505,7 +2478,7 @@ where
 
     /// Rebuild a replica from its archive. The certificates are inserted into
     /// `keyline` (a no-op for those it already holds), and each document's
-    /// tree is rebuilt from the stored operations. As with [`Self::generate`],
+    /// tree is rebuilt from its archived operations. As with [`Self::generate`],
     /// `keyline` becomes this keyhive's own.
     #[instrument(skip_all)]
     pub async fn try_from_archive(
@@ -2558,9 +2531,42 @@ where
         }
         individuals.insert(archive.active.individual.id(), raw_active.individual.dupe());
 
-        let mut cgka_ops = CgkaOpStore::new();
+        // Each tree is rebuilt from its operations: a held document if its
+        // invitation (or creation) has merged, and still awaiting it otherwise.
+        let me = raw_active.id();
+        let secrets = raw_active.key_pairs.lock().await.clone();
+        let mut by_doc: HashMap<DocumentId, Vec<Arc<Signed<CgkaOperation>>>> = HashMap::new();
         for op in archive.cgka_ops.iter() {
-            cgka_ops.insert(Arc::new(op.clone()));
+            let doc_id = DocumentId::from(*op.payload.doc_id());
+            by_doc.entry(doc_id).or_default().push(Arc::new(op.clone()));
+        }
+        let mut documents = HashMap::new();
+        let mut awaiting_invitation = HashMap::new();
+        for (doc_id, ops) in by_doc {
+            let invitations: HashSet<_> = ops
+                .iter()
+                .filter(|op| invites(op, me))
+                .map(|op| Digest::hash(op.as_ref()))
+                .collect();
+            let tree = tree_from_ops(doc_id, ops, me, &secrets);
+            if invitations.is_empty() || !tree.contains_predecessors(&invitations) {
+                awaiting_invitation.insert(doc_id, tree);
+                continue;
+            }
+            let (heads, state) = archive
+                .docs
+                .get(&doc_id)
+                .map(|d| (d.content_heads.clone(), d.content_state.clone()))
+                .unwrap_or_default();
+            documents.insert(
+                doc_id,
+                Arc::new(Mutex::new(DocumentState::with_tree(
+                    doc_id, tree, heads, state,
+                ))),
+            );
+        }
+        for doc_id in archive.docs.keys().filter(|id| !documents.contains_key(id)) {
+            tracing::warn!(%doc_id, "the archived tree does not rebuild from its operations");
         }
 
         let verified: Vec<_> = archive
@@ -2584,8 +2590,8 @@ where
         let hive = Keyhive(Arc::new(KeyhiveState {
             active: raw_active,
             individuals: Mutex::new(individuals),
-            documents: Mutex::new(HashMap::new()),
-            cgka_ops: Mutex::new(cgka_ops),
+            documents: Mutex::new(documents),
+            awaiting_invitation: Mutex::new(awaiting_invitation),
             pending_events: Mutex::new(
                 archive
                     .pending_events
@@ -2601,32 +2607,6 @@ where
             _plaintext_phantom: PhantomData,
         }));
 
-        for (doc_id, doc_archive) in archive.docs.iter() {
-            if let Err(error) = hive.feed_tree(*doc_id, None).await {
-                tracing::warn!(%doc_id, %error, "a stored operation does not apply");
-            }
-            let Some(doc) = hive.document_state(*doc_id).await else {
-                tracing::warn!(%doc_id, "the archived tree does not rebuild from its operations");
-                continue;
-            };
-            let mut locked = doc.lock().await;
-            locked.content_heads.clone_from(&doc_archive.content_heads);
-            locked.content_state.clone_from(&doc_archive.content_state);
-        }
-        // A document whose operations are held but whose tree was not built
-        // yet: its invitation may have merged since.
-        let unbuilt: Vec<DocumentId> = {
-            let store = hive.cgka_ops.lock().await;
-            store
-                .documents()
-                .filter(|id| !archive.docs.contains_key(id))
-                .collect()
-        };
-        for doc_id in unbuilt {
-            if let Err(error) = hive.feed_tree(doc_id, None).await {
-                tracing::warn!(%doc_id, %error, "a stored operation does not apply");
-            }
-        }
         Ok(hive)
     }
 
@@ -2776,19 +2756,23 @@ where
             }
         }
 
-        let cgka_operations = self.cgka_ops.lock().await.len() as u64;
+        let mut cgka_operations = 0;
+        let held: Vec<_> = { self.documents.lock().await.values().cloned().collect() };
+        for doc in held {
+            cgka_operations += doc.lock().await.cgka().ops_count() as u64;
+        }
         // Groups are the Keyline subjects that are neither individuals nor
         // documents here. `stats` cannot report a store failure; it is
         // logged, and counts none.
         let groups = match self.subjects().await {
             Ok(subjects) => {
                 let individuals = self.individuals.lock().await;
-                let documents = self.cgka_ops.lock().await;
+                let documents = self.documents.lock().await;
                 subjects
                     .into_iter()
                     .filter(|id| {
                         !individuals.contains_key(&IndividualId(*id))
-                            && !documents.holds(DocumentId(*id))
+                            && !documents.contains_key(&DocumentId(*id))
                     })
                     .count() as u64
             }
@@ -2904,15 +2888,17 @@ where
             .ok_or_else(|| NotFound::new(id))
     }
 
-    /// This replica's tree-holding document for `id`: `None` if it knows the
-    /// document only as a relay, and `NotFound` if it does not know it.
+    /// This replica's tree-holding document for `id`: `None` if it can read the
+    /// document but its invitation has not merged yet, and `NotFound` if it
+    /// holds nothing for it (a relay included).
     async fn member_document(
         &self,
         id: DocumentId,
     ) -> Result<Option<Arc<Mutex<DocumentState<T>>>>, NotFound> {
         match self.document_state(id).await {
             Some(doc) => Ok(Some(doc)),
-            None if self.has_document(id).await => Ok(None),
+            // Readable here, with its invitation not merged yet.
+            None if self.awaiting_invitation.lock().await.contains_key(&id) => Ok(None),
             None => Err(NotFound::new(id)),
         }
     }
@@ -3256,27 +3242,40 @@ pub enum GenerateGroupError<E: core::error::Error + 'static> {
     KeylineStorage(#[from] KeylineStorageError<E>),
 }
 
-/// Feed a held document's tree every stored operation it has not applied, in
-/// causal order. Returns `received`'s failure, if it failed other than for
-/// arriving early.
-async fn feed_held<T: ContentRef, E: core::error::Error + 'static>(
-    doc: &Mutex<DocumentState<T>>,
+/// Every operation `tree` has applied.
+fn tree_ops(tree: &Cgka) -> Vec<Arc<Signed<CgkaOperation>>> {
+    tree.ops()
+        .map(|batches| batches.into_iter().flatten().collect())
+        .unwrap_or_default()
+}
+
+/// Rebuild a tree from archived operations, in causal order.
+fn tree_from_ops(
+    doc_id: DocumentId,
     ops: Vec<Arc<Signed<CgkaOperation>>>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-    received: Option<Digest<Signed<CgkaOperation>>>,
-) -> Result<(), ReceiveCgkaOpError<E>> {
-    let mut locked = doc.lock().await;
-    let waiting = ops
-        .into_iter()
-        .filter(|op| !applied(locked.cgka(), op))
-        .collect();
-    apply_in_causal_order(locked.cgka_mut(), waiting, me, secrets, received).map_or(Ok(()), Err)
+) -> Cgka {
+    let mut tree = Cgka::new(doc_id, me, ShareKeyMap::new());
+    if let Some(error) =
+        apply_in_causal_order::<core::convert::Infallible>(&mut tree, ops, me, secrets, None)
+    {
+        tracing::warn!(%doc_id, %error, "an archived operation does not apply");
+    }
+    tree
 }
 
-/// Whether `tree` has applied `op`.
-fn applied(tree: &Cgka, op: &Arc<Signed<CgkaOperation>>) -> bool {
-    tree.contains_predecessors(&HashSet::from([Digest::hash(op.as_ref())]))
+/// Merge one operation into `tree`, adopting the secrets `me` holds for its
+/// own leaf. `true` if the tree did not have it.
+fn merge_one<E: core::error::Error + 'static>(
+    tree: &mut Cgka,
+    op: Arc<Signed<CgkaOperation>>,
+    me: IndividualId,
+    secrets: &BTreeMap<ShareKey, ShareSecretKey>,
+) -> Result<bool, ReceiveCgkaOpError<E>> {
+    let merged = apply_one(tree, op, me, secrets)?;
+    adopt_own_leaf_secrets(tree, me, secrets);
+    Ok(merged)
 }
 
 /// Whether `op` invites `me`: an add of `me`.
@@ -3300,7 +3299,7 @@ fn apply_in_causal_order<E: core::error::Error + 'static>(
     loop {
         let mut progress = false;
         waiting.retain(|op| match apply_one(tree, op.dupe(), me, secrets) {
-            Ok(()) => {
+            Ok(_) => {
                 progress = true;
                 false
             }
@@ -3309,7 +3308,7 @@ fn apply_in_causal_order<E: core::error::Error + 'static>(
                 if Some(Digest::hash(op.as_ref())) == received {
                     failure = Some(error);
                 } else {
-                    tracing::debug!(%error, "a stored operation does not apply");
+                    tracing::debug!(%error, "an archived operation does not apply");
                 }
                 false
             }
@@ -3323,25 +3322,23 @@ fn apply_in_causal_order<E: core::error::Error + 'static>(
 }
 
 /// Merge one operation. An invitation (an add of `me`) carries the secret for
-/// its leaf.
+/// its leaf. `true` if the tree did not have it.
 fn apply_one<E: core::error::Error + 'static>(
     tree: &mut Cgka,
     op: Arc<Signed<CgkaOperation>>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-) -> Result<(), ReceiveCgkaOpError<E>> {
+) -> Result<bool, ReceiveCgkaOpError<E>> {
     if let CgkaOperation::Add { added_id, pk, .. } = op.payload {
         let added = IndividualId::from(added_id);
         if added == me {
             let sk = secrets
                 .get(&pk)
                 .ok_or(ReceiveCgkaOpError::UnknownInvitePrekey(pk))?;
-            tree.merge_invite(op, sk)?;
-            return Ok(());
+            return Ok(tree.merge_invite(op, sk)?);
         }
     }
-    tree.merge_concurrent_operation(op)?;
-    Ok(())
+    Ok(tree.merge_concurrent_operation(op)?)
 }
 
 /// Move into `tree` every secret `me` holds for a key the tree has placed at
@@ -3399,15 +3396,16 @@ struct SubjectView<T: ContentRef> {
 /// The identifiers a certificate names: a delegation's issuer, audience and
 /// subject, and a revocation's issuer. Read without verifying: the store
 /// verified it on insert.
-fn named_by<W>(cert: &Certificate<W>) -> Vec<Id> {
-    match cert {
-        Certificate::Delegation(signed) => signed
-            .encoded()
-            .decode()
-            .map(|d: Delegation| vec![signed.issuer(), d.audience, d.subject])
-            .unwrap_or_default(),
+fn named_by<W, E: core::error::Error + 'static>(
+    cert: &Certificate<W>,
+) -> Result<Vec<Id>, KeylineStorageError<E>> {
+    Ok(match cert {
+        Certificate::Delegation(signed) => {
+            let (issuer, d): (Id, Delegation) = decode_stored(signed)?;
+            vec![issuer, d.audience, d.subject]
+        }
         Certificate::Revocation(_) => Vec::new(),
-    }
+    })
 }
 
 #[derive(Debug, Error)]

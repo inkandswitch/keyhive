@@ -60,13 +60,14 @@ pub struct DocumentState<T: ContentRef> {
     known_decryption_keys: HashMap<T, SymmetricKey>,
 
     /// This replica's key agreement tree. A replica holds a document only as a
-    /// member: a relay stores its operations and has no `DocumentState`.
+    /// member whose creation or invitation has merged; a relay holds none of
+    /// its operations and has no `DocumentState`.
     cgka: Cgka,
 }
 
 impl<T: ContentRef> DocumentState<T> {
-    /// A member's document: its tree, built from the operation store, and
-    /// the content heads it knows.
+    /// A member's document: its tree, built from its operations, and the
+    /// content heads it knows.
     pub(crate) fn with_tree(
         id: DocumentId,
         cgka: Cgka,
@@ -379,7 +380,7 @@ impl<T: ContentRef> DocumentState<T> {
 }
 
 /// A document, as a transient handle over the keyhive: one this replica holds
-/// an authorized key agreement operation for, as a member or a relay.
+/// as a member.
 #[derive(Debug, Clone)]
 pub struct Document<KH> {
     keyhive: KH,
@@ -455,8 +456,8 @@ where
             .await
     }
 
-    /// The individuals in this replica's tree for the document; `None` for a
-    /// relay, which holds no tree.
+    /// The individuals in this replica's tree for the document; `None` if it
+    /// holds no tree for it.
     pub async fn cgka_members(&self) -> Option<BTreeSet<IndividualId>> {
         let state = self.keyhive.document_state(self.id).await?;
         let mut locked = state.lock().await;
@@ -464,15 +465,15 @@ where
     }
 
     /// How many key agreement operations this replica's tree has applied;
-    /// `None` for a relay.
+    /// `None` if it holds no tree for the document.
     pub async fn cgka_ops_count(&self) -> Option<usize> {
         let state = self.keyhive.document_state(self.id).await?;
         let count = state.lock().await.cgka().ops_count();
         Some(count)
     }
 
-    /// The content heads this replica knows for the document; `None` for a
-    /// relay.
+    /// The content heads this replica knows for the document; `None` if it
+    /// holds no tree for it.
     pub async fn content_heads(&self) -> Option<HashSet<T>> {
         let state = self.keyhive.document_state(self.id).await?;
         let heads = state.lock().await.content_heads.clone();

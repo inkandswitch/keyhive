@@ -27,8 +27,8 @@ impl JsDocument {
         JsPrincipal::new(self.0.keyhive().get_principal(self.0.id())).await
     }
 
-    /// The individuals in this keyhive's tree for the document; empty for a
-    /// relay, which holds no tree.
+    /// The individuals in this keyhive's tree for the document; empty if it
+    /// holds no tree for it.
     ///
     /// This is the set to watch when deciding whether a new reader needs a key
     /// rotation. `members()` reports the document's own delegations, which do

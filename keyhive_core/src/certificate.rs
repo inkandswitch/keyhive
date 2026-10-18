@@ -3,7 +3,7 @@
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::FutureForm;
-use keyhive_codec::traits::Decode;
+use keyhive_codec::{error::DecodeError, traits::Decode};
 use keyhive_crypto::{
     id::Id,
     signed::SigningError,
@@ -63,8 +63,50 @@ pub(crate) async fn route_through<F: FutureForm, K: Keyline<F>>(
     issuer: Id,
     delegation: &Delegation,
     who: Id,
-) -> Result<bool, K::Error> {
+) -> Result<bool, KeylineStorageError<K::Error>>
+where
+    K::Error: 'static,
+{
     let mut standing = Standing::new(keyline);
+    let closure = closure_delegations(keyline, doc).await?;
+    route_through_with(&mut standing, &closure, doc, issuer, delegation, who).await
+}
+
+/// Every delegation in `doc`'s closure, with its issuer.
+async fn closure_delegations<F: FutureForm, K: Keyline<F>>(
+    keyline: &K,
+    doc: Id,
+) -> Result<Vec<(Id, Delegation)>, KeylineStorageError<K::Error>>
+where
+    K::Error: 'static,
+{
+    keyline
+        .closure(doc)
+        .await
+        .map_err(KeylineStorageError::new)?
+        .value
+        .iter()
+        .filter_map(|cert| match cert {
+            Certificate::Delegation(signed) => Some(decode_stored(signed)),
+            Certificate::Revocation(_) => None,
+        })
+        .collect()
+}
+
+/// [`route_through`] with standing remembered across calls and `doc`'s
+/// closure delegations already read: for a caller that asks many routes of
+/// one store.
+async fn route_through_with<F: FutureForm, K: Keyline<F>>(
+    standing: &mut Standing<'_, F, K>,
+    closure: &[(Id, Delegation)],
+    doc: Id,
+    issuer: Id,
+    delegation: &Delegation,
+    who: Id,
+) -> Result<bool, KeylineStorageError<K::Error>>
+where
+    K::Error: 'static,
+{
     let subject = delegation.subject;
     if !standing.over(subject, issuer).await? || !standing.over(doc, subject).await? {
         return Ok(false);
@@ -73,14 +115,11 @@ pub(crate) async fn route_through<F: FutureForm, K: Keyline<F>>(
     // Keep the delegations about subjects between `subject` and `doc`: those
     // the route can pass through. `closure(doc)` holds at least those; a
     // store may return more, so both bounds are checked here.
-    let mut edges: Vec<(Id, Delegation)> = Vec::new();
-    for cert in keyline.closure(doc).await?.value {
-        let Certificate::Delegation(signed) = cert else {
-            continue;
-        };
-        let (edge_issuer, d) = decode_stored(&signed);
+    let mut edges: Vec<&(Id, Delegation)> = Vec::new();
+    for edge in closure {
+        let d = &edge.1;
         if standing.over(d.subject, subject).await? && standing.over(doc, d.subject).await? {
-            edges.push((edge_issuer, d));
+            edges.push(edge);
         }
     }
 
@@ -88,7 +127,7 @@ pub(crate) async fn route_through<F: FutureForm, K: Keyline<F>>(
     let mut reached: Vec<(Id, Id)> = vec![(delegation.audience, subject)];
     loop {
         let mut grew = false;
-        for (edge_issuer, edge) in &edges {
+        for (edge_issuer, edge) in edges.iter().copied() {
             if reached.contains(&(edge.audience, edge.subject)) {
                 continue;
             }
@@ -129,26 +168,42 @@ pub(crate) async fn explanation<F: FutureForm, K: Keyline<F>>(
     keyline: &K,
     subject: Id,
     audience: Id,
-) -> Result<Vec<Certificate<K::RetentionWatermark>>, K::Error> {
+) -> Result<Vec<Certificate<K::RetentionWatermark>>, KeylineStorageError<K::Error>>
+where
+    K::Error: 'static,
+{
     let mut delegations = Vec::new();
     let mut revocations = Vec::new();
-    for cert in keyline.closure(subject).await?.value {
+    let closure = keyline
+        .closure(subject)
+        .await
+        .map_err(KeylineStorageError::new)?
+        .value;
+    for cert in closure {
         match &cert {
             Certificate::Delegation(signed) => {
-                let (issuer, d) = decode_stored(signed);
+                let (issuer, d) = decode_stored(signed)?;
                 delegations.push((issuer, d, signed.digest(), cert));
             }
             Certificate::Revocation(signed) => {
-                let (issuer, r): (Id, Revocation<K::RetentionWatermark>) = decode_stored(signed);
+                let (issuer, r): (Id, Revocation<K::RetentionWatermark>) = decode_stored(signed)?;
                 revocations.push((issuer, r.revoke, cert));
             }
         }
     }
 
+    // One store, one closure: every route below shares the standing it asks
+    // and the delegations already decoded.
+    let mut standing = Standing::new(keyline);
+    let closure: Vec<(Id, Delegation)> = delegations
+        .iter()
+        .map(|(issuer, d, _, _)| (*issuer, *d))
+        .collect();
+
     let mut kept = BTreeMap::new();
     let mut routes = BTreeSet::new();
     for (issuer, d, digest, cert) in &delegations {
-        if route_through(keyline, subject, *issuer, d, audience).await? {
+        if route_through_with(&mut standing, &closure, subject, *issuer, d, audience).await? {
             routes.insert(*digest);
             kept.insert(cert.id(), cert.clone());
         }
@@ -163,7 +218,7 @@ pub(crate) async fn explanation<F: FutureForm, K: Keyline<F>>(
     for revoker in revokers {
         for (issuer, d, _, cert) in &delegations {
             if !kept.contains_key(&cert.id())
-                && route_through(keyline, subject, *issuer, d, revoker).await?
+                && route_through_with(&mut standing, &closure, subject, *issuer, d, revoker).await?
             {
                 kept.insert(cert.id(), cert.clone());
             }
@@ -181,7 +236,10 @@ struct Standing<'a, F: FutureForm, K: Keyline<F>> {
     _form: PhantomData<F>,
 }
 
-impl<'a, F: FutureForm, K: Keyline<F>> Standing<'a, F, K> {
+impl<'a, F: FutureForm, K: Keyline<F>> Standing<'a, F, K>
+where
+    K::Error: 'static,
+{
     fn new(keyline: &'a K) -> Self {
         Standing {
             keyline,
@@ -190,7 +248,11 @@ impl<'a, F: FutureForm, K: Keyline<F>> Standing<'a, F, K> {
         }
     }
 
-    async fn over(&mut self, subject: Id, audience: Id) -> Result<bool, K::Error> {
+    async fn over(
+        &mut self,
+        subject: Id,
+        audience: Id,
+    ) -> Result<bool, KeylineStorageError<K::Error>> {
         if subject == audience {
             return Ok(true);
         }
@@ -200,7 +262,8 @@ impl<'a, F: FutureForm, K: Keyline<F>> Standing<'a, F, K> {
         let holds = self
             .keyline
             .positive_power(subject, audience)
-            .await?
+            .await
+            .map_err(KeylineStorageError::new)?
             .value
             .is_some();
         self.known.insert((subject, audience), holds);
@@ -236,32 +299,44 @@ pub enum CertificateError {
 }
 
 /// The issuer and payload of a certificate read from a store. A store holds
-/// only verified certificates, whose encoding is canonical, so this cannot
-/// fail.
-pub fn decode_stored<T: Decode>(signed: &Signed<T>) -> (Id, T) {
+/// only verified certificates, whose encoding is canonical; bytes that do not
+/// decode mean the store returned something else, and are
+/// [`KeylineStorageError::Corrupt`].
+pub fn decode_stored<T: Decode, E: core::error::Error + 'static>(
+    signed: &Signed<T>,
+) -> Result<(Id, T), KeylineStorageError<E>> {
     let payload = signed
         .encoded()
         .decode()
-        .expect("a stored certificate decodes: the store verified it");
-    (signed.issuer(), payload)
+        .map_err(KeylineStorageError::Corrupt)?;
+    Ok((signed.issuer(), payload))
 }
 
-/// The `Keyline` store failed: its backend's own storage error `E`
-/// ([`Keyline::Error`]). A backend that cannot fail, such as
-/// `keyline_memory`'s, has `E = Infallible`, which makes this uninhabited.
+/// The `Keyline` store failed: its backend reported an error, or it returned
+/// a certificate that does not decode.
+///
+/// Neither is a bug in this crate. A persistent backend's bytes come from
+/// disk or the network, where they can be corrupted, so they are reported
+/// rather than trusted. A backend that cannot fail, such as
+/// `keyline_memory`'s, has `E = Infallible`, and is `Corrupt` only through a
+/// bug of its own.
 #[derive(Debug, Error)]
-#[error("the Keyline store failed")]
-pub struct KeylineStorageError<E: core::error::Error + 'static>(#[source] E);
+pub enum KeylineStorageError<E: core::error::Error + 'static> {
+    /// The backend's own error ([`Keyline::Error`]).
+    #[error("the Keyline store failed")]
+    Backend(#[source] E),
+
+    /// A certificate read from the store does not decode: the store returned
+    /// bytes other than the verified certificate it was given. Retrying reads
+    /// the same bytes; the store needs repairing or rebuilding.
+    #[error("the Keyline store returned a certificate that does not decode")]
+    Corrupt(#[source] DecodeError),
+}
 
 impl<E: core::error::Error + 'static> KeylineStorageError<E> {
     /// Wrap a backend's error.
     pub fn new(error: E) -> Self {
-        KeylineStorageError(error)
-    }
-
-    /// The backend's own error.
-    pub fn into_inner(self) -> E {
-        self.0
+        KeylineStorageError::Backend(error)
     }
 }
 
@@ -480,6 +555,25 @@ mod tests {
                 "carol's route passes through the grant to the group"
             );
         });
+    }
+
+    /// Bytes a store returns that do not decode are a storage error the
+    /// caller sees, not a panic: a persistent backend's bytes can be corrupt.
+    #[test]
+    fn a_stored_certificate_that_does_not_decode_is_reported() {
+        use keyhive_codec::encoded::Encoded;
+        use keyline::test_utils::id;
+
+        let garbage: Signed<Delegation> = Signed::from_parts(
+            id(1),
+            Encoded::from_bytes_unchecked(vec![0xff; 3]),
+            Signature::from_bytes(&[0; 64]),
+        );
+        let result = decode_stored::<Delegation, std::convert::Infallible>(&garbage);
+        assert!(
+            matches!(result, Err(KeylineStorageError::Corrupt(_))),
+            "{result:?}"
+        );
     }
 
     /// `MemoryKeyline`, except that `closure` returns every certificate:
