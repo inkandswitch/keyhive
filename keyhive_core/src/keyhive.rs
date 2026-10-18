@@ -775,14 +775,17 @@ where
         *fresh = self.insert_fresh(reconciled, roots).await?;
 
         let doc_kl = Id::from(doc_id);
-        let (signer, owner, owner_pk, owner_sks) = {
+        let (signer, owner, owner_pk) = {
             let active = &self.active;
             let owner_pk = active.pick_prekey(doc_id).await;
-            let sks = active.key_pairs.lock().await.clone();
-            (active.signer.clone(), active.id(), owner_pk, sks)
+            (active.signer.clone(), active.id(), owner_pk)
         };
         let owner_pk = owner_pk.ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
-        let owner_sk = *owner_sks
+        let owner_sk = *self
+            .active
+            .key_pairs
+            .lock()
+            .await
             .get(&owner_pk)
             .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
 
@@ -2320,7 +2323,13 @@ where
         // queue, as does one for a document this replica does not hold.
         let op = Arc::new(signed_op);
         let me = self.active.id();
-        let secrets = self.active.key_pairs.lock().await.clone();
+        let secrets: BTreeMap<ShareKey, ShareSecretKey> = {
+            let pairs = self.active.key_pairs.lock().await;
+            own_leaf_keys(&op, me)
+                .into_iter()
+                .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, *sk)))
+                .collect()
+        };
         if let Some(doc) = self.document_state(doc_id).await {
             let merged = {
                 let mut locked = doc.lock().await;
@@ -3249,76 +3258,82 @@ fn tree_ops(tree: &Cgka) -> Vec<Arc<Signed<CgkaOperation>>> {
         .unwrap_or_default()
 }
 
-/// Rebuild a tree from archived operations, in causal order.
+/// Rebuild a tree from archived operations: apply them in causal order, as
+/// far as they go, then adopt the secrets `me` holds for its own leaf. An
+/// operation that does not apply is logged and skipped.
 fn tree_from_ops(
     doc_id: DocumentId,
-    ops: Vec<Arc<Signed<CgkaOperation>>>,
+    mut waiting: Vec<Arc<Signed<CgkaOperation>>>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
 ) -> Cgka {
     let mut tree = Cgka::new(doc_id, me, ShareKeyMap::new());
-    if let Some(error) =
-        apply_in_causal_order::<core::convert::Infallible>(&mut tree, ops, me, secrets, None)
-    {
-        tracing::warn!(%doc_id, %error, "an archived operation does not apply");
-    }
-    tree
-}
-
-/// Merge one operation into `tree`, adopting the secrets `me` holds for its
-/// own leaf. `true` if the tree did not have it.
-fn merge_one<E: core::error::Error + 'static>(
-    tree: &mut Cgka,
-    op: Arc<Signed<CgkaOperation>>,
-    me: IndividualId,
-    secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-) -> Result<bool, ReceiveCgkaOpError<E>> {
-    let merged = apply_one(tree, op, me, secrets)?;
-    adopt_own_leaf_secrets(tree, me, secrets);
-    Ok(merged)
-}
-
-/// Whether `op` invites `me`: an add of `me`.
-fn invites(op: &Signed<CgkaOperation>, me: IndividualId) -> bool {
-    matches!(op.payload, CgkaOperation::Add { added_id, .. } if IndividualId::from(added_id) == me)
-}
-
-/// Apply `waiting` to `tree` in causal order, as far as it goes, adopting the
-/// secrets `me` holds for its own leaf along the way. Synchronous: the
-/// secrets are passed in, so a held document's lock is the only one taken.
-///
-/// Returns `received`'s failure, if it failed other than for arriving early.
-fn apply_in_causal_order<E: core::error::Error + 'static>(
-    tree: &mut Cgka,
-    mut waiting: Vec<Arc<Signed<CgkaOperation>>>,
-    me: IndividualId,
-    secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-    received: Option<Digest<Signed<CgkaOperation>>>,
-) -> Option<ReceiveCgkaOpError<E>> {
-    let mut failure = None;
     loop {
         let mut progress = false;
-        waiting.retain(|op| match apply_one(tree, op.dupe(), me, secrets) {
-            Ok(_) => {
-                progress = true;
-                false
-            }
-            Err(ReceiveCgkaOpError::CgkaError(CgkaError::OutOfOrderOperation)) => true,
-            Err(error) => {
-                if Some(Digest::hash(op.as_ref())) == received {
-                    failure = Some(error);
-                } else {
-                    tracing::debug!(%error, "an archived operation does not apply");
+        waiting.retain(|op| {
+            match apply_one::<core::convert::Infallible>(&mut tree, op.dupe(), me, secrets) {
+                Ok(_) => {
+                    progress = true;
+                    false
                 }
-                false
+                Err(ReceiveCgkaOpError::CgkaError(CgkaError::OutOfOrderOperation)) => true,
+                Err(error) => {
+                    tracing::warn!(%doc_id, %error, "an archived operation does not apply");
+                    false
+                }
             }
         });
         if !progress || waiting.is_empty() {
             break;
         }
     }
-    adopt_own_leaf_secrets(tree, me, secrets);
-    failure
+    if !waiting.is_empty() {
+        tracing::warn!(
+            %doc_id,
+            missing = waiting.len(),
+            "archived operations whose predecessors are not in the archive"
+        );
+    }
+    adopt_own_leaf_secrets(&mut tree, me, secrets);
+    tree
+}
+
+/// Merge one operation into `tree`, adopting the secrets `me` holds for the
+/// keys it places at `me`'s leaf. `true` if the tree did not have it.
+///
+/// Looks only at `op`, not the tree's history, so a merge costs the same
+/// however long the history is. The leaf's earlier keys were adopted when
+/// the operations that placed them merged, or when the tree was rebuilt or
+/// secrets were imported ([`adopt_own_leaf_secrets`]).
+fn merge_one<E: core::error::Error + 'static>(
+    tree: &mut Cgka,
+    op: Arc<Signed<CgkaOperation>>,
+    me: IndividualId,
+    secrets: &BTreeMap<ShareKey, ShareSecretKey>,
+) -> Result<bool, ReceiveCgkaOpError<E>> {
+    let keys = own_leaf_keys(&op, me);
+    let merged = apply_one(tree, op, me, secrets)?;
+    adopt_leaf_secrets(tree, keys, secrets);
+    Ok(merged)
+}
+
+/// The keys `op` places at `me`'s leaf: an invitation's prekey, or the leaf
+/// keys of `me`'s own update. The only secrets merging `op` can need.
+fn own_leaf_keys(op: &Signed<CgkaOperation>, me: IndividualId) -> Vec<ShareKey> {
+    match &op.payload {
+        CgkaOperation::Add { added_id, pk, .. } if IndividualId::from(*added_id) == me => {
+            vec![*pk]
+        }
+        CgkaOperation::Update { id, new_path, .. } if IndividualId::from(*id) == me => {
+            new_path.leaf_pk.keys()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Whether `op` invites `me`: an add of `me`.
+fn invites(op: &Signed<CgkaOperation>, me: IndividualId) -> bool {
+    matches!(op.payload, CgkaOperation::Add { added_id, .. } if IndividualId::from(added_id) == me)
 }
 
 /// Merge one operation. An invitation (an add of `me`) carries the secret for
@@ -3343,6 +3358,10 @@ fn apply_one<E: core::error::Error + 'static>(
 
 /// Move into `tree` every secret `me` holds for a key the tree has placed at
 /// its leaf: the current one, and those its own updates rotated in.
+///
+/// Walks the tree's whole history, so it is for rebuilding a tree or after
+/// importing secrets, not for each merge ([`merge_one`] looks at the merged
+/// operation only).
 fn adopt_own_leaf_secrets(
     tree: &mut Cgka,
     me: IndividualId,
@@ -3351,13 +3370,19 @@ fn adopt_own_leaf_secrets(
     let mut keys: Vec<ShareKey> = tree.owner_leaf_key().into_iter().collect();
     if let Ok(batches) = tree.ops() {
         for op in batches.iter().flat_map(|batch| batch.iter()) {
-            if let CgkaOperation::Update { id, new_path, .. } = &op.payload {
-                if IndividualId::from(*id) == me {
-                    keys.extend(new_path.leaf_pk.keys());
-                }
-            }
+            keys.extend(own_leaf_keys(op, me));
         }
     }
+    adopt_leaf_secrets(tree, keys, secrets);
+}
+
+/// Move into `tree` the secrets held in `secrets` for `keys`, where the tree
+/// does not have them yet.
+fn adopt_leaf_secrets<I: IntoIterator<Item = ShareKey>>(
+    tree: &mut Cgka,
+    keys: I,
+    secrets: &BTreeMap<ShareKey, ShareSecretKey>,
+) {
     for pk in keys {
         if !tree.owner_sks().contains_key(&pk) {
             if let Some(sk) = secrets.get(&pk) {
@@ -5049,6 +5074,44 @@ mod tests {
                 "{who} came in through the revoked subgroup and their removal was not reported"
             );
         }
+
+        Ok(())
+    }
+
+    /// Merging an operation adopts only the secrets for keys it places at
+    /// one's own leaf: an invitation's prekey for the invitee, an update's leaf
+    /// keys for its author, and nothing for anyone else.
+    #[tokio::test]
+    async fn test_own_leaf_keys_are_the_keys_an_operation_places_at_ones_leaf() -> TestResult {
+        test_utils::init_logging();
+
+        let alice = make_keyhive().await;
+        let bob_kh = make_keyhive().await;
+        let bob = introduce(&alice, &bob_kh).await;
+        let me = alice.active.id();
+
+        let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice.add_member(bob, doc, Power::Read).await?;
+        let (update, _) = alice.force_pcs_update(doc).await?;
+
+        let ops = alice.cgka_ops_for_doc(&doc).await.expect("alice holds it");
+        let invitation = ops
+            .iter()
+            .find(|op| invites(op, bob))
+            .expect("bob is invited");
+        let CgkaOperation::Add { pk, .. } = invitation.payload else {
+            unreachable!("an invitation is an add")
+        };
+        assert_eq!(own_leaf_keys(invitation, bob), vec![pk]);
+        assert_eq!(own_leaf_keys(invitation, me), Vec::new());
+
+        let CgkaOperation::Update { new_path, .. } = &update.payload else {
+            unreachable!("a PCS update is an update")
+        };
+        let leaf = new_path.leaf_pk.keys();
+        assert!(!leaf.is_empty());
+        assert_eq!(own_leaf_keys(&update, me), leaf);
+        assert_eq!(own_leaf_keys(&update, bob), Vec::new());
 
         Ok(())
     }
