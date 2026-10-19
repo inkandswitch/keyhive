@@ -425,6 +425,9 @@ impl BeeKem {
                     return Ok(child_sks.get(&parent_pk).cloned());
                 }
                 let secret = parent.decrypt_secret(child_node_key, child_sks, seen_idxs)?;
+                if secret.share_key() != parent_pk {
+                    return Err(CgkaError::PathSecretMismatch);
+                }
                 child_sks.insert(parent_pk, secret);
                 Some(secret)
             }

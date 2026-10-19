@@ -45,6 +45,12 @@ impl<'a> arbitrary::Arbitrary<'a> for SecretStore {
 }
 
 impl SecretStore {
+    /// The current version, for testing version forgery.
+    #[cfg(test)]
+    pub(crate) fn head_mut(&mut self) -> &mut SecretStoreVersion {
+        &mut self.versions.head
+    }
+
     pub fn new(
         pk: ShareKey,
         encrypter_pk: ShareKey,

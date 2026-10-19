@@ -131,13 +131,15 @@ impl Cgka {
     /// Derive an [`ApplicationSecret`] from our current [`PcsKey`] for new content
     /// to encrypt.
     ///
-    /// If the tree does not currently contain a root key, then we must first
-    /// perform a leaf key rotation. The new key pair is returned as the third element,
-    /// which is `None` when there was no rotation.
+    /// If the tree has no root secret, or a path secret this member would
+    /// decrypt does not match its node's key, this member first rotates its
+    /// leaf. That update and the new key pair are returned as the second
+    /// element, which is `None` when there was no rotation.
     ///
-    /// Returns a [`CgkaError::NoMembers`] error if the group is empty and a
-    /// [`CgkaError::UnknownPcsKey`] error if the tree's root secret cannot be
-    /// recorded for the update that produced it.
+    /// Returns [`CgkaError::NoMembers`] if the group is empty,
+    /// [`CgkaError::UnknownPcsKey`] if the root secret derives but cannot be
+    /// recorded for the update that produced it, and otherwise any error from
+    /// deriving the root secret.
     ///
     /// # Security
     ///
@@ -164,7 +166,16 @@ impl Cgka {
         CgkaError,
     > {
         self.replay_if_pending()?;
-        let (current_pcs_key, current_op_hash, rotation) = if !self.has_tree_root_secret() {
+        let known = self.record_tree_root_secret();
+        let (current_pcs_key, current_op_hash, rotation) = if let Some((op_hash, pcs_key)) = known {
+            (pcs_key, op_hash, None)
+        } else {
+            // Rotate whenever we cannot derive the root secret: the tree has
+            // none, a path another member wrote does not decrypt, or another
+            // instance of this identity rotated our leaf and we lack its secret.
+            if self.has_tree_root_secret() && self.decrypt_tree_root_secret().is_ok() {
+                return Err(CgkaError::UnknownPcsKey);
+            }
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
             let (pcs_key, update_op, key_pair) = self
@@ -172,18 +183,6 @@ impl Cgka {
                 .await?;
             let op_hash = Digest::hash(&update_op);
             (pcs_key, op_hash, Some((update_op, key_pair)))
-        } else {
-            // `has_tree_root_secret()` above guarantees a single head.
-            debug_assert!(self.ops_graph.has_single_head());
-            match self.record_tree_root_secret() {
-                Some((op_hash, pcs_key)) => (pcs_key, op_hash, None),
-                None => {
-                    // If there is a decryption error, return it. Otherwise, return
-                    // `UnknownPcsKey`.
-                    self.decrypt_tree_root_secret()?;
-                    return Err(CgkaError::UnknownPcsKey);
-                }
-            }
         };
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id.as_bytes());
         Ok((
