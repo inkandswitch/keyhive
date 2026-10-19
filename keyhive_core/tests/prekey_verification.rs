@@ -12,7 +12,7 @@ use keyhive_core::{
         id::IndividualId,
         op::{add_key::AddKeyOp, KeyOp},
         state::PrekeyState,
-        Individual, ReceivePrekeyOpError,
+        IndividualState, ReceivePrekeyOpError,
     },
     test_utils::make_simple_keyhive,
 };
@@ -53,7 +53,7 @@ async fn a_forged_first_prekey_op_is_refused() -> TestResult {
         .await;
 
     assert!(
-        matches!(&result, Err(e) if !e.is_missing_dependency()),
+        matches!(&result, Err(e) if e.is_final()),
         "refused for good, not kept pending: {result:?}"
     );
     assert!(!alice.has_individual(carol.id()).await, "carol is unknown");
@@ -70,7 +70,7 @@ async fn a_forged_prekey_op_cannot_turn_a_group_into_an_individual() -> TestResu
         .await;
 
     assert!(result.is_err());
-    assert!(alice.has_group(group).await, "still a group");
+    assert!(alice.has_group(group).await?, "still a group");
     assert!(!alice.has_individual(IndividualId(group.into())).await);
     Ok(())
 }
@@ -128,7 +128,7 @@ fn an_individual_deserializes_only_from_one_issuers_operations() -> TestResult {
     let mut state = PrekeyState::new(add(&alice));
     state.insert_op(add(&alice));
     let bytes = bincode::serialize(&state)?;
-    let individual: Individual = bincode::deserialize(&bytes)?;
+    let individual: IndividualState = bincode::deserialize(&bytes)?;
     assert_eq!(
         Identifier::from(individual.id()),
         Identifier::try_from(alice.verifying_key())?
@@ -137,6 +137,6 @@ fn an_individual_deserializes_only_from_one_issuers_operations() -> TestResult {
 
     state.insert_op(add(&mallory));
     let bytes = bincode::serialize(&state)?;
-    assert!(bincode::deserialize::<Individual>(&bytes).is_err());
+    assert!(bincode::deserialize::<IndividualState>(&bytes).is_err());
     Ok(())
 }

@@ -5,4 +5,3 @@
 
 pub mod digest;
 pub mod envelope;
-pub mod signed_ext;

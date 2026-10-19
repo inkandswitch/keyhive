@@ -1,13 +1,13 @@
+use ed25519_dalek::SigningKey;
 use keyhive_core::{
-    access::Access::Read,
-    crypto::digest::Digest,
-    principal::{
-        document::AddMemberError,
-        group::{delegation::StaticDelegation, revocation::StaticRevocation},
-    },
+    content::heads::ContentHeads,
+    event::{static_event::StaticEvent, Event},
     test_utils::TestContext,
 };
-use keyhive_crypto::signer::memory::MemorySigner;
+use keyhive_crypto::{identifier::Identifier, verified::Verified};
+use keyline::{
+    certificate::Certificate, delegation::Delegation, power::Power::Read, revocation::Revocation,
+};
 use std::{future::IntoFuture, time::Duration};
 use testresult::TestResult;
 use tokio::time::{timeout, Timeout};
@@ -25,41 +25,28 @@ async fn a_revocation_issued_by_an_outsider_does_not_deadlock_the_receiver() -> 
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
 
     // An outsider, holding no power over the document, delegates and revokes.
-    let outsider = MemorySigner::from(ed25519_dalek::SigningKey::from([9u8; 32]));
-    let dlg = outsider.try_sign_sync(StaticDelegation::<[u8; 32]> {
-        can: Read,
-        proof: None,
-        delegate: bob.id().into(),
-        after_revocations: vec![],
-        after_content: Default::default(),
-    })?;
-    alice.receive_delegation(&dlg).await?;
-    let rev = outsider.try_sign_sync(StaticRevocation::<[u8; 32]> {
-        revoke: Digest::hash(&dlg),
-        proof: None,
-        after_content: Default::default(),
-    })?;
+    let outsider_key = SigningKey::from([9u8; 32]);
+    let dlg = Verified::sign_sync(
+        &Delegation::new(
+            Identifier::from(bob.id()),
+            Identifier::from(design_doc),
+            Read,
+        ),
+        &outsider_key,
+    )?;
+    let rev: Verified<Revocation<ContentHeads<[u8; 32]>>> =
+        Verified::sign_sync(&Revocation::new(dlg.digest()), &outsider_key)?;
 
-    check_deadlock(alice.receive_revocation(&rev)).await??;
-    Ok(())
-}
-
-#[tokio::test]
-async fn including_the_resource_among_the_other_relevant_docs_is_refused() -> TestResult {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let bob = ctx.individual("bob").await?;
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-
-    let result =
-        check_deadlock(alice.add_member(bob.id(), design_doc, Read, &[design_doc])).await?;
-    assert!(matches!(
-        result,
-        Err(AddMemberError::ResourceIncludedInRelevantDocs(id)) if id == design_doc
-    ));
-    assert_eq!(alice.access_for_doc(bob.id(), design_doc).await, None);
+    let event = |cert: Certificate<ContentHeads<[u8; 32]>>| StaticEvent::from(Event::from(cert));
+    alice
+        .receive_static_event(event(Certificate::Delegation(dlg.signed().clone())))
+        .await?;
+    check_deadlock(
+        alice.receive_static_event(event(Certificate::Revocation(rev.signed().clone()))),
+    )
+    .await??;
     Ok(())
 }

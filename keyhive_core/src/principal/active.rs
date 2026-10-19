@@ -1,4 +1,4 @@
-//! The current user agent (which can sign and encrypt).
+//! This replica's own individual, which can sign and encrypt.
 
 pub mod archive;
 
@@ -9,19 +9,11 @@ use super::{
         id::IndividualId,
         op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
         state::PrekeyState,
-        Individual,
+        IndividualState,
     },
 };
 use crate::{
-    access::Access,
-    listener::{
-        log::Log, membership::MembershipListener, no_listener::NoListener, prekey::PrekeyListener,
-    },
-    principal::{
-        agent::id::AgentId,
-        group::delegation::{Delegation, DelegationError},
-        membered::Membered,
-    },
+    listener::{log::Log, membership::MembershipListener, prekey::PrekeyListener},
     transact::{
         fork::Fork,
         merge::{Merge, MergeAsync},
@@ -29,31 +21,27 @@ use crate::{
 };
 use derivative::Derivative;
 use dupe::Dupe;
+use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use futures::{lock::Mutex, prelude::*};
 use keyhive_crypto::{
     content::reference::ContentRef,
-    identifier::{Identifier, InvalidIdentifier},
+    identifier::InvalidIdentifier,
     share_key::{ShareKey, ShareSecretKey},
     signed::{SerdeSigned, SigningError},
     signer::{async_signer, async_signer::AsyncSigner},
     verifiable::Verifiable,
     verified::{SignError, Verified},
 };
+use rand::{CryptoRng, RngCore};
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
-use thiserror::Error;
+use std::{collections::BTreeMap, fmt, marker::PhantomData, sync::Arc};
 
-/// The current user agent (which can sign and encrypt).
+/// This replica's own individual, which can sign and encrypt.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Active<
-    F: FutureForm,
-    S: AsyncSigner<F>,
-    T: ContentRef = [u8; 32],
-    L: PrekeyListener<F> = NoListener,
-> {
-    /// The signing key of the active agent.
+pub struct Active<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> {
+    /// The signing key of the active individual.
     #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
 
@@ -64,8 +52,8 @@ pub struct Active<
 
     pub(crate) id: IndividualId,
 
-    /// The [`Individual`] representation (how others see this agent).
-    pub(crate) individual: Arc<Mutex<Individual>>,
+    /// The [`IndividualState`] representation (how others see it).
+    pub(crate) individual: Arc<Mutex<IndividualState>>,
 
     ///The listener for prekey events.
     #[derivative(Debug = "ignore", PartialEq = "ignore")]
@@ -75,14 +63,14 @@ pub struct Active<
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Active<F, S, T, L> {
-    /// Generate a new active agent.
+    /// Generate a new active individual.
     ///
     /// # Arguments
     ///
-    /// * `signer` - The signing key of the active agent.
-    /// * `listener` - The listener for changes to this agent's prekeys.
+    /// * `signer` - The signing key of the active individual.
+    /// * `listener` - The listener for changes to its prekeys.
     /// * `csprng` - The cryptographically secure random number generator.
-    pub async fn generate<R: rand::CryptoRng + rand::RngCore>(
+    pub async fn generate<R: CryptoRng + RngCore>(
         signer: S,
         listener: L,
         csprng: &mut R,
@@ -92,7 +80,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         let init_op =
             KeyOp::Add(Verified::sign::<F, S>(&AddKeyOp { share_key: init_pk }, &signer).await?);
 
-        // Signing checked that the signer's key is a valid identifier.
+        // Signing checked that the signer's key is a valid id.
         let id = IndividualId::from(init_op.issuer());
         let mut prekey_state = PrekeyState::new(init_op);
         let mut prekey_pairs = BTreeMap::from_iter([(init_pk, init_sk)]);
@@ -115,7 +103,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
 
         Ok(Self {
             id,
-            individual: Arc::new(Mutex::new(Individual {
+            individual: Arc::new(Mutex::new(IndividualState {
                 id,
                 prekeys: prekey_state.build(),
                 prekey_state,
@@ -127,24 +115,19 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         })
     }
 
-    /// Getter for the agent's [`IndividualId`].
+    /// This individual's [`IndividualId`].
     pub fn id(&self) -> IndividualId {
         self.id
     }
 
-    /// Getter for the agent's [`AgentId`].
-    pub fn agent_id(&self) -> AgentId {
-        AgentId::IndividualId(self.id())
-    }
-
-    /// The agent's underlying [`Individual`].
-    pub fn individual(&self) -> Arc<Mutex<Individual>> {
+    /// The underlying [`IndividualState`].
+    pub(crate) fn individual(&self) -> Arc<Mutex<IndividualState>> {
         self.individual.dupe()
     }
 
     /// Create a [`ShareKey`] that is not broadcast via the prekey state.
-    pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
+    pub async fn generate_private_prekey<R: CryptoRng + RngCore>(
+        &self,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Verified<RotateKeyOp>, SignError> {
         let picked = {
@@ -170,7 +153,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 
     /// Select a prekey out of the current prekeys, as
-    /// [`Individual::pick_prekey`] does, preferring one whose secret this
+    /// [`IndividualState::pick_prekey`] does, preferring one whose secret this
     /// instance holds. `None` if there are no live prekeys.
     pub async fn pick_prekey(&self, doc_id: DocumentId) -> Option<ShareKey> {
         tracing::trace!("picking prekey for document {doc_id}",);
@@ -199,8 +182,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 
     /// Replace a particular prekey with a new one.
-    pub async fn rotate_prekey<R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
+    pub async fn rotate_prekey<R: CryptoRng + RngCore>(
+        &self,
         old_prekey: ShareKey,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Verified<RotateKeyOp>, SignError> {
@@ -238,8 +221,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 
     /// Add a new prekey, expanding the number of currently available prekeys.
-    pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
+    pub async fn expand_prekeys<R: CryptoRng + RngCore>(
+        &self,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Verified<AddKeyOp>, SignError> {
         let new_secret = {
@@ -275,23 +258,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 
     /// Asynchronously sign a payload.
-    pub async fn try_sign_async<U: Serialize + std::fmt::Debug>(
+    pub async fn try_sign_async<U: Serialize + fmt::Debug>(
         &self,
         payload: U,
     ) -> Result<SerdeSigned<U>, SigningError> {
         async_signer::try_sign_async::<F, _, _>(&self.signer, payload).await
-    }
-
-    /// Encrypt a payload for a member of some [`Group`] or [`Document`].
-    pub async fn get_capability<M: MembershipListener<F, S, T>>(
-        &self,
-        subject: Membered<F, S, T, M>,
-        min: Access,
-    ) -> Option<Arc<SerdeSigned<Delegation<F, S, T, M>>>> {
-        subject
-            .get_capability(&self.id().into())
-            .await
-            .filter(|cap| cap.payload().can >= min)
     }
 
     /// Export prekey secrets as an opaque blob.
@@ -326,7 +297,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         }
     }
 
-    /// Deserialize from storage.
+    /// Deserialize from storage. Fails if the signer's key is not a valid id.
     pub fn from_archive(
         archive: &ActiveArchive,
         signer: S,
@@ -362,18 +333,18 @@ impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<
     }
 }
 
-impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> std::fmt::Display
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> fmt::Display
     for Active<F, S, T, L>
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.id(), f)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.id(), f)
     }
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Verifiable
     for Active<F, S, T, L>
 {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+    fn verifying_key(&self) -> VerifyingKey {
         self.signer.verifying_key()
     }
 }
@@ -381,9 +352,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Veri
 impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> Fork
     for Active<F, S, T, L>
 where
-    Log<F, S, T>: MembershipListener<F, S, T>,
+    Log<T>: MembershipListener<F, T>,
 {
-    type Forked = Active<F, S, T, Log<F, S, T>>;
+    type Forked = Active<F, S, T, Log<T>>;
 
     fn fork(&self) -> Self::Forked {
         Active {
@@ -400,7 +371,7 @@ where
 impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<F>> MergeAsync
     for Active<F, S, T, L>
 where
-    Log<F, S, T>: MembershipListener<F, S, T>,
+    Log<T>: MembershipListener<F, T>,
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
         let forked_individual = { fork.individual.lock().await.clone() };
@@ -413,45 +384,10 @@ where
     }
 }
 
-/// Errors when sharing encrypted content.
-#[derive(Debug, Error)]
-pub enum ShareError {
-    /// The active agent cannot find a public [`ShareKey`] for themselves.
-    #[error("The active agent cannot find a public ShareKey for themselves")]
-    MissingYourSharePublicKey,
-
-    /// The active agent cannot find a [`ShareSecretKey`] for themselves.
-    #[error("The active agent cannot find a secret ShareKey for themselves")]
-    MissingYourShareSecretKey,
-
-    /// The active agent does not know the [`ShareKey`] for the recipient.
-    #[error("The active agent does not know the ShareKey for the recipient: {0}")]
-    MissingRecipientShareKey(Identifier),
-
-    /// Encryption failed.
-    #[error("Encryption failed: {0}")]
-    EncryptionFailed(chacha20poly1305::Error),
-
-    /// [`Siv`][keyhive_crypto::siv::Siv] construction failed with an IO error.
-    #[error("Siv error: {0}")]
-    SivError(std::io::Error),
-}
-
-/// Errors when looking up a delegation for the [`Active`] agent.
-#[derive(Debug, Error)]
-pub enum ActiveDelegationError {
-    /// Cannot find proof at the requested access level.
-    #[error("Cannot find proof at the requested access level")]
-    CannotFindProof,
-
-    /// Invalid delegation.
-    #[error(transparent)]
-    DelegationError(#[from] DelegationError),
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::listener::no_listener::NoListener;
     use future_form::Sendable;
     use keyhive_crypto::signer::memory::MemorySigner;
 

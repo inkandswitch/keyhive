@@ -1,9 +1,13 @@
 use crate::principal::membered::id::MemberedId;
+use beekem::id::TreeId;
 use dupe::Dupe;
-use ed25519_dalek::VerifyingKey;
-use keyhive_crypto::{identifier::Identifier, verifiable::Verifiable};
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use keyhive_crypto::{
+    identifier::{Identifier, InvalidIdentifier},
+    verifiable::Verifiable,
+};
 use serde::{Deserialize, Serialize};
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
@@ -12,9 +16,7 @@ pub struct DocumentId(pub(crate) Identifier);
 impl DocumentId {
     #[cfg(any(feature = "test_utils", test))]
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
-        Self(Identifier::from(&ed25519_dalek::SigningKey::generate(
-            csprng,
-        )))
+        Self::from(&SigningKey::generate(csprng))
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
@@ -32,15 +34,29 @@ impl DocumentId {
 
 impl Dupe for DocumentId {}
 
+impl From<Identifier> for DocumentId {
+    fn from(id: Identifier) -> Self {
+        DocumentId(id)
+    }
+}
+
 impl From<DocumentId> for Identifier {
-    fn from(id: DocumentId) -> Identifier {
+    fn from(id: DocumentId) -> Self {
         id.0
     }
 }
 
-impl From<Identifier> for DocumentId {
-    fn from(id: Identifier) -> DocumentId {
-        DocumentId(id)
+impl From<&SigningKey> for DocumentId {
+    fn from(key: &SigningKey) -> Self {
+        DocumentId(Identifier::from(key))
+    }
+}
+
+impl TryFrom<VerifyingKey> for DocumentId {
+    type Error = InvalidIdentifier;
+
+    fn try_from(key: VerifyingKey) -> Result<Self, InvalidIdentifier> {
+        Identifier::try_from(key).map(DocumentId)
     }
 }
 
@@ -50,15 +66,15 @@ impl From<DocumentId> for MemberedId {
     }
 }
 
-impl From<beekem::id::TreeId> for DocumentId {
-    fn from(tree_id: beekem::id::TreeId) -> Self {
-        DocumentId(tree_id.id())
+impl From<TreeId> for DocumentId {
+    fn from(tree: TreeId) -> Self {
+        DocumentId(tree.id())
     }
 }
 
-impl From<DocumentId> for beekem::id::TreeId {
+impl From<DocumentId> for TreeId {
     fn from(id: DocumentId) -> Self {
-        beekem::id::TreeId::from(id.0)
+        TreeId::from(id.0)
     }
 }
 
@@ -68,14 +84,15 @@ impl Verifiable for DocumentId {
     }
 }
 
-impl Debug for DocumentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DocumentId({:#x})", self.0)
+impl fmt::Debug for DocumentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DocumentId({self})")
     }
 }
 
-impl Display for DocumentId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+/// The whole key, `0x`-prefixed.
+impl fmt::Display for DocumentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:#x}", self.0)
     }
 }

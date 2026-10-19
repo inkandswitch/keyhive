@@ -1,37 +1,36 @@
 //! Syncing to a replica that has never been introduced to one or more members.
 
-use futures::lock::Mutex;
 use keyhive_core::{
-    access::Access,
-    principal::individual::{id::IndividualId, op::KeyOp, Individual},
-    test_utils::make_simple_keyhive,
+    principal::individual::{id::IndividualId, op::KeyOp, IndividualState},
+    test_utils::{make_simple_keyhive, Hive},
 };
+use keyline::power::Power;
 use nonempty::nonempty;
-use std::sync::Arc;
 use testresult::TestResult;
 
-type Kh = keyhive_core::test_utils::Hive;
-
 /// Introduce `who` to `observer`, so `observer` can add `who` to a document.
-async fn introduce(observer: &Kh, who: &Kh) -> TestResult<IndividualId> {
+async fn introduce(observer: &Hive, who: &Hive) -> TestResult<IndividualId> {
     let prekey = who.expand_prekeys().await?;
-    let indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(prekey))));
-    let id = { indie.lock().await.id() };
+    let indie = IndividualState::new(KeyOp::Add(prekey));
+    let id = indie.id();
     observer.register_individual(indie).await;
     Ok(id)
 }
 
 /// Introduce `who` to `observer` by contact card, which contains a lone rotation
 /// rather than the op that added the rotated key.
-async fn introduce_by_contact_card(observer: &Kh, who: &Kh) -> TestResult<IndividualId> {
+async fn introduce_by_contact_card(observer: &Hive, who: &Hive) -> TestResult<IndividualId> {
     let card = who.generate_contact_card().await?;
     Ok(observer.receive_contact_card(&card).await?)
 }
 
 /// Deliver everything `from` holds that `to` is entitled to. Returns the number
 /// of events `to` could not apply.
-async fn sync_to(from: &Kh, to: &Kh) -> usize {
-    let events = from.static_events_for_agent(to.id()).await;
+async fn sync_to(from: &Hive, to: &Hive) -> usize {
+    let events = from
+        .static_events_for_agent(to.id())
+        .await
+        .expect("selects events");
     to.ingest_unsorted_static_events(events.into_values().collect())
         .await
         .len()
@@ -47,14 +46,14 @@ async fn a_replica_that_never_met_the_revoked_member_takes_the_revocation_in() -
     let dave_id = introduce(&alice, &dave).await?;
 
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    alice.add_member(bob_id, doc_id, Access::Admin, &[]).await?;
-    alice.add_member(dave_id, doc_id, Access::Read, &[]).await?;
+    alice.add_member(bob_id, doc_id, Power::Admin).await?;
+    alice.add_member(dave_id, doc_id, Power::Read).await?;
     assert_eq!(sync_to(&alice, &bob).await, 0, "bob took the setup");
 
-    // Bob's delegation to Erin is proved by Bob's own, which Alice revokes
-    // below. Dave has met neither of them.
+    // Bob grants Erin; Alice revokes Bob below, adopting Bob's grants. Dave
+    // has met neither of them.
     let erin_id = introduce(&bob, &erin).await?;
-    bob.add_member(erin_id, doc_id, Access::Read, &[]).await?;
+    bob.add_member(erin_id, doc_id, Power::Read).await?;
     assert_eq!(
         sync_to(&bob, &alice).await,
         0,
@@ -62,7 +61,7 @@ async fn a_replica_that_never_met_the_revoked_member_takes_the_revocation_in() -
     );
     assert!(
         dave.get_individual(erin_id).await.is_none(),
-        "dave must not know erin yet, or the defect cannot arise"
+        "dave must not know erin yet, so this shows he needs no keys"
     );
     alice.revoke_member(bob_id, true, doc_id).await?;
 
@@ -70,18 +69,18 @@ async fn a_replica_that_never_met_the_revoked_member_takes_the_revocation_in() -
 
     assert_eq!(stuck, 0, "dave cannot apply {stuck} events");
     assert!(
-        dave.get_individual(bob_id).await.is_some(),
-        "dave learned the revoked member's keys"
+        dave.get_individual(bob_id).await.is_none(),
+        "dave is not sent the revoked member's keys, and needs none"
     );
     assert_eq!(
-        dave.access_for_doc(bob_id, doc_id).await,
+        dave.access_for_doc(bob_id, doc_id).await?,
         None,
         "and holds him revoked, not merely unknown"
     );
     assert_eq!(
-        dave.access_for_doc(erin_id, doc_id).await,
-        Some(Access::Read),
-        "dave keeps erin, whose delegation bob proved"
+        dave.access_for_doc(erin_id, doc_id).await?,
+        Some(Power::Read),
+        "dave keeps erin, whom alice adopted"
     );
     Ok(())
 }
@@ -98,18 +97,14 @@ async fn a_replica_that_never_met_a_revoked_groups_members_takes_the_revocation_
 
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     let group_id = alice.generate_group(vec![]).await?;
-    alice
-        .add_member(group_id, doc_id, Access::Read, &[])
-        .await?;
+    alice.add_member(group_id, doc_id, Power::Read).await?;
     for who in [bob_id, erin_id] {
-        alice.add_member(who, group_id, Access::Read, &[]).await?;
+        alice.add_member(who, group_id, Power::Read).await?;
     }
-    alice
-        .add_member(dave_id, doc_id, Access::Admin, &[])
-        .await?;
+    alice.add_member(dave_id, doc_id, Power::Admin).await?;
     assert!(
         dave.get_individual(bob_id).await.is_none(),
-        "dave must not know bob yet, or the defect cannot arise"
+        "dave must not know bob yet, so this shows he needs no keys"
     );
 
     alice.revoke_member(group_id, true, doc_id).await?;
@@ -118,14 +113,13 @@ async fn a_replica_that_never_met_a_revoked_groups_members_takes_the_revocation_
 
     assert_eq!(stuck, 0, "dave cannot apply {stuck} events");
     assert!(
-        dave.get_individual(bob_id).await.is_some(),
-        "dave knows who bob is, or he could not have applied the delegations \
-         referencing him"
+        dave.get_individual(bob_id).await.is_none(),
+        "dave applies the delegations naming bob without bob's keys"
     );
     Ok(())
 }
 
-async fn a_revoked_chain_of_delegations() -> TestResult<(Kh, Kh, IndividualId)> {
+async fn a_revoked_chain_of_delegations() -> TestResult<(Hive, Hive, IndividualId)> {
     let owner = make_simple_keyhive().await?;
     let alice = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
@@ -136,20 +130,16 @@ async fn a_revoked_chain_of_delegations() -> TestResult<(Kh, Kh, IndividualId)> 
     let dave_id = introduce(&owner, &dave).await?;
 
     let doc_id = owner.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    owner
-        .add_member(alice_id, doc_id, Access::Admin, &[])
-        .await?;
-    owner
-        .add_member(dave_id, doc_id, Access::Admin, &[])
-        .await?;
+    owner.add_member(alice_id, doc_id, Power::Admin).await?;
+    owner.add_member(dave_id, doc_id, Power::Admin).await?;
     assert_eq!(sync_to(&owner, &alice).await, 0, "alice took the setup");
 
     let bob_id = introduce(&alice, &bob).await?;
-    alice.add_member(bob_id, doc_id, Access::Admin, &[]).await?;
+    alice.add_member(bob_id, doc_id, Power::Admin).await?;
     assert_eq!(sync_to(&alice, &bob).await, 0, "bob took the setup");
 
     let erin_id = introduce(&bob, &erin).await?;
-    bob.add_member(erin_id, doc_id, Access::Read, &[]).await?;
+    bob.add_member(erin_id, doc_id, Power::Read).await?;
     assert_eq!(
         sync_to(&bob, &owner).await,
         0,
@@ -157,15 +147,15 @@ async fn a_revoked_chain_of_delegations() -> TestResult<(Kh, Kh, IndividualId)> 
     );
     assert!(
         dave.get_individual(erin_id).await.is_none(),
-        "dave must not know erin yet, or the defect cannot arise"
+        "dave must not know erin yet, so this shows he needs no keys"
     );
 
-    // Revoking bob alone leaves erin in place: the check is on the issuer of
-    // erin's proof, which is alice. Revoking alice is what drops erin.
+    // Revoking bob cuts erin off: bob's grant to erin dies with bob's
+    // standing. Alice is revoked too, so no adoption keeps erin.
     owner.revoke_member(bob_id, false, doc_id).await?;
     owner.revoke_member(alice_id, false, doc_id).await?;
     assert_eq!(
-        owner.access_for_doc(erin_id, doc_id).await,
+        owner.access_for_doc(erin_id, doc_id).await?,
         None,
         "erin has to be out and not referenced by a revocation for this to be the case"
     );
@@ -181,9 +171,8 @@ async fn a_replica_takes_in_a_delegate_dropped_without_a_revocation() -> TestRes
 
     assert_eq!(stuck, 0, "dave cannot apply {stuck} events");
     assert!(
-        dave.get_individual(erin_id).await.is_some(),
-        "dave knows who erin is, or he could not have applied the delegation \
-         referencing her"
+        dave.get_individual(erin_id).await.is_none(),
+        "dave applies the delegation naming erin without erin's keys"
     );
     Ok(())
 }
@@ -201,25 +190,17 @@ async fn a_replica_takes_in_a_delegate_dropped_inside_a_member_group() -> TestRe
 
     let doc_id = owner.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     let group_id = owner.generate_group(vec![]).await?;
-    owner
-        .add_member(group_id, doc_id, Access::Read, &[])
-        .await?;
-    owner
-        .add_member(alice_id, group_id, Access::Admin, &[])
-        .await?;
-    owner
-        .add_member(dave_id, doc_id, Access::Admin, &[])
-        .await?;
+    owner.add_member(group_id, doc_id, Power::Read).await?;
+    owner.add_member(alice_id, group_id, Power::Admin).await?;
+    owner.add_member(dave_id, doc_id, Power::Admin).await?;
     assert_eq!(sync_to(&owner, &alice).await, 0, "alice took the setup");
 
     let bob_id = introduce(&alice, &bob).await?;
-    alice
-        .add_member(bob_id, group_id, Access::Admin, &[])
-        .await?;
+    alice.add_member(bob_id, group_id, Power::Admin).await?;
     assert_eq!(sync_to(&alice, &bob).await, 0, "bob took the setup");
 
     let erin_id = introduce(&bob, &erin).await?;
-    bob.add_member(erin_id, group_id, Access::Read, &[]).await?;
+    bob.add_member(erin_id, group_id, Power::Read).await?;
     assert_eq!(
         sync_to(&bob, &owner).await,
         0,
@@ -227,21 +208,20 @@ async fn a_replica_takes_in_a_delegate_dropped_inside_a_member_group() -> TestRe
     );
     assert!(
         dave.get_individual(erin_id).await.is_none(),
-        "dave must not know erin yet, or the defect cannot arise"
+        "dave must not know erin yet, so this shows he needs no keys"
     );
 
     owner.revoke_member(bob_id, false, group_id).await?;
     owner.revoke_member(alice_id, false, group_id).await?;
 
     // Dave reaches the document, not the group. The delegations he is sent
-    // include the group's, so the members they reference have to reach him too.
+    // include the group's; the members they name need not reach him.
     let stuck = sync_to(&owner, &dave).await;
 
     assert_eq!(stuck, 0, "dave cannot apply {stuck} events");
     assert!(
-        dave.get_individual(erin_id).await.is_some(),
-        "dave knows who erin is, or he could not have applied the delegation \
-         referencing her"
+        dave.get_individual(erin_id).await.is_none(),
+        "dave applies the delegation naming erin without erin's keys"
     );
     Ok(())
 }
@@ -255,10 +235,8 @@ async fn a_replica_takes_in_a_delegation_to_a_member_known_by_contact_card() -> 
     let bob_id = introduce_by_contact_card(&alice, &bob).await?;
 
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    alice
-        .add_member(relay_id, doc_id, Access::Relay, &[])
-        .await?;
-    alice.add_member(bob_id, doc_id, Access::Edit, &[]).await?;
+    alice.add_member(relay_id, doc_id, Power::Relay).await?;
+    alice.add_member(bob_id, doc_id, Power::Edit).await?;
 
     assert_eq!(
         sync_to(&alice, &relay).await,
@@ -266,15 +244,17 @@ async fn a_replica_takes_in_a_delegation_to_a_member_known_by_contact_card() -> 
         "the relay took everything"
     );
     assert_eq!(
-        relay.access_for_doc(bob_id, doc_id).await,
-        Some(Access::Edit),
+        relay.access_for_doc(bob_id, doc_id).await?,
+        Some(Power::Edit),
         "the relay knows bob is a member"
     );
     Ok(())
 }
 
+/// Membership reaches bob through a relay that knows everyone only by contact
+/// card; the key agreement, which a relay does not hold, comes from alice.
 #[tokio::test]
-async fn a_member_decrypts_what_it_receives_from_a_relay_known_by_contact_card() -> TestResult {
+async fn a_member_decrypts_with_membership_from_a_relay_known_by_contact_card() -> TestResult {
     let alice = make_simple_keyhive().await?;
     let relay = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
@@ -282,10 +262,8 @@ async fn a_member_decrypts_what_it_receives_from_a_relay_known_by_contact_card()
     let bob_id = introduce_by_contact_card(&alice, &bob).await?;
 
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    alice
-        .add_member(relay_id, doc_id, Access::Relay, &[])
-        .await?;
-    alice.add_member(bob_id, doc_id, Access::Edit, &[]).await?;
+    alice.add_member(relay_id, doc_id, Power::Relay).await?;
+    alice.add_member(bob_id, doc_id, Power::Edit).await?;
     let encrypted = alice
         .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"from alice")
         .await?;
@@ -295,12 +273,21 @@ async fn a_member_decrypts_what_it_receives_from_a_relay_known_by_contact_card()
         0,
         "the relay received everything"
     );
-    // Bob never hears from alice directly.
     assert_eq!(
         sync_to(&relay, &bob).await,
         0,
-        "bob received everything from the relay"
+        "bob received everything the relay holds"
     );
+    assert_eq!(
+        bob.access_for_doc(bob_id, doc_id).await?,
+        Some(Power::Edit),
+        "and knows he is a member"
+    );
+    assert!(
+        !bob.has_document(doc_id).await,
+        "a relay holds no key agreement to pass on"
+    );
+    sync_to(&alice, &bob).await;
     assert_eq!(
         bob.try_decrypt_content(doc_id, encrypted.encrypted_content())
             .await?,
