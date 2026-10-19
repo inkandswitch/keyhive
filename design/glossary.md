@@ -11,7 +11,6 @@ Terms used across the Keyhive design documents and code. Where the design docume
 | _Group_ (design docs: _Stateful Agent_) | An agent with a mutable membership: a set of delegations and revocations rooted at the group's key. | `Group`, `GroupId` |
 | _Document_ | A group that additionally owns encrypted content and a BeeKEM tree. `Document :< Group :< Individual` in the design-doc subtyping. | `Document`, `DocumentId` |
 | _Active_ | The local user's own agent: the individual whose signing key this replica controls. | `Active` |
-| _Public_ | A well-known individual whose keys everyone holds; used to encrypt "to anyone" as a fallback. | `Public` |
 | _Membered_ | Anything with a membership (a `Group` or a `Document`). | `Membered` |
 | _Peer_ | Anything you can delegate _to_ (an individual, group, or document) as opposed to a delegator. | `Peer` |
 | _Root_ / _Genesis key_ | The key pair whose verifying key _is_ a group's or document's identifier. All authority over that subject is rooted in delegations signed by it. Self-certifying: possession of the root key proves you created the subject. | |

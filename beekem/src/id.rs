@@ -21,19 +21,6 @@ impl MemberId {
         self.0
     }
 
-    /// The well-known `Public` member identity.
-    ///
-    /// Its signing key is all zeros, so its secret is public knowledge by
-    /// design, so it provides no confidentiality on its own.
-    pub fn public() -> Self {
-        Self::from(&SigningKey::from([0u8; 32]))
-    }
-
-    /// Whether this is [`Self::public`].
-    pub fn is_public(&self) -> bool {
-        *self == Self::public()
-    }
-
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
@@ -216,13 +203,6 @@ mod tests {
             assert_eq!(VerifyingKey::from(tree), vk);
             assert_eq!(TreeId::try_from(vk), Ok(tree));
         });
-    }
-
-    #[test]
-    fn only_the_public_id_is_public() {
-        assert!(MemberId::public().is_public());
-        let other = SigningKey::from([1u8; 32]);
-        assert!(!MemberId::from(&other).is_public());
     }
 
     #[test]

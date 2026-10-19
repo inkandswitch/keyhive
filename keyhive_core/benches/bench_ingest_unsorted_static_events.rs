@@ -3,8 +3,7 @@
 //! cargo bench --bench bench_ingest --features test_utils
 
 use keyhive_core::{
-    access::Access, event::static_event::StaticEvent, principal::public::Public,
-    test_utils::make_simple_keyhive,
+    access::Access, event::static_event::StaticEvent, test_utils::make_simple_keyhive,
 };
 use nonempty::nonempty;
 
@@ -18,10 +17,7 @@ async fn generate_events(n_peers: usize, n_public_docs: usize) -> Vec<StaticEven
     let mut docs = Vec::with_capacity(n_public_docs);
     for i in 0..n_public_docs {
         let hash: [u8; 32] = blake3::hash(&(i as u64).to_le_bytes()).into();
-        let doc = alice
-            .generate_doc(vec![Public.id()], nonempty![hash])
-            .await
-            .unwrap();
+        let doc = alice.generate_doc(vec![], nonempty![hash]).await.unwrap();
         docs.push(doc);
     }
 

@@ -1,6 +1,5 @@
 use beekem::{
     id::{MemberId, TreeId},
-    keys::{ConflictKeys, NodeKey},
     operation::{CgkaAuthorization, CgkaOperation},
     tree::PathChange,
 };
@@ -10,9 +9,8 @@ use keyhive_core::{
     keyhive::ReceiveCgkaOpError,
     principal::{
         document::id::DocumentId,
-        group::{delegation::StaticDelegation, id::GroupId, revocation::StaticRevocation},
+        group::{delegation::StaticDelegation, id::GroupId},
         individual::{id::IndividualId, Individual},
-        public::Public,
     },
 };
 use keyhive_crypto::{
@@ -501,54 +499,6 @@ async fn a_founding_delegation_cannot_seat_an_outsider() -> TestResult {
     Ok(())
 }
 
-#[tokio::test]
-async fn an_add_cannot_cite_a_delegation_issued_by_public() -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc = alice.get_document(doc_id).await.expect("the document");
-    alice
-        .add_member(Public.id(), doc_id, Access::Read, &[])
-        .await?;
-
-    // Mallory grants herself admin under `Public`, using the key everybody has.
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
-    learn(&alice, &mallory).await;
-    let forged = Public
-        .signer()
-        .try_sign_sync(StaticDelegation::<[u8; 32]> {
-            can: Access::Admin,
-            proof: None,
-            delegate: mallory.id().into(),
-            after_revocations: vec![],
-            after_content: Default::default(),
-        })?;
-    alice.receive_delegation(&forged).await?;
-
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: CgkaAuthorization::Delegation(Digest::hash(&forged).into()),
-    };
-    // Signed with the same well-known key, so the issuers match.
-    let result = alice
-        .receive_cgka_op(Public.signer().try_sign_sync(op)?)
-        .await;
-
-    assert!(is_denied(&result), "{result:?}");
-    let seated = doc
-        .lock()
-        .await
-        .cgka_mut()?
-        .member_ids()?
-        .any(|id| id == mallory.id());
-    assert!(!seated, "mallory must not be in the tree");
-    Ok(())
-}
-
 /// The causal root of `doc`'s operations, which is its creator's add of themselves.
 async fn creators_own_add(observer: &Kh, doc: DocumentId) -> Signed<CgkaOperation> {
     op_where(
@@ -601,55 +551,6 @@ async fn a_member_who_did_not_found_the_document_cannot_enact_a_founding_delegat
 
     assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, bob.id().verifying_key()).await);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_remove_cannot_cite_a_revocation_issued_by_public() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-    let bob_id = bob.id();
-    alice
-        .add_member(Public.id(), doc_id, Access::Read, &[])
-        .await?;
-
-    let forged_dlg = Public
-        .signer()
-        .try_sign_sync(StaticDelegation::<[u8; 32]> {
-            can: Access::Admin,
-            proof: None,
-            delegate: bob_id.into(),
-            after_revocations: vec![],
-            after_content: Default::default(),
-        })?;
-    alice.receive_delegation(&forged_dlg).await?;
-    let forged_rev = Public
-        .signer()
-        .try_sign_sync(StaticRevocation::<[u8; 32]> {
-            revoke: Digest::hash(&forged_dlg),
-            proof: None,
-            after_content: Default::default(),
-        })?;
-    alice.receive_revocation(&forged_rev).await?;
-
-    let seated = tree_members(&alice, doc_id).await;
-    let leaf_idx = seated
-        .iter()
-        .position(|id| *id == bob_id)
-        .expect("bob seated") as u32;
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob.id()),
-        leaf_idx,
-        removed_keys: vec![],
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: CgkaAuthorization::Revocation(Digest::hash(&forged_rev).into()),
-    };
-    let result = alice
-        .receive_cgka_op(Public.signer().try_sign_sync(op)?)
-        .await;
-
-    assert!(is_denied(&result), "{result:?}");
-    assert!(tree_members(&alice, doc_id).await.contains(&bob_id));
     Ok(())
 }
 
@@ -851,29 +752,6 @@ async fn a_rotation_whose_id_differs_from_its_path_leaf_is_denied() -> TestResul
     let op = CgkaOperation::Update {
         id: MemberId::from(alice.id()),
         new_path: intercepted_path(&bob).await,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-    };
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
-
-    assert!(is_denied(&result), "{result:?}");
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_member_cannot_rotate_their_leaf_to_the_public_key() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-
-    let mut path = intercepted_path(&bob).await;
-    path.leaf_pk = NodeKey::ConflictKeys(ConflictKeys {
-        first: Public.share_key(),
-        second: path.leaf_pk.lowest(),
-        more: vec![],
-    });
-    let op = CgkaOperation::Update {
-        id: MemberId::from(bob.id()),
-        new_path: path,
         predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),

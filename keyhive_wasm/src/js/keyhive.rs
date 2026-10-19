@@ -54,9 +54,7 @@ use keyhive_core::{
     crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
-    principal::{
-        agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError, public::Public,
-    },
+    principal::{agent::Agent, document::DecryptError, individual::ReceivePrekeyOpError},
 };
 use nonempty::NonEmpty;
 use rand::rngs::OsRng;
@@ -306,7 +304,6 @@ impl JsKeyhive {
     /// Force a PCS key rotation and return the new leaf secret, serialized as a
     /// one-entry `BTreeMap<ShareKey, ShareSecretKey>` (the exact format
     /// `importPrekeySecrets` accepts).
-    /// The map is empty if only Public's keys were used.
     /// The returned bytes are secret key material: do not log or persist unencrypted.
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub async fn force_pcs_update(&self, doc_id: &JsDocumentId) -> Result<Box<[u8]>, JsValue> {
@@ -317,7 +314,7 @@ impl JsKeyhive {
             .await
             .map_err(EncryptContentError::from)
             .map_err(JsEncryptError::from)?;
-        let map = BTreeMap::from_iter(new_key_pair);
+        let map = BTreeMap::from([new_key_pair]);
         let bytes = bincode::serialize(&map).map_err(JsSerializationError::from)?;
         Ok(bytes.into_boxed_slice())
     }
@@ -589,28 +586,6 @@ impl JsKeyhive {
         let doc = self.0.get_document(doc_id.0).await?;
         let mems = { doc.lock().await.transitive_members().await };
         mems.get(&id.0).map(|(_, access)| JsAccess(*access))
-    }
-
-    /// The most permissive of `id`'s direct access and the document's
-    /// public access. Returns undefined if neither grants access (or the
-    /// document is unknown).
-    #[wasm_bindgen(js_name = bestAccessForDoc)]
-    pub async fn best_access_for_doc(
-        &self,
-        id: &JsIdentifier,
-        doc_id: &JsDocumentId,
-    ) -> Option<JsAccess> {
-        init_span!("JsKeyhive::best_access_for_doc");
-        let doc = self.0.get_document(doc_id.0).await?;
-        let members = { doc.lock().await.transitive_members().await };
-        let direct = members.get(&id.0).map(|(_, access)| *access);
-        let public = members.get(&Public.id()).map(|(_, access)| *access);
-        match (direct, public) {
-            (Some(d), Some(p)) => Some(JsAccess(d.max(p))),
-            (Some(d), None) => Some(JsAccess(d)),
-            (None, Some(p)) => Some(JsAccess(p)),
-            (None, None) => None,
-        }
     }
 
     #[wasm_bindgen(js_name = exportPrekeySecrets)]

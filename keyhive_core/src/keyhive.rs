@@ -39,7 +39,6 @@ use crate::{
         },
         membered::{id::MemberedId, Membered},
         peer::Peer,
-        public::Public,
     },
     stats::Stats,
     store::{
@@ -59,8 +58,7 @@ use crate::{
 use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
-    id::MemberId,
-    keys::{LeafKeyPair, NodeKey, ShareKeyMap},
+    keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaAuthorization, CgkaOperation},
     pcs_key::PcsKey,
 };
@@ -200,13 +198,10 @@ impl<
 
         Ok(Self {
             id: active_id,
-            individuals: Arc::new(Mutex::new(HashMap::from_iter([
-                (
-                    Public.id().into(),
-                    Arc::new(Mutex::new(Public.individual())),
-                ),
-                (active_id, inner_active.individual().dupe()),
-            ]))),
+            individuals: Arc::new(Mutex::new(HashMap::from_iter([(
+                active_id,
+                inner_active.individual().dupe(),
+            )]))),
             active: Arc::new(Mutex::new(inner_active)),
             groups: Arc::new(Mutex::new(HashMap::new())),
             docs: Arc::new(Mutex::new(HashMap::new())),
@@ -875,7 +870,7 @@ impl<
     pub async fn force_pcs_update(
         &self,
         doc: DocumentId,
-    ) -> Result<(Signed<CgkaOperation>, Option<LeafKeyPair>), EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, LeafKeyPair), EncryptError> {
         let handle = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
         let (op, new_key_pair) = {
@@ -886,7 +881,7 @@ impl<
                 .pcs_update(&signer, &mut *locked_csprng)
                 .await?
         };
-        self.insert_rotated_secret(new_key_pair).await;
+        self.insert_rotated_secret(Some(new_key_pair)).await;
         self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
         Ok((op, new_key_pair))
     }
@@ -1706,11 +1701,6 @@ impl<
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
         let id = key_op.issuer();
-        // Drop any prekey op addressed to Public so its individual can never
-        // expand or rotate.
-        if id == Public.id() {
-            return Ok(());
-        }
         let agent = if let Some(agent) = self.get_agent(id).await {
             agent
         } else {
@@ -1980,8 +1970,6 @@ impl<
                 };
                 let dlg = { self.delegations.lock().await.get(&Digest::from(*dlg_hash)) }
                     .ok_or(CgkaUnauthorized::Pending)?;
-                // Public can't add members.
-                ensure(dlg.issuer != Public.id(), CgkaUnauthorized::Denied)?;
                 // Only readers or above can add members.
                 ensure(dlg.payload.can.is_reader(), CgkaUnauthorized::Denied)?;
                 // A founding delegation is signed by the document's own
@@ -2025,8 +2013,6 @@ impl<
                 };
                 let rev = { self.revocations.lock().await.get(&Digest::from(*rev_hash)) }
                     .ok_or(CgkaUnauthorized::Pending)?;
-                // Public can't remove members.
-                ensure(rev.issuer != Public.id(), CgkaUnauthorized::Denied)?;
                 ensure(rev.issuer == op_issuer, CgkaUnauthorized::Denied)?;
                 ensure(
                     rev.payload.revoke.payload.can.is_reader(),
@@ -2045,21 +2031,8 @@ impl<
             }
             CgkaOperation::Update { id, new_path, .. } => {
                 ensure(*id == new_path.leaf_id, CgkaUnauthorized::Denied)?;
-                if new_path.leaf_id == MemberId::public() {
-                    // Anyone can rotate Public's leaf, but it must reinstate the well-known key.
-                    ensure(
-                        new_path.leaf_pk == NodeKey::ShareKey(Public.share_key()),
-                        CgkaUnauthorized::Denied,
-                    )
-                } else {
-                    // An update must be signed by the owner of the leaf it rotates.
-                    ensure(new_path.leaf_id.id() == op_issuer, CgkaUnauthorized::Denied)?;
-                    // An update can't make a non-public leaf public.
-                    ensure(
-                        !new_path.leaf_pk.contains_key(&Public.share_key()),
-                        CgkaUnauthorized::Denied,
-                    )
-                }
+                // An update must be signed by the owner of the leaf it rotates.
+                ensure(new_path.leaf_id.id() == op_issuer, CgkaUnauthorized::Denied)
             }
         }
     }
@@ -2111,21 +2084,6 @@ impl<
                 {
                     self.event_listener.on_cgka_op(&signed_op).await;
                 };
-                return Ok(());
-            } else if Public.individual().id() == added_id {
-                let sk = Public.share_secret_key();
-                let mut locked_doc = doc.lock().await;
-                let merged = locked_doc.merge_cgka_invite_op(signed_op.clone(), &sk)?;
-                locked_doc.reset_cgka_owner(active_id)?;
-                drop(locked_doc);
-                // Resetting the owner changes which leaf is ours so a secret we hold for
-                // it may only now be the one this document needs. Release the active
-                // guard first.
-                drop(locked_active);
-                self.adopt_leaf_secrets(&doc, Vec::new()).await;
-                if merged {
-                    self.event_listener.on_cgka_op(&signed_op).await;
-                }
                 return Ok(());
             }
         }
@@ -2927,21 +2885,6 @@ impl<
             .map(|(_agent, can)| *can)
     }
 
-    /// The higher of `who`'s access to `doc` and public's access to `doc`.
-    ///
-    /// `None` for an agent or document we have not heard of.
-    pub async fn best_access_for_doc(
-        &self,
-        who: impl Into<Identifier>,
-        doc: DocumentId,
-    ) -> Option<Access> {
-        let members = self.reachable_members(doc).await;
-        let direct = members.get(&who.into()).copied();
-        let public = members.get(&Public.id()).copied();
-        // `None` sorts below `Some`, so this is "the better of the two, if either".
-        direct.max(public)
-    }
-
     pub(crate) async fn agent_by_id(&self, id: Identifier) -> Result<Agent<F, S, T, L>, NotFound> {
         self.get_agent(id).await.ok_or_else(|| NotFound::new(id))
     }
@@ -3409,7 +3352,7 @@ pub enum ReceiveEventError<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{access::Access, principal::public::Public, transact::transact_async};
+    use crate::{access::Access, transact::transact_async};
     use beekem::operation::CgkaOperation;
     use future_form::Sendable;
     use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
@@ -3496,7 +3439,7 @@ mod tests {
             .await?;
 
         assert!(!hive.active.lock().await.key_pairs.lock().await.is_empty());
-        assert_eq!(hive.individuals.lock().await.len(), 3);
+        assert_eq!(hive.individuals.lock().await.len(), 2);
         assert_eq!(hive.groups.lock().await.len(), 1);
         assert_eq!(hive.docs.lock().await.len(), 1);
         assert_eq!(hive.delegations.lock().await.len(), 4);
@@ -3505,7 +3448,7 @@ mod tests {
         let archive = hive.into_archive().await;
 
         assert_eq!(hive.id(), archive.id());
-        assert_eq!(archive.individuals.len(), 3);
+        assert_eq!(archive.individuals.len(), 2);
         assert_eq!(archive.groups.len(), 1);
         assert_eq!(archive.docs.len(), 1);
         assert_eq!(archive.topsorted_ops.len(), 4);
@@ -3610,7 +3553,7 @@ mod tests {
 
         assert_eq!(hive1.delegations.lock().await.len(), 2);
         assert_eq!(hive1.revocations.lock().await.len(), 0);
-        assert_eq!(hive1.individuals.lock().await.len(), 3); // NOTE: knows about Public and Hive2
+        assert_eq!(hive1.individuals.lock().await.len(), 2); // NOTE: itself and Hive2
         assert_eq!(hive1.groups.lock().await.len(), 1);
         assert_eq!(hive1.docs.lock().await.len(), 0);
 
@@ -3630,7 +3573,7 @@ mod tests {
 
             assert_eq!(hive2.delegations.lock().await.len(), 0);
             assert_eq!(hive2.revocations.lock().await.len(), 0);
-            assert_eq!(hive2.individuals.lock().await.len(), 3);
+            assert_eq!(hive2.individuals.lock().await.len(), 2);
             assert_eq!(hive2.groups.lock().await.len(), 0);
             assert_eq!(hive2.docs.lock().await.len(), 0);
 
@@ -3643,7 +3586,7 @@ mod tests {
 
         assert_eq!(hive2.delegations.lock().await.len(), 2);
         assert_eq!(hive2.revocations.lock().await.len(), 0);
-        assert_eq!(hive2.individuals.lock().await.len(), 3); // NOTE: Yourself, Public, and Hive2
+        assert_eq!(hive2.individuals.lock().await.len(), 2); // NOTE: itself and Hive1
         assert_eq!(hive2.groups.lock().await.len(), 1);
         assert_eq!(hive2.docs.lock().await.len(), 0);
     }
@@ -3655,10 +3598,13 @@ mod tests {
         let left = make_keyhive().await;
         let middle = make_keyhive().await;
         let right = make_keyhive().await;
+        // A reader of Left's document: each replica passes on what it is sent.
+        let reader = make_keyhive().await;
+        let reader_id = register_peer(&left, &reader).await;
 
-        // 2 delegations (you & public)
+        // 2 delegations (you & the reader)
         let left_doc = left
-            .generate_doc(vec![Public.id()], nonempty![[0u8; 32]])
+            .generate_doc(vec![reader_id.into()], nonempty![[0u8; 32]])
             .await
             .unwrap();
         // 1 delegation (you)
@@ -3668,11 +3614,7 @@ mod tests {
         assert_eq!(left.revocations.lock().await.len(), 0);
 
         assert_eq!(left.individuals.lock().await.len(), 2);
-        assert!(left
-            .individuals
-            .lock()
-            .await
-            .contains_key(&IndividualId(Public.id())));
+        assert!(left.individuals.lock().await.contains_key(&reader_id));
 
         assert_eq!(left.groups.lock().await.len(), 1);
         assert_eq!(left.docs.lock().await.len(), 1);
@@ -3681,13 +3623,13 @@ mod tests {
         assert!(left.groups.lock().await.contains_key(&left_group_id));
 
         // Not the group.
-        let left_membered = left.membered_reachable_by_agent(Public.id()).await;
+        let left_membered = left.membered_reachable_by_agent(reader_id).await;
 
         assert_eq!(left_membered.len(), 1);
         assert!(left_membered.contains_key(&left_doc.into()));
-        assert!(!left_membered.contains_key(&left_group_id.into())); // not included because Public is not a member
+        assert!(!left_membered.contains_key(&left_group_id.into())); // not included because the reader is not a member
 
-        let left_to_mid_ops = left.events_for_agent(Public.id()).await;
+        let left_to_mid_ops = left.events_for_agent(reader_id).await;
         assert_eq!(left_to_mid_ops.len(), 13);
 
         let left_to_mid: HashSet<_> = left_to_mid_ops.keys().copied().collect();
@@ -3724,8 +3666,8 @@ mod tests {
         );
 
         // Middle passes on exactly what it was sent. Its own prekey ops are not
-        // added, because no event Public is sent refers to Middle.
-        let mid_to_right_ops = middle.events_for_agent(Public.id()).await;
+        // added, because no event the reader is sent refers to Middle.
+        let mid_to_right_ops = middle.events_for_agent(reader_id).await;
         assert_eq!(
             mid_to_right_ops.keys().copied().collect::<HashSet<_>>(),
             left_to_mid
@@ -3761,13 +3703,13 @@ mod tests {
 
         assert_eq!(
             middle
-                .events_for_agent(Public.id())
+                .events_for_agent(reader_id)
                 .await
                 .iter()
                 .collect::<Vec<_>>()
                 .sort_by_key(|(k, _v)| **k),
             right
-                .events_for_agent(Public.id())
+                .events_for_agent(reader_id)
                 .await
                 .iter()
                 .collect::<Vec<_>>()
@@ -3777,7 +3719,7 @@ mod tests {
         right.generate_group(vec![left_doc.into()]).await.unwrap();
 
         // Check transitivity
-        let transitive_right_to_mid_ops = right.events_for_agent(Public.id()).await;
+        let transitive_right_to_mid_ops = right.events_for_agent(reader_id).await;
         assert_eq!(transitive_right_to_mid_ops.len(), 22);
 
         middle
@@ -3796,12 +3738,14 @@ mod tests {
         test_utils::init_logging();
 
         let keyhive = make_keyhive().await;
+        let reader = make_keyhive().await;
+        let reader_id = register_peer(&keyhive, &reader).await;
         let doc = keyhive
-            .generate_doc(vec![Public.id()], nonempty![[0u8; 32]])
+            .generate_doc(vec![reader_id.into()], nonempty![[0u8; 32]])
             .await
             .unwrap();
         let dlg = keyhive
-            .add_member(Public.id(), doc, Access::Read, &[])
+            .add_member(reader_id, doc, Access::Read, &[])
             .await
             .unwrap();
 
@@ -4490,9 +4434,10 @@ mod tests {
         for_bob.retain(|_, event| !matches!(event, Event::CgkaOperation(_)));
         bob.ingest_event_table(for_bob).await?;
 
-        let public = Public.individual();
+        let carol = make_keyhive().await;
+        let carol_id = register_peer(&bob, &carol).await;
         let result = bob
-            .add_member(public.id(), project_id, Access::Read, &[])
+            .add_member(carol_id, project_id, Access::Read, &[])
             .await;
 
         assert!(

@@ -57,17 +57,12 @@ impl Hash for Cgka {
 }
 
 impl Cgka {
-    fn insert_public_sks(cgka: &mut beekem::cgka::Cgka) {
-        use crate::principal::public::Public;
-        cgka.owner_sks
-            .insert(Public.share_key(), Public.share_secret_key());
-    }
-
     pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
-        let mut inner =
-            beekem::cgka::Cgka::new(TreeId::from(doc_id), MemberId::from(owner_id), owner_sks);
-        Self::insert_public_sks(&mut inner);
-        Cgka(inner)
+        Cgka(beekem::cgka::Cgka::new(
+            TreeId::from(doc_id),
+            MemberId::from(owner_id),
+            owner_sks,
+        ))
     }
 
     pub fn with_new_owner(
@@ -75,9 +70,9 @@ impl Cgka {
         my_id: IndividualId,
         owner_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
-        let mut inner = self.0.with_new_owner(MemberId::from(my_id), owner_sks)?;
-        Self::insert_public_sks(&mut inner);
-        Ok(Cgka(inner))
+        Ok(Cgka(
+            self.0.with_new_owner(MemberId::from(my_id), owner_sks)?,
+        ))
     }
 
     pub fn ops_count(&self) -> usize {
@@ -113,8 +108,7 @@ impl Cgka {
     ) -> Result<
         (
             ApplicationSecret<T>,
-            Option<Signed<CgkaOperation>>,
-            Option<LeafKeyPair>,
+            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
         ),
         CgkaError,
     > {
@@ -164,14 +158,13 @@ impl Cgka {
             .await
     }
 
-    #[allow(clippy::type_complexity)]
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>, Option<LeafKeyPair>), CgkaError> {
+    ) -> Result<(PcsKey, Signed<CgkaOperation>, LeafKeyPair), CgkaError> {
         self.0.update(new_pk, new_sk, signer, csprng).await
     }
 

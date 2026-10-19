@@ -7,4 +7,3 @@ pub mod group;
 pub mod individual;
 pub mod membered;
 pub mod peer;
-pub mod public;
