@@ -6,7 +6,7 @@ use future_form::Sendable;
 use keyhive_core::{
     access::Access,
     listener::no_listener::NoListener,
-    principal::{individual::id::IndividualId, membered::Membered, public::Public},
+    principal::{individual::id::IndividualId, membered::Membered},
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
@@ -69,7 +69,7 @@ async fn setup_many_docs_nested(
         let mut content = [0u8; 32];
         content[..8].copy_from_slice(&(i as u64).to_le_bytes());
         let doc_id = alice
-            .generate_doc(vec![Public.id()], nonempty![content])
+            .generate_doc(vec![], nonempty![content])
             .await
             .unwrap();
         // Only the first and last docs contain the group chain

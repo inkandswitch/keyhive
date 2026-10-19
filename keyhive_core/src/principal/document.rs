@@ -478,28 +478,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.merge_cgka_op(op, added_id)
     }
 
-    /// Reset the CGKA owner to `owner_id`, preserving `owner_sks`.
-    pub fn reset_cgka_owner(&mut self, owner_id: IndividualId) -> Result<(), CgkaError> {
-        let owner_sks = self.cgka()?.owner_sks().clone();
-        self.cgka = Some(self.cgka()?.with_new_owner(owner_id, owner_sks)?);
-        Ok(())
-    }
-
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
         self.cgka()?.ops()
     }
 
-    /// Rotate our CGKA key.
-    ///
-    /// The second element of the return is the new key pair or [`None`] when the owner
-    /// is not in the tree and the update fell back to Public's existing key.
+    /// Rotate our CGKA key, returning the update and the new leaf key pair.
     #[instrument(skip_all)]
-    #[allow(clippy::type_complexity)]
     pub async fn pcs_update<R: rand::RngCore + rand::CryptoRng>(
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Signed<CgkaOperation>, Option<LeafKeyPair>), EncryptError> {
+    ) -> Result<(Signed<CgkaOperation>, LeafKeyPair), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op, new_key_pair) = self
@@ -567,12 +556,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         ),
         EncryptError,
     > {
-        let (app_secret, maybe_update_op, new_key_pair) = self
+        let (app_secret, rotation) = self
             .cgka_mut()
             .map_err(EncryptError::FailedToMakeAppSecret)?
             .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
             .await
             .map_err(EncryptError::FailedToMakeAppSecret)?;
+        let (maybe_update_op, new_key_pair) = rotation.unzip();
 
         let application_secret_key = app_secret.key();
         self.known_decryption_keys

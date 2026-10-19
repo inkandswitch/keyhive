@@ -8,7 +8,7 @@ use keyhive_core::{
     },
     keyhive::Keyhive,
     listener::no_listener::NoListener,
-    principal::{document::id::DocumentId, public::Public},
+    principal::document::id::DocumentId,
     store::ciphertext::memory::MemoryCiphertextStore,
     test_utils::{
         content_ref, EventKind, Hive, Instance, TestContext, TestError, TestResult as Result,
@@ -163,12 +163,12 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
 
     // Neither instance knows about the other's document when it makes it.
     let from_alice = ctx.doc(&alice, "notes").await?;
-    alice.add_member(Public.id(), from_alice, Read, &[]).await?;
+    alice.add_member(reader.id(), from_alice, Read, &[]).await?;
     alice.force_pcs_update(from_alice).await?;
 
     let replica_doc = ctx.doc(&alice_replica, "design_doc").await?;
     alice_replica
-        .add_member(Public.id(), replica_doc, Read, &[])
+        .add_member(reader.id(), replica_doc, Read, &[])
         .await?;
     alice_replica.force_pcs_update(replica_doc).await?;
 
@@ -225,16 +225,16 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
         .new_keyhive_instance_for(&alice, "alice-replica")
         .await?;
     let reader = ctx.individual("reader").await?;
-    ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
     // When revoking and re-delegating, the second delegation cannot be applied until the
     // revocation has been.
-    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
-    alice.revoke_member(Public.id(), true, design_doc).await?;
-    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
+    alice.add_member(reader.id(), design_doc, Read, &[]).await?;
+    alice.revoke_member(reader.id(), true, design_doc).await?;
+    alice.add_member(reader.id(), design_doc, Read, &[]).await?;
     alice.force_pcs_update(design_doc).await?;
+    ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
     ctx.sync(&alice, &alice_replica).await?;
     assert_eq!(
@@ -243,7 +243,7 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
         "the replica applied the revocation and the delegation that followed it"
     );
     assert_eq!(
-        alice_replica.access_for_doc(Public.id(), design_doc).await,
+        alice_replica.access_for_doc(reader.id(), design_doc).await,
         Some(Read),
         "and ended on the re-delegation rather than the revocation"
     );
@@ -259,7 +259,7 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
             .try_decrypt_content(design_doc, &replica_wrote)
             .await?,
         b"after the re-delegation".to_vec(),
-        "the document is public again, so the reader reads what the replica wrote"
+        "the reader is a member again, so it reads what the replica wrote"
     );
     assert_eq!(
         reader.stats().await.pending_total(),
@@ -443,40 +443,7 @@ async fn the_second_instance_writes_to_a_document_owned_through_a_group() -> Res
 }
 
 #[tokio::test]
-async fn a_public_reader_reads_what_the_second_instance_wrote() -> Result<()> {
-    let mut ctx = TestContext::new().await;
-    let alice = ctx.individual("alice").await?;
-    let alice_replica = ctx
-        .new_keyhive_instance_for(&alice, "alice-replica")
-        .await?;
-    let bob = ctx.individual("bob").await?;
-    ctx.share_prekey_secrets(&alice, &alice_replica).await?;
-
-    let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
-    alice.force_pcs_update(design_doc).await?;
-    ctx.sync_all_unsent().await?;
-
-    let ct = ctx
-        .encrypt(&alice_replica, design_doc, b"announcement from the replica")
-        .await?;
-    ctx.sync(&alice_replica, &bob).await?;
-
-    assert_eq!(
-        alice.access_for_doc(bob.id(), design_doc).await,
-        None,
-        "bob is not a member and never becomes one"
-    );
-    assert_eq!(
-        bob.try_decrypt_content(design_doc, &ct).await?,
-        b"announcement from the replica".to_vec(),
-        "he reads the second instance's write through the public delegation"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_relay_carries_the_second_instances_write_to_a_public_reader() -> Result<()> {
+async fn a_relay_carries_the_second_instances_write_to_a_reader() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let alice_replica = ctx
@@ -484,12 +451,12 @@ async fn a_relay_carries_the_second_instances_write_to_a_public_reader() -> Resu
         .await?;
     let relay = ctx.individual("relay").await?;
     let bob = ctx.individual("bob").await?;
-    ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
     alice.add_member(relay.id(), design_doc, Read, &[]).await?;
-    alice.add_member(Public.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
     alice.force_pcs_update(design_doc).await?;
+    ctx.share_prekey_secrets(&alice, &alice_replica).await?;
     ctx.sync(&alice, &alice_replica).await?;
 
     let ct = ctx
@@ -505,7 +472,7 @@ async fn a_relay_carries_the_second_instances_write_to_a_public_reader() -> Resu
     assert_eq!(
         bob.try_decrypt_content(design_doc, &ct).await?,
         b"relayed from the replica".to_vec(),
-        "the relay carried the second instance's write through to a public reader"
+        "the relay carried the second instance's write through to a reader"
     );
     Ok(())
 }

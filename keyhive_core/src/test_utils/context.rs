@@ -23,7 +23,6 @@ use crate::{
         },
         individual::{id::IndividualId, op::KeyOp, Individual, ReceivePrekeyOpError},
         membered::{id::MemberedId, Membered},
-        public::Public,
     },
     stats::Stats,
     store::ciphertext::{
@@ -405,13 +404,11 @@ impl std::fmt::Debug for TestContext {
 
 impl TestContext {
     pub async fn new() -> Self {
-        let mut names = BTreeMap::new();
-        names.insert(Public.id(), "public".into());
         TestContext {
             hives: BTreeMap::new(),
             stores: BTreeMap::new(),
             signers: BTreeMap::new(),
-            names,
+            names: BTreeMap::new(),
             delivered: BTreeMap::new(),
             last_delivery: 0,
             next_instance: 0,
@@ -538,12 +535,6 @@ impl TestContext {
     /// is the one that sends only a delta.
     pub async fn sync(&mut self, from: &Instance, to: &Instance) -> TestResult<usize> {
         let events = self.static_events_for_instance(from, to).await?;
-        self.deliver(to, events).await
-    }
-
-    /// Sends `to` everything the public agent may see, like a sync server.
-    pub async fn sync_as_public(&mut self, from: &Instance, to: &Instance) -> TestResult<usize> {
-        let events = self.events_for(from, Public.id()).await;
         self.deliver(to, events).await
     }
 
@@ -923,10 +914,7 @@ impl TestContext {
             .await
             .ok_or_else(|| TestError::NotSynced(Box::new(to.id().into())))?;
 
-        let mut events: BTreeMap<[u8; 32], StaticEvent<[u8; 32]>> =
-            self.events_for(from, to.id()).await.into_iter().collect();
-        events.extend(self.events_for(from, Public.id()).await);
-        Ok(events.into_iter().collect())
+        Ok(self.events_for(from, to.id()).await)
     }
 
     async fn events_for(

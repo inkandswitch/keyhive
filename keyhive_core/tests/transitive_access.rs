@@ -2,7 +2,7 @@ use dupe::Dupe;
 use keyhive_core::{
     access::Access,
     event::static_event::StaticEvent,
-    principal::{agent::Agent, document::id::DocumentId, public::Public},
+    principal::{agent::Agent, document::id::DocumentId},
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::{
@@ -345,9 +345,9 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
     // Simulates the full TPW scenario with sync:
     // 1. Alice creates the hierarchy (doc_a as admin of doc_b, Bob as admin of doc_a)
     // 2. Alice shares events to Bob
-    // 3. Bob makes doc_b public on HIS keyhive (his own copy of the doc)
+    // 3. Bob adds Dave to doc_b on HIS keyhive (his own copy of the doc)
     // 4. Bob shares events back to Alice
-    // 5. Alice should see doc_b as public
+    // 5. Alice should see that Dave can read doc_b
     test_utils::init_logging();
 
     let alice = make_simple_keyhive().await?;
@@ -410,33 +410,37 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
     );
     let _doc_b_on_bob = doc_b_on_bob.unwrap();
 
-    // Bob makes doc_b public on HIS keyhive
-    bob.add_member(Public.id(), doc_b_id, Access::Read, &[])
+    let dave = make_simple_keyhive().await?;
+    let dave_id = bob
+        .receive_contact_card(&dave.get_existing_contact_card().await)
         .await?;
 
-    // Verify Public can reach doc_b on Bob's keyhive
-    let public_reachable_bob = bob.docs_reachable_by_agent(Public.id()).await;
+    // Bob adds Dave on HIS keyhive
+    bob.add_member(dave_id, doc_b_id, Access::Read, &[]).await?;
+
+    // Verify Dave can reach doc_b on Bob's keyhive
+    let dave_reachable_bob = bob.docs_reachable_by_agent(dave_id).await;
     assert_eq!(
-        public_reachable_bob.len(),
+        dave_reachable_bob.len(),
         1,
-        "Public should reach doc_b on Bob's keyhive"
+        "Dave should reach doc_b on Bob's keyhive"
     );
 
     // Bob shares events back to Alice
     let events_for_alice = bob.events_for_agent(alice_on_bob_id).await;
     alice.ingest_event_table(events_for_alice).await?;
 
-    // Verify Public can reach doc_b on Alice's keyhive
-    let public_reachable_alice = alice.docs_reachable_by_agent(Public.id()).await;
+    // Verify Dave can reach doc_b on Alice's keyhive
+    let dave_reachable_alice = alice.docs_reachable_by_agent(dave_id).await;
     assert_eq!(
-        public_reachable_alice.len(),
+        dave_reachable_alice.len(),
         1,
-        "Public should reach doc_b on Alice's keyhive after ingesting Bob's events"
+        "Dave should reach doc_b on Alice's keyhive after ingesting Bob's events"
     );
     assert_eq!(
-        public_reachable_alice[&doc_b_id],
+        dave_reachable_alice[&doc_b_id],
         Access::Read,
-        "Public should have Read access to doc_b on Alice's keyhive"
+        "Dave should have Read access to doc_b on Alice's keyhive"
     );
 
     Ok(())
@@ -445,7 +449,7 @@ async fn test_transitive_admin_can_make_public_via_sync() -> TestResult {
 #[tokio::test]
 async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
     // Scenario: Alice and Bob both have the doc with CGKA initialized.
-    // Alice adds Carol, Bob adds Public — concurrently.
+    // Alice adds Carol, Bob adds Dave — concurrently.
     // Then they sync: Alice ingests Bob's events, Bob ingests Alice's events.
     // Both should end up with the same members.
     test_utils::init_logging();
@@ -484,7 +488,7 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
     bob.ingest_event_table(events_for_bob).await?;
 
     // Now both have the doc with CGKA initialized.
-    // Alice adds Carol concurrently with Bob adding Public.
+    // Alice adds Carol concurrently with Bob adding Dave.
     let carol = make_simple_keyhive().await?;
     let carol_prekey_op = carol.expand_prekeys().await?;
     let carol_on_alice = std::sync::Arc::new(futures::lock::Mutex::new(
@@ -508,9 +512,13 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
         .add_member(carol_on_alice_id, doc_id, Access::Edit, &[])
         .await?;
 
-    // Bob adds Public as Read member (concurrently, before syncing)
-    bob.add_member(Public.id(), doc_id, Access::Read, &[])
+    let dave = make_simple_keyhive().await?;
+    let dave_id = bob
+        .receive_contact_card(&dave.get_existing_contact_card().await)
         .await?;
+
+    // Bob adds Dave as Read member (concurrently, before syncing)
+    bob.add_member(dave_id, doc_id, Access::Read, &[]).await?;
 
     // Now sync: Alice sends to Bob, Bob sends to Alice
     let events_alice_to_bob = alice.events_for_agent(bob_on_alice_id).await;
@@ -519,7 +527,7 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
     bob.ingest_event_table(events_alice_to_bob).await?;
     alice.ingest_event_table(events_bob_to_alice).await?;
 
-    // Both should see Carol and Public on the doc
+    // Both should see Carol and Dave on the doc
     let alice_reachable = alice.docs_reachable_by_agent(carol_on_alice_id).await;
     assert_eq!(
         alice_reachable.len(),
@@ -527,18 +535,18 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
         "Alice should see Carol on the doc"
     );
 
-    let alice_public_reachable = alice.docs_reachable_by_agent(Public.id()).await;
+    let alice_dave_reachable = alice.docs_reachable_by_agent(dave_id).await;
     assert_eq!(
-        alice_public_reachable.len(),
+        alice_dave_reachable.len(),
         1,
-        "Alice should see Public on the doc after ingesting Bob's events"
+        "Alice should see Dave on the doc after ingesting Bob's events"
     );
 
-    let bob_public_reachable = bob.docs_reachable_by_agent(Public.id()).await;
+    let bob_dave_reachable = bob.docs_reachable_by_agent(dave_id).await;
     assert_eq!(
-        bob_public_reachable.len(),
+        bob_dave_reachable.len(),
         1,
-        "Bob should still see Public on the doc"
+        "Bob should still see Dave on the doc"
     );
 
     Ok(())
@@ -668,14 +676,18 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         .await
         .map_err(|e| format!("alice's ops should merge with the tree bob started: {e:?}"))?;
 
-    bob.add_member(Public.id(), doc_id, Access::Read, &[])
+    let dave = make_simple_keyhive().await?;
+    let dave_id = bob
+        .receive_contact_card(&dave.get_existing_contact_card().await)
+        .await?;
+    bob.add_member(dave_id, doc_id, Access::Read, &[])
         .await
         .map_err(|e| format!("bob's tree should still take an add: {e:?}"))?;
 
     assert_eq!(
-        bob.docs_reachable_by_agent(Public.id()).await.len(),
+        bob.docs_reachable_by_agent(dave_id).await.len(),
         1,
-        "the document bob just admitted Public to should be reachable by Public"
+        "the document bob just admitted Dave to should be reachable by Dave"
     );
 
     // Exchange everything in both directions. The two trees should now agree.

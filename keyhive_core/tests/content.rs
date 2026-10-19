@@ -110,7 +110,7 @@ async fn two_things_cannot_share_a_name() -> Result<()> {
     ctx.doc(&alice, "design_doc").await?;
 
     // The members maps are keyed by name. A collision would drop one of them silently.
-    for taken in ["alice", "design_doc", "public"] {
+    for taken in ["alice", "design_doc"] {
         match ctx.group(&alice, taken).await {
             Err(TestError::NameTaken { name }) => assert_eq!(name, taken),
             other => panic!("{taken:?} is taken, got {other:?}"),

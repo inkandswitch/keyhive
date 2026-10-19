@@ -1,4 +1,3 @@
-use keyhive_core::principal::public::Public;
 use keyhive_crypto::identifier::Identifier;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -18,11 +17,6 @@ impl JsIdentifier {
         Ok(JsIdentifier(
             Identifier::from_bytes(vec).map_err(|_| CannotParseIdentifier)?,
         ))
-    }
-
-    #[wasm_bindgen(js_name = publicId)]
-    pub fn public_id() -> Self {
-        JsIdentifier(Public.id())
     }
 
     #[wasm_bindgen(js_name = toString)]

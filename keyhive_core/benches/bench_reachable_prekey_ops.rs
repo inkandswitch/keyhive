@@ -1,8 +1,6 @@
 use dupe::Dupe;
 use keyhive_core::{
-    access::Access,
-    principal::{individual::op::KeyOp, public::Public},
-    test_utils::make_simple_keyhive,
+    access::Access, principal::individual::op::KeyOp, test_utils::make_simple_keyhive,
 };
 use nonempty::nonempty;
 
@@ -35,10 +33,7 @@ fn reachable_prekey_ops_for_agent(
         let mut docs = Vec::with_capacity(n_public_docs);
         for i in 0..n_public_docs {
             let hash: [u8; 32] = blake3::hash(&(i as u64).to_le_bytes()).into();
-            let doc = alice
-                .generate_doc(vec![Public.id()], nonempty![hash])
-                .await
-                .unwrap();
+            let doc = alice.generate_doc(vec![], nonempty![hash]).await.unwrap();
             docs.push(doc);
         }
 

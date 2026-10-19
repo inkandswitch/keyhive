@@ -792,12 +792,6 @@ async fn an_unknown_id_causes_empty_query_and_failed_operation() -> Result<()> {
         None,
         "bob doesn't know the doc, so he doesn't know of any access level he might have to it"
     );
-    assert_eq!(
-        bob.best_access_for_doc(bob.id(), design_doc).await,
-        None,
-        "bob doesn't know the doc, so he doesn't know of any access level he might have to it /
-        , even if it's public"
-    );
 
     assert!(
         bob.get_document(design_doc).await.is_none(),
