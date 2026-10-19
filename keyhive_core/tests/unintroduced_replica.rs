@@ -61,7 +61,7 @@ async fn a_replica_that_never_met_the_revoked_member_takes_the_revocation_in() -
     );
     assert!(
         dave.get_individual(erin_id).await.is_none(),
-        "dave must not know erin yet, so this shows he needs no keys"
+        "dave does not know erin before the sync"
     );
     alice.revoke_member(bob_id, true, doc_id).await?;
 
@@ -69,8 +69,8 @@ async fn a_replica_that_never_met_the_revoked_member_takes_the_revocation_in() -
 
     assert_eq!(stuck, 0, "dave cannot apply {stuck} events");
     assert!(
-        dave.get_individual(bob_id).await.is_none(),
-        "dave is not sent the revoked member's keys, and needs none"
+        dave.get_individual(bob_id).await.is_some(),
+        "dave is sent the revoked member's keys: the delegation revoked names him"
     );
     assert_eq!(
         dave.access_for_doc(bob_id, doc_id).await?,
@@ -104,7 +104,7 @@ async fn a_replica_that_never_met_a_revoked_groups_members_takes_the_revocation_
     alice.add_member(dave_id, doc_id, Power::Admin).await?;
     assert!(
         dave.get_individual(bob_id).await.is_none(),
-        "dave must not know bob yet, so this shows he needs no keys"
+        "dave does not know bob before the sync"
     );
 
     alice.revoke_member(group_id, true, doc_id).await?;
@@ -113,8 +113,8 @@ async fn a_replica_that_never_met_a_revoked_groups_members_takes_the_revocation_
 
     assert_eq!(stuck, 0, "dave cannot apply {stuck} events");
     assert!(
-        dave.get_individual(bob_id).await.is_none(),
-        "dave applies the delegations naming bob without bob's keys"
+        dave.get_individual(bob_id).await.is_some(),
+        "dave is sent the keys of bob, whom the delegations he is sent name"
     );
     Ok(())
 }
@@ -147,7 +147,7 @@ async fn a_revoked_chain_of_delegations() -> TestResult<(Hive, Hive, IndividualI
     );
     assert!(
         dave.get_individual(erin_id).await.is_none(),
-        "dave must not know erin yet, so this shows he needs no keys"
+        "dave does not know erin before the sync"
     );
 
     // Revoking bob cuts erin off: bob's grant to erin dies with bob's
@@ -171,8 +171,8 @@ async fn a_replica_takes_in_a_delegate_dropped_without_a_revocation() -> TestRes
 
     assert_eq!(stuck, 0, "dave cannot apply {stuck} events");
     assert!(
-        dave.get_individual(erin_id).await.is_none(),
-        "dave applies the delegation naming erin without erin's keys"
+        dave.get_individual(erin_id).await.is_some(),
+        "dave is sent the keys of erin, whom a delegation he is sent names"
     );
     Ok(())
 }
@@ -208,7 +208,7 @@ async fn a_replica_takes_in_a_delegate_dropped_inside_a_member_group() -> TestRe
     );
     assert!(
         dave.get_individual(erin_id).await.is_none(),
-        "dave must not know erin yet, so this shows he needs no keys"
+        "dave does not know erin before the sync"
     );
 
     owner.revoke_member(bob_id, false, group_id).await?;
@@ -220,8 +220,8 @@ async fn a_replica_takes_in_a_delegate_dropped_inside_a_member_group() -> TestRe
 
     assert_eq!(stuck, 0, "dave cannot apply {stuck} events");
     assert!(
-        dave.get_individual(erin_id).await.is_none(),
-        "dave applies the delegation naming erin without erin's keys"
+        dave.get_individual(erin_id).await.is_some(),
+        "dave is sent the keys of erin, whom a delegation he is sent names"
     );
     Ok(())
 }

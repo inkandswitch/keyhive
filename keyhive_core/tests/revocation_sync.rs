@@ -2,7 +2,6 @@
 //! keys go to no one, a live member's to those it may be seated with.
 
 use keyhive_core::test_utils::{Instance, TestContext, TestResult as Result};
-use keyhive_crypto::identifier::Identifier;
 use keyline::power::Power::{Admin, Read};
 
 /// Alice's document, reached through a group holding Bob and Erin, with Dave an
@@ -40,7 +39,7 @@ async fn doc_with_a_member_group(ctx: &mut TestContext) -> Result<MemberGroup> {
 }
 
 #[tokio::test]
-async fn the_bulk_traversal_offers_live_members_keys_and_not_revoked_ones() -> Result<()> {
+async fn a_revoked_members_keys_reach_everyone_sent_its_revocation() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let MemberGroup {
         alice,
@@ -54,21 +53,23 @@ async fn the_bulk_traversal_offers_live_members_keys_and_not_revoked_ones() -> R
 
     let all = alice.all_agent_events().await?;
 
-    // The document reaches both of them, dave directly and erin through the
-    // group. Erin may be seated with dave; bob is out and needs no seat.
+    // Both are sent engineering's revocation of bob, and the delegation it
+    // revokes names him: erin as a member of the group, dave through the
+    // document's delegation to it. Erin, still a member, may be seated with
+    // either of them.
     for who in [&dave, &erin] {
         let sources = all
             .prekey_index
             .get(&who.id().into())
-            .expect("the traversal indexed this principal");
+            .expect("this principal is indexed");
         assert!(
             sources.contains(&erin.id().into()),
             "{} is not given the live member's keys",
             who.name()
         );
         assert!(
-            !sources.contains(&bob.id().into()),
-            "{} is given the revoked member's keys",
+            sources.contains(&bob.id().into()),
+            "{} is not given the revoked member's keys",
             who.name()
         );
     }
@@ -76,7 +77,7 @@ async fn the_bulk_traversal_offers_live_members_keys_and_not_revoked_ones() -> R
 }
 
 #[tokio::test]
-async fn a_group_in_no_document_offers_no_keys_of_its_revoked_members() -> Result<()> {
+async fn a_group_in_no_document_still_provides_keys_from_its_revoked_members() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -90,19 +91,21 @@ async fn a_group_in_no_document_offers_no_keys_of_its_revoked_members() -> Resul
 
     let all = alice.all_agent_events().await?;
 
+    // No document contains engineering, so only the group's own certificates
+    // name bob.
     let sources = all
         .prekey_index
         .get(&erin.id().into())
-        .expect("the traversal indexed erin");
+        .expect("erin is indexed");
     assert!(
-        !sources.contains(&bob.id().into()),
-        "erin is given the revoked member's keys"
+        sources.contains(&bob.id().into()),
+        "erin is not given the revoked member's keys"
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn a_member_revoked_inside_a_revoked_group_is_offered_to_no_one() -> Result<()> {
+async fn a_revocation_inside_a_revoked_group_sends_the_revoked_members_keys() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let dave = ctx.individual("dave").await?;
@@ -122,17 +125,40 @@ async fn a_member_revoked_inside_a_revoked_group_is_offered_to_no_one() -> Resul
 
     let all = alice.all_agent_events().await?;
 
-    // Frank is two groups down from the document and behind a revocation at each
-    // step.
-    for (who, sources) in &all.prekey_index {
-        assert!(
-            *who == Identifier::from(frank.id()) || !sources.contains(&frank.id().into()),
-            "{who} is given the keys of a member revoked inside the revoked group"
-        );
-    }
+    // Dave holds the document's closure, which reaches research's delegation
+    // to frank and its revocation through engineering.
+    let sources = all
+        .prekey_index
+        .get(&dave.id().into())
+        .expect("dave is indexed");
+    assert!(
+        sources.contains(&frank.id().into()),
+        "dave is not given the keys of a member revoked inside the revoked group"
+    );
     assert!(
         all.explanations.contains_key(&frank.id().into()),
         "frank is sent what explains his removal"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_removed_member_and_its_remover_agree_on_what_it_is_sent() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let engineering = ctx.group(&alice, "engineering").await?;
+    alice.add_member(bob.id(), engineering, Admin).await?;
+    ctx.sync_all_unsent().await?;
+
+    alice.revoke_member(bob.id(), true, engineering).await?;
+    ctx.sync_all_unsent().await?;
+
+    let bobs_view = bob.event_digests_for_agent(bob.id()).await?;
+    assert_eq!(alice.event_digests_for_agent(bob.id()).await?, bobs_view);
+    assert_eq!(
+        alice.all_agent_events().await?.digests_for(bob.id().into()),
+        bobs_view
     );
     Ok(())
 }

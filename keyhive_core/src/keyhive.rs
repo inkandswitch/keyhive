@@ -1564,27 +1564,71 @@ where
         &self,
         who: impl Into<Identifier>,
     ) -> Result<HashMap<Digest<Event<T>>, Event<T>>, KeylineStorageError<K::Error>> {
-        let who = who.into();
+        let (certs, cgka, prekeys) = self.all_for_agent(who.into()).await?;
         let mut ops = HashMap::new();
 
-        for key_ops in self.reachable_prekey_ops_for_agent(who).await?.values() {
-            for key_op in key_ops.iter() {
-                let op = Event::<T>::from(key_op.as_ref().dupe());
-                ops.insert(Digest::hash(&op), op);
-            }
+        for key_op in prekeys.values().flatten() {
+            let op = Event::<T>::from(key_op.as_ref().dupe());
+            ops.insert(Digest::hash(&op), op);
         }
 
-        for cgka_op in self.cgka_ops_reachable_by_agent(who).await? {
+        for cgka_op in cgka {
             let op = Event::<T>::from(cgka_op);
             ops.insert(Digest::hash(&op), op);
         }
 
-        for cert in self.certificates_for_agent(who).await? {
+        for cert in certs {
             let op = Event::from(cert);
             ops.insert(Digest::hash(&op), op);
         }
 
         Ok(ops)
+    }
+
+    /// The certificates, CGKA operations and prekey operations `who` is sent,
+    /// each computed once.
+    #[allow(clippy::type_complexity)]
+    async fn all_for_agent(
+        &self,
+        who: Identifier,
+    ) -> Result<
+        (
+            Vec<Certificate<ContentHeads<T>>>,
+            Vec<Arc<SerdeSigned<CgkaOperation>>>,
+            KeyOps,
+        ),
+        KeylineStorageError<K::Error>,
+    > {
+        let certs = self.certificates_for_agent(who).await?;
+        let cgka = self.cgka_ops_reachable_by_agent(who).await?;
+        let prekeys = self.prekey_ops_named_by(who, &certs, &cgka).await?;
+        Ok((certs, cgka, prekeys))
+    }
+
+    /// The prekey operations of `who` and of every agent `certs` or `cgka`
+    /// name: what a recipient of those needs to check each CGKA add's key
+    /// against the added member's published prekeys.
+    async fn prekey_ops_named_by(
+        &self,
+        who: Identifier,
+        certs: &[Certificate<ContentHeads<T>>],
+        cgka: &[Arc<SerdeSigned<CgkaOperation>>],
+    ) -> Result<KeyOps, KeylineStorageError<K::Error>> {
+        let mut named = BTreeSet::from([who]);
+        for cert in certs {
+            named.extend(named_by(cert)?);
+        }
+        for op in cgka {
+            named.extend(named_by_cgka_op(op));
+        }
+
+        let mut map: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
+        for id in named {
+            if let Some(state) = self.individual_state(IndividualId(id)).await {
+                map.insert(id, state.lock().await.prekey_ops().clone());
+            }
+        }
+        Ok(map.into())
     }
 
     /// The subjects in Keyline `who` stands over, split by whether it still
@@ -1745,50 +1789,74 @@ where
         Some(ops)
     }
 
-    /// Every prekey op `who` needs, grouped by the identifier they belong to:
-    /// its own, the active individual's, and those of every live member of a
-    /// subject it stands over: whoever it may seat in a tree. Members since
-    /// cut off are left out, and so is everything about a subject `who` was
-    /// cut off from.
+    /// Every prekey op `who` is sent, grouped by the identifier they belong
+    /// to: its own, and those of every agent named by the certificates and
+    /// CGKA operations it is sent.
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
         who: impl Into<Identifier>,
     ) -> Result<KeyOps, KeylineStorageError<K::Error>> {
-        let who = who.into();
-        let active_id: Identifier = { self.active.id().into() };
-        let mut owners = BTreeSet::from([active_id, who]);
-        let (live, _) = self.standing_over(who).await?;
-        for subject in live {
-            owners.extend(self.members_of(subject).await?.into_keys());
-        }
-
-        let mut map: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
-        for id in owners {
-            if let Some(state) = self.individual_state(IndividualId(id)).await {
-                map.insert(id, state.lock().await.prekey_ops().clone());
-            }
-        }
-        Ok(map.into())
+        Ok(self.all_for_agent(who.into()).await?.2)
     }
 
     /// [`Self::reachable_prekey_ops_for_agent`] for every principal, in one pass.
     ///
     /// Returns an [`AllReachablePrekeyOps`] containing:
     /// - `ops`: key ops per identifier, computed once and shared
-    /// - `index`: for each principal, the identifier keys into `ops` that principal
-    ///   needs, including members it can no longer reach
+    /// - `index`: for each principal, the identifiers in `ops` whose prekey ops
+    ///   it is sent
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_all_agents(
         &self,
     ) -> Result<AllReachablePrekeyOps, KeylineStorageError<K::Error>> {
         let views = self.subject_views().await?;
-        Ok(self.prekey_ops_for_views(&views).await)
+        let all_cgka = self.cgka_ops_for_all_agents().await?;
+        self.prekey_ops_for_views(&views, &all_cgka).await
     }
 
-    async fn prekey_ops_for_views(&self, views: &[SubjectView<T>]) -> AllReachablePrekeyOps {
+    /// The bulk form of [`Self::prekey_ops_named_by`]: each principal is sent
+    /// its own prekey ops and those of every agent named in what it is sent,
+    /// the closures of the subjects it stands over, its explanations, and the
+    /// CGKA operations of the documents it reads.
+    async fn prekey_ops_for_views(
+        &self,
+        views: &[SubjectView<T>],
+        all_cgka: &AllCgkaOps,
+    ) -> Result<AllReachablePrekeyOps, KeylineStorageError<K::Error>> {
         let active_id: Identifier = { self.active.id().into() };
 
+        // What each source names.
+        let mut named_by_closure: HashMap<Identifier, BTreeSet<Identifier>> = HashMap::new();
+        let mut named_by_explanation: HashMap<Identifier, BTreeSet<Identifier>> = HashMap::new();
+        let mut sources: HashMap<Identifier, BTreeSet<Identifier>> = HashMap::new();
+        for view in views {
+            let named = named_by_closure.entry(view.subject).or_default();
+            for cert in &view.closure {
+                named.extend(named_by(cert)?);
+            }
+            for member in view.live.iter().chain([&view.subject]) {
+                sources.entry(*member).or_default().insert(view.subject);
+            }
+            for (who, certs) in &view.cut {
+                let named = named_by_explanation.entry(*who).or_default();
+                for cert in certs {
+                    named.extend(named_by(cert)?);
+                }
+            }
+        }
+        let named_by_cgka: HashMap<Identifier, BTreeSet<Identifier>> = all_cgka
+            .ops
+            .iter()
+            .map(|(doc, ops)| {
+                (
+                    *doc,
+                    ops.iter().flat_map(|op| named_by_cgka_op(op)).collect(),
+                )
+            })
+            .collect();
+
+        // Every principal that is sent anything, and everyone this replica knows.
         let mut agents: BTreeSet<Identifier> = self
             .individuals
             .lock()
@@ -1797,37 +1865,38 @@ where
             .map(|id| (*id).into())
             .collect();
         agents.insert(active_id);
-        for view in views {
-            agents.extend(view.live.iter().copied());
-        }
+        agents.extend(sources.keys().copied());
+        agents.extend(named_by_explanation.keys().copied());
+        agents.extend(all_cgka.index.keys().copied());
 
-        let mut key_ops_cache: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
-        for id in &agents {
-            if let Some(state) = self.individual_state(IndividualId(*id)).await {
-                key_ops_cache.insert(*id, state.lock().await.prekey_ops().clone());
+        let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
+        for agent in &agents {
+            let needs = index.entry(*agent).or_default();
+            needs.insert(*agent);
+            for subject in sources.get(agent).into_iter().flatten() {
+                needs.extend(named_by_closure.get(subject).into_iter().flatten());
+            }
+            needs.extend(named_by_explanation.get(agent).into_iter().flatten());
+            for doc in all_cgka.index.get(agent).into_iter().flatten() {
+                needs.extend(named_by_cgka.get(doc).into_iter().flatten());
             }
         }
 
-        let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
-        for id in &agents {
-            index.entry(*id).or_default().extend([active_id, *id]);
-        }
-        for view in views {
-            for member in view.live.iter().chain([&view.subject]) {
-                index
-                    .entry(*member)
-                    .or_default()
-                    .extend(view.live.iter().copied());
+        let mut key_ops_cache: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
+        let candidates: BTreeSet<Identifier> = index.values().flatten().copied().collect();
+        for id in candidates {
+            if let Some(state) = self.individual_state(IndividualId(id)).await {
+                key_ops_cache.insert(id, state.lock().await.prekey_ops().clone());
             }
         }
         for needs in index.values_mut() {
             needs.retain(|id| key_ops_cache.contains_key(id));
         }
 
-        AllReachablePrekeyOps {
+        Ok(AllReachablePrekeyOps {
             ops: KeyOps::from(key_ops_cache),
             index,
-        }
+        })
     }
 
     /// Compute CGKA ops for all principals in a single pass: each held document's
@@ -1866,27 +1935,22 @@ where
     }
 
     /// Every event `agent` is sent, under the digests they are sent by.
-    ///
-    /// This includes prekey operations for members revoked out of groups it belongs to,
-    /// which it needs to verify those revocations.
     pub async fn event_digests_for_agent(
         &self,
         agent: impl Into<Identifier>,
     ) -> Result<HashSet<EventDigest<T>>, KeylineStorageError<K::Error>> {
-        let who = agent.into();
+        let (certs, cgka, prekeys) = self.all_for_agent(agent.into()).await?;
         let mut digests = HashSet::new();
 
-        for key_ops in self.reachable_prekey_ops_for_agent(who).await?.values() {
-            for key_op in key_ops.iter() {
-                let event: Event<T> = Event::from(key_op.as_ref().clone());
-                digests.insert(Digest::hash(&event));
-            }
+        for key_op in prekeys.values().flatten() {
+            let event: Event<T> = Event::from(key_op.as_ref().clone());
+            digests.insert(Digest::hash(&event));
         }
-        for cgka_op in self.cgka_ops_reachable_by_agent(who).await? {
+        for cgka_op in cgka {
             let event: Event<T> = Event::from(cgka_op);
             digests.insert(Digest::hash(&event));
         }
-        for cert in self.certificates_for_agent(who).await? {
+        for cert in certs {
             let event: Event<T> = Event::from(cert);
             digests.insert(Digest::hash(&event));
         }
@@ -1899,8 +1963,8 @@ where
         &self,
     ) -> Result<AllAgentEvents<T>, KeylineStorageError<K::Error>> {
         let views = self.subject_views().await?;
-        let all_prekey = self.prekey_ops_for_views(&views).await;
         let all_cgka = self.cgka_ops_for_all_agents().await?;
+        let all_prekey = self.prekey_ops_for_views(&views, &all_cgka).await?;
 
         let mut events = HashMap::new();
 
@@ -3429,7 +3493,9 @@ struct SubjectView<T: ContentRef> {
 
 /// The identifiers a certificate names: a delegation's issuer, audience and
 /// subject, and a revocation's issuer. Read without verifying: the store
-/// verified it on insert.
+/// verified it on insert. A revocation sent to anyone travels with the
+/// delegation it revokes (both closures and explanations hold it), so that
+/// delegation's audience is named too.
 fn named_by<W, E: core::error::Error + 'static>(
     cert: &Certificate<W>,
 ) -> Result<Vec<Identifier>, KeylineStorageError<E>> {
@@ -3438,8 +3504,17 @@ fn named_by<W, E: core::error::Error + 'static>(
             let (issuer, d): (Identifier, Delegation) = decode_stored(signed)?;
             vec![issuer, d.audience, d.subject]
         }
-        Certificate::Revocation(_) => Vec::new(),
+        Certificate::Revocation(signed) => vec![signed.issuer()],
     })
+}
+
+/// The individuals a CGKA operation names: its issuer and, for an add, the
+/// added member.
+fn named_by_cgka_op(op: &SerdeSigned<CgkaOperation>) -> Vec<Identifier> {
+    match &op.payload {
+        CgkaOperation::Add { added_id, .. } => vec![op.issuer, added_id.id()],
+        _ => vec![op.issuer],
+    }
 }
 
 #[derive(Debug, Error)]

@@ -180,9 +180,8 @@ pub struct AllReachablePrekeyOps {
     /// Key ops per identifier, computed once.
     pub ops: KeyOps,
 
-    /// For each principal: the set of identifiers whose ops in `ops` are reachable, plus
-    /// members it can no longer reach whose keys still help verify the history it is
-    /// sent.
+    /// For each principal, the identifiers in `ops` whose prekey ops it is sent: its
+    /// own plus every agent named by the certificates and CGKA ops it is sent.
     pub index: HashMap<Identifier, HashSet<Identifier>>,
 }
 

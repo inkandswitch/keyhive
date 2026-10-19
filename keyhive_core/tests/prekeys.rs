@@ -146,17 +146,20 @@ async fn two_concurrent_rotations_of_one_key_both_survive() -> Result<()> {
     Ok(())
 }
 
-/// Sixteen prekeys (seven at creation, nine more) used to pick an index one
-/// past the end for about half of all documents, and panic.
+/// Sixteen prekeys used to pick an index one past the end for about half of
+/// all documents, and panic.
 #[tokio::test]
 async fn a_member_with_sixteen_prekeys_can_be_added_to_any_document() -> Result<()> {
+    use keyhive_core::principal::individual::op::KeyOp;
+
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
-    for _ in 0..9 {
-        bob.expand_prekeys().await?;
+    // Delivered directly: nothing alice is sent names bob until she adds him.
+    while ctx.prekeys_of(&alice, bob.id()).await?.len() < 16 {
+        let op = bob.expand_prekeys().await?;
+        alice.receive_prekey_op(&KeyOp::Add(op)).await?;
     }
-    ctx.sync_all_unsent().await?;
     assert_eq!(ctx.prekeys_of(&alice, bob.id()).await?.len(), 16);
 
     for i in 0..24 {

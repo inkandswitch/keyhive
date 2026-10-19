@@ -33,7 +33,7 @@ pub struct AllAgentEvents<T: ContentRef> {
     /// included), whose certificates it is sent.
     pub membership_index: HashMap<Identifier, HashSet<Identifier>>,
 
-    /// For each principal, the prekey sources it reaches.
+    /// For each principal, the identifiers whose prekey events it is sent.
     pub prekey_index: HashMap<Identifier, HashSet<Identifier>>,
 
     /// For each principal, the key agreement sources it reaches.
