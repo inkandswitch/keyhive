@@ -13,6 +13,7 @@ use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef, signed::SerdeSigned, signer::async_signer::AsyncSigner,
+    verified::Signed,
 };
 use std::sync::Arc;
 
@@ -92,14 +93,14 @@ where
 {
     fn on_prekeys_expanded<'a>(
         &'a self,
-        new_prekey: &'a Arc<SerdeSigned<AddKeyOp>>,
+        new_prekey: &'a Arc<Signed<AddKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey.dupe())).await })
     }
 
     fn on_prekey_rotated<'a>(
         &'a self,
-        rotate_key: &'a Arc<SerdeSigned<RotateKeyOp>>,
+        rotate_key: &'a Arc<Signed<RotateKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeyRotated(rotate_key.dupe())).await })
     }

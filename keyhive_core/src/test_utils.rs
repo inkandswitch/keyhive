@@ -12,10 +12,10 @@ use crate::{
     keyhive::Keyhive, listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
-use keyhive_crypto::{signed::SigningError, signer::memory::MemorySigner};
+use keyhive_crypto::{signer::memory::MemorySigner, verified::SignError};
 use rand::rngs::OsRng;
 
-pub async fn make_simple_keyhive() -> Result<Hive, SigningError> {
+pub async fn make_simple_keyhive() -> Result<Hive, SignError> {
     Keyhive::generate(
         MemorySigner::generate(&mut OsRng),
         MemoryCiphertextStore::new(),

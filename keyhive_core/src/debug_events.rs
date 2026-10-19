@@ -2,6 +2,7 @@ use crate::{
     crypto::{digest::Digest, signed_ext::SignedSubjectId},
     event::Event,
     listener::membership::MembershipListener,
+    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
 use future_form::FutureForm;
 use keyhive_crypto::signer::async_signer::AsyncSigner;
@@ -59,6 +60,10 @@ pub enum DebugEventDetails {
         has_proof: bool,
         after_content_count: usize,
     },
+
+    /// A prekey operation whose payload does not decode. It reached the
+    /// event log without being verified, so this is a bug elsewhere.
+    Undecodable,
 }
 
 /// Specific details for CGKA operations.
@@ -126,6 +131,16 @@ impl DebugEventTable {
 }
 
 impl DebugEventRow {
+    fn undecodable(idx: usize, event_type: &str, event_hash: Hash) -> Self {
+        Self {
+            index: idx,
+            event_type: event_type.to_string(),
+            issuer: event_hash.clone(),
+            event_hash,
+            details: DebugEventDetails::Undecodable,
+        }
+    }
+
     /// Create a new debug event row from an event.
     pub fn from_event<F, S, T, L>(
         idx: usize,
@@ -140,8 +155,11 @@ impl DebugEventRow {
     {
         match event {
             Event::PrekeysExpanded(signed) => {
-                let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
+                let event_hash = Hash::new(signed.digest().as_slice(), nicknames);
+                let Ok(payload) = signed.encoded().decode() else {
+                    return Self::undecodable(idx, "PrekeysExpanded", event_hash);
+                };
+                let payload: AddKeyOp = payload;
                 let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
                 let details = DebugEventDetails::PrekeysExpanded {
                     share_key: Hash::new(payload.share_key.as_bytes(), nicknames),
@@ -156,8 +174,11 @@ impl DebugEventRow {
                 }
             }
             Event::PrekeyRotated(signed) => {
-                let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
+                let event_hash = Hash::new(signed.digest().as_slice(), nicknames);
+                let Ok(payload) = signed.encoded().decode() else {
+                    return Self::undecodable(idx, "PrekeyRotated", event_hash);
+                };
+                let payload: RotateKeyOp = payload;
                 let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
                 let details = DebugEventDetails::PrekeyRotated {
                     old_key: Hash::new(payload.old.as_bytes(), nicknames),

@@ -1,4 +1,3 @@
-use dupe::Dupe;
 use future_form::Sendable;
 use keyhive_core::{
     access::Access,
@@ -46,7 +45,7 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
         for _ in 0..prekey_rotations_per_peer {
             let add_op = peer.expand_prekeys().await.unwrap();
             alice
-                .receive_prekey_op(&KeyOp::Add(add_op.dupe()))
+                .receive_prekey_op(&KeyOp::Add(add_op.clone()))
                 .await
                 .unwrap();
 

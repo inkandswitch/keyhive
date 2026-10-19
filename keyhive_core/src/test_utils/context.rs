@@ -40,6 +40,7 @@ use keyhive_crypto::{
     signed::{SerdeSigned, SigningError},
     signer::memory::MemorySigner,
     symmetric_key::SymmetricKey,
+    verified::SignError,
 };
 use nonempty::nonempty;
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
@@ -172,8 +173,7 @@ macro_rules! other_from {
         }
     )+};
 }
-
-other_from!(CgkaError, SigningError, ReceivePrekeyOpError);
+other_from!(CgkaError, SignError, SigningError, ReceivePrekeyOpError);
 
 impl From<GenerateDocError> for TestError {
     fn from(e: GenerateDocError) -> Self {

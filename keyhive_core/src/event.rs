@@ -22,7 +22,7 @@ use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef, digest::Digest, signed::SerdeSigned,
-    signer::async_signer::AsyncSigner,
+    signer::async_signer::AsyncSigner, verified::Signed,
 };
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
@@ -37,11 +37,12 @@ pub enum Event<
     T: ContentRef = [u8; 32],
     L: MembershipListener<F, S, T> = NoListener,
 > {
-    /// Prekeys were expanded.
-    PrekeysExpanded(Arc<SerdeSigned<AddKeyOp>>),
+    /// Prekeys were expanded, in wire form: verified before it became an
+    /// event.
+    PrekeysExpanded(Arc<Signed<AddKeyOp>>),
 
-    /// A prekey was rotated.
-    PrekeyRotated(Arc<SerdeSigned<RotateKeyOp>>),
+    /// A prekey was rotated, in wire form.
+    PrekeyRotated(Arc<Signed<RotateKeyOp>>),
 
     /// A CGKA operation was performed.
     CgkaOperation(Arc<SerdeSigned<CgkaOperation>>),
@@ -85,8 +86,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 {
     fn from(key_op: KeyOp) -> Self {
         match key_op {
-            KeyOp::Add(add) => Event::PrekeysExpanded(add),
-            KeyOp::Rotate(rot) => Event::PrekeyRotated(rot),
+            KeyOp::Add(add) => Event::PrekeysExpanded(add.signed().dupe()),
+            KeyOp::Rotate(rot) => Event::PrekeyRotated(rot.signed().dupe()),
         }
     }
 }
@@ -114,12 +115,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 StaticEvent::CgkaOperation(Box::new(Arc::unwrap_or_clone(cgka)))
             }
 
-            Event::PrekeyRotated(pkr) => {
-                StaticEvent::PrekeyRotated(Box::new(Arc::unwrap_or_clone(pkr).map(Into::into)))
-            }
-            Event::PrekeysExpanded(pke) => {
-                StaticEvent::PrekeysExpanded(Box::new(Arc::unwrap_or_clone(pke).map(Into::into)))
-            }
+            Event::PrekeyRotated(pkr) => StaticEvent::PrekeyRotated(Arc::unwrap_or_clone(pkr)),
+            Event::PrekeysExpanded(pke) => StaticEvent::PrekeysExpanded(Arc::unwrap_or_clone(pke)),
         }
     }
 }
@@ -175,6 +172,7 @@ mod tests {
     use futures::lock::Mutex;
     use keyhive_crypto::{
         share_key::ShareKey, signer::memory::MemorySigner, siv::Siv, symmetric_key::SymmetricKey,
+        verified::Verified,
     };
     use rand::rngs::OsRng;
     use std::collections::BTreeMap;
@@ -227,15 +225,21 @@ mod tests {
         let events: Vec<Event<Sendable, MemorySigner, [u8; 32], NoListener>> = vec![
             Event::CgkaOperation(Arc::new(cgka_op_1)),
             Event::CgkaOperation(Arc::new(cgka_op_2)),
-            Event::PrekeysExpanded(Arc::new(
-                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
-            )),
-            Event::PrekeysExpanded(Arc::new(
-                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
-            )),
-            Event::PrekeysExpanded(Arc::new(
-                signer.try_sign_sync(AddKeyOp::generate(&mut csprng))?,
-            )),
+            Event::PrekeysExpanded(
+                Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
+                    .signed()
+                    .dupe(),
+            ),
+            Event::PrekeysExpanded(
+                Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
+                    .signed()
+                    .dupe(),
+            ),
+            Event::PrekeysExpanded(
+                Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
+                    .signed()
+                    .dupe(),
+            ),
             Event::Delegated(Arc::new(signer.try_sign_sync(Delegation {
                 delegate: Agent::Individual(indie.id(), Arc::new(Mutex::new(indie))),
                 can: Access::Read,

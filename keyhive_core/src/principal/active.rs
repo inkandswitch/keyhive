@@ -38,6 +38,7 @@ use keyhive_crypto::{
     signed::{SerdeSigned, SigningError},
     signer::{async_signer, async_signer::AsyncSigner},
     verifiable::Verifiable,
+    verified::{SignError, Verified},
 };
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt::Debug, marker::PhantomData, sync::Arc};
@@ -85,46 +86,32 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         signer: S,
         listener: L,
         csprng: &mut R,
-    ) -> Result<Self, SigningError> {
+    ) -> Result<Self, SignError> {
         let init_sk = ShareSecretKey::generate(csprng);
         let init_pk = init_sk.share_key();
-        let init_op = Arc::new(
-            async_signer::try_sign_async::<F, _, _>(&signer, AddKeyOp { share_key: init_pk })
-                .await?,
-        )
-        .into();
+        let init_op =
+            KeyOp::Add(Verified::sign::<F, S>(&AddKeyOp { share_key: init_pk }, &signer).await?);
 
+        // Signing checked that the signer's key is a valid identifier.
+        let id = IndividualId::from(init_op.issuer());
         let mut prekey_state = PrekeyState::new(init_op);
-        let prekey_pairs =
-            (0..6).try_fold(BTreeMap::from_iter([(init_pk, init_sk)]), |mut acc, _| {
-                let sk = ShareSecretKey::generate(csprng);
-                let pk = sk.share_key();
-                acc.insert(pk, sk);
-                Ok::<_, SigningError>(acc)
-            })?;
+        let mut prekey_pairs = BTreeMap::from_iter([(init_pk, init_sk)]);
+        for _ in 0..6 {
+            let sk = ShareSecretKey::generate(csprng);
+            prekey_pairs.insert(sk.share_key(), sk);
+        }
 
         let borrowed_signer = &signer;
-        let ops = stream::iter(prekey_pairs.keys().map(Ok::<_, SigningError>))
+        let ops = stream::iter(prekey_pairs.keys().map(Ok::<_, SignError>))
             .try_fold(vec![], |mut acc, pk| async move {
-                acc.push(
-                    Arc::new(
-                        async_signer::try_sign_async::<F, _, _>(
-                            borrowed_signer,
-                            AddKeyOp { share_key: *pk },
-                        )
-                        .await?,
-                    )
-                    .into(),
-                );
+                acc.push(KeyOp::Add(
+                    Verified::sign::<F, S>(&AddKeyOp { share_key: *pk }, borrowed_signer).await?,
+                ));
                 Ok(acc)
             })
             .await?;
 
-        prekey_state
-            .extend(ops)
-            .expect("newly generated local op should be valid");
-
-        let id = IndividualId::try_from(signer.verifying_key())?;
+        prekey_state.extend(ops);
 
         Ok(Self {
             id,
@@ -159,7 +146,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<SerdeSigned<RotateKeyOp>>, SigningError> {
+    ) -> Result<Verified<RotateKeyOp>, SignError> {
         let picked = {
             // TODO total hack
             let locked = self.individual.lock().await;
@@ -169,10 +156,16 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         // to rotate.
         let share_key = match picked {
             Some(share_key) => share_key,
-            None => self.expand_prekeys(csprng.dupe()).await?.payload.share_key,
+            None => {
+                self.expand_prekeys(csprng.dupe())
+                    .await?
+                    .payload()
+                    .share_key
+            }
         };
         let contact_key = self.rotate_prekey(share_key, csprng.dupe()).await?;
-        self.rotate_prekey(contact_key.payload.new, csprng).await?;
+        self.rotate_prekey(contact_key.payload().new, csprng)
+            .await?;
         Ok(contact_key)
     }
 
@@ -210,23 +203,21 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         &mut self,
         old_prekey: ShareKey,
         csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<SerdeSigned<RotateKeyOp>>, SigningError> {
+    ) -> Result<Verified<RotateKeyOp>, SignError> {
         let new_secret = {
             let mut locked_csprng = csprng.lock().await;
             ShareSecretKey::generate(&mut *locked_csprng)
         };
         let new_public = new_secret.share_key();
 
-        let rot_op = Arc::new(
-            async_signer::try_sign_async::<F, _, _>(
-                &self.signer,
-                RotateKeyOp {
-                    old: old_prekey,
-                    new: new_public,
-                },
-            )
-            .await?,
-        );
+        let rot_op = Verified::sign::<F, S>(
+            &RotateKeyOp {
+                old: old_prekey,
+                new: new_public,
+            },
+            &self.signer,
+        )
+        .await?;
 
         {
             self.key_pairs.lock().await.insert(new_public, new_secret);
@@ -236,14 +227,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             let mut locked_individual = self.individual.lock().await;
             locked_individual
                 .prekey_state
-                .insert_op(KeyOp::Rotate(rot_op.dupe()))
-                .expect("the op we just signed to be valid");
+                .insert_op(KeyOp::Rotate(rot_op.clone()));
 
             locked_individual.prekeys.remove(&old_prekey);
             locked_individual.prekeys.insert(new_public);
         }
 
-        self.listener.on_prekey_rotated(&rot_op).await;
+        self.listener.on_prekey_rotated(rot_op.signed()).await;
         Ok(rot_op)
     }
 
@@ -251,30 +241,27 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<SerdeSigned<AddKeyOp>>, SigningError> {
+    ) -> Result<Verified<AddKeyOp>, SignError> {
         let new_secret = {
             let mut locked_csprng = csprng.lock().await;
             ShareSecretKey::generate(&mut *locked_csprng)
         };
         let new_public = new_secret.share_key();
 
-        let op = Arc::new(
-            async_signer::try_sign_async::<F, _, _>(
-                &self.signer,
-                AddKeyOp {
-                    share_key: new_public,
-                },
-            )
-            .await?,
-        );
+        let op = Verified::sign::<F, S>(
+            &AddKeyOp {
+                share_key: new_public,
+            },
+            &self.signer,
+        )
+        .await?;
 
         {
             let mut locked_individual = self.individual.lock().await;
 
             locked_individual
                 .prekey_state
-                .insert_op(KeyOp::Add(op.dupe()))
-                .expect("the op we just signed to be valid");
+                .insert_op(KeyOp::Add(op.clone()));
 
             locked_individual.prekeys.insert(new_public);
         }
@@ -283,7 +270,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             self.key_pairs.lock().await.insert(new_public, new_secret);
         }
 
-        self.listener.on_prekeys_expanded(&op).await;
+        self.listener.on_prekeys_expanded(op.signed()).await;
         Ok(op)
     }
 

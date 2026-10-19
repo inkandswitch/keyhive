@@ -15,7 +15,7 @@ use derivative::Derivative;
 use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
 use id::IndividualId;
-use keyhive_crypto::{share_key::ShareKey, signed::VerificationError, verifiable::Verifiable};
+use keyhive_crypto::{share_key::ShareKey, verifiable::Verifiable, verified::VerifyError};
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::{collections::HashSet, sync::Arc};
@@ -25,7 +25,7 @@ use tracing::instrument;
 #[cfg(any(feature = "test_utils", test))]
 use future_form::FutureForm;
 #[cfg(any(feature = "test_utils", test))]
-use keyhive_crypto::{signed::SigningError, signer::async_signer::AsyncSigner};
+use keyhive_crypto::{signer::async_signer::AsyncSigner, verified::SignError};
 
 #[cfg(any(feature = "test_utils", test))]
 use std::num::NonZeroUsize;
@@ -35,8 +35,13 @@ use std::num::NonZeroUsize;
 /// `Individual`s can be thought of as the terminal agents. They represent
 /// keys that may sign ops, be delegated capabilities to
 /// [`Document`][super::document::Document]s and [`Group`][super::group::Group]s.
+///
+/// Serialized as its prekey operations alone: the id and the live prekeys
+/// follow from them, and deserializing checks that every operation verifies
+/// and has the same issuer.
 #[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
 #[derivative(PartialEq, Eq)]
+#[serde(into = "PrekeyState", try_from = "PrekeyState")]
 pub struct Individual {
     /// The public key identifier.
     pub(crate) id: IndividualId,
@@ -80,7 +85,7 @@ impl Individual {
     pub async fn generate<F: FutureForm, R: rand::CryptoRng + rand::RngCore, S: AsyncSigner<F>>(
         signer: &S,
         csprng: &mut R,
-    ) -> Result<Self, SigningError> {
+    ) -> Result<Self, SignError> {
         let prekey_state =
             PrekeyState::generate::<F, _, _>(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
 
@@ -110,7 +115,7 @@ impl Individual {
             return Err(ReceivePrekeyOpError::IncorrectSigner);
         }
 
-        self.prekey_state.insert_op(op)?;
+        self.prekey_state.insert_op(op);
         self.prekeys = self.prekey_state.build();
         Ok(())
     }
@@ -177,6 +182,41 @@ impl Verifiable for Individual {
     }
 }
 
+impl From<Individual> for PrekeyState {
+    fn from(individual: Individual) -> Self {
+        individual.prekey_state
+    }
+}
+
+impl TryFrom<PrekeyState> for Individual {
+    type Error = InvalidPrekeyState;
+
+    fn try_from(prekey_state: PrekeyState) -> Result<Self, Self::Error> {
+        let mut issuers = prekey_state.ops().values().map(|op| op.issuer());
+        let id = issuers.next().ok_or(InvalidPrekeyState::Empty)?;
+        if issuers.any(|issuer| issuer != id) {
+            return Err(InvalidPrekeyState::MixedIssuers);
+        }
+        Ok(Self {
+            id: IndividualId::from(id),
+            prekeys: prekey_state.build(),
+            prekey_state,
+        })
+    }
+}
+
+/// Why prekey operations do not make an [`Individual`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum InvalidPrekeyState {
+    /// There are none.
+    #[error("an individual needs at least one prekey operation")]
+    Empty,
+
+    /// They were signed by more than one key.
+    #[error("prekey operations from more than one issuer")]
+    MixedIssuers,
+}
+
 impl Fork for Individual {
     type Forked = Self;
 
@@ -185,8 +225,14 @@ impl Fork for Individual {
     }
 }
 
+/// Merges only the same individual's state: another individual's prekey
+/// operations are ignored, so an individual never holds two issuers' ops.
 impl Merge for Individual {
     fn merge(&mut self, fork: Self::Forked) {
+        if fork.id != self.id {
+            tracing::warn!(ours = %self.id, theirs = %fork.id, "not merging another individual's prekeys");
+            return;
+        }
         self.prekey_state.merge(fork.prekey_state);
         self.rebuild()
     }
@@ -197,8 +243,9 @@ pub enum ReceivePrekeyOpError {
     #[error("The op was not signed by the expected individual.")]
     IncorrectSigner,
 
+    /// It did not decode canonically, or its signature did not verify.
     #[error(transparent)]
-    VerificationError(#[from] VerificationError),
+    Verify(#[from] VerifyError),
 }
 
 /// An index below `len`, uniform and fixed by `seed`; `None` when `len` is 0.
@@ -226,21 +273,17 @@ fn uniform_index(seed: &[u8], len: usize) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
-    use keyhive_crypto::{share_key::ShareSecretKey, signer::memory::MemorySigner};
+    use keyhive_crypto::{
+        share_key::ShareSecretKey, signer::memory::MemorySigner, verified::Verified,
+    };
     use std::collections::BTreeSet;
 
     fn add(signer: &MemorySigner, share_key: ShareKey) -> KeyOp {
-        KeyOp::Add(Arc::new(
-            signer.try_sign_sync(AddKeyOp { share_key }).expect("signs"),
-        ))
+        KeyOp::Add(Verified::sign_sync(&AddKeyOp { share_key }, signer).expect("signs"))
     }
 
     fn rotate(signer: &MemorySigner, old: ShareKey, new: ShareKey) -> KeyOp {
-        KeyOp::Rotate(Arc::new(
-            signer
-                .try_sign_sync(RotateKeyOp { old, new })
-                .expect("signs"),
-        ))
+        KeyOp::Rotate(Verified::sign_sync(&RotateKeyOp { old, new }, signer).expect("signs"))
     }
 
     fn key() -> ShareKey {
@@ -269,8 +312,8 @@ mod tests {
         test_utils::init_logging();
         let mut csprng = rand::thread_rng();
         let sk = MemorySigner::generate(&mut csprng);
-        let op = sk.try_sign_sync(AddKeyOp::generate(&mut csprng)).unwrap();
-        let individual: Individual = Individual::new(Arc::new(op).into());
+        let op = Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &sk).unwrap();
+        let individual: Individual = Individual::new(KeyOp::Add(op));
         assert_eq!(individual.id.to_bytes(), sk.verifying_key().to_bytes());
     }
 
