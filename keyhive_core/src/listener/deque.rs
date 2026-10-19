@@ -34,14 +34,16 @@ where
         locked.push_back(event)
     }
 
+    /// The event pushed last.
     pub async fn pop_latest(&self) -> Option<Event<F, S, T, Self>> {
         let mut locked = self.0.lock().await;
-        locked.pop_front()
+        locked.pop_back()
     }
 
+    /// The event pushed first.
     pub async fn pop_earliest(&self) -> Option<Event<F, S, T, Self>> {
         let mut locked = self.0.lock().await;
-        locked.pop_back()
+        locked.pop_front()
     }
 
     pub async fn is_empty(&self) -> bool {
@@ -141,5 +143,56 @@ where
 {
     fn on_cgka_op<'a>(&'a self, op: &'a Arc<Signed<CgkaOperation>>) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::CgkaOperation(op.dupe())).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use keyhive_crypto::{share_key::ShareSecretKey, signer::memory::MemorySigner};
+    use rand::rngs::OsRng;
+
+    type TestDeque = Deque<Sendable, MemorySigner>;
+
+    fn prekey() -> Arc<Signed<AddKeyOp>> {
+        let op = AddKeyOp {
+            share_key: ShareSecretKey::generate(&mut OsRng).share_key(),
+        };
+        let signed = MemorySigner::generate(&mut OsRng)
+            .try_sign_sync(op)
+            .expect("signing succeeds");
+        Arc::new(signed)
+    }
+
+    /// The prekey op a popped event carries. `Event`'s `PartialEq` needs the
+    /// listener type to be `PartialEq`, which `Deque` is not.
+    fn prekey_of(
+        event: Option<Event<Sendable, MemorySigner, [u8; 32], TestDeque>>,
+    ) -> Option<Arc<Signed<AddKeyOp>>> {
+        match event? {
+            Event::PrekeysExpanded(op) => Some(op),
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_deque_pops_from_the_end_each_name_says() {
+        let deque = TestDeque::new();
+        assert!(deque.is_empty().await);
+        let (first, second, third) = (prekey(), prekey(), prekey());
+        for op in [&first, &second, &third] {
+            deque.push(Event::PrekeysExpanded(op.dupe())).await;
+        }
+        assert!(!deque.is_empty().await);
+
+        assert_eq!(prekey_of(deque.pop_latest().await), Some(third));
+        assert_eq!(prekey_of(deque.pop_earliest().await), Some(first));
+        assert_eq!(prekey_of(deque.pop_latest().await), Some(second));
+        assert!(deque.is_empty().await);
+
+        deque.push(Event::PrekeysExpanded(prekey())).await;
+        deque.clear().await;
+        assert!(deque.is_empty().await);
+        assert!(deque.pop_latest().await.is_none());
     }
 }
