@@ -1,10 +1,11 @@
 use keyhive_core::principal::group::RevokeMemberError;
+use std::convert::Infallible;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsRevokeMemberError(#[from] pub(crate) RevokeMemberError);
+pub struct JsRevokeMemberError(#[from] pub(crate) RevokeMemberError<Infallible>);
 
 impl From<JsRevokeMemberError> for JsValue {
     fn from(err: JsRevokeMemberError) -> Self {

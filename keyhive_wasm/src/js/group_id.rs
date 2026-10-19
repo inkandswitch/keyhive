@@ -1,7 +1,10 @@
 use crate::js::identifier::JsIdentifier;
 use keyhive_core::principal::group::id::GroupId;
 use keyhive_crypto::identifier::Identifier;
-use std::fmt::{Display, Formatter};
+use std::{
+    fmt,
+    fmt::{Display, Formatter},
+};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -15,9 +18,8 @@ impl JsGroupId {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: Vec<u8>) -> Result<Self, JsParseGroupIdError> {
         let vec: [u8; 32] = bytes.try_into().map_err(|_| JsParseGroupIdError)?;
-        Ok(JsGroupId(GroupId::from(
-            Identifier::from_bytes(vec).map_err(|_| JsParseGroupIdError)?,
-        )))
+        let id = Identifier::from_bytes(vec).map_err(|_| JsParseGroupIdError)?;
+        Ok(JsGroupId(GroupId::from(id)))
     }
 
     #[wasm_bindgen(js_name = toBytes)]
@@ -37,7 +39,7 @@ impl JsGroupId {
 }
 
 impl Display for JsGroupId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.0)
     }
 }

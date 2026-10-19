@@ -1,16 +1,16 @@
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
 use super::{
-    change_id::JsChangeId, ciphertext_store::JsCiphertextStore, event_handler::JsEventHandler,
-    keyhive::JsKeyhive, signer::JsSigner,
+    change_id::JsChangeId, ciphertext_store::JsCiphertextStore, keyhive::JsKeyhive,
+    signer::JsSigner,
 };
 use derive_more::{Display, From, Into};
-use future_form::Local;
 use futures::lock::Mutex;
 use keyhive_core::{
     archive::Archive,
     keyhive::{Keyhive, TryFromArchiveError},
 };
+use keyline_memory::MemoryKeyline;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -48,6 +48,7 @@ impl JsArchive {
             signer.clone(),
             ciphertext_store.clone(),
             event_handler.clone().into(),
+            MemoryKeyline::new(),
             Arc::new(Mutex::new(OsRng)),
         )
         .await
@@ -57,12 +58,10 @@ impl JsArchive {
 }
 
 #[derive(Debug, Display, Error)]
-pub struct JsTryFromArchiveError(TryFromArchiveError<Local, JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsTryFromArchiveError(TryFromArchiveError<Infallible>);
 
-impl From<TryFromArchiveError<Local, JsSigner, JsChangeId, JsEventHandler>>
-    for JsTryFromArchiveError
-{
-    fn from(err: TryFromArchiveError<Local, JsSigner, JsChangeId, JsEventHandler>) -> Self {
+impl From<TryFromArchiveError<Infallible>> for JsTryFromArchiveError {
+    fn from(err: TryFromArchiveError<Infallible>) -> Self {
         JsTryFromArchiveError(err)
     }
 }

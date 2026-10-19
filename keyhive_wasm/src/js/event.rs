@@ -1,18 +1,18 @@
 use crate::js::archive::JsSerializationError;
 
 use super::{
-    change_id::JsChangeId, event_handler::JsEventHandler, signed_delegation::JsSignedDelegation,
-    signed_revocation::JsSignedRevocation, signer::JsSigner,
+    change_id::JsChangeId, signed_delegation::JsSignedDelegation,
+    signed_revocation::JsSignedRevocation,
 };
 use derive_more::{From, Into};
 use dupe::Dupe;
-use future_form::Local;
 use keyhive_core::event::{static_event::StaticEvent, Event};
+use std::fmt;
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Hash, From, Into)]
 #[wasm_bindgen(js_name = Event)]
-pub struct JsEvent(pub(crate) Event<Local, JsSigner, JsChangeId, JsEventHandler>);
+pub struct JsEvent(pub(crate) Event<JsChangeId>);
 
 #[wasm_bindgen(js_class = Event)]
 impl JsEvent {
@@ -31,18 +31,20 @@ impl JsEvent {
         matches!(self.0, Event::Revoked(_))
     }
 
+    /// The delegation a `DELEGATED` event carries.
     #[wasm_bindgen(js_name = asSignedDelegation)]
     pub fn as_signed_delegation(&self) -> Option<JsSignedDelegation> {
         match &self.0 {
-            Event::Delegated(d) => Some(d.dupe().into()),
+            Event::Delegated(d) => Some(JsSignedDelegation(d.dupe())),
             _ => None,
         }
     }
 
+    /// The revocation a `REVOKED` event carries.
     #[wasm_bindgen(js_name = asSignedRevocation)]
     pub fn as_signed_revocation(&self) -> Option<JsSignedRevocation> {
         match &self.0 {
-            Event::Revoked(r) => Some(r.dupe().into()),
+            Event::Revoked(r) => Some(JsSignedRevocation(r.dupe())),
             _ => None,
         }
     }
@@ -88,8 +90,8 @@ impl From<&JsEvent> for JsEventVariant {
     }
 }
 
-impl std::fmt::Display for JsEventVariant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for JsEventVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             JsEventVariant::Delegated => "DELEGATED",
             JsEventVariant::Revoked => "REVOKED",

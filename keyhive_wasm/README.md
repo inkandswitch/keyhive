@@ -14,7 +14,15 @@ pnpm add @keyhive/keyhive
 ## Usage
 
 ```ts
-import { Access, ChangeId, CiphertextStore, Keyhive, Signer } from "@keyhive/keyhive";
+import {
+  ChangeId,
+  CiphertextStore,
+  ContactCard,
+  Keyhive,
+  MemberedId,
+  Power,
+  Signer,
+} from "@keyhive/keyhive";
 
 // A Signer holds the local Ed25519 key. `Signer.generate()` prefers a
 // non-extractable WebCrypto key and falls back to memory; use
@@ -23,22 +31,27 @@ const signer = await Signer.generate();
 const store = CiphertextStore.newInMemory();
 const keyhive = await Keyhive.init(signer, store, console.log);
 
-// Create a group and a document whose initial membership is that group.
-const group = await keyhive.generateGroup([]);
+// Create a group and a document whose initial membership includes that group.
+const groupId = await keyhive.generateGroup([]);
 const head = new ChangeId(initialChangeHash); // Uint8Array: your CRDT's first change hash
-const doc = await keyhive.generateDocument([group.toPeer()], head, []);
+const docId = await keyhive.generateDocument([groupId.toIdentifier()], head, []);
 
 // Encrypt a CRDT change, naming its causal predecessors.
 const next = new ChangeId(nextChangeHash);
-const encrypted = await keyhive.tryEncrypt(doc, next, [head], payload);
+const encrypted = await keyhive.tryEncrypt(docId, next, [head], payload);
 
 // Grant a collaborator Read access. Their contact card comes from
-// `theirKeyhive.contactCard()`, exchanged out of band.
-const bob = await keyhive.receiveContactCard(bobsContactCard);
-await keyhive.addMember(bob.toAgent(), doc.toMembered(), Access.read(), []);
+// `theirKeyhive.contactCard()`, exchanged out of band. The result is the
+// signed delegation that grants it.
+const bob = await keyhive.receiveContactCard(ContactCard.fromJson(bobsCardJson));
+const delegation = await keyhive.addMember(
+  bob.toIdentifier(),
+  MemberedId.document(docId),
+  Power.read(),
+);
 ```
 
-`Keyhive` carries the operations: `generateGroup` / `generateDocument`, `addMember` / `revokeMember`, `tryEncrypt` / `tryDecrypt`, `reachableDocs`, `forcePcsUpdate`, and event ingestion for sync. `Document` and `Group` are handles (`id`, `members`, `toPeer` / `toAgent` / `toMembered`; `Document` adds `cgkaMembers`, `Group` adds `transitiveMembers`) passed to those operations. See [`e2e/`](./e2e) for complete examples and `dist/index.d.ts` (after a build) for signatures.
+`Keyhive` carries the operations: `generateGroup` / `generateDocument`, `addMember` / `revokeMember`, `tryEncrypt` / `tryDecrypt`, `reachableDocs`, `forcePcsUpdate`, and event ingestion for sync. `getDocument`, `getGroup`, `getIndividual` and `getPrincipal` return handles: `Document` and `Group` have `members` and `transitiveMembers`, `Document` adds `cgkaMembers`, and each has `toPrincipal`. See [`e2e/`](./e2e) for complete examples and `dist/index.d.ts` (after a build) for signatures.
 
 ## Building
 

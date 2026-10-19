@@ -1,5 +1,6 @@
 use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
+use std::fmt;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = CgkaOperation)]
@@ -26,8 +27,8 @@ pub enum JsCgkaOperationVariant {
     Update,
 }
 
-impl std::fmt::Display for JsCgkaOperationVariant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for JsCgkaOperationVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             JsCgkaOperationVariant::Add => write!(f, "CGKA_ADD"),
             JsCgkaOperationVariant::Remove => write!(f, "CGKA_REMOVE"),
