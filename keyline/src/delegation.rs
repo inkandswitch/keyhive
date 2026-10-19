@@ -1,29 +1,35 @@
 //! Delegations: signed edges granting a power level over a subject.
 
-use crate::{id::Id, power::Power, revocation::RevocationId};
+use crate::{power::Power, revocation::RevocationId};
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verifiable};
+use keyhive_crypto::{
+    digest::Digest,
+    identifier::Identifier,
+    signable::{Kind, Kinded},
+};
 
 /// An edge in the authority graph.
 ///
-/// Reads: _`issuer` asserts that `audience` may exercise `power` over `subject`_. The edge
-/// rides `issuer`'s own standing over `subject`: `audience` receives
-/// `min(power, issuer's effective power over subject)`. The edge can be live only
-/// while `issuer` has standing over `subject`; revocations narrow that further
-/// (see [`crate::revocation::Revocation`]).
+/// Reads: _the issuer asserts that `audience` may exercise `power` over
+/// `subject`_. The issuer is whoever signs it, carried in the signed envelope
+/// ([`Verified::issuer`](keyhive_crypto::verified::Verified::issuer)), not in
+/// the payload. The edge rides the issuer's own standing over `subject`:
+/// `audience` receives `min(power, issuer's effective power over subject)`.
+/// The edge can be live only while the issuer has standing over `subject`;
+/// revocations narrow that further (see [`crate::revocation::Revocation`]).
 ///
 /// Anyone may issue a delegation over any subject. Issuing needs no Admin;
 /// Admin matters for revocation reach.
 ///
 /// # `citation`
 ///
-/// Certificates are content-addressed, so re-issuing an identical delegation
-/// produces the same digest: the same certificate. `citation` lets a
+/// Certificates are content-addressed, so an issuer re-issuing an identical
+/// delegation produces the same digest: the same certificate. `citation` lets a
 /// delegation identical to a revoked one be re-issued with a fresh digest. It
 /// names the revocation the issuer is re-issuing past, and evaluation ignores
 /// it. Absent means first issuance. When several revocations name the same
@@ -32,17 +38,14 @@ use keyhive_crypto::{digest::Digest, domain_separator::Domain, verifiable::Verif
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Delegation {
-    /// Signer. The edge rides this key's standing over `subject`.
-    pub issuer: Id,
-
     /// The key the delegation is issued to.
-    pub audience: Id,
+    pub audience: Identifier,
 
     /// Scope: which subject's routes this edge may participate in. A role key
-    /// here is membership in that role. `issuer == subject` is a root edge: the subject
-    /// grounding its own authority, which the evaluator treats like any other
+    /// here is membership in that role. A delegation the subject itself signs
+    /// is a root edge: the subject grounding its own authority, which the evaluator treats like any other
     /// edge because every subject stands at `Admin` over itself by axiom.
-    pub subject: Id,
+    pub subject: Identifier,
 
     /// Requested level; clamped by the issuer's own level, never raised.
     pub power: Power,
@@ -52,10 +55,10 @@ pub struct Delegation {
 }
 
 impl Delegation {
-    /// A first issuance: `issuer` grants `audience` `power` over `subject`, with no `citation`.
-    pub fn new(issuer: Id, audience: Id, subject: Id, power: Power) -> Self {
+    /// A first issuance: `audience` may exercise `power` over `subject`, with no
+    /// `citation`. Whoever signs it is the issuer.
+    pub fn new(audience: Identifier, subject: Identifier, power: Power) -> Self {
         Delegation {
-            issuer,
             audience,
             subject,
             power,
@@ -70,29 +73,18 @@ impl Delegation {
             ..self
         }
     }
-
-    /// The delegation's identity: what a [`crate::revocation::Revocation`]
-    /// names, and its key in the set ([`crate::certificate::CertificateId`]).
-    pub fn digest(&self) -> Digest<Delegation> {
-        Digest::of(&self.encode())
-    }
 }
 
-impl Domain for Delegation {
-    const CONTEXT: &'static str = "keyline/v0/delegation";
+impl Kinded for Delegation {
+    const KIND: Kind = Kind::DELEGATION;
+    const VERSION: u8 = 0;
 }
 
-impl Verifiable for Delegation {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.issuer.verifying_key()
-    }
-}
-
-// Fixed-width layout: issuer ‖ audience ‖ subject ‖ power ‖ citation_tag ‖ citation?
+// Fixed-width layout: audience ‖ subject ‖ power ‖ citation_tag ‖ citation?
 // Placeholder until the bespoke codec lands; see design/keyline/implementation.md.
 
 /// Encoded length without `citation`.
-const BASE_LEN: usize = Id::LEN * 3 + 1 + 1;
+const BASE_LEN: usize = Identifier::LEN * 2 + 1 + 1;
 
 /// Encoded length with `citation`.
 const CITATION_LEN: usize = BASE_LEN + Digest::<RevocationId>::LEN;
@@ -102,7 +94,6 @@ const CITATION_PRESENT: u8 = 1;
 
 impl Encode for Delegation {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.issuer.encode_into(out);
         self.audience.encode_into(out);
         self.subject.encode_into(out);
         self.power.encode_into(out);
@@ -122,10 +113,9 @@ impl Decode for Delegation {
             return Err(DecodeError::UnexpectedEnd);
         }
 
-        let (ids, rest) = bytes.split_at(Id::LEN * 3);
-        let issuer = Id::decode_field(&ids[..Id::LEN], "issuer")?;
-        let audience = Id::decode_field(&ids[Id::LEN..Id::LEN * 2], "audience")?;
-        let subject = Id::decode_field(&ids[Id::LEN * 2..], "subject")?;
+        let (ids, rest) = bytes.split_at(Identifier::LEN * 2);
+        let audience = Identifier::decode_field(&ids[..Identifier::LEN], "audience")?;
+        let subject = Identifier::decode_field(&ids[Identifier::LEN..], "subject")?;
         let power = Power::decode(&rest[..1])?;
 
         let citation = match rest[1] {
@@ -149,7 +139,6 @@ impl Decode for Delegation {
         };
 
         Ok(Delegation {
-            issuer,
             audience,
             subject,
             power,
@@ -163,7 +152,6 @@ impl<'a> arbitrary::Arbitrary<'a> for Delegation {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let citation: Option<[u8; Digest::<RevocationId>::LEN]> = u.arbitrary()?;
         Ok(Delegation {
-            issuer: u.arbitrary()?,
             audience: u.arbitrary()?,
             subject: u.arbitrary()?,
             power: u.arbitrary()?,
@@ -176,21 +164,25 @@ impl<'a> arbitrary::Arbitrary<'a> for Delegation {
 mod tests {
     use super::*;
     use crate::test_utils::id;
+    use alloc::string::String;
 
     #[test]
     fn citation_changes_hash_and_nothing_else() {
-        let d = Delegation::new(id(1), id(2), id(3), Power::Edit);
+        let d = Delegation::new(id(2), id(3), Power::Edit);
         let r = d.reissue(Digest::from([9u8; 32]));
         assert_eq!(
-            (r.issuer, r.audience, r.subject, r.power),
-            (d.issuer, d.audience, d.subject, d.power)
+            (r.audience, r.subject, r.power),
+            (d.audience, d.subject, d.power)
         );
-        assert_ne!(d.digest(), r.digest());
+        assert_ne!(
+            Digest::of(&id(1), &d.encode()),
+            Digest::of(&id(1), &r.encode())
+        );
     }
 
     #[test]
     fn encoded_lengths() {
-        let d = Delegation::new(id(1), id(2), id(3), Power::Read);
+        let d = Delegation::new(id(2), id(3), Power::Read);
         assert_eq!(d.encode().len(), BASE_LEN);
         assert_eq!(
             d.reissue(Digest::from([0u8; 32])).encode().len(),
@@ -200,7 +192,7 @@ mod tests {
 
     #[test]
     fn rejects_non_canonical() {
-        let d = Delegation::new(id(1), id(2), id(3), Power::Read);
+        let d = Delegation::new(id(2), id(3), Power::Read);
         let mut bytes = d.encode().into_bytes();
 
         // trailing byte after an absent `citation`
@@ -247,25 +239,23 @@ mod tests {
             });
     }
 
-    /// Pins the wire encoding and the domain-separated digest of one fixed
-    /// delegation. Changing the codec or the context must change this test
-    /// on purpose.
+    /// Pins the wire encoding of one fixed delegation, and its digest when
+    /// `id(1)` issues it. Changing the codec, the version or the kind must
+    /// change this test on purpose.
     #[test]
     fn known_answer() {
-        let hex = |bytes: &[u8]| -> alloc::string::String {
-            bytes.iter().map(|b| alloc::format!("{b:02x}")).collect()
-        };
-        let d = Delegation::new(id(1), id(2), id(3), Power::Edit);
+        let hex =
+            |bytes: &[u8]| -> String { bytes.iter().map(|b| alloc::format!("{b:02x}")).collect() };
+        let d = Delegation::new(id(2), id(3), Power::Edit);
         assert_eq!(
             hex(d.encode().as_bytes()),
-            "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c\
-             8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394\
+            "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394\
              ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1\
              4500"
         );
         assert_eq!(
-            hex(d.digest().as_slice()),
-            "e90472356fc5650ce40a68ab372fe1f8236c2b58b1239fdb013b2c71b3747451"
+            hex(Digest::of(&id(1), &d.encode()).as_slice()),
+            "e1ee04162147ce5f19a3c1635496c7eb22cd9b4ef9430b266973ad6535416145"
         );
     }
 }

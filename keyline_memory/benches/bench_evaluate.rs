@@ -1,4 +1,4 @@
-//! Evaluation cost of `MemoryKeyline` on three shapes:
+//! Evaluation cost of `keyline_memory::state::State` on three shapes:
 //!
 //! - `realistic`: one document, a root role, three member roles with `n`
 //!   humans each, a handful of revocations. What a query costs in the common case.
@@ -7,18 +7,19 @@
 //! - `revocation_spree`: one ex-admin revokes `k` certificates; with context
 //!   dedup this should scale like one dispute, not `k`.
 //!
+//! Every input is a fresh `State`, so each query pays for a full evaluation
+//! (the first query after an insert); `realistic_members_cached` measures a
+//! query served from the cached evaluation instead.
+//!
 //! Run with `cargo bench -p keyline_memory`.
 
 use divan::Bencher;
+use keyhive_crypto::identifier::Identifier;
 use keyline::{
-    contract::Keyline,
-    delegation::Delegation,
-    id::Id,
     power::Power,
-    revocation::Revocation,
-    test_utils::{assume_verified, conformance::build, id, Statement},
+    test_utils::{assume_verified, delegation, id, revocation, Statement},
 };
-use keyline_memory::MemoryKeyline;
+use keyline_memory::state::State;
 
 fn main() {
     divan::main();
@@ -33,12 +34,18 @@ const LADDER_LEAF: u8 = 250;
 const LATE_JOINER: u8 = 251;
 
 fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Statement<()> {
-    Delegation::new(id(issuer), id(audience), id(subject), power).into()
+    delegation(id(issuer), id(audience), id(subject), power).into()
+}
+
+fn build(certs: Vec<Statement<()>>) -> State<()> {
+    let mut g = State::new();
+    g.insert_all(certs.into_iter().map(assume_verified));
+    g
 }
 
 /// Doc rooted at Owners (two admins); three roles supplied into Doc at
 /// Edit/Read/Relay, each rooted at Owners, with `n` humans; two revocations.
-fn realistic(n: u8) -> MemoryKeyline<()> {
+fn realistic(n: u8) -> State<()> {
     let mut certs = vec![
         d(DOC, OWNERS, DOC, Power::Admin),
         d(OWNERS, FIRST_HUMAN, OWNERS, Power::Admin),
@@ -53,19 +60,19 @@ fn realistic(n: u8) -> MemoryKeyline<()> {
             next = next.wrapping_add(1);
         }
     }
-    let mut g: MemoryKeyline<()> = build(certs);
+    let mut g: State<()> = build(certs);
     // Two revocations: one by an Owner (covers), one by a member (inert).
-    let victim = Delegation::new(
+    let victim = delegation(
         id(FIRST_HUMAN),
         id(FIRST_HUMAN + 3),
         id(ROLES[0]),
         Power::Edit,
     );
-    g.insert(assume_verified(Revocation::new(
+    g.insert(assume_verified(revocation(
         id(FIRST_HUMAN + 1),
         victim.digest(),
     )));
-    g.insert(assume_verified(Revocation::new(
+    g.insert(assume_verified(revocation(
         id(FIRST_HUMAN + 4),
         victim.digest(),
     )));
@@ -74,7 +81,7 @@ fn realistic(n: u8) -> MemoryKeyline<()> {
 
 /// role₁ … roleₖ, each rooted at the previous one (which administers it) and
 /// supplied into Doc at Admin, with one human at the bottom.
-fn club_ladder(k: u8) -> MemoryKeyline<()> {
+fn club_ladder(k: u8) -> State<()> {
     let mut certs = vec![d(DOC, OWNERS, DOC, Power::Admin)];
     let mut prev = OWNERS;
     for i in 0..k {
@@ -89,21 +96,21 @@ fn club_ladder(k: u8) -> MemoryKeyline<()> {
 
 /// An Owner is removed and then revokes `k` roster certificates; all share one
 /// exclusion set.
-fn revocation_spree(k: u8) -> MemoryKeyline<()> {
+fn revocation_spree(k: u8) -> State<()> {
     let mut g = realistic(k);
-    let removed = Delegation::new(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Power::Admin);
-    g.insert(assume_verified(Revocation::new(
+    let removed = delegation(id(OWNERS), id(FIRST_HUMAN + 1), id(OWNERS), Power::Admin);
+    g.insert(assume_verified(revocation(
         id(FIRST_HUMAN),
         removed.digest(),
     )));
     for i in 0..k {
-        let target = Delegation::new(
+        let target = delegation(
             id(FIRST_HUMAN),
             id(FIRST_HUMAN + 2 + i),
             id(ROLES[0]),
             Power::Edit,
         );
-        g.insert(assume_verified(Revocation::new(
+        g.insert(assume_verified(revocation(
             id(FIRST_HUMAN + 1),
             target.digest(),
         )));
@@ -111,7 +118,7 @@ fn revocation_spree(k: u8) -> MemoryKeyline<()> {
     g
 }
 
-fn doc() -> Id {
+fn doc() -> Identifier {
     id(DOC)
 }
 
@@ -119,6 +126,17 @@ fn doc() -> Id {
 fn realistic_members(bencher: Bencher, n: u8) {
     bencher
         .with_inputs(|| realistic(n))
+        .bench_refs(|g| g.members(doc()));
+}
+
+#[divan::bench(args = [10, 30, 60])]
+fn realistic_members_cached(bencher: Bencher, n: u8) {
+    bencher
+        .with_inputs(|| {
+            let g = realistic(n);
+            g.members(doc());
+            g
+        })
         .bench_refs(|g| g.members(doc()));
 }
 
