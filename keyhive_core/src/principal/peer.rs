@@ -64,10 +64,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         doc_id: DocumentId,
     ) -> HashMap<IndividualId, ShareKey> {
         match self {
+            // An individual with no live prekeys has nothing to seat it with.
             Peer::Individual(id, i) => {
                 let locked = i.lock().await;
-                let prekey = locked.pick_prekey(doc_id);
-                HashMap::from_iter([(*id, *prekey)])
+                locked
+                    .pick_prekey(doc_id)
+                    .map(|prekey| (*id, *prekey))
+                    .into_iter()
+                    .collect()
             }
             Peer::Group(_, g) => g.lock().await.pick_individual_prekeys(doc_id).await,
             Peer::Document(_, d) => d.lock().await.group.pick_individual_prekeys(doc_id).await,

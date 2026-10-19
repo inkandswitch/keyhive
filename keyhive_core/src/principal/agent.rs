@@ -180,21 +180,24 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 continue;
             }
             match agent {
+                // An individual with no live prekeys has nothing to seat it with.
                 Agent::Active(_, a) => {
                     let (id, prekey) = {
                         let locked = a.lock().await;
-                        let id = locked.id();
-                        let prekey = locked.pick_prekey(doc_id).await;
-                        (id, prekey)
+                        (locked.id(), locked.pick_prekey(doc_id).await)
                     };
-                    result.insert(id, prekey);
+                    if let Some(prekey) = prekey {
+                        result.insert(id, prekey);
+                    }
                 }
                 Agent::Individual(_, i) => {
                     let (id, prekey) = {
                         let guard = i.lock().await;
-                        (guard.id(), *guard.pick_prekey(doc_id))
+                        (guard.id(), guard.pick_prekey(doc_id).copied())
                     };
-                    result.insert(id, prekey);
+                    if let Some(prekey) = prekey {
+                        result.insert(id, prekey);
+                    }
                 }
                 Agent::Group(_, g) => {
                     push_readers(&mut readers, g.lock().await.members());
