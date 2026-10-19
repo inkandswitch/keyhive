@@ -8,8 +8,14 @@ use crate::{
 };
 use alloc::{sync::Arc, vec::Vec};
 use core::hash::{Hash, Hasher};
-use future_form::Local;
-use keyhive_crypto::{digest::Digest, share_key::ShareSecretKey, signer::memory::MemorySigner};
+use future_form::{FutureForm, Local};
+use keyhive_crypto::{
+    digest::Digest,
+    share_key::ShareSecretKey,
+    signed::SigningError,
+    signer::{async_signer::AsyncSigner, memory::MemorySigner},
+    verifiable::Verifiable,
+};
 use rand::{rngs::StdRng, SeedableRng};
 use std::hash::DefaultHasher;
 
@@ -294,4 +300,92 @@ fn an_earlier_secret_that_was_not_recorded_is_found() {
             "the earlier update's secret should be derived again, not taken from the current tree"
         );
     });
+}
+
+/// A signer that refuses every payload, as a remote or hardware signer might.
+struct FailingSigner(MemorySigner);
+
+impl Verifiable for FailingSigner {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.0.verifying_key()
+    }
+}
+
+impl AsyncSigner<Local> for FailingSigner {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        _payload_bytes: &'a [u8],
+    ) -> <Local as FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
+        Local::ready(Err(SigningError::SigningFailed(
+            ed25519_dalek::SignatureError::new(),
+        )))
+    }
+}
+
+/// A group of three whose tree has a root secret and a signer for member 0
+/// that always fails.
+async fn group_with_a_failing_signer(seed: u64) -> (Group, FailingSigner, StdRng) {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut group = Group::new(3, &mut rng).await;
+    group.settle(0, &mut rng).await;
+    let failing = FailingSigner(group.members[0].signer.clone());
+    (group, failing, rng)
+}
+
+/// Members 1 and 0 each rotate, then check that every replica agrees on tree and key.
+async fn assert_agreement_after_rotations(mut group: Group, rng: &mut StdRng, context: &str) {
+    group.settle(1, rng).await;
+    group.settle(0, rng).await;
+    group.check(context);
+    group.assert_key_agreement(context);
+}
+
+#[tokio::test]
+async fn an_add_whose_signing_fails_does_not_change_the_tree() {
+    let (mut group, failing, mut rng) = group_with_a_failing_signer(0x5167_0001).await;
+    let fresh = member(&mut rng);
+    let result = group.replicas[0]
+        .add::<Local, _>(fresh.id, fresh.pk, ADD_AUTH, &failing)
+        .await;
+    assert!(result.is_err());
+    assert_agreement_after_rotations(group, &mut rng, "after a failed add").await;
+}
+
+#[tokio::test]
+async fn a_removal_whose_signing_fails_does_not_change_the_tree() {
+    let (mut group, failing, mut rng) = group_with_a_failing_signer(0x5167_0002).await;
+    let target = group.id(2);
+    let result = group.replicas[0]
+        .remove::<Local, _>(target, REMOVE_AUTH, &failing)
+        .await;
+    assert!(result.is_err());
+    assert_agreement_after_rotations(group, &mut rng, "after a failed removal").await;
+}
+
+#[tokio::test]
+async fn a_rotation_whose_signing_fails_does_not_change_the_tree() {
+    let (mut group, failing, mut rng) = group_with_a_failing_signer(0x5167_0003).await;
+    let sk = ShareSecretKey::generate(&mut rng);
+    let result = group.replicas[0]
+        .update::<Local, _, StdRng>(sk.share_key(), sk, &failing, &mut rng)
+        .await;
+    assert!(result.is_err());
+    assert_agreement_after_rotations(group, &mut rng, "after a failed rotation").await;
+}
+
+#[tokio::test]
+async fn a_first_add_whose_signing_fails_can_be_retried() {
+    let mut rng = StdRng::seed_from_u64(0x5167_0004);
+    let owner = member(&mut rng);
+    let mut cgka = cgka_with_no_operations(&owner);
+    let failing = FailingSigner(owner.signer.clone());
+    let result = cgka
+        .add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &failing)
+        .await;
+    assert!(result.is_err());
+    let retried = cgka
+        .add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &owner.signer)
+        .await
+        .expect("the add succeeds");
+    assert!(retried.is_some(), "the retried add created no operation");
 }

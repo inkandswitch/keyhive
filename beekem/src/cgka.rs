@@ -163,6 +163,7 @@ impl Cgka {
         ),
         CgkaError,
     > {
+        self.replay_if_pending()?;
         let (current_pcs_key, current_op_hash, rotation) = if !self.has_tree_root_secret() {
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
@@ -298,10 +299,7 @@ impl Cgka {
             doc_id: self.doc_id,
             authorization,
         };
-
-        let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-        self.record_op(&signed_op)?;
-        Ok(Some(signed_op))
+        Ok(Some(self.sign_and_record::<F, S>(op, signer).await?))
     }
 
     /// Build an invitation for a member we are adding, wrapping each of
@@ -382,6 +380,29 @@ impl Cgka {
         }
     }
 
+    /// Sign `op`, which the caller has already applied to the tree, and record
+    /// it. If signing fails, the tree must be reset. We replace it with a fresh
+    /// tree if `op` is the first operation. Otherwise, we set `pending_replay`
+    /// to `true` so the tree will be rebuilt before its next use.
+    async fn sign_and_record<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        op: CgkaOperation,
+        signer: &S,
+    ) -> Result<Signed<CgkaOperation>, CgkaError> {
+        let recorded = match async_signer::try_sign_async::<F, _, _>(signer, op).await {
+            Ok(signed_op) => self.record_op(&signed_op).map(|()| signed_op),
+            Err(e) => Err(e.into()),
+        };
+        if recorded.is_err() {
+            if self.ops_graph.cgka_op_heads.is_empty() {
+                self.tree = BeeKem::new(self.doc_id);
+            } else {
+                self.pending_replay = true;
+            }
+        }
+        recorded
+    }
+
     /// Add `op` to the operation graph and, if it includes an invitation for us,
     /// record those root secrets.
     fn record_op(&mut self, op: &Signed<CgkaOperation>) -> Result<(), CgkaError> {
@@ -455,9 +476,7 @@ impl Cgka {
             doc_id: self.doc_id,
             authorization,
         };
-        let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-        self.record_op(&signed_op)?;
-        Ok(Some(signed_op))
+        Ok(Some(self.sign_and_record::<F, S>(op, signer).await?))
     }
 
     /// Rotate the owner's leaf to `new_pk` and encrypt a new path from it.
@@ -497,8 +516,7 @@ impl Cgka {
                 doc_id: self.doc_id,
             };
 
-            let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-            self.record_op(&signed_op)?;
+            let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
             self.record_root_secret_for(pcs_key, Digest::hash(&signed_op));
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
