@@ -10,18 +10,25 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+arbitrary = { workspace = true, optional = true }
+bolero = { workspace = true, optional = true }
+bijoux = { workspace = true }
 serde = { workspace = true, features = ["alloc"], optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+arbitrary = { workspace = true }
+bolero = { workspace = true }
 postcard = { workspace = true, features = ["alloc"] }
 
 [features]
 default = ["std"]
 std = ["serde?/std", "thiserror/std"]
 serde = ["dep:serde"]
+# Property tests for the codec laws, for other crates' test suites.
+laws = ["dep:arbitrary", "dep:bolero"]
 # Everything the full test suite needs, including the serde tests.
-test_utils = ["serde"]
+test_utils = ["laws", "serde"]
 
 [lints]
 workspace = true
