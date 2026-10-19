@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use keyhive_core::principal::identifier::Identifier;
+use keyhive_crypto::identifier::Identifier;
 
 use crate::{
     js::{

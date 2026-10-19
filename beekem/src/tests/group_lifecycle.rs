@@ -9,9 +9,7 @@ use crate::{
 use alloc::{sync::Arc, vec::Vec};
 use core::hash::{Hash, Hasher};
 use future_form::Local;
-use keyhive_crypto::{
-    digest::Digest, share_key::ShareSecretKey, signer::memory::MemorySigner, verifiable::Verifiable,
-};
+use keyhive_crypto::{digest::Digest, share_key::ShareSecretKey, signer::memory::MemorySigner};
 use rand::{rngs::StdRng, SeedableRng};
 use std::hash::DefaultHasher;
 
@@ -84,7 +82,7 @@ async fn an_operation_for_another_document_is_refused() {
     let owner = member(&mut rng);
     let tree_for = |rng: &mut StdRng| {
         Cgka::new(
-            TreeId(MemorySigner::generate(rng).verifying_key()),
+            TreeId::from(&MemorySigner::generate(rng).0),
             owner.id,
             ShareKeyMap::new(),
         )
@@ -120,7 +118,7 @@ async fn a_removed_member_can_merge_a_fork_after_a_rotation() {
 }
 
 fn cgka_with_no_operations(owner: &Member) -> Cgka {
-    Cgka::new(TreeId(owner.id.0), owner.id, ShareKeyMap::new())
+    Cgka::new(TreeId::from(owner.id.id()), owner.id, ShareKeyMap::new())
 }
 
 #[test]

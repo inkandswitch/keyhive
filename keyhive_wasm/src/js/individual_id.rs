@@ -1,5 +1,6 @@
 use crate::js::identifier::{CannotParseIdentifier, JsIdentifier};
-use keyhive_core::principal::{identifier::Identifier, individual::id::IndividualId};
+use keyhive_core::principal::individual::id::IndividualId;
+use keyhive_crypto::identifier::Identifier;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = IndividualId)]
@@ -12,9 +13,9 @@ impl JsIndividualId {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: Vec<u8>) -> Result<Self, CannotParseIdentifier> {
         let vec: [u8; 32] = bytes.try_into().map_err(|_| CannotParseIdentifier)?;
-        let vk =
-            ed25519_dalek::VerifyingKey::from_bytes(&vec).map_err(|_| CannotParseIdentifier)?;
-        Ok(Self(IndividualId(Identifier::from(vk))))
+        Ok(Self(IndividualId(
+            Identifier::from_bytes(vec).map_err(|_| CannotParseIdentifier)?,
+        )))
     }
 
     #[wasm_bindgen(js_name = toString)]

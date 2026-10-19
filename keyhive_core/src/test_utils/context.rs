@@ -21,7 +21,6 @@ use crate::{
             delegation::Delegation, error::AddError, id::GroupId, AddGroupMemberError,
             RevokeMemberError,
         },
-        identifier::Identifier,
         individual::{id::IndividualId, op::KeyOp, Individual, ReceivePrekeyOpError},
         membered::{id::MemberedId, Membered},
         public::Public,
@@ -37,6 +36,7 @@ use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
+    identifier::Identifier,
     share_key::ShareKey,
     signed::{Signed, SigningError},
     signer::memory::MemorySigner,
@@ -358,7 +358,7 @@ pub struct DelegationSummary {
 impl From<&Signed<Delegation<Sendable, MemorySigner>>> for DelegationSummary {
     fn from(signed: &Signed<Delegation<Sendable, MemorySigner>>) -> Self {
         DelegationSummary {
-            issuer: Identifier::from(signed.issuer()),
+            issuer: *signed.issuer(),
             audience: signed.payload().delegate().id(),
             subject: signed.subject_id(),
             can: signed.payload().can(),

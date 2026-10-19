@@ -1,6 +1,6 @@
-use crate::principal::{document::id::DocumentId, group::id::GroupId, identifier::Identifier};
+use crate::principal::{document::id::DocumentId, group::id::GroupId};
 use ed25519_dalek::VerifyingKey;
-use keyhive_crypto::verifiable::Verifiable;
+use keyhive_crypto::{identifier::Identifier, verifiable::Verifiable};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 

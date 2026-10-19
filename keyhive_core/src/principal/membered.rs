@@ -7,7 +7,6 @@ use super::{
         delegation::Delegation, error::AddError, id::GroupId, revocation::Revocation, Group,
         RevokeMemberError,
     },
-    identifier::Identifier,
 };
 use crate::{
     access::Access,
@@ -20,8 +19,8 @@ use future_form::FutureForm;
 use futures::lock::Mutex;
 use id::MemberedId;
 use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
-    verifiable::Verifiable,
+    content::reference::ContentRef, identifier::Identifier, signed::Signed,
+    signer::async_signer::AsyncSigner, verifiable::Verifiable,
 };
 use nonempty::NonEmpty;
 use std::{

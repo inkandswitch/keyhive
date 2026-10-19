@@ -1,4 +1,5 @@
-use keyhive_core::principal::{identifier::Identifier, public::Public};
+use keyhive_core::principal::public::Public;
+use keyhive_crypto::identifier::Identifier;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -14,12 +15,9 @@ impl JsIdentifier {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: Vec<u8>) -> Result<Self, CannotParseIdentifier> {
         let vec: [u8; 32] = bytes.try_into().map_err(|_| CannotParseIdentifier)?;
-
-        // NOTE signature::Error is opaque, so we can just ignore the inbuilt error
-        let vk =
-            ed25519_dalek::VerifyingKey::from_bytes(&vec).map_err(|_| CannotParseIdentifier)?;
-
-        Ok(JsIdentifier(Identifier::from(vk)))
+        Ok(JsIdentifier(
+            Identifier::from_bytes(vec).map_err(|_| CannotParseIdentifier)?,
+        ))
     }
 
     #[wasm_bindgen(js_name = publicId)]
@@ -29,7 +27,7 @@ impl JsIdentifier {
 
     #[wasm_bindgen(js_name = toString)]
     pub fn to_js_string(&self) -> String {
-        self.0.to_string()
+        format!("{:#x}", self.0)
     }
 
     #[wasm_bindgen(js_name = toBytes)]

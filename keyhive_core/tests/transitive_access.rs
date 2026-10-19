@@ -2,10 +2,12 @@ use dupe::Dupe;
 use keyhive_core::{
     access::Access,
     event::static_event::StaticEvent,
-    principal::{agent::Agent, document::id::DocumentId, identifier::Identifier, public::Public},
+    principal::{agent::Agent, document::id::DocumentId, public::Public},
     test_utils::make_simple_keyhive,
 };
-use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
+use keyhive_crypto::{
+    identifier::Identifier, signer::memory::MemorySigner, verifiable::Verifiable,
+};
 use nonempty::nonempty;
 use testresult::TestResult;
 
@@ -780,7 +782,7 @@ async fn test_document_delegate_before_defining_event_reified_as_document() -> T
     for event in all_events.into_values() {
         match &event {
             StaticEvent::Delegated(signed)
-                if Identifier(signed.issuer) == doc_a_ident && signed.payload.proof.is_none() =>
+                if signed.issuer == doc_a_ident && signed.payload.proof.is_none() =>
             {
                 defining.push(event);
             }
@@ -859,7 +861,7 @@ async fn test_group_delegate_before_defining_event_reified_as_group() -> TestRes
     for event in all_events.into_values() {
         match &event {
             StaticEvent::Delegated(signed)
-                if Identifier(signed.issuer) == group_ident && signed.payload.proof.is_none() =>
+                if signed.issuer == group_ident && signed.payload.proof.is_none() =>
             {
                 defining.push(event);
             }

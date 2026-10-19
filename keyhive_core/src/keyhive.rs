@@ -30,7 +30,6 @@ use crate::{
             revocation::{Revocation, StaticRevocation},
             Group, IdOrIndividual, RevokeMemberError,
         },
-        identifier::Identifier,
         individual::{
             id::IndividualId,
             op::{
@@ -72,6 +71,7 @@ use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
+    identifier::{Identifier, InvalidIdentifier},
     share_key::ShareKey,
     signed::{Signed, SigningError, VerificationError},
     signer::async_signer::AsyncSigner,
@@ -109,8 +109,8 @@ pub struct Keyhive<
     L: MembershipListener<F, S, T> = NoListener,
     R: rand::CryptoRng = rand::rngs::OsRng,
 > {
-    /// The public verifying key for the active user.
-    verifying_key: ed25519_dalek::VerifyingKey,
+    /// The active user's identifier.
+    id: IndividualId,
 
     /// The [`Active`] user agent.
     active: Arc<Mutex<Active<F, S, T, L>>>,
@@ -180,7 +180,7 @@ impl<
 {
     #[instrument(skip_all)]
     pub fn id(&self) -> IndividualId {
-        self.verifying_key.into()
+        self.id
     }
 
     #[instrument(skip_all)]
@@ -195,12 +195,11 @@ impl<
         event_listener: L,
         mut csprng: R,
     ) -> Result<Self, SigningError> {
-        let verifying_key = signer.verifying_key();
         let inner_active = Active::generate(signer, event_listener.clone(), &mut csprng).await?;
         let active_id = inner_active.id();
 
         Ok(Self {
-            verifying_key,
+            id: active_id,
             individuals: Arc::new(Mutex::new(HashMap::from_iter([
                 (
                     Public.id().into(),
@@ -1706,7 +1705,7 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
-        let id = Identifier(*key_op.issuer());
+        let id = key_op.issuer();
         // Drop any prekey op addressed to Public so its individual can never
         // expand or rotate.
         if id == Public.id() {
@@ -1897,7 +1896,7 @@ impl<
         }
         let group = Arc::new(Mutex::new(
             Group::new(
-                GroupId(static_rev.issuer.into()),
+                GroupId(static_rev.issuer),
                 revocation.payload.revoke.dupe(),
                 self.delegations.dupe(),
                 self.revocations.dupe(),
@@ -1982,10 +1981,7 @@ impl<
                 let dlg = { self.delegations.lock().await.get(&Digest::from(*dlg_hash)) }
                     .ok_or(CgkaUnauthorized::Pending)?;
                 // Public can't add members.
-                ensure(
-                    Identifier(dlg.issuer) != Public.id(),
-                    CgkaUnauthorized::Denied,
-                )?;
+                ensure(dlg.issuer != Public.id(), CgkaUnauthorized::Denied)?;
                 // Only readers or above can add members.
                 ensure(dlg.payload.can.is_reader(), CgkaUnauthorized::Denied)?;
                 // A founding delegation is signed by the document's own
@@ -2000,16 +1996,13 @@ impl<
                     // admin delegation rather than the founding one.
                     let issuer_founded_with_admin = {
                         let locked = doc.lock().await;
-                        locked
-                            .members()
-                            .get(&Identifier::from(op_issuer))
-                            .is_some_and(|delegations| {
-                                delegations.iter().any(|cap| {
-                                    cap.payload.proof.is_none()
-                                        && cap.subject_id() == Identifier::from(doc_id)
-                                        && cap.payload.can >= Access::Admin
-                                })
+                        locked.members().get(&op_issuer).is_some_and(|delegations| {
+                            delegations.iter().any(|cap| {
+                                cap.payload.proof.is_none()
+                                    && cap.subject_id() == Identifier::from(doc_id)
+                                    && cap.payload.can >= Access::Admin
                             })
+                        })
                     };
                     ensure(issuer_founded_with_admin, CgkaUnauthorized::Pending)?;
                 } else {
@@ -2033,10 +2026,7 @@ impl<
                 let rev = { self.revocations.lock().await.get(&Digest::from(*rev_hash)) }
                     .ok_or(CgkaUnauthorized::Pending)?;
                 // Public can't remove members.
-                ensure(
-                    Identifier(rev.issuer) != Public.id(),
-                    CgkaUnauthorized::Denied,
-                )?;
+                ensure(rev.issuer != Public.id(), CgkaUnauthorized::Denied)?;
                 ensure(rev.issuer == op_issuer, CgkaUnauthorized::Denied)?;
                 ensure(
                     rev.payload.revoke.payload.can.is_reader(),
@@ -2063,7 +2053,7 @@ impl<
                     )
                 } else {
                     // An update must be signed by the owner of the leaf it rotates.
-                    ensure(new_path.leaf_id.0 == op_issuer, CgkaUnauthorized::Denied)?;
+                    ensure(new_path.leaf_id.id() == op_issuer, CgkaUnauthorized::Denied)?;
                     // An update can't make a non-public leaf public.
                     ensure(
                         !new_path.leaf_pk.contains_key(&Public.share_key()),
@@ -2433,7 +2423,7 @@ impl<
         listener: L,
         csprng: Arc<Mutex<R>>,
     ) -> Result<Self, TryFromArchiveError<F, S, T, L>> {
-        let raw_active = Active::from_archive(&archive.active, signer, listener.clone());
+        let raw_active = Active::from_archive(&archive.active, signer, listener.clone())?;
 
         let delegations = Arc::new(Mutex::new(DelegationStore::new()));
         let revocations = Arc::new(Mutex::new(RevocationStore::new()));
@@ -2583,12 +2573,12 @@ impl<
                     .dupe();
 
                 if actual_dlg.payload().proof.is_none()
-                    && actual_dlg.issuer != group.verifying_key()
+                    && actual_dlg.issuer.verifying_key() != group.verifying_key()
                 {
                     tracing::warn!(
                         "try_from_archive: skipping delegation with mismatched root issuer (group={:?}, issuer={:?})",
                         group.group_id(),
-                        Identifier::from(actual_dlg.issuer),
+                        actual_dlg.issuer,
                     );
                     continue;
                 }
@@ -2672,7 +2662,7 @@ impl<
         }
 
         Ok(Self {
-            verifying_key: archive.active.individual.verifying_key(),
+            id: archive.active.individual.id(),
             active,
             individuals: Arc::new(Mutex::new(individuals)),
             groups: Arc::new(Mutex::new(groups)),
@@ -3097,7 +3087,7 @@ impl<
     > Verifiable for Keyhive<F, S, T, P, C, L, R>
 {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.verifying_key
+        self.id.verifying_key()
     }
 }
 
@@ -3257,6 +3247,10 @@ pub enum TryFromArchiveError<
     T: ContentRef,
     L: MembershipListener<F, S, T>,
 > {
+    /// The signer's key is not a valid identifier.
+    #[error("the signer's key is not a valid identifier: {0}")]
+    InvalidSigner(#[from] InvalidIdentifier),
+
     #[error("Missing delegation: {0}")]
     MissingDelegation(#[from] Digest<Signed<Delegation<F, S, T, L>>>),
 
@@ -3354,11 +3348,11 @@ fn insert_agents_referenced_by_membership_op<
 ) {
     match op {
         MembershipOperation::Delegation(dlg) => {
-            referenced.insert(Identifier(dlg.issuer));
+            referenced.insert(dlg.issuer);
             referenced.insert(dlg.payload.delegate.id());
         }
         MembershipOperation::Revocation(rev) => {
-            referenced.insert(Identifier(rev.issuer));
+            referenced.insert(rev.issuer);
             referenced.insert(rev.payload.revoke.payload.delegate.id());
         }
     }
@@ -3369,9 +3363,9 @@ fn insert_agents_referenced_by_cgka_op(
     op: &Signed<CgkaOperation>,
     referenced: &mut HashSet<Identifier>,
 ) {
-    referenced.insert(Identifier(op.issuer));
+    referenced.insert(op.issuer);
     if let CgkaOperation::Add { added_id, .. } = &op.payload {
-        referenced.insert(Identifier(added_id.0));
+        referenced.insert(added_id.id());
     }
 }
 
@@ -3416,7 +3410,7 @@ pub enum ReceiveEventError<
 mod tests {
     use super::*;
     use crate::{access::Access, principal::public::Public, transact::transact_async};
-    use beekem::{id::MemberId, operation::CgkaOperation};
+    use beekem::operation::CgkaOperation;
     use future_form::Sendable;
     use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
     use nonempty::nonempty;
@@ -3587,7 +3581,7 @@ mod tests {
             )
             .await?;
 
-        assert_eq!(kh2.verifying_key, archive.active.individual.verifying_key());
+        assert_eq!(kh2.id, archive.active.individual.id());
 
         Ok(())
     }
@@ -4368,9 +4362,7 @@ mod tests {
             .cgka_ops()
             .iter()
             .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove {
-                    id: MemberId(vk), ..
-                } => Some(*vk),
+                CgkaOperation::Remove { id, .. } => Some(id.verifying_key()),
                 _ => None,
             })
             .collect();
@@ -4411,9 +4403,7 @@ mod tests {
             .cgka_ops()
             .iter()
             .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove {
-                    id: MemberId(vk), ..
-                } => Some(*vk),
+                CgkaOperation::Remove { id, .. } => Some(id.verifying_key()),
                 _ => None,
             })
             .collect();

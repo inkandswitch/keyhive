@@ -5,15 +5,12 @@
 
 use crate::{
     listener::membership::MembershipListener,
-    principal::{
-        group::{delegation::Delegation, revocation::Revocation},
-        identifier::Identifier,
-    },
+    principal::group::{delegation::Delegation, revocation::Revocation},
 };
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
-    verifiable::Verifiable,
+    content::reference::ContentRef, identifier::Identifier, signed::Signed,
+    signer::async_signer::AsyncSigner,
 };
 
 /// Retrieve the issuer [`Identifier`] from any [`Signed<T>`].
@@ -23,7 +20,7 @@ pub trait SignedId {
 
 impl<T: serde::Serialize + std::fmt::Debug> SignedId for Signed<T> {
     fn id(&self) -> Identifier {
-        self.verifying_key().into()
+        self.issuer
     }
 }
 
@@ -46,7 +43,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             head = proof;
         }
 
-        head.issuer.into()
+        head.issuer
     }
 }
 

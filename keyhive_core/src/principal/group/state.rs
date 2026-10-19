@@ -6,7 +6,7 @@ use crate::{
     access::Access,
     crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
-    principal::{agent::Agent, group::delegation::DelegationError, identifier::Identifier},
+    principal::{agent::Agent, group::delegation::DelegationError},
     store::{delegation::DelegationStore, revocation::RevocationStore},
 };
 use derive_where::derive_where;
@@ -16,6 +16,7 @@ use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
+    identifier::Identifier,
     signed::Signed,
     signer::{async_signer::AsyncSigner, memory::MemorySigner},
     verifiable::Verifiable,
@@ -49,7 +50,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
     ) -> Self {
-        let id = GroupId(delegation_head.verifying_key().into());
+        let id = GroupId(delegation_head.issuer);
         let mut heads = vec![delegation_head.dupe()];
 
         while let Some(head) = heads.pop() {
@@ -95,7 +96,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         csprng: &mut R,
     ) -> Result<Self, DelegationError> {
         let signer = MemorySigner::generate(csprng);
-        let group_id = signer.verifying_key().into();
+        let group_id = Identifier::from(&signer.0);
 
         let group = GroupState {
             id: GroupId(group_id),
@@ -147,7 +148,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
 
-        if delegation.payload().proof.is_none() && delegation.issuer != self.verifying_key() {
+        if delegation.payload().proof.is_none()
+            && delegation.issuer.verifying_key() != self.verifying_key()
+        {
             return Err(AddError::InvalidProofChain);
         }
 
@@ -169,7 +172,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             if head.verifying_key() != proof.payload.delegate.verifying_key() {
                 // The signer doesn't directly match the proof's delegate.
                 // Check transitive membership through a group/doc intermediary.
-                let head_id = Identifier::from(head.verifying_key());
+                let head_id = head.issuer;
                 if !is_transitive_member_of(
                     &proof.payload.delegate,
                     head_id,
@@ -219,19 +222,15 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             //
             // By seniority: the revoker issued the proof or is its delegate, and
             // the revoked delegation is the proof or descends from it.
-            let revoker_owns_proof =
-                proof.issuer == revoker || proof.payload.delegate.verifying_key() == revoker;
+            let revoker_owns_proof = proof.issuer == revoker
+                || proof.payload.delegate.verifying_key() == revoker.verifying_key();
             let under_proof = *revoke == *proof || revoke.payload.is_descendant_of(proof);
 
             // By membership: the revoker is a transitive member of the proof's
             // delegate, with at least the access being revoked.
             let entitled = (revoker_owns_proof && under_proof)
-                || is_transitive_member_of(
-                    &proof.payload.delegate,
-                    Identifier::from(revoker),
-                    revoke.payload.can,
-                )
-                .await;
+                || is_transitive_member_of(&proof.payload.delegate, revoker, revoke.payload.can)
+                    .await;
 
             if !entitled {
                 return Err(AddError::InvalidProofChain);
@@ -248,7 +247,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 }
 
                 if head.verifying_key() != next_proof.payload.delegate.verifying_key() {
-                    let head_id = Identifier::from(head.verifying_key());
+                    let head_id = head.issuer;
                     if !is_transitive_member_of(
                         &next_proof.payload.delegate,
                         head_id,
@@ -260,7 +259,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     }
                 }
             }
-        } else if revocation.issuer != self.verifying_key() {
+        } else if revocation.issuer.verifying_key() != self.verifying_key() {
             return Err(AddError::InvalidProofChain);
         }
 

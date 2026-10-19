@@ -3,12 +3,12 @@
 use crate::{
     event::Event,
     listener::{membership::MembershipListener, no_listener::NoListener},
-    principal::identifier::Identifier,
 };
 use derive_where::derive_where;
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef, digest::Digest, identifier::Identifier,
+    signer::async_signer::AsyncSigner,
 };
 use std::collections::{HashMap, HashSet};
 

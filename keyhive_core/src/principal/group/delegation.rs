@@ -8,7 +8,6 @@ use crate::{
     principal::{
         agent::{id::AgentId, Agent},
         document::id::DocumentId,
-        identifier::Identifier,
     },
 };
 use derive_where::derive_where;
@@ -17,6 +16,7 @@ use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
+    identifier::Identifier,
     signed::{Signed, SigningError},
     signer::async_signer::AsyncSigner,
 };

@@ -1,3 +1,4 @@
+use keyhive_crypto::identifier::Identifier;
 use std::collections::HashSet;
 
 use super::{
@@ -8,7 +9,7 @@ use super::{
 use crate::{
     crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
-    principal::{agent::Agent, document::id::DocumentId, identifier::Identifier},
+    principal::{agent::Agent, document::id::DocumentId},
     reversed::Reversed,
     store::{delegation::DelegationStore, revocation::RevocationStore},
     util::{content_addressed_map::CaMap, topsort::Topsort},

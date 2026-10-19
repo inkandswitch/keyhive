@@ -5,13 +5,13 @@ use super::{
 use crate::{
     crypto::signed_ext::SignedSubjectId,
     listener::{membership::MembershipListener, no_listener::NoListener},
-    principal::{agent::id::AgentId, document::id::DocumentId, identifier::Identifier},
+    principal::{agent::id::AgentId, document::id::DocumentId},
 };
 use derive_where::derive_where;
 use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, signed::Signed,
+    content::reference::ContentRef, digest::Digest, identifier::Identifier, signed::Signed,
     signer::async_signer::AsyncSigner,
 };
 use serde::{Deserialize, Serialize};

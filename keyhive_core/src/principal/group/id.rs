@@ -1,25 +1,12 @@
-use crate::principal::identifier::Identifier;
 use derive_more::{From, Into};
 use dupe::Dupe;
-use keyhive_crypto::verifiable::Verifiable;
+use keyhive_crypto::{identifier::Identifier, verifiable::Verifiable};
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
 /// A group identifier.
 #[derive(
-    Debug,
-    Copy,
-    Clone,
-    Dupe,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    From,
-    Into,
-    Serialize,
-    Deserialize,
+    Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, From, Into, Serialize, Deserialize,
 )]
 pub struct GroupId(pub(crate) Identifier);
 
@@ -38,18 +25,20 @@ impl GroupId {
     }
 
     pub fn as_slice(&self) -> &[u8] {
-        self.0.as_slice()
+        self.0.as_bytes()
     }
 }
 
+impl Dupe for GroupId {}
+
 impl Verifiable for GroupId {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.0.into()
+        self.0.verifying_key()
     }
 }
 
 impl Display for GroupId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        write!(f, "{:#x}", self.0)
     }
 }

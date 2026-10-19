@@ -22,7 +22,7 @@ impl JsPeer {
     pub fn to_js_string(&self) -> String {
         self.0
             .id()
-            .as_slice()
+            .as_bytes()
             .iter()
             .fold(String::new(), |mut acc, byte| {
                 acc.push_str(&format!("{:#x}", byte));
