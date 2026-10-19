@@ -12,3 +12,6 @@ lazy_static = { workspace = true }
 nu-ansi-term = { workspace = true }
 tracing = { workspace = true, features = ["attributes", "std"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[lints]
+workspace = true

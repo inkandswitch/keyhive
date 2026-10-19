@@ -52,3 +52,6 @@ conformance = ["dep:sha2", "ed25519-dalek/hazmat"]
 # Everything the full test suite needs: the scenarios plus the generator, the
 # oracles, the `bolero` laws, and the serde round-trip tests.
 test_utils = ["arbitrary", "conformance", "dep:bolero", "serde"]
+
+[lints]
+workspace = true

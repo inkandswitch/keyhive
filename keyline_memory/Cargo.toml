@@ -29,3 +29,6 @@ test_utils = ["keyline/test_utils"]
 [[bench]]
 name = "bench_evaluate"
 harness = false
+
+[lints]
+workspace = true
