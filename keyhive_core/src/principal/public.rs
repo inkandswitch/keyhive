@@ -1,7 +1,6 @@
 use super::{
     active::Active,
-    identifier::Identifier,
-    individual::{op::add_key::AddKeyOp, state::PrekeyState, Individual},
+    individual::{id::IndividualId, op::add_key::AddKeyOp, state::PrekeyState, Individual},
 };
 use crate::listener::prekey::PrekeyListener;
 use dupe::Dupe;
@@ -9,6 +8,7 @@ use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
+    identifier::Identifier,
     share_key::{ShareKey, ShareSecretKey},
     signer::memory::MemorySigner,
     verifiable::Verifiable,
@@ -19,7 +19,7 @@ use std::{
 };
 
 /// The `Public` identifier, derived once from the well-known signing key.
-static PUBLIC_ID: LazyLock<Identifier> = LazyLock::new(|| Public.verifying_key().into());
+static PUBLIC_ID: LazyLock<Identifier> = LazyLock::new(|| Identifier::from(&Public.signing_key()));
 
 /// The `Public` share key, derived once from the well-known secret.
 static PUBLIC_SHARE_KEY: LazyLock<ShareKey> =
@@ -68,7 +68,7 @@ impl Public {
         let prekey_state = PrekeyState::new(op);
 
         Individual {
-            id: self.verifying_key().into(),
+            id: IndividualId::from(&self.signing_key()),
             prekeys: prekey_state.build(),
             prekey_state,
         }
@@ -82,7 +82,7 @@ impl Public {
         MemorySigner: keyhive_crypto::signer::async_signer::AsyncSigner<F>,
     {
         Active {
-            id: self.signer().verifying_key().into(),
+            id: IndividualId::from(&self.signing_key()),
             signer: self.signer(),
             key_pairs: Arc::new(Mutex::new(BTreeMap::from_iter([(
                 self.share_key(),

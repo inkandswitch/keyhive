@@ -5,7 +5,6 @@ pub mod archive;
 use self::archive::ActiveArchive;
 use super::{
     document::id::DocumentId,
-    identifier::Identifier,
     individual::{
         id::IndividualId,
         op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
@@ -34,6 +33,7 @@ use future_form::FutureForm;
 use futures::{lock::Mutex, prelude::*};
 use keyhive_crypto::{
     content::reference::ContentRef,
+    identifier::{Identifier, InvalidIdentifier},
     share_key::{ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
     signer::{async_signer, async_signer::AsyncSigner},
@@ -124,7 +124,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             .extend(ops)
             .expect("newly generated local op should be valid");
 
-        let id = signer.verifying_key().into();
+        let id = IndividualId::try_from(signer.verifying_key())?;
 
         Ok(Self {
             id,
@@ -327,19 +327,23 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     }
 
     /// Deserialize from storage.
-    pub fn from_archive(archive: &ActiveArchive, signer: S, listener: L) -> Self {
+    pub fn from_archive(
+        archive: &ActiveArchive,
+        signer: S,
+        listener: L,
+    ) -> Result<Self, InvalidIdentifier> {
         tracing::trace!(
             num_key_pairs = archive.key_pairs.len(),
             "loaded from archive"
         );
-        Self {
-            id: signer.verifying_key().into(),
+        Ok(Self {
+            id: IndividualId::try_from(signer.verifying_key())?,
             key_pairs: Arc::new(Mutex::new(archive.key_pairs.clone())),
             individual: Arc::new(Mutex::new(archive.individual.clone())),
             signer,
             listener,
             _phantom: PhantomData,
-        }
+        })
     }
 }
 

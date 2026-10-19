@@ -1,6 +1,7 @@
 use super::{document_id::JsDocumentId, group_id::JsGroupId};
 use crate::js::identifier::JsIdentifier;
-use keyhive_core::principal::{identifier::Identifier, membered::id::MemberedId};
+use keyhive_core::principal::membered::id::MemberedId;
+use keyhive_crypto::identifier::Identifier;
 use wasm_bindgen::prelude::*;
 
 /// ID for a resource that can have members, which is either a group or a document.

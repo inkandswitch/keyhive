@@ -17,7 +17,6 @@ use crate::{
             revocation::Revocation,
             Group, RevokeMemberError,
         },
-        identifier::Identifier,
     },
     store::{
         ciphertext::{
@@ -44,6 +43,7 @@ use id::DocumentId;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
+    identifier::Identifier,
     share_key::{ShareKey, ShareSecretKey},
     signed::{Signed, SigningError},
     signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
@@ -191,7 +191,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     delegations,
                     revocations,
                     BTreeMap::from_iter([(
-                        DocumentId(verifier.into()),
+                        DocumentId(verifier),
                         initial_content_heads.clone().into_iter().collect(),
                     )]),
                     listener,

@@ -21,7 +21,6 @@ use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
     signer::memory::MemorySigner,
-    verifiable::Verifiable,
 };
 use rand::rngs::StdRng;
 
@@ -40,7 +39,7 @@ pub struct Member {
 /// A new member, with a fresh signer and a fresh prekey.
 pub fn member(rng: &mut StdRng) -> Member {
     let signer = MemorySigner::generate(rng);
-    let id = MemberId(signer.verifying_key());
+    let id = MemberId::from(&signer.0);
     let sk = ShareSecretKey::generate(rng);
     let pk = sk.share_key();
     Member { id, signer, pk, sk }
@@ -64,7 +63,7 @@ impl Group {
     /// `n` members, each with a replica that has every add applied.
     pub async fn new(n: usize, rng: &mut StdRng) -> Group {
         let doc_signer = MemorySigner::generate(rng);
-        let doc_id = TreeId(doc_signer.verifying_key());
+        let doc_id = TreeId::from(&doc_signer.0);
         let members: Vec<Member> = (0..n).map(|_| member(rng)).collect();
 
         let replicas = members

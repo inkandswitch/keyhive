@@ -4,7 +4,7 @@
 //! [`TreeId`](beekem::id::TreeId)) at the API boundary.
 
 use crate::{
-    principal::{document::id::DocumentId, identifier::Identifier, individual::id::IndividualId},
+    principal::{document::id::DocumentId, individual::id::IndividualId},
     transact::{fork::Fork, merge::Merge},
 };
 use beekem::{
@@ -19,11 +19,11 @@ use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
+    identifier::Identifier,
     share_key::{ShareKey, ShareSecretKey},
     signed::Signed,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
-    verifiable::Verifiable,
 };
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
@@ -64,11 +64,8 @@ impl Cgka {
     }
 
     pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
-        let mut inner = beekem::cgka::Cgka::new(
-            TreeId(doc_id.verifying_key()),
-            MemberId(owner_id.verifying_key()),
-            owner_sks,
-        );
+        let mut inner =
+            beekem::cgka::Cgka::new(TreeId::from(doc_id), MemberId::from(owner_id), owner_sks);
         Self::insert_public_sks(&mut inner);
         Cgka(inner)
     }
@@ -78,9 +75,7 @@ impl Cgka {
         my_id: IndividualId,
         owner_sks: ShareKeyMap,
     ) -> Result<Self, CgkaError> {
-        let mut inner = self
-            .0
-            .with_new_owner(MemberId(my_id.verifying_key()), owner_sks)?;
+        let mut inner = self.0.with_new_owner(MemberId::from(my_id), owner_sks)?;
         Self::insert_public_sks(&mut inner);
         Ok(Cgka(inner))
     }
@@ -145,7 +140,7 @@ impl Cgka {
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         self.0
-            .add(MemberId(id.verifying_key()), pk, authorization, signer)
+            .add(MemberId::from(id), pk, authorization, signer)
             .await
     }
 
@@ -154,7 +149,7 @@ impl Cgka {
         members: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
-        let converted = members.map(|(id, pk, auth)| (MemberId(id.verifying_key()), pk, auth));
+        let converted = members.map(|(id, pk, auth)| (MemberId::from(id), pk, auth));
         self.0.add_multiple(converted, signer).await
     }
 
@@ -165,7 +160,7 @@ impl Cgka {
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
         self.0
-            .remove(MemberId(id.verifying_key()), authorization, signer)
+            .remove(MemberId::from(id), authorization, signer)
             .await
     }
 

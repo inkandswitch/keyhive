@@ -2,7 +2,6 @@ use super::{
     agent::{id::AgentId, Agent},
     document::{id::DocumentId, Document},
     group::{id::GroupId, Group},
-    identifier::Identifier,
     individual::{id::IndividualId, Individual},
 };
 use crate::listener::{membership::MembershipListener, no_listener::NoListener};
@@ -11,7 +10,8 @@ use dupe::Dupe;
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef, share_key::ShareKey, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef, identifier::Identifier, share_key::ShareKey,
+    signer::async_signer::AsyncSigner,
 };
 use std::{
     collections::{HashMap, HashSet},

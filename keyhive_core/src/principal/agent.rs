@@ -4,7 +4,6 @@ use super::{
     active::Active,
     document::{id::DocumentId, Document},
     group::{id::GroupId, Group, IdOrIndividual},
-    identifier::Identifier,
     individual::{id::IndividualId, op::KeyOp, Individual},
     membered::Membered,
 };
@@ -22,7 +21,7 @@ use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef, share_key::ShareKey, signed::Signed,
+    content::reference::ContentRef, identifier::Identifier, share_key::ShareKey, signed::Signed,
     signer::async_signer::AsyncSigner, verifiable::Verifiable,
 };
 use nonempty::NonEmpty;

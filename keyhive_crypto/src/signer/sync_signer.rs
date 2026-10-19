@@ -1,14 +1,11 @@
 //! Low-level synchronous signer primitives.
 //!
-//! The [`SyncSigner`] trait has been removed. Synchronous signing
-//! convenience methods are now concrete methods on
-//! [`MemorySigner`](crate::signer::memory::MemorySigner). All
-//! signers implement [`AsyncSigner<F>`](crate::signer::async_signer::AsyncSigner)
-//! directly.
-//!
-//! This module retains [`SyncSignerBasic`] (used by
-//! [`EphemeralSigner`](crate::signer::ephemeral::EphemeralSigner))
-//! and the [`try_sign_basic`] helper.
+//! [`SyncSignerBasic`] signs bytes synchronously, for a key held in memory
+//! (such as [`EphemeralSigner`](crate::signer::ephemeral::EphemeralSigner)).
+//! Every signer also implements
+//! [`AsyncSigner<F>`](crate::signer::async_signer::AsyncSigner), and
+//! [`MemorySigner`](crate::signer::memory::MemorySigner) has synchronous
+//! convenience methods. [`try_sign_basic`] signs a serializable payload.
 
 use crate::{signed::SigningError, signer::async_signer::AsyncSigner};
 use ed25519_dalek::Signer;
@@ -16,14 +13,14 @@ use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
 #[cfg(feature = "std")]
 use {
-    crate::{hex::ToHexString, signed::Signed},
+    crate::{hex::ToHexString, identifier::Identifier, signed::Signed},
     serde::Serialize,
     tracing::info,
 };
 
 /// Implement [`AsyncSigner<F>`] for the raw `ed25519_dalek::SigningKey`.
 ///
-/// Synchronous signing wrapped in [`F::ready`].
+/// Synchronous signing wrapped in [`F::ready`](FutureForm::ready).
 #[future_form(Sendable, Local)]
 impl<F: FutureForm> AsyncSigner<F> for ed25519_dalek::SigningKey {
     fn try_sign_bytes_async<'a>(
@@ -90,6 +87,6 @@ pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + core::fmt::Deb
     let bytes = bincode::serialize(&payload)?;
     let signature = signer.try_sign_bytes_sync_basic(bytes.as_slice())?;
     info!("signature: {:0x?}", signature.to_bytes());
-    let signed = Signed::new(payload, issuer, signature);
+    let signed = Signed::new(payload, Identifier::try_from(issuer)?, signature);
     Ok(signed)
 }

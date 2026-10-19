@@ -5,7 +5,11 @@
 use crate::{signed::SigningError, verifiable::Verifiable};
 use future_form::FutureForm;
 #[cfg(feature = "std")]
-use {crate::signed::Signed, alloc::vec::Vec, serde::Serialize};
+use {
+    crate::{identifier::Identifier, signed::Signed},
+    alloc::vec::Vec,
+    serde::Serialize,
+};
 
 /// Async [Ed25519] signer trait.
 ///
@@ -21,7 +25,7 @@ use {crate::signed::Signed, alloc::vec::Vec, serde::Serialize};
 /// [`Local`](future_form::Local) for the latter.
 ///
 /// Synchronous signers (like [`MemorySigner`]) implement this for
-/// _both_ `Sendable` and `Local` using [`F::ready`], so they work
+/// _both_ `Sendable` and `Local` using [`F::ready`](FutureForm::ready), so they work
 /// in any context.
 ///
 /// [Ed25519]: https://en.wikipedia.org/wiki/EdDSA#Ed25519
@@ -50,7 +54,8 @@ pub async fn try_sign_async<F: FutureForm, S: AsyncSigner<F>, T: Serialize + cor
     let signature = signer
         .try_sign_bytes_async(payload_bytes.as_slice())
         .await?;
-    let signed = Signed::new(payload, signer.verifying_key(), signature);
+    let issuer = Identifier::try_from(signer.verifying_key())?;
+    let signed = Signed::new(payload, issuer, signature);
     Ok(signed)
 }
 

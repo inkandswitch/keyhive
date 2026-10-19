@@ -4,10 +4,8 @@ use super::{
 };
 use dupe::Dupe;
 use future_form::Local;
-use keyhive_core::{
-    access::Access,
-    principal::{agent::Agent, identifier::Identifier},
-};
+use keyhive_core::{access::Access, principal::agent::Agent};
+use keyhive_crypto::identifier::Identifier;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 

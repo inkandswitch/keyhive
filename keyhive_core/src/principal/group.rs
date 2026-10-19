@@ -18,7 +18,6 @@ use self::{
 use super::{
     agent::{id::AgentId, Agent},
     document::{id::DocumentId, AddMemberUpdate, Document, RevokeMemberUpdate},
-    identifier::Identifier,
     individual::{id::IndividualId, Individual},
     membered::Membered,
 };
@@ -39,6 +38,7 @@ use id::GroupId;
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
+    identifier::Identifier,
     share_key::ShareKey,
     signed::{Signed, SigningError},
     signer::{
@@ -159,15 +159,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[tracing::instrument(skip_all)]
     pub(crate) async fn generate_after_content(
         signer: Box<dyn SyncSignerBasic>,
-        verifier: ed25519_dalek::VerifyingKey,
+        verifier: Identifier,
         parents: NonEmpty<Agent<F, S, T, L>>,
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
         listener: L,
     ) -> Result<Self, SigningError> {
-        let id = verifier.into();
-        let group_id = GroupId(id);
+        let group_id = GroupId(verifier);
         let mut delegation_heads = DelegationStore::new();
 
         {
@@ -177,7 +176,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             for parent in parents.iter() {
                 let dlg = try_sign_basic(
                     &*signer,
-                    verifier,
+                    verifier.verifying_key(),
                     Delegation {
                         delegate: parent.dupe(),
                         can: Access::Admin,
@@ -486,9 +485,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         signer: &S,
         after_content: BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<AddMemberUpdate<F, S, T, L>, AddGroupMemberError> {
+        let signer_id = Identifier::try_from(signer.verifying_key()).map_err(SigningError::from)?;
         let proof = if self.verifying_key() == signer.verifying_key() {
             None
-        } else if let Some(p) = self.get_capability(&signer.verifying_key().into()) {
+        } else if let Some(p) = self.get_capability(&signer_id) {
             // Signer is a direct member of this group.
             if can > p.payload.can {
                 return Err(AddError::Escalation {
@@ -502,7 +502,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             // Check transitive membership through the group graph.
             // Single pass: find which direct member provides a sufficient
             // transitive path for the signer.
-            let signer_id = Identifier::from(signer.verifying_key());
             let mut best_proof = None;
             let mut best_access: Option<Access> = None;
 
@@ -575,6 +574,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         after_content: &BTreeMap<DocumentId, Vec<T>>,
     ) -> Result<RevokeMemberUpdate<F, S, T, L>, RevokeMemberError> {
         let vk = signer.verifying_key();
+        let signer_id = Identifier::try_from(vk).map_err(SigningError::from)?;
         let mut revocations = vec![];
         let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
 
@@ -603,7 +603,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             for to_revoke in all_to_revoke.iter() {
                 let mut found = false;
 
-                if let Some(member_dlgs) = self.members.get(&vk.into()) {
+                if let Some(member_dlgs) = self.members.get(&signer_id) {
                     // "Double up" if you're an admin in case you get concurrently demoted.
                     // We include the admin proofs as well since those could also get revoked.
                     for mem_dlg in member_dlgs.clone().iter() {
@@ -632,7 +632,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     }
                 }
 
-                if to_revoke.issuer == vk {
+                if to_revoke.issuer.verifying_key() == vk {
                     let r = self
                         .build_revocation(
                             signer,
@@ -647,7 +647,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 } else {
                     // Look for proof of any ancestor
                     for ancestor in to_revoke.payload().proof_lineage() {
-                        if ancestor.issuer == vk {
+                        if ancestor.issuer.verifying_key() == vk {
                             found = true;
                             let r = self
                                 .build_revocation(
@@ -666,7 +666,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 
                 if !found {
                     // Check transitive membership through the group graph.
-                    let signer_id = Identifier::from(vk);
                     for mid in self.members.keys() {
                         let dlg = self
                             .get_capability(mid)
@@ -795,18 +794,18 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         if revoked_dlgs.contains(&found_proof.signature.to_bytes())
                             || !dlgs_in_play.contains_key(&found_proof.signature.to_bytes())
                         {
-                            if let Some(alt_proofs) = self.members.get(&found_proof.issuer.into()) {
+                            if let Some(alt_proofs) = self.members.get(&found_proof.issuer) {
                                 if alt_proofs.iter().filter(|d| *d != found_proof).all(
                                     |alt_proof| alt_proof.payload.can < found_proof.payload.can,
                                 ) {
                                     // No suitable proofs
                                     continue;
                                 }
-                            } else if found_proof.issuer != self.verifying_key() {
+                            } else if found_proof.issuer.verifying_key() != self.verifying_key() {
                                 continue;
                             }
                         }
-                    } else if d.issuer != self.verifying_key() {
+                    } else if d.issuer.verifying_key() != self.verifying_key() {
                         debug_assert!(false, "Delegation without valid root proof");
                         continue;
                     }
@@ -829,7 +828,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                         if revoked_dlgs.contains(&found_proof.signature.to_bytes())
                             || !dlgs_in_play.contains_key(&found_proof.signature.to_bytes())
                         {
-                            if let Some(alt_proofs) = self.members.get(&found_proof.issuer.into()) {
+                            if let Some(alt_proofs) = self.members.get(&found_proof.issuer) {
                                 if !alt_proofs
                                     .iter()
                                     .any(|p| p.payload.can >= found_proof.payload.can)
@@ -838,7 +837,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                                 }
                             }
                         }
-                    } else if r.issuer != self.verifying_key() {
+                    } else if r.issuer.verifying_key() != self.verifying_key() {
                         debug_assert!(false, "Revocation without valid root proof");
                         continue;
                     }

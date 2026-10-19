@@ -1,4 +1,4 @@
-use crate::principal::identifier::Identifier;
+use keyhive_crypto::identifier::Identifier;
 use thiserror::Error;
 
 /// An identifier this instance has never received.

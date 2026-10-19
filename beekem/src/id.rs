@@ -1,41 +1,38 @@
 //! Identity newtypes for BeeKEM tree members and documents.
+//!
+//! Both wrap a validated [`Identifier`]: a canonical Ed25519 verifying key
+//! outside the small-order subgroup. They keep a member and a document apart in
+//! Beekem's types without depending on `keyhive_core`.
 
-use core::{
-    cmp::Ordering,
-    fmt,
-    hash::{Hash, Hasher},
+use core::fmt;
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use keyhive_crypto::{
+    identifier::{Identifier, InvalidIdentifier},
+    verifiable::Verifiable,
 };
-use keyhive_crypto::verifiable::Verifiable;
 use serde::{Deserialize, Serialize};
 
-/// A group member identity, wrapping an Ed25519 verifying key.
-///
-/// This replaces `IndividualId` from keyhive_core for use within
-/// the BeeKEM crate boundary.
-#[derive(Copy, Clone, Serialize, Deserialize)]
-pub struct MemberId(pub ed25519_dalek::VerifyingKey);
+/// A group member: the individual at a leaf of the tree.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct MemberId(Identifier);
 
 impl MemberId {
+    /// The member's key.
+    pub fn id(&self) -> Identifier {
+        self.0
+    }
+
     /// The well-known `Public` member identity.
     ///
-    /// This is the verifying key derived from the all-zeros signing key, the
-    /// shared identity used to grant access to anyone. Its secret key is
-    /// public knowledge by design, so it provides no confidentiality on its
-    /// own.
+    /// Its signing key is all zeros, so its secret is public knowledge by
+    /// design, so it provides no confidentiality on its own.
     pub fn public() -> Self {
-        MemberId(ed25519_dalek::VerifyingKey::from(
-            &ed25519_dalek::SigningKey::from([0u8; 32]),
-        ))
+        Self::from(&SigningKey::from([0u8; 32]))
     }
 
     /// Whether this is [`Self::public`].
     pub fn is_public(&self) -> bool {
-        const PUBLIC: [u8; 32] = [
-            0x3b, 0x6a, 0x27, 0xbc, 0xce, 0xb6, 0xa4, 0x2d, 0x62, 0xa3, 0xa8, 0xd0, 0x2a, 0x6f,
-            0x0d, 0x73, 0x65, 0x32, 0x15, 0x77, 0x1d, 0xe2, 0x43, 0xa6, 0x3a, 0xc0, 0x48, 0xa1,
-            0x8b, 0x59, 0xda, 0x29,
-        ];
-        *self.as_bytes() == PUBLIC
+        *self == Self::public()
     }
 
     pub fn to_bytes(&self) -> [u8; 32] {
@@ -48,32 +45,6 @@ impl MemberId {
 
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_bytes()
-    }
-}
-
-impl PartialEq for MemberId {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_bytes() == other.as_bytes()
-    }
-}
-
-impl Eq for MemberId {}
-
-impl Hash for MemberId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.as_bytes().hash(state)
-    }
-}
-
-impl PartialOrd for MemberId {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for MemberId {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.as_bytes().cmp(other.as_bytes())
     }
 }
 
@@ -93,47 +64,62 @@ impl fmt::Display for MemberId {
 }
 
 impl Verifiable for MemberId {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.0
+    fn verifying_key(&self) -> VerifyingKey {
+        self.0.verifying_key()
     }
 }
 
-impl From<ed25519_dalek::VerifyingKey> for MemberId {
-    fn from(vk: ed25519_dalek::VerifyingKey) -> Self {
-        Self(vk)
+impl From<Identifier> for MemberId {
+    fn from(id: Identifier) -> Self {
+        Self(id)
     }
 }
 
-impl From<&ed25519_dalek::VerifyingKey> for MemberId {
-    fn from(vk: &ed25519_dalek::VerifyingKey) -> Self {
-        Self(*vk)
+impl From<MemberId> for Identifier {
+    fn from(member: MemberId) -> Self {
+        member.0
     }
 }
 
-impl From<MemberId> for ed25519_dalek::VerifyingKey {
-    fn from(id: MemberId) -> Self {
-        id.0
+/// A signing key's verifying key is always a valid [`Identifier`].
+impl From<&SigningKey> for MemberId {
+    fn from(key: &SigningKey) -> Self {
+        Self(Identifier::from(key))
+    }
+}
+
+impl TryFrom<VerifyingKey> for MemberId {
+    type Error = InvalidIdentifier;
+
+    fn try_from(key: VerifyingKey) -> Result<Self, InvalidIdentifier> {
+        Identifier::try_from(key).map(Self)
+    }
+}
+
+impl From<MemberId> for VerifyingKey {
+    fn from(member: MemberId) -> Self {
+        member.0.verifying_key()
     }
 }
 
 #[cfg(any(test, feature = "arbitrary"))]
 impl<'a> arbitrary::Arbitrary<'a> for MemberId {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let bytes = u.bytes(32)?;
-        let arr = <[u8; 32]>::try_from(bytes).expect("32 bytes");
-        let sk = ed25519_dalek::SigningKey::from_bytes(&arr);
-        Ok(Self(sk.verifying_key()))
+        let seed: [u8; 32] = u.arbitrary()?;
+        Ok(Self::from(&SigningKey::from_bytes(&seed)))
     }
 }
 
-/// A tree/document identity, wrapping an Ed25519 verifying key.
-///
-/// This replaces `DocumentId` from keyhive_core for use within
-/// the BeeKEM crate boundary.
-#[derive(Copy, Clone, Serialize, Deserialize)]
-pub struct TreeId(pub ed25519_dalek::VerifyingKey);
+/// A tree's document.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TreeId(Identifier);
 
 impl TreeId {
+    /// The document's key.
+    pub fn id(&self) -> Identifier {
+        self.0
+    }
+
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
     }
@@ -144,32 +130,6 @@ impl TreeId {
 
     pub fn as_slice(&self) -> &[u8] {
         self.0.as_bytes()
-    }
-}
-
-impl PartialEq for TreeId {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_bytes() == other.as_bytes()
-    }
-}
-
-impl Eq for TreeId {}
-
-impl Hash for TreeId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.as_bytes().hash(state)
-    }
-}
-
-impl PartialOrd for TreeId {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for TreeId {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.as_bytes().cmp(other.as_bytes())
     }
 }
 
@@ -189,36 +149,49 @@ impl fmt::Display for TreeId {
 }
 
 impl Verifiable for TreeId {
-    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
-        self.0
+    fn verifying_key(&self) -> VerifyingKey {
+        self.0.verifying_key()
     }
 }
 
-impl From<ed25519_dalek::VerifyingKey> for TreeId {
-    fn from(vk: ed25519_dalek::VerifyingKey) -> Self {
-        Self(vk)
+impl From<Identifier> for TreeId {
+    fn from(id: Identifier) -> Self {
+        Self(id)
     }
 }
 
-impl From<&ed25519_dalek::VerifyingKey> for TreeId {
-    fn from(vk: &ed25519_dalek::VerifyingKey) -> Self {
-        Self(*vk)
+impl From<TreeId> for Identifier {
+    fn from(tree: TreeId) -> Self {
+        tree.0
     }
 }
 
-impl From<TreeId> for ed25519_dalek::VerifyingKey {
-    fn from(id: TreeId) -> Self {
-        id.0
+/// A signing key's verifying key is always a valid [`Identifier`].
+impl From<&SigningKey> for TreeId {
+    fn from(key: &SigningKey) -> Self {
+        Self(Identifier::from(key))
+    }
+}
+
+impl TryFrom<VerifyingKey> for TreeId {
+    type Error = InvalidIdentifier;
+
+    fn try_from(key: VerifyingKey) -> Result<Self, InvalidIdentifier> {
+        Identifier::try_from(key).map(Self)
+    }
+}
+
+impl From<TreeId> for VerifyingKey {
+    fn from(tree: TreeId) -> Self {
+        tree.0.verifying_key()
     }
 }
 
 #[cfg(any(test, feature = "arbitrary"))]
 impl<'a> arbitrary::Arbitrary<'a> for TreeId {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let bytes = u.bytes(32)?;
-        let arr = <[u8; 32]>::try_from(bytes).expect("32 bytes");
-        let sk = ed25519_dalek::SigningKey::from_bytes(&arr);
-        Ok(Self(sk.verifying_key()))
+        let seed: [u8; 32] = u.arbitrary()?;
+        Ok(Self::from(&SigningKey::from_bytes(&seed)))
     }
 }
 
@@ -226,10 +199,39 @@ impl<'a> arbitrary::Arbitrary<'a> for TreeId {
 mod tests {
     use super::*;
 
+    /// A key comes back out as it went in, through `verifying_key` and
+    /// through the conversion, for members and trees alike.
+    #[test]
+    fn keys_round_trip() {
+        bolero::check!().with_type::<[u8; 32]>().for_each(|seed| {
+            let key = SigningKey::from_bytes(seed);
+            let vk = key.verifying_key();
+
+            let member = MemberId::from(&key);
+            assert_eq!(member.verifying_key(), vk);
+            assert_eq!(VerifyingKey::from(member), vk);
+            assert_eq!(MemberId::try_from(vk), Ok(member));
+
+            let tree = TreeId::from(&key);
+            assert_eq!(tree.verifying_key(), vk);
+            assert_eq!(VerifyingKey::from(tree), vk);
+            assert_eq!(TreeId::try_from(vk), Ok(tree));
+        });
+    }
+
     #[test]
     fn only_the_public_id_is_public() {
         assert!(MemberId::public().is_public());
-        let other = ed25519_dalek::SigningKey::from([1u8; 32]);
-        assert!(!MemberId(other.verifying_key()).is_public());
+        let other = SigningKey::from([1u8; 32]);
+        assert!(!MemberId::from(&other).is_public());
+    }
+
+    #[test]
+    fn a_small_order_key_is_not_a_member() {
+        use curve25519_dalek::constants::EIGHT_TORSION;
+        let weak = VerifyingKey::from_bytes(&EIGHT_TORSION[1].compress().to_bytes())
+            .expect("a small-order point decompresses");
+        assert_eq!(MemberId::try_from(weak), Err(InvalidIdentifier::SmallOrder));
+        assert_eq!(TreeId::try_from(weak), Err(InvalidIdentifier::SmallOrder));
     }
 }

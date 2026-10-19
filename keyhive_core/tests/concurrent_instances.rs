@@ -12,7 +12,7 @@ use keyhive_core::{
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext, TestResult as Result},
 };
-use keyhive_crypto::{share_key::ShareKey, signed::Signed, verifiable::Verifiable};
+use keyhive_crypto::{share_key::ShareKey, signed::Signed};
 
 /// One of `who`'s own prekeys it would use to join `doc`.
 async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
@@ -86,7 +86,7 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
         new_path,
         predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(&bob, design_doc).await,
-        doc_id: TreeId(design_doc.verifying_key()),
+        doc_id: TreeId::from(design_doc),
     };
     let signed = alice.try_sign(op).await.map_err(|e| e.to_string())?;
     bob.receive_cgka_op(signed)

@@ -1,6 +1,6 @@
 use derive_more::{Deref, Display, From, Into};
-use keyhive_core::{contact_card::ContactCard, event::Event, principal::identifier::Identifier};
-use keyhive_crypto::verifiable::Verifiable;
+use keyhive_core::{contact_card::ContactCard, event::Event};
+use keyhive_crypto::{identifier::Identifier, verifiable::Verifiable};
 use wasm_bindgen::prelude::*;
 
 use crate::js::{event::JsEvent, identifier::JsIdentifier};

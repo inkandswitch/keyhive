@@ -65,7 +65,7 @@ pub struct Individual {
 impl Individual {
     #[instrument]
     pub fn new(initial_op: KeyOp) -> Self {
-        let id = IndividualId(initial_op.verifying_key().into());
+        let id = IndividualId(initial_op.issuer());
         let prekey_state = PrekeyState::new(initial_op);
 
         Self {
@@ -85,7 +85,7 @@ impl Individual {
             PrekeyState::generate::<F, _, _>(signer, NonZeroUsize::new(8).unwrap(), csprng).await?;
 
         Ok(Self {
-            id: IndividualId(signer.verifying_key().into()),
+            id: IndividualId::try_from(signer.verifying_key())?,
             prekeys: prekey_state.build(),
             prekey_state,
         })

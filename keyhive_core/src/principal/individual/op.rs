@@ -4,10 +4,11 @@ pub mod add_key;
 pub mod rotate_key;
 
 use self::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
-use crate::{principal::identifier::Identifier, util::content_addressed_map::CaMap};
+use crate::util::content_addressed_map::CaMap;
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use keyhive_crypto::{
+    identifier::Identifier,
     share_key::ShareKey,
     signed::{Signed, VerificationError},
     verifiable::Verifiable,
@@ -48,10 +49,10 @@ impl KeyOp {
         }
     }
 
-    pub fn issuer(&self) -> &ed25519_dalek::VerifyingKey {
+    pub fn issuer(&self) -> Identifier {
         match self {
-            KeyOp::Add(add) => &add.issuer,
-            KeyOp::Rotate(rot) => &rot.issuer,
+            KeyOp::Add(add) => add.issuer,
+            KeyOp::Rotate(rot) => rot.issuer,
         }
     }
 

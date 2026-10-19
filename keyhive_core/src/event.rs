@@ -175,7 +175,6 @@ mod tests {
     use futures::lock::Mutex;
     use keyhive_crypto::{
         share_key::ShareKey, signer::memory::MemorySigner, siv::Siv, symmetric_key::SymmetricKey,
-        verifiable::Verifiable,
     };
     use rand::rngs::OsRng;
     use std::collections::BTreeMap;
@@ -192,31 +191,31 @@ mod tests {
         let doc_id2 = DocumentId::generate(&mut csprng);
 
         let cgka_op_1 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
+            added_id: MemberId::from(IndividualId::generate(&mut csprng)),
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 42,
             invitation: None,
             predecessors: vec![],
-            doc_id: TreeId(doc_id1.verifying_key()),
+            doc_id: TreeId::from(doc_id1),
             authorization: CgkaAuthorization::Delegation([0u8; 32]),
         })?;
 
         let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
-            id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
+            id: MemberId::from(IndividualId::generate(&mut csprng)),
             leaf_idx: 4,
             predecessors: vec![],
             removed_keys: vec![],
-            doc_id: TreeId(doc_id2.verifying_key()),
+            doc_id: TreeId::from(doc_id2),
             authorization: CgkaAuthorization::Revocation([0u8; 32]),
         })?;
 
         let cgka_op_3 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId(IndividualId::generate(&mut csprng).verifying_key()),
+            added_id: MemberId::from(IndividualId::generate(&mut csprng)),
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 11,
             invitation: None,
             predecessors: vec![],
-            doc_id: TreeId(doc_id1.verifying_key()),
+            doc_id: TreeId::from(doc_id1),
             authorization: CgkaAuthorization::Delegation([0u8; 32]),
         })?;
 

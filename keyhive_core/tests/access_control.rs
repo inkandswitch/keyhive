@@ -3,11 +3,10 @@
 use keyhive_core::{
     access::Access::{self, Admin, Edit, Read, Relay},
     crypto::digest::Digest,
-    principal::{
-        document::AddMemberError, group::revocation::StaticRevocation, identifier::Identifier,
-    },
+    principal::{document::AddMemberError, group::revocation::StaticRevocation},
     test_utils::{TestContext, TestError, TestResult as Result},
 };
+use keyhive_crypto::identifier::Identifier;
 
 #[tokio::test]
 async fn a_group_member_reaches_the_groups_documents() -> Result<()> {
