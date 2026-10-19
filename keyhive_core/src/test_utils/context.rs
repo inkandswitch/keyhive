@@ -37,7 +37,7 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::Identifier,
     share_key::ShareKey,
-    signed::{Signed, SigningError},
+    signed::{SerdeSigned, SigningError},
     signer::memory::MemorySigner,
     symmetric_key::SymmetricKey,
 };
@@ -340,7 +340,7 @@ pub fn content_ref(content: &[u8]) -> [u8; 32] {
 
 /// One delegation, as plain values, for a test that wants to compare or assert on it.
 ///
-/// A `Signed<Delegation<..>>` carries handles and four type parameters, which is more than an
+/// A `SerdeSigned<Delegation<..>>` carries handles and four type parameters, which is more than an
 /// assertion needs and prints badly on failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DelegationSummary {
@@ -354,8 +354,8 @@ pub struct DelegationSummary {
     pub can: Access,
 }
 
-impl From<&Signed<Delegation<Sendable, MemorySigner>>> for DelegationSummary {
-    fn from(signed: &Signed<Delegation<Sendable, MemorySigner>>) -> Self {
+impl From<&SerdeSigned<Delegation<Sendable, MemorySigner>>> for DelegationSummary {
+    fn from(signed: &SerdeSigned<Delegation<Sendable, MemorySigner>>) -> Self {
         DelegationSummary {
             issuer: *signed.issuer(),
             audience: signed.payload().delegate().id(),

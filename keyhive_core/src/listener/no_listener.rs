@@ -10,7 +10,7 @@ use derive_more::derive::Debug;
 use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef, signed::SerdeSigned, signer::async_signer::AsyncSigner,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -23,11 +23,11 @@ pub struct NoListener;
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm> PrekeyListener<F> for NoListener {
-    fn on_prekeys_expanded<'a>(&'a self, _e: &'a Arc<Signed<AddKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekeys_expanded<'a>(&'a self, _e: &'a Arc<SerdeSigned<AddKeyOp>>) -> F::Future<'a, ()> {
         F::ready(())
     }
 
-    fn on_prekey_rotated<'a>(&'a self, _e: &'a Arc<Signed<RotateKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekey_rotated<'a>(&'a self, _e: &'a Arc<SerdeSigned<RotateKeyOp>>) -> F::Future<'a, ()> {
         F::ready(())
     }
 }
@@ -36,14 +36,14 @@ impl<F: FutureForm> PrekeyListener<F> for NoListener {
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> MembershipListener<F, S, T> for NoListener {
     fn on_delegation<'a>(
         &'a self,
-        _data: &'a Arc<Signed<Delegation<F, S, T, NoListener>>>,
+        _data: &'a Arc<SerdeSigned<Delegation<F, S, T, NoListener>>>,
     ) -> F::Future<'a, ()> {
         F::ready(())
     }
 
     fn on_revocation<'a>(
         &'a self,
-        _data: &'a Arc<Signed<Revocation<F, S, T, NoListener>>>,
+        _data: &'a Arc<SerdeSigned<Revocation<F, S, T, NoListener>>>,
     ) -> F::Future<'a, ()> {
         F::ready(())
     }
@@ -51,7 +51,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef> MembershipListener<F, S, T
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm> CgkaListener<F> for NoListener {
-    fn on_cgka_op<'a>(&'a self, _data: &'a Arc<Signed<CgkaOperation>>) -> F::Future<'a, ()> {
+    fn on_cgka_op<'a>(&'a self, _data: &'a Arc<SerdeSigned<CgkaOperation>>) -> F::Future<'a, ()> {
         F::ready(())
     }
 }

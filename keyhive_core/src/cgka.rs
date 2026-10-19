@@ -21,7 +21,7 @@ use keyhive_crypto::{
     digest::Digest,
     identifier::Identifier,
     share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
+    signed::SerdeSigned,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
 };
@@ -108,7 +108,7 @@ impl Cgka {
     ) -> Result<
         (
             ApplicationSecret<T>,
-            Option<(Signed<CgkaOperation>, LeafKeyPair)>,
+            Option<(SerdeSigned<CgkaOperation>, LeafKeyPair)>,
         ),
         CgkaError,
     > {
@@ -132,7 +132,7 @@ impl Cgka {
         pk: ShareKey,
         authorization: CgkaAuthorization,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
         self.0
             .add(MemberId::from(id), pk, authorization, signer)
             .await
@@ -142,7 +142,7 @@ impl Cgka {
         &mut self,
         members: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<SerdeSigned<CgkaOperation>>, CgkaError> {
         let converted = members.map(|(id, pk, auth)| (MemberId::from(id), pk, auth));
         self.0.add_multiple(converted, signer).await
     }
@@ -152,7 +152,7 @@ impl Cgka {
         id: IndividualId,
         authorization: CgkaAuthorization,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
         self.0
             .remove(MemberId::from(id), authorization, signer)
             .await
@@ -164,7 +164,7 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, Signed<CgkaOperation>, LeafKeyPair), CgkaError> {
+    ) -> Result<(PcsKey, SerdeSigned<CgkaOperation>, LeafKeyPair), CgkaError> {
         self.0.update(new_pk, new_sk, signer, csprng).await
     }
 
@@ -183,7 +183,7 @@ impl Cgka {
 
     pub fn merge_concurrent_operation(
         &mut self,
-        op: Arc<Signed<CgkaOperation>>,
+        op: Arc<SerdeSigned<CgkaOperation>>,
     ) -> Result<bool, CgkaError> {
         self.0.merge_concurrent_operation(op)
     }
@@ -192,7 +192,10 @@ impl Cgka {
         self.0.ops()
     }
 
-    pub fn contains_predecessors(&self, preds: &HashSet<Digest<Signed<CgkaOperation>>>) -> bool {
+    pub fn contains_predecessors(
+        &self,
+        preds: &HashSet<Digest<SerdeSigned<CgkaOperation>>>,
+    ) -> bool {
         self.0.contains_predecessors(preds)
     }
 }
@@ -218,7 +221,7 @@ impl Merge for Cgka {
 #[derive(Debug)]
 pub struct AllCgkaOps {
     /// CGKA ops per doc, keyed by doc Identifier.
-    pub ops: HashMap<Identifier, Vec<Arc<Signed<CgkaOperation>>>>,
+    pub ops: HashMap<Identifier, Vec<Arc<SerdeSigned<CgkaOperation>>>>,
 
     /// For each agent: the set of doc identifiers whose ops are reachable.
     pub index: HashMap<Identifier, HashSet<Identifier>>,
@@ -235,7 +238,7 @@ impl AllCgkaOps {
     pub fn ops_for_agent(
         &self,
         agent_id: &Identifier,
-    ) -> Option<impl Iterator<Item = &Arc<Signed<CgkaOperation>>>> {
+    ) -> Option<impl Iterator<Item = &Arc<SerdeSigned<CgkaOperation>>>> {
         self.index.get(agent_id).map(|doc_ids| {
             doc_ids
                 .iter()

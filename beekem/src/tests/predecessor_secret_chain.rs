@@ -14,7 +14,7 @@ use future_form::Local;
 use keyhive_crypto::{
     digest::Digest,
     share_key::ShareSecretKey,
-    signed::Signed,
+    signed::SerdeSigned,
     signer::{
         async_signer::{self, AsyncSigner},
         memory::MemorySigner,
@@ -26,7 +26,7 @@ async fn rotate<S: AsyncSigner<Local>, R: rand::CryptoRng + rand::RngCore>(
     cgka: &mut Cgka,
     signer: &S,
     csprng: &mut R,
-) -> (PcsKey, Signed<CgkaOperation>) {
+) -> (PcsKey, SerdeSigned<CgkaOperation>) {
     let sk = ShareSecretKey::generate(csprng);
     let (pcs_key, op, _) = cgka
         .update::<Local, _, _>(sk.share_key(), sk, signer, csprng)
@@ -35,7 +35,7 @@ async fn rotate<S: AsyncSigner<Local>, R: rand::CryptoRng + rand::RngCore>(
     (pcs_key, op)
 }
 
-fn predecessor_secrets(op: &Signed<CgkaOperation>) -> &[PredecessorSecret] {
+fn predecessor_secrets(op: &SerdeSigned<CgkaOperation>) -> &[PredecessorSecret] {
     let CgkaOperation::Update {
         predecessor_secrets,
         ..
@@ -46,7 +46,10 @@ fn predecessor_secrets(op: &Signed<CgkaOperation>) -> &[PredecessorSecret] {
     predecessor_secrets
 }
 
-fn added_to_chain(op: &Signed<CgkaOperation>, hash: &Digest<Signed<CgkaOperation>>) -> bool {
+fn added_to_chain(
+    op: &SerdeSigned<CgkaOperation>,
+    hash: &Digest<SerdeSigned<CgkaOperation>>,
+) -> bool {
     predecessor_secrets(op)
         .iter()
         .any(|s| s.update_op_hash == *hash)
@@ -64,9 +67,9 @@ fn view_of(source: &Cgka, member: &Member) -> Cgka {
 /// Re-sign `op` with its predecessor secrets replaced by `entries`.
 async fn with_entries(
     signer: &MemorySigner,
-    op: &Signed<CgkaOperation>,
+    op: &SerdeSigned<CgkaOperation>,
     entries: Vec<PredecessorSecret>,
-) -> Signed<CgkaOperation> {
+) -> SerdeSigned<CgkaOperation> {
     let CgkaOperation::Update {
         id,
         ref new_path,
@@ -96,9 +99,9 @@ async fn carol_updates_without_bobs_secret(
     rng: &mut StdRng,
 ) -> (
     Group,
-    Digest<Signed<CgkaOperation>>,
-    Digest<Signed<CgkaOperation>>,
-    Signed<CgkaOperation>,
+    Digest<SerdeSigned<CgkaOperation>>,
+    Digest<SerdeSigned<CgkaOperation>>,
+    SerdeSigned<CgkaOperation>,
 ) {
     let mut group = Group::new(2, rng).await;
     let alice_op1_hash = Digest::hash(group.rotate(0, rng).await.as_ref());
@@ -307,7 +310,11 @@ fn an_invitation_leaves_out_an_update_already_in_the_chain() {
 /// [`Cgka`], and each update with the secret it produced.
 async fn carol_added_after_three_updates(
     rng: &mut StdRng,
-) -> (Member, Cgka, Vec<(Digest<Signed<CgkaOperation>>, PcsKey)>) {
+) -> (
+    Member,
+    Cgka,
+    Vec<(Digest<SerdeSigned<CgkaOperation>>, PcsKey)>,
+) {
     let mut group = Group::new(1, rng).await;
     let mut updates = Vec::new();
     for _ in 0..3 {
@@ -419,8 +426,8 @@ async fn missing_the_second_secret(
     rng: &mut StdRng,
 ) -> (
     Group,
-    Digest<Signed<CgkaOperation>>,
-    Digest<Signed<CgkaOperation>>,
+    Digest<SerdeSigned<CgkaOperation>>,
+    Digest<SerdeSigned<CgkaOperation>>,
 ) {
     let mut group = Group::new(1, rng).await;
     let first = Digest::hash(group.rotate(0, rng).await.as_ref());

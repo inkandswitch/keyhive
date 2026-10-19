@@ -19,7 +19,7 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, signed::Signed,
+    content::reference::ContentRef, digest::Digest, signed::SerdeSigned,
     signer::async_signer::AsyncSigner, verifiable::Verifiable,
 };
 use serde::{Deserialize, Serialize};
@@ -37,8 +37,8 @@ pub enum MembershipOperation<
     T: ContentRef = [u8; 32],
     L: MembershipListener<F, S, T> = NoListener,
 > {
-    Delegation(Arc<Signed<Delegation<F, S, T, L>>>),
-    Revocation(Arc<Signed<Revocation<F, S, T, L>>>),
+    Delegation(Arc<SerdeSigned<Delegation<F, S, T, L>>>),
+    Revocation(Arc<SerdeSigned<Revocation<F, S, T, L>>>),
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
@@ -456,17 +456,17 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<Arc<Signed<Delegation<F, S, T, L>>>> for MembershipOperation<F, S, T, L>
+    From<Arc<SerdeSigned<Delegation<F, S, T, L>>>> for MembershipOperation<F, S, T, L>
 {
-    fn from(delegation: Arc<Signed<Delegation<F, S, T, L>>>) -> Self {
+    fn from(delegation: Arc<SerdeSigned<Delegation<F, S, T, L>>>) -> Self {
         MembershipOperation::Delegation(delegation)
     }
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
-    From<Arc<Signed<Revocation<F, S, T, L>>>> for MembershipOperation<F, S, T, L>
+    From<Arc<SerdeSigned<Revocation<F, S, T, L>>>> for MembershipOperation<F, S, T, L>
 {
-    fn from(revocation: Arc<Signed<Revocation<F, S, T, L>>>) -> Self {
+    fn from(revocation: Arc<SerdeSigned<Revocation<F, S, T, L>>>) -> Self {
         MembershipOperation::Revocation(revocation)
     }
 }
@@ -474,8 +474,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum StaticMembershipOperation<T: ContentRef> {
-    Delegation(Signed<StaticDelegation<T>>),
-    Revocation(Signed<StaticRevocation<T>>),
+    Delegation(SerdeSigned<StaticDelegation<T>>),
+    Revocation(SerdeSigned<StaticRevocation<T>>),
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
@@ -661,7 +661,7 @@ pub async fn bfs_extend_from_revocation<
     T: ContentRef,
     L: MembershipListener<F, S, T>,
 >(
-    rev: &Arc<Signed<Revocation<F, S, T, L>>>,
+    rev: &Arc<SerdeSigned<Revocation<F, S, T, L>>>,
     all_ops: &mut MembershipOpMap<F, S, T, L>,
     visited: &mut HashSet<Digest<MembershipOperation<F, S, T, L>>>,
 ) {
@@ -750,7 +750,7 @@ mod tests {
 
     async fn add_alice<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<Sendable, MemorySigner, String>>> {
+    ) -> Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> {
         let alice = Individual::generate::<Sendable, _, _>(fixture(&ALICE_SIGNER), csprng)
             .await
             .unwrap();
@@ -772,7 +772,7 @@ mod tests {
 
     async fn add_bob<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<Sendable, MemorySigner, String>>> {
+    ) -> Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> {
         let bob = Individual::generate::<Sendable, _, _>(fixture(&BOB_SIGNER), csprng)
             .await
             .unwrap();
@@ -792,7 +792,7 @@ mod tests {
 
     async fn add_carol<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<Sendable, MemorySigner, String>>> {
+    ) -> Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> {
         let carol = Individual::generate::<Sendable, _, _>(fixture(&CAROL_SIGNER), csprng)
             .await
             .unwrap();
@@ -812,7 +812,7 @@ mod tests {
 
     async fn add_dan<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<Sendable, MemorySigner, String>>> {
+    ) -> Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> {
         let dan = Individual::generate::<Sendable, _, _>(fixture(&DAN_SIGNER), csprng)
             .await
             .unwrap();
@@ -832,7 +832,7 @@ mod tests {
 
     async fn add_erin<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Delegation<Sendable, MemorySigner, String>>> {
+    ) -> Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> {
         let erin = Individual::generate::<Sendable, _, _>(fixture(&ERIN_SIGNER), csprng)
             .await
             .unwrap();
@@ -852,7 +852,7 @@ mod tests {
 
     async fn remove_carol<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Revocation<Sendable, MemorySigner, String>>> {
+    ) -> Arc<SerdeSigned<Revocation<Sendable, MemorySigner, String>>> {
         Arc::new(
             fixture(&ALICE_SIGNER)
                 .try_sign_sync(Revocation {
@@ -866,7 +866,7 @@ mod tests {
 
     async fn remove_dan<R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-    ) -> Arc<Signed<Revocation<Sendable, MemorySigner, String>>> {
+    ) -> Arc<SerdeSigned<Revocation<Sendable, MemorySigner, String>>> {
         Arc::new(
             fixture(&BOB_SIGNER)
                 .try_sign_sync(Revocation {
@@ -1084,7 +1084,7 @@ mod tests {
 
             let locked_alice = alice.lock().await;
 
-            let alice_to_bob: Arc<Signed<Delegation<Sendable, MemorySigner>>> = Arc::new(
+            let alice_to_bob: Arc<SerdeSigned<Delegation<Sendable, MemorySigner>>> = Arc::new(
                 locked_alice
                     .signer
                     .try_sign_sync(Delegation {
@@ -1344,7 +1344,7 @@ mod tests {
                 .unwrap();
 
             // group -> alice
-            let root_dlg: Arc<Signed<Delegation<Sendable, MemorySigner, String>>> = Arc::new(
+            let root_dlg: Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> = Arc::new(
                 group_signer
                     .try_sign_sync(Delegation {
                         delegate: alice.into(),
@@ -1474,17 +1474,18 @@ mod tests {
                 .await
                 .unwrap();
 
-            let isolated_dlg: Arc<Signed<Delegation<Sendable, MemorySigner, String>>> = Arc::new(
-                group_signer2
-                    .try_sign_sync(Delegation {
-                        delegate: dan.into(),
-                        can: Access::Admin,
-                        proof: None,
-                        after_content: BTreeMap::new(),
-                        after_revocations: vec![],
-                    })
-                    .unwrap(),
-            );
+            let isolated_dlg: Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> =
+                Arc::new(
+                    group_signer2
+                        .try_sign_sync(Delegation {
+                            delegate: dan.into(),
+                            can: Access::Admin,
+                            proof: None,
+                            after_content: BTreeMap::new(),
+                            after_revocations: vec![],
+                        })
+                        .unwrap(),
+                );
 
             // Two unrelated root delegations. Both are isolated
             let dlg_heads2 =
@@ -1520,7 +1521,7 @@ mod tests {
             let bob = Individual::generate::<Sendable, _, _>(&bob_signer, csprng).await?;
             let carol = Individual::generate::<Sendable, _, _>(&carol_signer, csprng).await?;
 
-            let root_dlg: Arc<Signed<Delegation<Sendable, MemorySigner, String>>> =
+            let root_dlg: Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> =
                 Arc::new(group_signer.try_sign_sync(Delegation {
                     delegate: alice.into(),
                     can: Access::Admin,
@@ -1630,7 +1631,7 @@ mod tests {
             let carol = Individual::generate::<Sendable, _, _>(&carol_signer, csprng).await?;
             let dave = Individual::generate::<Sendable, _, _>(&dave_signer, csprng).await?;
 
-            let root_dlg: Arc<Signed<Delegation<Sendable, MemorySigner, String>>> =
+            let root_dlg: Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> =
                 Arc::new(group_signer.try_sign_sync(Delegation {
                     delegate: alice.into(),
                     can: Access::Admin,
@@ -1725,7 +1726,7 @@ mod tests {
             let carol = Individual::generate::<Sendable, _, _>(&carol_signer, csprng).await?;
             let dan = Individual::generate::<Sendable, _, _>(&dan_signer, csprng).await?;
 
-            let root_dlg: Arc<Signed<Delegation<Sendable, MemorySigner, String>>> =
+            let root_dlg: Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> =
                 Arc::new(group_signer.try_sign_sync(Delegation {
                     delegate: alice.into(),
                     can: Access::Admin,
@@ -1854,7 +1855,7 @@ mod tests {
             let alice = Individual::generate::<Sendable, _, _>(&alice_signer, csprng).await?;
             let bob = Individual::generate::<Sendable, _, _>(&bob_signer, csprng).await?;
 
-            let root_dlg: Arc<Signed<Delegation<Sendable, MemorySigner, String>>> =
+            let root_dlg: Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> =
                 Arc::new(group_signer.try_sign_sync(Delegation {
                     delegate: alice.clone().into(),
                     can: Access::Admin,
@@ -1865,7 +1866,8 @@ mod tests {
 
             let depth = 10;
             let mut all_dlgs = vec![root_dlg.dupe()];
-            let mut all_revs: Vec<Arc<Signed<Revocation<Sendable, MemorySigner, String>>>> = vec![];
+            let mut all_revs: Vec<Arc<SerdeSigned<Revocation<Sendable, MemorySigner, String>>>> =
+                vec![];
             let mut current_proof = root_dlg.dupe();
 
             for i in 0..depth {
@@ -2049,7 +2051,7 @@ mod tests {
                 let grace = Individual::generate::<Sendable, _, _>(&grace_signer, csprng).await?;
                 let heidi = Individual::generate::<Sendable, _, _>(&heidi_signer, csprng).await?;
 
-                let root_dlg: Arc<Signed<Delegation<Sendable, MemorySigner, String>>> =
+                let root_dlg: Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> =
                     Arc::new(group_signer.try_sign_sync(Delegation {
                         delegate: alice.into(),
                         can: Access::Admin,
@@ -2212,7 +2214,7 @@ mod tests {
                 let heidi = Individual::generate::<Sendable, _, _>(&heidi_signer, csprng).await?;
                 let ivan = Individual::generate::<Sendable, _, _>(&ivan_signer, csprng).await?;
 
-                let root_dlg: Arc<Signed<Delegation<Sendable, MemorySigner, String>>> =
+                let root_dlg: Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> =
                     Arc::new(group_signer.try_sign_sync(Delegation {
                         delegate: alice.into(),
                         can: Access::Admin,
@@ -2400,7 +2402,7 @@ mod tests {
                 let judy = Individual::generate::<Sendable, _, _>(&judy_signer, csprng).await?;
                 let karl = Individual::generate::<Sendable, _, _>(&karl_signer, csprng).await?;
 
-                let root_dlg: Arc<Signed<Delegation<Sendable, MemorySigner, String>>> =
+                let root_dlg: Arc<SerdeSigned<Delegation<Sendable, MemorySigner, String>>> =
                     Arc::new(group_signer.try_sign_sync(Delegation {
                         delegate: alice.into(),
                         can: Access::Admin,

@@ -5,7 +5,7 @@ use crate::{
 };
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef, signed::SerdeSigned, signer::async_signer::AsyncSigner,
 };
 use std::{collections::BTreeMap, hash::Hash, sync::Arc};
 
@@ -17,7 +17,7 @@ pub struct Dependencies<
     T: ContentRef = [u8; 32],
     L: MembershipListener<F, S, T> = NoListener,
 > {
-    pub delegations: Vec<Arc<Signed<Delegation<F, S, T, L>>>>,
-    pub revocations: Vec<Arc<Signed<Revocation<F, S, T, L>>>>,
+    pub delegations: Vec<Arc<SerdeSigned<Delegation<F, S, T, L>>>>,
+    pub revocations: Vec<Arc<SerdeSigned<Revocation<F, S, T, L>>>>,
     pub content: &'a BTreeMap<DocumentId, Vec<T>>,
 }

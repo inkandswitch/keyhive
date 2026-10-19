@@ -21,7 +21,7 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, signed::Signed,
+    content::reference::ContentRef, digest::Digest, signed::SerdeSigned,
     signer::async_signer::AsyncSigner,
 };
 use serde::Serialize;
@@ -38,19 +38,19 @@ pub enum Event<
     L: MembershipListener<F, S, T> = NoListener,
 > {
     /// Prekeys were expanded.
-    PrekeysExpanded(Arc<Signed<AddKeyOp>>),
+    PrekeysExpanded(Arc<SerdeSigned<AddKeyOp>>),
 
     /// A prekey was rotated.
-    PrekeyRotated(Arc<Signed<RotateKeyOp>>),
+    PrekeyRotated(Arc<SerdeSigned<RotateKeyOp>>),
 
     /// A CGKA operation was performed.
-    CgkaOperation(Arc<Signed<CgkaOperation>>),
+    CgkaOperation(Arc<SerdeSigned<CgkaOperation>>),
 
     /// A delegation was created.
-    Delegated(Arc<Signed<Delegation<F, S, T, L>>>),
+    Delegated(Arc<SerdeSigned<Delegation<F, S, T, L>>>),
 
     /// A delegation was revoked.
-    Revoked(Arc<Signed<Revocation<F, S, T, L>>>),
+    Revoked(Arc<SerdeSigned<Revocation<F, S, T, L>>>),
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>

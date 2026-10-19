@@ -1,33 +1,45 @@
 //! Wrap data in signatures.
 
-#[cfg(feature = "std")]
-use super::digest::Digest;
 use super::{
     identifier::{Identifier, InvalidIdentifier},
     verifiable::Verifiable,
 };
-#[cfg(feature = "std")]
-use alloc::vec::Vec;
 use core::{
     cmp::Ordering,
     fmt::{self, Debug},
     hash::{Hash, Hasher},
 };
+use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "std")]
+use super::digest::Digest;
+
+#[cfg(feature = "std")]
+use alloc::vec::Vec;
+
 #[cfg(feature = "std")]
 use dupe::Dupe;
+
 #[cfg(feature = "std")]
 use ed25519_dalek::Verifier;
-use serde::{Deserialize, Serialize};
+
 #[cfg(feature = "std")]
 use std::sync::OnceLock;
+
 #[cfg(feature = "std")]
 use thiserror::Error;
+
 #[cfg(feature = "std")]
 use tracing::instrument;
 
-/// A wrapper to add a signature and signer information to an arbitrary payload.
+/// A wrapper to add a signature and signer information to an arbitrary payload,
+/// encoded with serde (`bincode`).
+///
+/// Transitional: [`verified::Signed`](crate::verified::Signed) replaces it,
+/// signing the canonical `KH` frame instead of a serde encoding. Membership and
+/// CGKA operations still use this type; it is removed once they have codecs.
 #[derive(Serialize, Deserialize)]
-pub struct Signed<T: Serialize + Debug> {
+pub struct SerdeSigned<T: Serialize + Debug> {
     /// The data that was signed.
     pub payload: T,
 
@@ -37,15 +49,18 @@ pub struct Signed<T: Serialize + Debug> {
     /// The signature of the payload, which can be verified by the `verifying_key`.
     pub signature: ed25519_dalek::Signature,
 
-    /// Digest hash (computed eagerly on construction).
+    /// The digest, memoized: hashing re-serializes the whole value, nested
+    /// proofs included. Filled by [`Self::new`], or on first use after
+    /// deserializing. Never serialized: it is derived from the other fields,
+    /// and the digest hashes the serialization.
     #[cfg(feature = "std")]
     #[serde(skip)]
     digest_hash: OnceLock<[u8; 32]>,
 }
 
-impl<T: Serialize + Debug> Debug for Signed<T> {
+impl<T: Serialize + Debug> Debug for SerdeSigned<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Signed")
+        f.debug_struct("SerdeSigned")
             .field("payload", &self.payload)
             .field("issuer", &format_args!("{:x}", self.issuer))
             .field("signature", &format_args!("{}", HexSig(&self.signature)))
@@ -62,23 +77,23 @@ impl fmt::Display for HexSig<'_> {
 }
 
 /// Equality is based on issuer + signature only (payload is ignored).
-impl<T: Serialize + Debug> PartialEq for Signed<T> {
+impl<T: Serialize + Debug> PartialEq for SerdeSigned<T> {
     fn eq(&self, other: &Self) -> bool {
         self.issuer == other.issuer && self.signature == other.signature
     }
 }
 
-impl<T: Serialize + Debug> Eq for Signed<T> {}
+impl<T: Serialize + Debug> Eq for SerdeSigned<T> {}
 
 /// Hash is based on issuer + signature bytes (payload is ignored).
-impl<T: Serialize + Debug> Hash for Signed<T> {
+impl<T: Serialize + Debug> Hash for SerdeSigned<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.issuer.hash(state);
         self.signature.to_bytes().hash(state);
     }
 }
 
-impl<T: Clone + Serialize + Debug> Clone for Signed<T> {
+impl<T: Clone + Serialize + Debug> Clone for SerdeSigned<T> {
     fn clone(&self) -> Self {
         #[cfg(feature = "std")]
         let digest_hash = {
@@ -98,8 +113,8 @@ impl<T: Clone + Serialize + Debug> Clone for Signed<T> {
     }
 }
 
-impl<T: Serialize + Debug> Signed<T> {
-    /// Create a new [`Signed`]. The digest hash will be computed eagerly.
+impl<T: Serialize + Debug> SerdeSigned<T> {
+    /// Create a new [`SerdeSigned`]. The digest hash will be computed eagerly.
     pub fn new(payload: T, issuer: Identifier, signature: ed25519_dalek::Signature) -> Self {
         let signed = Self {
             payload,
@@ -164,8 +179,8 @@ impl<T: Serialize + Debug> Signed<T> {
     /// Map over the payload of the signed data.
     ///
     /// The digest hash is recomputed eagerly since the payload type changes.
-    pub fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> Signed<U> {
-        Signed::new(f(self.payload), self.issuer, self.signature)
+    pub fn map<U: Serialize + Debug, F: FnOnce(T) -> U>(self, f: F) -> SerdeSigned<U> {
+        SerdeSigned::new(f(self.payload), self.issuer, self.signature)
     }
 }
 
@@ -184,14 +199,14 @@ mod arb {
     }
 
     impl<'a, T: serde::Serialize + Debug + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
-        for super::Signed<T>
+        for super::SerdeSigned<T>
     {
         fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
             let payload = T::arbitrary(u)?;
             let mut key = arb_signing_key(u)?;
             let encoded = bincode::serialize(&payload).unwrap();
             let signature = key.sign(&encoded);
-            Ok(super::Signed::new(
+            Ok(super::SerdeSigned::new(
                 payload,
                 Identifier::from(&key),
                 signature,
@@ -200,7 +215,7 @@ mod arb {
     }
 }
 
-impl<T: Serialize + PartialOrd + Debug> PartialOrd for Signed<T> {
+impl<T: Serialize + PartialOrd + Debug> PartialOrd for SerdeSigned<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.issuer.as_bytes().partial_cmp(other.issuer.as_bytes()) {
             Some(Ordering::Equal) => match self
@@ -216,7 +231,7 @@ impl<T: Serialize + PartialOrd + Debug> PartialOrd for Signed<T> {
     }
 }
 
-impl<T: Serialize + Ord + Debug> Ord for Signed<T> {
+impl<T: Serialize + Ord + Debug> Ord for SerdeSigned<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self
             .verifying_key()
@@ -233,13 +248,13 @@ impl<T: Serialize + Ord + Debug> Ord for Signed<T> {
 }
 
 #[cfg(feature = "std")]
-impl<T: Dupe + Serialize + Debug> Dupe for Signed<T> {
+impl<T: Dupe + Serialize + Debug> Dupe for SerdeSigned<T> {
     fn dupe(&self) -> Self {
         let digest_hash = OnceLock::new();
         if let Some(digest) = self.digest_hash.get() {
             let _ = digest_hash.set(*digest);
         }
-        Signed {
+        SerdeSigned {
             payload: self.payload.dupe(),
             issuer: self.issuer,
             signature: self.signature,
@@ -248,7 +263,7 @@ impl<T: Dupe + Serialize + Debug> Dupe for Signed<T> {
     }
 }
 
-impl<T: Serialize + Debug> Verifiable for Signed<T> {
+impl<T: Serialize + Debug> Verifiable for SerdeSigned<T> {
     fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.issuer.verifying_key()
     }
@@ -346,13 +361,13 @@ mod tests {
     /// The partial order agrees with the total one: issuer first.
     #[test]
     fn partial_order_agrees_with_order() {
-        use super::Signed;
+        use super::SerdeSigned;
         use crate::identifier::Identifier;
         use ed25519_dalek::{Signer, SigningKey};
 
         let signed_by = |n: u8| {
             let key = SigningKey::from_bytes(&[n; 32]);
-            Signed::new(5u8, Identifier::from(&key), key.sign(b"payload"))
+            SerdeSigned::new(5u8, Identifier::from(&key), key.sign(b"payload"))
         };
         let (a, b) = (signed_by(1), signed_by(2));
         assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));

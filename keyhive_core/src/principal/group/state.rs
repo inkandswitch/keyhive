@@ -17,7 +17,7 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
     identifier::Identifier,
-    signed::Signed,
+    signed::SerdeSigned,
     signer::{async_signer::AsyncSigner, memory::MemorySigner},
     verifiable::Verifiable,
 };
@@ -46,7 +46,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     GroupState<F, S, T, L>
 {
     pub async fn new(
-        delegation_head: Arc<Signed<Delegation<F, S, T, L>>>,
+        delegation_head: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
     ) -> Self {
@@ -142,8 +142,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn add_delegation(
         &mut self,
-        delegation: Arc<Signed<Delegation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<F, S, T, L>>>, AddError> {
+        delegation: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
+    ) -> Result<Digest<SerdeSigned<Delegation<F, S, T, L>>>, AddError> {
         if delegation.subject_id() != Identifier::from(self.id) {
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
@@ -208,8 +208,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn add_revocation(
         &mut self,
-        revocation: Arc<Signed<Revocation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<F, S, T, L>>>, AddError> {
+        revocation: Arc<SerdeSigned<Revocation<F, S, T, L>>>,
+    ) -> Result<Digest<SerdeSigned<Revocation<F, S, T, L>>>, AddError> {
         if revocation.subject_id() != Identifier::from(self.id) {
             return Err(AddError::InvalidSubject(Box::new(revocation.subject_id())));
         }
@@ -272,7 +272,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn delegations_for(
         &self,
         agent: Agent<F, S, T, L>,
-    ) -> Vec<Arc<Signed<Delegation<F, S, T, L>>>> {
+    ) -> Vec<Arc<SerdeSigned<Delegation<F, S, T, L>>>> {
         let mut dlgs = Vec::new();
         for delegation in self.delegations.lock().await.values() {
             if agent == delegation.payload().delegate {

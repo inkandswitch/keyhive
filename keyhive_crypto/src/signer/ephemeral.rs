@@ -30,7 +30,7 @@ impl EphemeralSigner {
     ///
     /// ```
     /// use keyhive_crypto::{
-    ///     signed::Signed,
+    ///     signed::SerdeSigned,
     ///     signer::{
     ///         async_signer::AsyncSigner,
     ///         ephemeral::EphemeralSigner,
@@ -60,7 +60,7 @@ impl EphemeralSigner {
     ///
     /// ```
     /// use keyhive_crypto::{
-    ///     signed::Signed,
+    ///     signed::SerdeSigned,
     ///     signer::{
     ///         async_signer::AsyncSigner,
     ///         ephemeral::EphemeralSigner,

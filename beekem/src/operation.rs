@@ -24,7 +24,7 @@ use core::{
 use keyhive_crypto::{
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
+    signed::SerdeSigned,
 };
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
@@ -43,25 +43,25 @@ pub enum CgkaAuthorization {
 /// An ordered [`NonEmpty`] of [`CgkaOperation`]s that a replay applies
 /// together.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct CgkaBatch(NonEmpty<Arc<Signed<CgkaOperation>>>);
+pub struct CgkaBatch(NonEmpty<Arc<SerdeSigned<CgkaOperation>>>);
 
-impl From<NonEmpty<Arc<Signed<CgkaOperation>>>> for CgkaBatch {
-    fn from(item: NonEmpty<Arc<Signed<CgkaOperation>>>) -> Self {
+impl From<NonEmpty<Arc<SerdeSigned<CgkaOperation>>>> for CgkaBatch {
+    fn from(item: NonEmpty<Arc<SerdeSigned<CgkaOperation>>>) -> Self {
         CgkaBatch(item)
     }
 }
 
 impl Deref for CgkaBatch {
-    type Target = NonEmpty<Arc<Signed<CgkaOperation>>>;
+    type Target = NonEmpty<Arc<SerdeSigned<CgkaOperation>>>;
 
-    fn deref(&self) -> &NonEmpty<Arc<Signed<CgkaOperation>>> {
+    fn deref(&self) -> &NonEmpty<Arc<SerdeSigned<CgkaOperation>>> {
         &self.0
     }
 }
 
 impl IntoIterator for CgkaBatch {
-    type Item = Arc<Signed<CgkaOperation>>;
-    type IntoIter = <NonEmpty<Arc<Signed<CgkaOperation>>> as IntoIterator>::IntoIter;
+    type Item = Arc<SerdeSigned<CgkaOperation>>;
+    type IntoIter = <NonEmpty<Arc<SerdeSigned<CgkaOperation>>> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -74,7 +74,7 @@ impl IntoIterator for CgkaBatch {
 pub struct InvitationSecret {
     /// The update operation that produced the secret in
     /// [`InvitationSecret::encrypted_root_secret`].
-    pub update_op_hash: Digest<Signed<CgkaOperation>>,
+    pub update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
 
     /// The root secret, encrypted to the `pk` of the [`CgkaOperation::Add`]
     /// wrapping this invitation.
@@ -108,7 +108,7 @@ pub struct Invitation {
 pub struct PredecessorSecret {
     /// The update operation that produced the secret in
     /// [`PredecessorSecret::encrypted_root_secret`].
-    pub update_op_hash: Digest<Signed<CgkaOperation>>,
+    pub update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
 
     /// The root secret, encrypted under a key derived from the root secret of the
     /// update that contains this entry.
@@ -127,7 +127,7 @@ pub enum CgkaOperation {
         /// `None` when the adder had no root secrets to wrap, or no key pair of
         /// its own to wrap them with.
         invitation: Option<Box<Invitation>>,
-        predecessors: Vec<Digest<Signed<CgkaOperation>>>,
+        predecessors: Vec<Digest<SerdeSigned<CgkaOperation>>>,
         doc_id: TreeId,
         authorization: CgkaAuthorization,
     },
@@ -135,7 +135,7 @@ pub enum CgkaOperation {
         id: MemberId,
         leaf_idx: u32,
         removed_keys: Vec<ShareKey>,
-        predecessors: Vec<Digest<Signed<CgkaOperation>>>,
+        predecessors: Vec<Digest<SerdeSigned<CgkaOperation>>>,
         doc_id: TreeId,
         authorization: CgkaAuthorization,
     },
@@ -147,18 +147,18 @@ pub enum CgkaOperation {
         /// had not yet decrypted from a later update, each encrypted under a key
         /// derived from this update's root secret.
         predecessor_secrets: Vec<PredecessorSecret>,
-        predecessors: Vec<Digest<Signed<CgkaOperation>>>,
+        predecessors: Vec<Digest<SerdeSigned<CgkaOperation>>>,
         doc_id: TreeId,
     },
 }
 
 impl CgkaOperation {
     /// The zero or more immediate causal predecessors of this operation.
-    pub fn predecessors(&self) -> Set<Digest<Signed<CgkaOperation>>> {
+    pub fn predecessors(&self) -> Set<Digest<SerdeSigned<CgkaOperation>>> {
         Set::from_iter(self.predecessor_list().iter().copied())
     }
 
-    fn predecessor_list(&self) -> &[Digest<Signed<CgkaOperation>>] {
+    fn predecessor_list(&self) -> &[Digest<SerdeSigned<CgkaOperation>>] {
         match self {
             CgkaOperation::Add { predecessors, .. }
             | CgkaOperation::Remove { predecessors, .. }
@@ -187,18 +187,18 @@ impl CgkaOperation {
 /// for deterministic hashing.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CgkaOperationGraph {
-    pub cgka_ops: CaMap<Signed<CgkaOperation>>,
+    pub cgka_ops: CaMap<SerdeSigned<CgkaOperation>>,
 
-    pub cgka_op_heads: Set<Digest<Signed<CgkaOperation>>>,
+    pub cgka_op_heads: Set<Digest<SerdeSigned<CgkaOperation>>>,
 
     /// The length of the longest chain of predecessors before each operation.
     /// An operation with no predecessors has depth 0.
-    depths: Map<Digest<Signed<CgkaOperation>>, u64>,
+    depths: Map<Digest<SerdeSigned<CgkaOperation>>, u64>,
 
     /// The latest update on each branch. These are updates that no later update
     /// has as a nearest update ancestor yet. Every other update is chainable,
     /// meaning a later update could have wrapped its root secret.
-    latest_updates: Set<Digest<Signed<CgkaOperation>>>,
+    latest_updates: Set<Digest<SerdeSigned<CgkaOperation>>>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -258,13 +258,13 @@ impl CgkaOperationGraph {
         }
     }
 
-    pub fn contains_op_hash(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> bool {
+    pub fn contains_op_hash(&self, op_hash: &Digest<SerdeSigned<CgkaOperation>>) -> bool {
         self.cgka_ops.contains_key(op_hash)
     }
 
     /// Whether `op_hash` is an update that some later update has as a nearest
     /// update ancestor.
-    pub(crate) fn is_chainable(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> bool {
+    pub(crate) fn is_chainable(&self, op_hash: &Digest<SerdeSigned<CgkaOperation>>) -> bool {
         self.cgka_ops
             .get(op_hash)
             .is_some_and(|op| matches!(op.payload, CgkaOperation::Update { .. }))
@@ -277,7 +277,7 @@ impl CgkaOperationGraph {
     /// its path does not end in a single share key.
     pub(crate) fn update_root_share_key(
         &self,
-        op_hash: &Digest<Signed<CgkaOperation>>,
+        op_hash: &Digest<SerdeSigned<CgkaOperation>>,
     ) -> Option<ShareKey> {
         let CgkaOperation::Update { new_path, .. } = &self.cgka_ops.get(op_hash)?.payload else {
             return None;
@@ -289,7 +289,7 @@ impl CgkaOperationGraph {
         }
     }
 
-    pub fn contains_predecessors(&self, preds: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
+    pub fn contains_predecessors(&self, preds: &Set<Digest<SerdeSigned<CgkaOperation>>>) -> bool {
         preds.iter().all(|hash| self.cgka_ops.contains_key(hash))
     }
 
@@ -321,8 +321,8 @@ impl CgkaOperationGraph {
     /// error if it cannot be added or a predecessor has no recorded depth.
     pub fn add_op(
         &mut self,
-        op: &Signed<CgkaOperation>,
-    ) -> Result<Set<Digest<Signed<CgkaOperation>>>, CgkaError> {
+        op: &SerdeSigned<CgkaOperation>,
+    ) -> Result<Set<Digest<SerdeSigned<CgkaOperation>>>, CgkaError> {
         let op_hash = Digest::hash(op);
         if self.cgka_ops.contains_key(&op_hash) {
             return Ok(Set::new());
@@ -358,7 +358,7 @@ impl CgkaOperationGraph {
     /// in the graph, and [`CgkaError::DepthNotFound`] if one has no recorded depth.
     pub(crate) fn batch_has_membership_change(
         &self,
-        predecessors: &Set<Digest<Signed<CgkaOperation>>>,
+        predecessors: &Set<Digest<SerdeSigned<CgkaOperation>>>,
     ) -> Result<bool, CgkaError> {
         if predecessors.is_empty() {
             // A root must itself be an add.
@@ -403,8 +403,8 @@ impl CgkaOperationGraph {
     /// heads, skipping operations of other kinds.
     pub(crate) fn nearest_update_ancestors(
         &self,
-        heads: &Set<Digest<Signed<CgkaOperation>>>,
-    ) -> Set<Digest<Signed<CgkaOperation>>> {
+        heads: &Set<Digest<SerdeSigned<CgkaOperation>>>,
+    ) -> Set<Digest<SerdeSigned<CgkaOperation>>> {
         let mut updates = Set::new();
         let mut seen = Set::new();
         let mut frontier = Vec::from_iter(heads.iter().copied());
@@ -431,7 +431,7 @@ impl CgkaOperationGraph {
     pub(crate) fn has_add_before(
         &self,
         member: MemberId,
-        op_hash: Digest<Signed<CgkaOperation>>,
+        op_hash: Digest<SerdeSigned<CgkaOperation>>,
     ) -> bool {
         let mut seen = Set::new();
         let mut frontier = Vec::from_iter([op_hash]);
@@ -454,14 +454,14 @@ impl CgkaOperationGraph {
         false
     }
 
-    pub fn heads_contained_in(&self, heads: &Set<Digest<Signed<CgkaOperation>>>) -> bool {
+    pub fn heads_contained_in(&self, heads: &Set<Digest<SerdeSigned<CgkaOperation>>>) -> bool {
         self.cgka_op_heads.iter().all(|h| heads.contains(h))
     }
 
     pub fn predecessors_for(
         &self,
-        op_hash: &Digest<Signed<CgkaOperation>>,
-    ) -> Option<&[Digest<Signed<CgkaOperation>>]> {
+        op_hash: &Digest<SerdeSigned<CgkaOperation>>,
+    ) -> Option<&[Digest<SerdeSigned<CgkaOperation>>]> {
         self.cgka_ops
             .get(op_hash)
             .map(|op| op.payload.predecessor_list())
@@ -493,9 +493,9 @@ impl CgkaOperationGraph {
     /// if `heads` is empty.
     pub fn batches_for_heads(
         &self,
-        heads: &Set<Digest<Signed<CgkaOperation>>>,
+        heads: &Set<Digest<SerdeSigned<CgkaOperation>>>,
     ) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
-        let mut deepest_child: Map<Digest<Signed<CgkaOperation>>, u64> = Map::new();
+        let mut deepest_child: Map<Digest<SerdeSigned<CgkaOperation>>, u64> = Map::new();
         let mut seen = heads.clone();
         let mut frontier = Vec::from_iter(heads.iter().copied());
         let mut ordered = Vec::with_capacity(heads.len());
@@ -563,7 +563,7 @@ impl CgkaOperationGraph {
         NonEmpty::from_vec(batches).ok_or(CgkaError::NotInitialized)
     }
 
-    fn depth(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> Result<u64, CgkaError> {
+    fn depth(&self, op_hash: &Digest<SerdeSigned<CgkaOperation>>) -> Result<u64, CgkaError> {
         match self.depths.get(op_hash) {
             Some(depth) => Ok(*depth),
             None if self.cgka_ops.contains_key(op_hash) => Err(CgkaError::DepthNotFound),
@@ -590,8 +590,8 @@ mod causal_graph_tests {
         signer: &MemorySigner,
         doc_id: TreeId,
         leaf_index: u32,
-        predecessors: &[&Signed<CgkaOperation>],
-    ) -> Signed<CgkaOperation> {
+        predecessors: &[&SerdeSigned<CgkaOperation>],
+    ) -> SerdeSigned<CgkaOperation> {
         signed_add_of(signer, doc_id, member_id(), leaf_index, predecessors).await
     }
 
@@ -600,8 +600,8 @@ mod causal_graph_tests {
         doc_id: TreeId,
         added_id: MemberId,
         leaf_index: u32,
-        predecessors: &[&Signed<CgkaOperation>],
-    ) -> Signed<CgkaOperation> {
+        predecessors: &[&SerdeSigned<CgkaOperation>],
+    ) -> SerdeSigned<CgkaOperation> {
         let op = CgkaOperation::Add {
             added_id,
             pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
@@ -884,8 +884,8 @@ mod causal_graph_tests {
     async fn signed_update(
         signer: &MemorySigner,
         doc_id: TreeId,
-        predecessors: &[&Signed<CgkaOperation>],
-    ) -> Signed<CgkaOperation> {
+        predecessors: &[&SerdeSigned<CgkaOperation>],
+    ) -> SerdeSigned<CgkaOperation> {
         let new_path =
             arbitrary::Arbitrary::arbitrary(&mut arbitrary::Unstructured::new(&[0; 4096]))
                 .expect("4096 bytes are enough for a path");

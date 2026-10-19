@@ -71,7 +71,7 @@ use keyhive_crypto::{
     digest::Digest,
     identifier::{Identifier, InvalidIdentifier},
     share_key::ShareKey,
-    signed::{Signed, SigningError, VerificationError},
+    signed::{SerdeSigned, SigningError, VerificationError},
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
     verifiable::Verifiable,
@@ -389,7 +389,7 @@ impl<
     pub async fn rotate_prekey(
         &self,
         prekey: ShareKey,
-    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<Arc<SerdeSigned<RotateKeyOp>>, SigningError> {
         self.active
             .lock()
             .await
@@ -398,7 +398,7 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn expand_prekeys(&self) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
+    pub async fn expand_prekeys(&self) -> Result<Arc<SerdeSigned<AddKeyOp>>, SigningError> {
         self.active
             .lock()
             .await
@@ -407,7 +407,10 @@ impl<
     }
 
     #[instrument(skip_all)]
-    pub async fn try_sign<U: Serialize + Debug>(&self, data: U) -> Result<Signed<U>, SigningError> {
+    pub async fn try_sign<U: Serialize + Debug>(
+        &self,
+        data: U,
+    ) -> Result<SerdeSigned<U>, SigningError> {
         let signer = self.active.lock().await.signer.clone();
         keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(&signer, data).await
     }
@@ -870,7 +873,7 @@ impl<
     pub async fn force_pcs_update(
         &self,
         doc: DocumentId,
-    ) -> Result<(Signed<CgkaOperation>, LeafKeyPair), EncryptError> {
+    ) -> Result<(SerdeSigned<CgkaOperation>, LeafKeyPair), EncryptError> {
         let handle = self.document_by_id(doc).await?;
         let signer = { self.active.lock().await.signer.clone() };
         let (op, new_key_pair) = {
@@ -1077,7 +1080,7 @@ impl<
     pub async fn cgka_ops_reachable_by_agent(
         &self,
         who: impl Into<Identifier>,
-    ) -> Vec<Arc<Signed<CgkaOperation>>> {
+    ) -> Vec<Arc<SerdeSigned<CgkaOperation>>> {
         let mut ops = Vec::new();
         let reachable = self.doc_handles_reachable_by(who.into()).await;
         for (doc_id, (doc, _)) in reachable {
@@ -1100,7 +1103,7 @@ impl<
     pub async fn cgka_ops_for_doc(
         &self,
         doc: &DocumentId,
-    ) -> Result<Option<Vec<Arc<Signed<CgkaOperation>>>>, CgkaError> {
+    ) -> Result<Option<Vec<Arc<SerdeSigned<CgkaOperation>>>>, CgkaError> {
         let locked_docs = self.docs.lock().await;
         let Some(doc) = locked_docs.get(doc) else {
             return Ok(None);
@@ -1255,7 +1258,7 @@ impl<
         who: Identifier,
     ) -> (
         MembershipOpMap<F, S, T, L>,
-        Vec<Arc<Signed<CgkaOperation>>>,
+        Vec<Arc<SerdeSigned<CgkaOperation>>>,
         KeyOps,
     ) {
         let membership = self.membership_ops_for_agent(who).await;
@@ -1270,7 +1273,7 @@ impl<
         &self,
         who: Identifier,
         membership: &MembershipOpMap<F, S, T, L>,
-        cgka: &[Arc<Signed<CgkaOperation>>],
+        cgka: &[Arc<SerdeSigned<CgkaOperation>>],
     ) -> KeyOps {
         let mut referenced = HashSet::from([who]);
         for op in membership.values() {
@@ -1401,7 +1404,7 @@ impl<
     /// Documents without an initialized CGKA are skipped.
     #[instrument(skip_all)]
     pub async fn cgka_ops_for_all_agents(&self) -> AllCgkaOps {
-        let mut ops: HashMap<Identifier, Vec<Arc<Signed<CgkaOperation>>>> = HashMap::new();
+        let mut ops: HashMap<Identifier, Vec<Arc<SerdeSigned<CgkaOperation>>>> = HashMap::new();
         let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
 
         let docs = { self.docs.lock().await.values().cloned().collect::<Vec<_>>() };
@@ -1621,9 +1624,9 @@ impl<
     #[instrument(skip_all)]
     async fn static_delegation_to_delegation(
         &self,
-        static_dlg: &Signed<StaticDelegation<T>>,
+        static_dlg: &SerdeSigned<StaticDelegation<T>>,
     ) -> Result<Delegation<F, S, T, L>, StaticEventConversionError<F, S, T, L>> {
-        let proof: Option<Arc<Signed<Delegation<F, S, T, L>>>> =
+        let proof: Option<Arc<SerdeSigned<Delegation<F, S, T, L>>>> =
             if let Some(proof_hash) = static_dlg.payload().proof {
                 let hash = proof_hash.coerce();
                 Some(
@@ -1667,17 +1670,17 @@ impl<
     #[instrument(skip_all)]
     async fn static_revocation_to_revocation(
         &self,
-        static_rev: &Signed<StaticRevocation<T>>,
+        static_rev: &SerdeSigned<StaticRevocation<T>>,
     ) -> Result<Revocation<F, S, T, L>, StaticEventConversionError<F, S, T, L>> {
         let revoke_hash = static_rev.payload.revoke.coerce();
-        let revoke: Arc<Signed<Delegation<F, S, T, L>>> = self
+        let revoke: Arc<SerdeSigned<Delegation<F, S, T, L>>> = self
             .delegations
             .lock()
             .await
             .get(&revoke_hash)
             .ok_or(StaticEventConversionError::MissingDelegation(revoke_hash))?;
 
-        let proof: Option<Arc<Signed<Delegation<F, S, T, L>>>> =
+        let proof: Option<Arc<SerdeSigned<Delegation<F, S, T, L>>>> =
             if let Some(proof_hash) = static_rev.payload().proof {
                 let hash = proof_hash.coerce();
                 Some(
@@ -1748,7 +1751,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn receive_delegation(
         &self,
-        static_dlg: &Signed<StaticDelegation<T>>,
+        static_dlg: &SerdeSigned<StaticDelegation<T>>,
     ) -> Result<(), ReceiveStaticDelegationError<F, S, T, L>> {
         if self
             .delegations
@@ -1775,7 +1778,7 @@ impl<
             after_revocations.push(resolved_rev.dupe());
         }
 
-        let delegation = Signed::new(payload, static_dlg.issuer, static_dlg.signature);
+        let delegation = SerdeSigned::new(payload, static_dlg.issuer, static_dlg.signature);
 
         let subject_id = delegation.subject_id();
         let delegation = Arc::new(delegation);
@@ -1846,7 +1849,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn receive_revocation(
         &self,
-        static_rev: &Signed<StaticRevocation<T>>,
+        static_rev: &SerdeSigned<StaticRevocation<T>>,
     ) -> Result<(), ReceiveStaticDelegationError<F, S, T, L>> {
         if self
             .revocations
@@ -1862,7 +1865,7 @@ impl<
 
         let payload = self.static_revocation_to_revocation(static_rev).await?;
 
-        let revocation = Signed::new(payload, static_rev.issuer, static_rev.signature);
+        let revocation = SerdeSigned::new(payload, static_rev.issuer, static_rev.signature);
 
         let id = revocation.subject_id();
         let revocation = Arc::new(revocation);
@@ -1929,7 +1932,7 @@ impl<
     /// update does not cite anything and is checked against the leaf it rotates.
     async fn cgka_op_is_authorized(
         &self,
-        signed_op: &Signed<CgkaOperation>,
+        signed_op: &SerdeSigned<CgkaOperation>,
         doc: &Arc<Mutex<Document<F, S, T, L>>>,
         doc_id: DocumentId,
     ) -> Result<(), CgkaUnauthorized> {
@@ -2040,7 +2043,7 @@ impl<
     #[instrument(skip_all)]
     pub async fn receive_cgka_op(
         &self,
-        signed_op: Signed<CgkaOperation>,
+        signed_op: SerdeSigned<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError> {
         signed_op.try_verify()?;
 
@@ -2202,7 +2205,7 @@ impl<
     async fn promote_individual_to_group(
         &self,
         individual: Arc<Mutex<Individual>>,
-        head: Arc<Signed<Delegation<F, S, T, L>>>,
+        head: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
     ) -> Arc<Mutex<Group<F, S, T, L>>> {
         let indie = individual.lock().await.clone();
         let group = Arc::new(Mutex::new(
@@ -2224,7 +2227,7 @@ impl<
             let mut locked_delegations = self.delegations.lock().await;
             for (_digest, dlg) in locked_delegations.clone().iter() {
                 if dlg.payload.delegate.id() == agent.id() {
-                    locked_delegations.insert(Arc::new(Signed::new(
+                    locked_delegations.insert(Arc::new(SerdeSigned::new(
                         Delegation {
                             delegate: agent.dupe(),
                             can: dlg.payload.can,
@@ -2244,7 +2247,7 @@ impl<
             let mut locked_revocations = self.revocations.lock().await;
             for (_digest, rev) in locked_revocations.clone().iter() {
                 if rev.payload.subject_id() == group_id {
-                    locked_revocations.insert(Arc::new(Signed::new(
+                    locked_revocations.insert(Arc::new(SerdeSigned::new(
                         Revocation {
                             revoke: self
                                 .delegations
@@ -2273,7 +2276,7 @@ impl<
                         .await
                         .get(&Digest::hash(&rev.payload.revoke))
                         .unwrap_or_else(|| rev.payload.revoke.dupe());
-                    locked_revocations.insert(Arc::new(Signed::new(
+                    locked_revocations.insert(Arc::new(SerdeSigned::new(
                         Revocation {
                             revoke,
                             proof: rev.payload.proof.dupe(),
@@ -2423,7 +2426,7 @@ impl<
         for (_digest, static_op) in archive.topsorted_ops.iter() {
             match static_op {
                 StaticMembershipOperation::Delegation(sd) => {
-                    let proof: Option<Arc<Signed<Delegation<F, S, T, L>>>> =
+                    let proof: Option<Arc<SerdeSigned<Delegation<F, S, T, L>>>> =
                         if let Some(proof_digest) = sd.payload.proof {
                             Some(delegations.lock().await.get(&proof_digest.coerce()).ok_or(
                                 TryFromArchiveError::MissingDelegation(proof_digest.coerce()),
@@ -2434,7 +2437,7 @@ impl<
 
                     let mut after_revocations = vec![];
                     for rev_digest in sd.payload.after_revocations.iter() {
-                        let r: Arc<Signed<Revocation<F, S, T, L>>> = revocations
+                        let r: Arc<SerdeSigned<Revocation<F, S, T, L>>> = revocations
                             .lock()
                             .await
                             .get(&rev_digest.coerce())
@@ -2465,7 +2468,7 @@ impl<
                     };
 
                     // NOTE Manually pushing; skipping various steps intentionally
-                    delegations.lock().await.insert(Arc::new(Signed::new(
+                    delegations.lock().await.insert(Arc::new(SerdeSigned::new(
                         Delegation {
                             delegate,
                             proof,
@@ -2494,7 +2497,7 @@ impl<
                         None
                     };
 
-                    revocations.lock().await.insert(Arc::new(Signed::new(
+                    revocations.lock().await.insert(Arc::new(SerdeSigned::new(
                         Revocation {
                             revoke,
                             proof,
@@ -2517,15 +2520,15 @@ impl<
             group: &mut Group<G, Z, U, M>,
             dlg_store: Arc<Mutex<DelegationStore<G, Z, U, M>>>,
             rev_store: Arc<Mutex<RevocationStore<G, Z, U, M>>>,
-            dlg_head_hashes: &HashSet<Digest<Signed<StaticDelegation<U>>>>,
-            rev_head_hashes: &HashSet<Digest<Signed<StaticRevocation<U>>>>,
-            members: HashMap<Identifier, NonEmpty<Digest<Signed<Delegation<G, Z, U, M>>>>>,
+            dlg_head_hashes: &HashSet<Digest<SerdeSigned<StaticDelegation<U>>>>,
+            rev_head_hashes: &HashSet<Digest<SerdeSigned<StaticRevocation<U>>>>,
+            members: HashMap<Identifier, NonEmpty<Digest<SerdeSigned<Delegation<G, Z, U, M>>>>>,
         ) -> Result<(), TryFromArchiveError<G, Z, U, M>> {
             let read_dlgs = dlg_store.lock().await;
             let read_revs = rev_store.lock().await;
 
             for dlg_hash in dlg_head_hashes.iter() {
-                let actual_dlg: Arc<Signed<Delegation<G, Z, U, M>>> = read_dlgs
+                let actual_dlg: Arc<SerdeSigned<Delegation<G, Z, U, M>>> = read_dlgs
                     .get(&dlg_hash.coerce())
                     .ok_or(TryFromArchiveError::MissingDelegation(dlg_hash.coerce()))?
                     .dupe();
@@ -3080,10 +3083,12 @@ pub enum ReceiveStaticDelegationError<
     VerificationError(#[from] VerificationError),
 
     #[error("Missing proof: {0}")]
-    MissingProof(#[from] MissingDependency<Digest<Signed<Delegation<F, S, T, L>>>>),
+    MissingProof(#[from] MissingDependency<Digest<SerdeSigned<Delegation<F, S, T, L>>>>),
 
     #[error("Missing revocation dependency: {0}")]
-    MissingRevocationDependency(#[from] MissingDependency<Digest<Signed<Revocation<F, S, T, L>>>>),
+    MissingRevocationDependency(
+        #[from] MissingDependency<Digest<SerdeSigned<Revocation<F, S, T, L>>>>,
+    ),
 
     #[error("Cgka init error: {0}")]
     CgkaInitError(#[from] CgkaError),
@@ -3155,10 +3160,10 @@ pub enum StaticEventConversionError<
     L: MembershipListener<F, S, T>,
 > {
     #[error("Missing delegation: {0}")]
-    MissingDelegation(Digest<Signed<Delegation<F, S, T, L>>>),
+    MissingDelegation(Digest<SerdeSigned<Delegation<F, S, T, L>>>),
 
     #[error("Missing revocation: {0}")]
-    MissingRevocation(Digest<Signed<Revocation<F, S, T, L>>>),
+    MissingRevocation(Digest<SerdeSigned<Revocation<F, S, T, L>>>),
 
     #[error("Unknown agent: {0}")]
     UnknownAgent(Box<Identifier>),
@@ -3195,10 +3200,10 @@ pub enum TryFromArchiveError<
     InvalidSigner(#[from] InvalidIdentifier),
 
     #[error("Missing delegation: {0}")]
-    MissingDelegation(#[from] Digest<Signed<Delegation<F, S, T, L>>>),
+    MissingDelegation(#[from] Digest<SerdeSigned<Delegation<F, S, T, L>>>),
 
     #[error("Missing revocation: {0}")]
-    MissingRevocation(#[from] Digest<Signed<Revocation<F, S, T, L>>>),
+    MissingRevocation(#[from] Digest<SerdeSigned<Revocation<F, S, T, L>>>),
 
     #[error("Missing individual: {0}")]
     MissingIndividual(Box<IndividualId>),
@@ -3303,7 +3308,7 @@ fn insert_agents_referenced_by_membership_op<
 
 /// Add the individuals `op` refers to: its issuer and, for Adds, the added member.
 fn insert_agents_referenced_by_cgka_op(
-    op: &Signed<CgkaOperation>,
+    op: &SerdeSigned<CgkaOperation>,
     referenced: &mut HashSet<Identifier>,
 ) {
     referenced.insert(op.issuer);

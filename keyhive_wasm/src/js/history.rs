@@ -10,7 +10,7 @@ use keyhive_core::principal::{
     document::id::DocumentId,
     group::{delegation::Delegation, dependencies::Dependencies, revocation::Revocation},
 };
-use keyhive_crypto::signed::Signed;
+use keyhive_crypto::signed::SerdeSigned;
 use std::{collections::BTreeMap, sync::Arc};
 use wasm_bindgen::prelude::*;
 
@@ -18,9 +18,9 @@ use wasm_bindgen::prelude::*;
 #[derive(Debug, Clone)]
 pub struct JsHistory {
     pub(crate) delegations:
-        Vec<Arc<Signed<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
+        Vec<Arc<SerdeSigned<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
     pub(crate) revocations:
-        Vec<Arc<Signed<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
+        Vec<Arc<SerdeSigned<Revocation<Local, JsSigner, JsChangeId, JsEventHandler>>>>,
     pub(crate) content: BTreeMap<DocumentId, Vec<JsChangeId>>,
 }
 

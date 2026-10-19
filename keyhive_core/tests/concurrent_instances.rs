@@ -12,7 +12,7 @@ use keyhive_core::{
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext, TestResult as Result},
 };
-use keyhive_crypto::{share_key::ShareKey, signed::Signed};
+use keyhive_crypto::{share_key::ShareKey, signed::SerdeSigned};
 
 /// One of `who`'s own prekeys it would use to join `doc`.
 async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
@@ -22,7 +22,10 @@ async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
 }
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
-async fn cgka_heads(observer: &Instance, doc: DocumentId) -> Vec<Digest<Signed<CgkaOperation>>> {
+async fn cgka_heads(
+    observer: &Instance,
+    doc: DocumentId,
+) -> Vec<Digest<SerdeSigned<CgkaOperation>>> {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap().unwrap();
     let referenced: std::collections::HashSet<_> = ops
         .iter()

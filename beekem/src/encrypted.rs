@@ -7,7 +7,7 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
+    signed::SerdeSigned,
     siv::Siv,
     symmetric_key::SymmetricKey,
 };
@@ -27,7 +27,7 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// Hash of the PCS key used to derive the application secret for encrypting.
     pub pcs_key_hash: Digest<PcsKey>,
     /// Hash of the PCS update operation corresponding to the PCS key.
-    pub pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
+    pub pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
     /// The content ref hash used to derive the application secret for encrypting.
     pub content_ref: Cr,
     /// The predecessor content ref hashes used to derive the application secret
@@ -43,7 +43,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         nonce: Siv,
         ciphertext: Vec<u8>,
         pcs_key_hash: Digest<PcsKey>,
-        pcs_update_op_hash: Digest<Signed<CgkaOperation>>,
+        pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
         content_ref: Cr,
         pred_refs: Digest<Vec<Cr>>,
     ) -> EncryptedContent<T, Cr> {
