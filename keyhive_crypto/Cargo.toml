@@ -56,5 +56,5 @@ arbitrary = ["dep:arbitrary", "std"]
 # to build this crate and its mutants are never tested.
 test_utils = ["arbitrary"]
 
-[lints.clippy]
-doc_overindented_list_items = "allow"
+[lints]
+workspace = true
