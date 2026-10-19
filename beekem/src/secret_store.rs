@@ -235,7 +235,9 @@ impl SecretStoreVersion {
         child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
     ) -> Result<ShareSecretKey, CgkaError> {
-        let is_encrypter = child_node_key.contains_key(&self.encrypter_pk);
+        // A conflict leaf retains only its lowest key. Check our secrets as a fallback.
+        let is_encrypter = child_node_key.contains_key(&self.encrypter_pk)
+            || child_sks.contains_key(&self.encrypter_pk);
         let mut lookup_idx = seen_idxs.last().ok_or(CgkaError::EncryptedSecretNotFound)?;
         if !self.sk.contains_key(lookup_idx) {
             let mut found = false;
