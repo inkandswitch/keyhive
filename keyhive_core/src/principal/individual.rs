@@ -377,6 +377,26 @@ mod tests {
         assert_eq!(picked.len(), 8);
     }
 
+    /// Merging the same individual's state adds its prekeys; another
+    /// individual's state is ignored, so no individual holds two issuers' ops.
+    #[test]
+    fn an_individual_merges_only_its_own_state() {
+        let alice = MemorySigner::generate(&mut rand::thread_rng());
+        let mallory = MemorySigner::generate(&mut rand::thread_rng());
+        let (a, b) = (key(), key());
+        let mut ours = Individual::new(add(&alice, a));
+
+        ours.merge(Individual::new(add(&alice, b)));
+        assert_eq!(ours.prekeys(), &HashSet::from([a, b]));
+
+        ours.merge(Individual::new(add(&mallory, key())));
+        assert_eq!(ours.prekeys(), &HashSet::from([a, b]));
+        assert!(ours
+            .prekey_ops()
+            .values()
+            .all(|op| op.issuer() == ours.id().0));
+    }
+
     /// Rotations that retire each other's keys leave no live prekey: nothing to
     /// pick, rather than a panic.
     #[test]

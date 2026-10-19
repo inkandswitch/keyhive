@@ -3414,6 +3414,65 @@ mod tests {
     }
 
     /// Register a peer keyhive as an individual on `owner` and return its id.
+    /// Pending prekey ops are counted, and the active identity's counted again.
+    /// Twice as many are the active identity's as anyone else's, so counting
+    /// the wrong side changes every `_by_active` count.
+    #[tokio::test]
+    async fn stats_count_pending_prekey_ops_and_the_active_identitys() -> TestResult {
+        use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
+        use keyhive_crypto::{share_key::ShareSecretKey, verified::Verified};
+        use rand::rngs::OsRng;
+
+        let hive = make_keyhive().await;
+        let share_key = || ShareSecretKey::generate(&mut OsRng).share_key();
+        let pending_from = |signer: &MemorySigner| -> TestResult<Vec<StaticEvent<[u8; 32]>>> {
+            let added = Verified::sign_sync(
+                &AddKeyOp {
+                    share_key: share_key(),
+                },
+                signer,
+            )?;
+            let rotated = Verified::sign_sync(
+                &RotateKeyOp {
+                    old: share_key(),
+                    new: share_key(),
+                },
+                signer,
+            )?;
+            Ok(vec![
+                StaticEvent::PrekeysExpanded(added.signed().as_ref().clone()),
+                StaticEvent::PrekeyRotated(rotated.signed().as_ref().clone()),
+            ])
+        };
+        let active_signer = hive.active.lock().await.signer.clone();
+        let mine = pending_from(&active_signer)?;
+        let mine_again = pending_from(&active_signer)?;
+        let theirs = pending_from(&MemorySigner::generate(&mut OsRng))?;
+        hive.pending_events.lock().await.extend(
+            mine.into_iter()
+                .chain(mine_again)
+                .chain(theirs)
+                .map(Arc::new),
+        );
+
+        let stats = hive.stats().await;
+        assert_eq!(
+            (
+                stats.pending_prekeys_expanded,
+                stats.pending_prekeys_expanded_by_active
+            ),
+            (3, 2)
+        );
+        assert_eq!(
+            (
+                stats.pending_prekey_rotated,
+                stats.pending_prekey_rotated_by_active
+            ),
+            (3, 2)
+        );
+        Ok(())
+    }
+
     async fn register_peer(owner: &TestKeyhive, peer: &TestKeyhive) -> IndividualId {
         let add_op = peer.expand_prekeys().await.unwrap();
         let indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(add_op))));
