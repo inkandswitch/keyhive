@@ -1,7 +1,7 @@
 //! Ephemeral signers that are only valid for a short period of time.
 
 use super::sync_signer::SyncSignerBasic;
-use crate::verifiable::Verifiable;
+use crate::{identifier::Identifier, verifiable::Verifiable};
 use alloc::boxed::Box;
 use core::future::Future;
 use derive_more::{From, Into};
@@ -37,8 +37,8 @@ impl EphemeralSigner {
     ///     }
     /// };
     ///
-    /// let ((signature, returned_payload), _vk) =
-    ///     EphemeralSigner::with_signer(&mut rand::rngs::OsRng, |vk, sk| {
+    /// let ((signature, returned_payload), _id) =
+    ///     EphemeralSigner::with_signer(&mut rand::rngs::OsRng, |_id, sk| {
     ///         let payload = vec![1, 2, 3];
     ///         let sig = sk.try_sign_bytes_sync_basic(payload.as_slice());
     ///         (sig, payload)
@@ -49,11 +49,11 @@ impl EphemeralSigner {
     /// ```
     pub fn with_signer<T, R: rand::CryptoRng + rand::RngCore>(
         csprng: &mut R,
-        f: impl FnOnce(ed25519_dalek::VerifyingKey, Box<dyn SyncSignerBasic>) -> T,
-    ) -> (T, ed25519_dalek::VerifyingKey) {
+        f: impl FnOnce(Identifier, Box<dyn SyncSignerBasic>) -> T,
+    ) -> (T, Identifier) {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
-        let vk = sk.verifying_key();
-        (f(vk, Box::new(sk)), vk)
+        let id = Identifier::from(&sk);
+        (f(id, Box::new(sk)), id)
     }
 
     /// Run an async closure with a randomly generated ephemeral key.
@@ -70,7 +70,7 @@ impl EphemeralSigner {
     /// #[tokio::main(flavor = "current_thread")]
     /// async fn main() {
     ///     let mut csprng = rand::rngs::OsRng;
-    ///     let (fut, _vk) = EphemeralSigner::with_signer_async(&mut csprng, |vk, sk| async move {
+    ///     let (fut, _id) = EphemeralSigner::with_signer_async(&mut csprng, |_id, sk| async move {
     ///         let payload = vec![1, 2, 3];
     ///         let sig = sk.try_sign(payload.as_slice());
     ///         (sig, payload)
@@ -88,14 +88,11 @@ impl EphemeralSigner {
         Fut: Future<Output = T>,
     >(
         csprng: &mut R,
-        f: impl FnOnce(
-            ed25519_dalek::VerifyingKey,
-            Box<dyn ed25519_dalek::Signer<ed25519_dalek::Signature>>,
-        ) -> Fut,
-    ) -> (Fut, ed25519_dalek::VerifyingKey) {
+        f: impl FnOnce(Identifier, Box<dyn ed25519_dalek::Signer<ed25519_dalek::Signature>>) -> Fut,
+    ) -> (Fut, Identifier) {
         let sk = ed25519_dalek::SigningKey::generate(csprng);
-        let vk = sk.verifying_key();
-        (f(vk, Box::new(sk)), vk)
+        let id = Identifier::from(&sk);
+        (f(id, Box::new(sk)), id)
     }
 }
 

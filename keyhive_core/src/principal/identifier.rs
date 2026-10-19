@@ -1,7 +1,7 @@
 //! The universally unique identifier of an [`Agent`](crate::principal::agentAgent).
 
 use dupe::Dupe;
-use keyhive_crypto::verifiable::Verifiable;
+use keyhive_crypto::{identifier, verifiable::Verifiable};
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(feature = "test_utils", test))]
@@ -121,6 +121,18 @@ impl From<ed25519_dalek::VerifyingKey> for Identifier {
 impl From<&ed25519_dalek::VerifyingKey> for Identifier {
     fn from(verifying_key: &ed25519_dalek::VerifyingKey) -> Self {
         Self(*verifying_key)
+    }
+}
+
+impl From<identifier::Identifier> for Identifier {
+    fn from(id: identifier::Identifier) -> Self {
+        Self(id.verifying_key())
+    }
+}
+
+impl From<&identifier::Identifier> for Identifier {
+    fn from(id: &identifier::Identifier) -> Self {
+        Self(id.verifying_key())
     }
 }
 

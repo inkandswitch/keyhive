@@ -144,7 +144,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
                 Self::generate_after_content(
                     signer,
-                    verifier,
+                    verifier.verifying_key(),
                     parents,
                     delegations,
                     revocations,
@@ -632,7 +632,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     }
                 }
 
-                if to_revoke.issuer == vk {
+                if to_revoke.issuer.verifying_key() == vk {
                     let r = self
                         .build_revocation(
                             signer,
@@ -647,7 +647,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 } else {
                     // Look for proof of any ancestor
                     for ancestor in to_revoke.payload().proof_lineage() {
-                        if ancestor.issuer == vk {
+                        if ancestor.issuer.verifying_key() == vk {
                             found = true;
                             let r = self
                                 .build_revocation(
@@ -802,11 +802,11 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                                     // No suitable proofs
                                     continue;
                                 }
-                            } else if found_proof.issuer != self.verifying_key() {
+                            } else if found_proof.issuer.verifying_key() != self.verifying_key() {
                                 continue;
                             }
                         }
-                    } else if d.issuer != self.verifying_key() {
+                    } else if d.issuer.verifying_key() != self.verifying_key() {
                         debug_assert!(false, "Delegation without valid root proof");
                         continue;
                     }
@@ -838,7 +838,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                                 }
                             }
                         }
-                    } else if r.issuer != self.verifying_key() {
+                    } else if r.issuer.verifying_key() != self.verifying_key() {
                         debug_assert!(false, "Revocation without valid root proof");
                         continue;
                     }

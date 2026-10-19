@@ -48,10 +48,10 @@ impl KeyOp {
         }
     }
 
-    pub fn issuer(&self) -> &ed25519_dalek::VerifyingKey {
+    pub fn issuer(&self) -> Identifier {
         match self {
-            KeyOp::Add(add) => &add.issuer,
-            KeyOp::Rotate(rot) => &rot.issuer,
+            KeyOp::Add(add) => add.issuer.into(),
+            KeyOp::Rotate(rot) => rot.issuer.into(),
         }
     }
 

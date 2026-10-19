@@ -186,7 +186,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             EphemeralSigner::with_signer(&mut *locked_csprng, |verifier, signer| {
                 Group::generate_after_content(
                     signer,
-                    verifier,
+                    verifier.verifying_key(),
                     parents,
                     delegations,
                     revocations,

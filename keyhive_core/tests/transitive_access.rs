@@ -780,7 +780,8 @@ async fn test_document_delegate_before_defining_event_reified_as_document() -> T
     for event in all_events.into_values() {
         match &event {
             StaticEvent::Delegated(signed)
-                if Identifier(signed.issuer) == doc_a_ident && signed.payload.proof.is_none() =>
+                if Identifier::from(signed.issuer) == doc_a_ident
+                    && signed.payload.proof.is_none() =>
             {
                 defining.push(event);
             }
@@ -859,7 +860,8 @@ async fn test_group_delegate_before_defining_event_reified_as_group() -> TestRes
     for event in all_events.into_values() {
         match &event {
             StaticEvent::Delegated(signed)
-                if Identifier(signed.issuer) == group_ident && signed.payload.proof.is_none() =>
+                if Identifier::from(signed.issuer) == group_ident
+                    && signed.payload.proof.is_none() =>
             {
                 defining.push(event);
             }

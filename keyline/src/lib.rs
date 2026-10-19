@@ -1,12 +1,14 @@
 //! Keyline: Keyhive's convergent authority graph.
 //!
-//! A flat namespace of Ed25519 verifying keys ([`id::Id`]) and a set of signed
-//! certificates over them: [`delegation::Delegation`]s that grant a [`power::Power`] level over
-//! a subject, and [`revocation::Revocation`]s that withdraw a delegation by hash. Authority
-//! is reachability over that graph, attenuated to the minimum along a route and
-//! combined as the maximum over routes. Evaluation is a pure function of the
-//! set, so every replica holding the same certificates computes the same
-//! answer regardless of the order it received them.
+//! A flat namespace of Ed25519 verifying keys
+//! ([`Identifier`](keyhive_crypto::identifier::Identifier)) and a set of signed
+//! certificates over them: [`delegation::Delegation`]s that grant a
+//! [`power::Power`] level over a subject, and [`revocation::Revocation`]s that
+//! withdraw a delegation by hash. Authority is reachability over that graph,
+//! attenuated to the minimum along a route and combined as the maximum over
+//! routes. Evaluation is a pure function of the set, so every replica holding
+//! the same certificates computes the same answer regardless of the order it
+//! received them.
 //!
 //! The model is specified in `design/keyline/README.md`; this crate's shape in
 //! `design/keyline/implementation.md`; rejected alternatives in
@@ -22,13 +24,15 @@
 //! A backend never checks signatures: [`contract::Keyline::insert`] takes a
 //! [`certificate::VerifiedCertificate`], which outside the `conformance` and
 //! `test_utils` features only signature verification
-//! ([`signed::Signed::verify`], [`certificate::Certificate::verify`]) or
-//! signing ([`signed::Verified::sign`], which verifies what it signs) can make.
-//! The crate knows nothing of prekeys, CGKA, documents, or groups. Its trait is
-//! synchronous; only signing is async, because the key may sit behind
-//! WebCrypto or an HSM. Concurrency is the wrapper's job. A wrapper holds an
-//! implementation behind a lock and converts its typed handles to [`id::Id`]s at
-//! the boundary.
+//! ([`Signed::verify`](keyhive_crypto::verified::Signed::verify),
+//! [`certificate::Certificate::verify`]) or signing
+//! ([`Verified::sign`](keyhive_crypto::verified::Verified::sign), which
+//! verifies what it signs) can make. The crate knows nothing of prekeys, CGKA,
+//! documents, or groups. Its trait is async, fallible and versioned so that a
+//! database or an incremental engine can implement it (see [`contract`]); each
+//! backend owns its concurrency control. Signing is async too, because the key
+//! may sit behind WebCrypto or an HSM. A caller converts its typed handles to
+//! [`Identifier`](keyhive_crypto::identifier::Identifier)s at the boundary.
 //!
 //! # `no_std` support
 //!
@@ -51,10 +55,8 @@ extern crate std;
 pub mod certificate;
 pub mod contract;
 pub mod delegation;
-pub mod id;
 pub mod power;
 pub mod revocation;
-pub mod signed;
 
 #[cfg(any(test, feature = "conformance"))]
 pub mod test_utils;

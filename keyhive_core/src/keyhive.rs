@@ -1706,7 +1706,7 @@ impl<
 
     #[instrument(skip_all)]
     pub async fn receive_prekey_op(&self, key_op: &KeyOp) -> Result<(), ReceivePrekeyOpError> {
-        let id = Identifier(*key_op.issuer());
+        let id = key_op.issuer();
         // Drop any prekey op addressed to Public so its individual can never
         // expand or rotate.
         if id == Public.id() {
@@ -1983,7 +1983,7 @@ impl<
                     .ok_or(CgkaUnauthorized::Pending)?;
                 // Public can't add members.
                 ensure(
-                    Identifier(dlg.issuer) != Public.id(),
+                    Identifier::from(dlg.issuer) != Public.id(),
                     CgkaUnauthorized::Denied,
                 )?;
                 // Only readers or above can add members.
@@ -2034,7 +2034,7 @@ impl<
                     .ok_or(CgkaUnauthorized::Pending)?;
                 // Public can't remove members.
                 ensure(
-                    Identifier(rev.issuer) != Public.id(),
+                    Identifier::from(rev.issuer) != Public.id(),
                     CgkaUnauthorized::Denied,
                 )?;
                 ensure(rev.issuer == op_issuer, CgkaUnauthorized::Denied)?;
@@ -2063,7 +2063,10 @@ impl<
                     )
                 } else {
                     // An update must be signed by the owner of the leaf it rotates.
-                    ensure(new_path.leaf_id.0 == op_issuer, CgkaUnauthorized::Denied)?;
+                    ensure(
+                        new_path.leaf_id.0 == op_issuer.verifying_key(),
+                        CgkaUnauthorized::Denied,
+                    )?;
                     // An update can't make a non-public leaf public.
                     ensure(
                         !new_path.leaf_pk.contains_key(&Public.share_key()),
@@ -2583,7 +2586,7 @@ impl<
                     .dupe();
 
                 if actual_dlg.payload().proof.is_none()
-                    && actual_dlg.issuer != group.verifying_key()
+                    && actual_dlg.issuer.verifying_key() != group.verifying_key()
                 {
                     tracing::warn!(
                         "try_from_archive: skipping delegation with mismatched root issuer (group={:?}, issuer={:?})",
@@ -3354,11 +3357,11 @@ fn insert_agents_referenced_by_membership_op<
 ) {
     match op {
         MembershipOperation::Delegation(dlg) => {
-            referenced.insert(Identifier(dlg.issuer));
+            referenced.insert(Identifier::from(dlg.issuer));
             referenced.insert(dlg.payload.delegate.id());
         }
         MembershipOperation::Revocation(rev) => {
-            referenced.insert(Identifier(rev.issuer));
+            referenced.insert(Identifier::from(rev.issuer));
             referenced.insert(rev.payload.revoke.payload.delegate.id());
         }
     }
@@ -3369,7 +3372,7 @@ fn insert_agents_referenced_by_cgka_op(
     op: &Signed<CgkaOperation>,
     referenced: &mut HashSet<Identifier>,
 ) {
-    referenced.insert(Identifier(op.issuer));
+    referenced.insert(Identifier::from(op.issuer));
     if let CgkaOperation::Add { added_id, .. } = &op.payload {
         referenced.insert(Identifier(added_id.0));
     }

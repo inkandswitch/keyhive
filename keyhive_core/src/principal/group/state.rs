@@ -147,7 +147,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             return Err(AddError::InvalidSubject(Box::new(delegation.subject_id())));
         }
 
-        if delegation.payload().proof.is_none() && delegation.issuer != self.verifying_key() {
+        if delegation.payload().proof.is_none()
+            && delegation.issuer.verifying_key() != self.verifying_key()
+        {
             return Err(AddError::InvalidProofChain);
         }
 
@@ -219,8 +221,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
             //
             // By seniority: the revoker issued the proof or is its delegate, and
             // the revoked delegation is the proof or descends from it.
-            let revoker_owns_proof =
-                proof.issuer == revoker || proof.payload.delegate.verifying_key() == revoker;
+            let revoker_owns_proof = proof.issuer == revoker
+                || proof.payload.delegate.verifying_key() == revoker.verifying_key();
             let under_proof = *revoke == *proof || revoke.payload.is_descendant_of(proof);
 
             // By membership: the revoker is a transitive member of the proof's
@@ -260,7 +262,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                     }
                 }
             }
-        } else if revocation.issuer != self.verifying_key() {
+        } else if revocation.issuer.verifying_key() != self.verifying_key() {
             return Err(AddError::InvalidProofChain);
         }
 

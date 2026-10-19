@@ -46,7 +46,7 @@ async fn contains_op_from(
         .await
         .unwrap()
         .unwrap_or_default();
-    ops.iter().any(|op| op.issuer == issuer)
+    ops.iter().any(|op| op.issuer.verifying_key() == issuer)
 }
 
 /// Whether `observer`'s tree contains `op`.
@@ -747,7 +747,7 @@ async fn an_add_through_an_individual_is_applied_once_the_individual_is_promoted
         .into_iter()
         .filter(|(_, event)| match event {
             keyhive_core::event::Event::CgkaOperation(_) => false,
-            keyhive_core::event::Event::Delegated(dlg) => dlg.issuer != group_key,
+            keyhive_core::event::Event::Delegated(dlg) => dlg.issuer.verifying_key() != group_key,
             _ => true,
         })
         .collect();
@@ -810,7 +810,7 @@ async fn a_remove_through_an_individual_is_applied_once_the_individual_is_promot
         .into_iter()
         .filter(|(_, event)| match event {
             keyhive_core::event::Event::CgkaOperation(_) => false,
-            keyhive_core::event::Event::Delegated(dlg) => dlg.issuer != group_key,
+            keyhive_core::event::Event::Delegated(dlg) => dlg.issuer.verifying_key() != group_key,
             _ => true,
         })
         .collect();

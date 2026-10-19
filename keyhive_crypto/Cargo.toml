@@ -32,6 +32,10 @@ arbitrary = { workspace = true, optional = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true }
+bolero = { workspace = true }
+curve25519-dalek = { workspace = true }
+keyhive_codec = { workspace = true, features = ["laws"] }
+postcard = { workspace = true, features = ["alloc"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
@@ -51,10 +55,13 @@ std = [
   "tracing/std",
 ]
 arbitrary = ["dep:arbitrary", "std"]
+serde = ["keyhive_codec/serde"]
+# `Verified::assume`, which skips signature checks: for test fixtures only.
+unchecked = []
 # Everything the full test suite needs. Also the feature hosted CI and
 # cargo-mutants pass to every crate: without it, `--features test_utils` fails
 # to build this crate and its mutants are never tested.
-test_utils = ["arbitrary"]
+test_utils = ["arbitrary", "unchecked"]
 
 [lints]
 workspace = true

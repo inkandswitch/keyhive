@@ -7,7 +7,12 @@ use ed25519_dalek::Signer;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
 #[cfg(feature = "std")]
-use {crate::signed::Signed, alloc::vec::Vec, dupe::Dupe, serde::Serialize};
+use {
+    crate::{identifier::Identifier, signed::Signed},
+    alloc::vec::Vec,
+    dupe::Dupe,
+    serde::Serialize,
+};
 
 /// An in-memory signer.
 ///
@@ -76,7 +81,7 @@ impl MemorySigner {
     ) -> Result<Signed<T>, SigningError> {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
         let signature = self.try_sign_bytes_sync(payload_bytes.as_slice())?;
-        let signed = Signed::new(payload, self.verifying_key(), signature);
+        let signed = Signed::new(payload, Identifier::from(&self.0), signature);
         Ok(signed)
     }
 }
