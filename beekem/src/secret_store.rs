@@ -7,7 +7,17 @@ use crate::{
     keys::{share_secret_key_from_decrypted_secret, ConflictKeys, NodeKey, ShareKeyMap},
     treemath::TreeNodeIndex,
 };
-use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::ToString,
+    vec,
+    vec::Vec,
+};
+use keyhive_codec::{
+    error::DecodeError,
+    prefixed::encode_list,
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
@@ -151,6 +161,29 @@ impl SecretStore {
     }
 }
 
+/// A count (at least one), then the versions in ascending order without
+/// repeats, as [`SecretStore`] keeps them.
+impl Encode for SecretStore {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        encode_list(self.versions.iter(), out);
+    }
+}
+
+impl Decode for SecretStore {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for SecretStore {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (versions, rest) = BTreeSet::<SecretStoreVersion>::decode_next(bytes)?;
+        let versions = NonEmpty::collect(versions)
+            .ok_or(DecodeError::InvalidField("secret store versions"))?;
+        Ok((SecretStore { versions }, rest))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct SecretStoreVersion {
@@ -162,6 +195,37 @@ pub struct SecretStoreVersion {
     pub sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
     /// The PublicKey of the child that encrypted this parent.
     pub encrypter_pk: ShareKey,
+}
+
+/// `pk ‖ sk ‖ encrypter_pk`, with `sk` in ascending index order.
+impl Encode for SecretStoreVersion {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.pk.encode_into(out);
+        self.sk.encode_into(out);
+        self.encrypter_pk.encode_into(out);
+    }
+}
+
+impl Decode for SecretStoreVersion {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for SecretStoreVersion {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (pk, rest) = ShareKey::decode_next(bytes)?;
+        let (sk, rest) = BTreeMap::decode_next(rest)?;
+        let (encrypter_pk, rest) = ShareKey::decode_next(rest)?;
+        Ok((
+            SecretStoreVersion {
+                pk,
+                sk,
+                encrypter_pk,
+            },
+            rest,
+        ))
+    }
 }
 
 impl SecretStoreVersion {

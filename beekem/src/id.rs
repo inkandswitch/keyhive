@@ -5,6 +5,10 @@
 
 use core::fmt;
 use ed25519_dalek::{SigningKey, VerifyingKey};
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
     verifiable::Verifiable,
@@ -85,6 +89,28 @@ impl TryFrom<VerifyingKey> for MemberId {
 impl From<MemberId> for VerifyingKey {
     fn from(member: MemberId) -> Self {
         member.0.verifying_key()
+    }
+}
+
+impl Encode for MemberId {
+    fn encode_into(&self, out: &mut alloc::vec::Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
+impl Decode for MemberId {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for MemberId {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (id, rest) = Identifier::decode_next(bytes).map_err(|e| match e {
+            DecodeError::InvalidField(_) => DecodeError::InvalidField("member_id"),
+            other => other,
+        })?;
+        Ok((Self(id), rest))
     }
 }
 
@@ -173,6 +199,28 @@ impl From<TreeId> for VerifyingKey {
     }
 }
 
+impl Encode for TreeId {
+    fn encode_into(&self, out: &mut alloc::vec::Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
+impl Decode for TreeId {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for TreeId {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (id, rest) = Identifier::decode_next(bytes).map_err(|e| match e {
+            DecodeError::InvalidField(_) => DecodeError::InvalidField("tree_id"),
+            other => other,
+        })?;
+        Ok((Self(id), rest))
+    }
+}
+
 #[cfg(any(test, feature = "arbitrary"))]
 impl<'a> arbitrary::Arbitrary<'a> for TreeId {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
@@ -184,6 +232,16 @@ impl<'a> arbitrary::Arbitrary<'a> for TreeId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codec_laws() {
+        keyhive_codec::laws::round_trip::<MemberId>();
+        keyhive_codec::laws::canonical_near::<MemberId>();
+        keyhive_codec::laws::stream::<MemberId>();
+        keyhive_codec::laws::round_trip::<TreeId>();
+        keyhive_codec::laws::canonical_near::<TreeId>();
+        keyhive_codec::laws::stream::<TreeId>();
+    }
 
     /// A key comes back out as it went in, through `verifying_key` and
     /// through the conversion, for members and trees alike.

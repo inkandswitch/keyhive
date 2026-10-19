@@ -35,6 +35,7 @@ extern crate std;
 
 pub mod encoded;
 pub mod error;
+pub mod prefixed;
 pub mod traits;
 
 #[cfg(feature = "laws")]
