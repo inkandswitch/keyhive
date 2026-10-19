@@ -74,3 +74,6 @@ optional = false
 default = ["console_error_panic_hook", "web-sys", "json"]
 browser_test = []
 json = ["dep:serde_json"]
+
+[lints]
+workspace = true

@@ -116,5 +116,5 @@ name = "bench_cgka_propagation"
 harness = false
 required-features = ["test_utils"]
 
-[lints.clippy]
-doc_overindented_list_items = "allow"
+[lints]
+workspace = true
