@@ -10,6 +10,7 @@ use crate::{
     transact::{Fork, Merge},
 };
 use alloc::{sync::Arc, vec, vec::Vec};
+use future_form::Local;
 use keyhive_crypto::{
     digest::Digest,
     share_key::ShareSecretKey,
@@ -21,14 +22,14 @@ use keyhive_crypto::{
 };
 use rand::rngs::StdRng;
 
-async fn rotate<S: AsyncSigner<future_form::Local>, R: rand::CryptoRng + rand::RngCore>(
+async fn rotate<S: AsyncSigner<Local>, R: rand::CryptoRng + rand::RngCore>(
     cgka: &mut Cgka,
     signer: &S,
     csprng: &mut R,
 ) -> (PcsKey, Signed<CgkaOperation>) {
     let sk = ShareSecretKey::generate(csprng);
     let (pcs_key, op, _) = cgka
-        .update::<future_form::Local, _, _>(sk.share_key(), sk, signer, csprng)
+        .update::<Local, _, _>(sk.share_key(), sk, signer, csprng)
         .await
         .unwrap();
     (pcs_key, op)
@@ -82,7 +83,7 @@ async fn with_entries(
         predecessors: predecessors.clone(),
         doc_id: *op.payload.doc_id(),
     };
-    async_signer::try_sign_async::<future_form::Local, _, _>(signer, rebuilt)
+    async_signer::try_sign_async::<Local, _, _>(signer, rebuilt)
         .await
         .unwrap()
 }
