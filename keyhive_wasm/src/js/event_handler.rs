@@ -12,7 +12,7 @@ use keyhive_core::{
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
     },
 };
-use keyhive_crypto::signed::Signed;
+use keyhive_crypto::signed::SerdeSigned;
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
@@ -37,11 +37,17 @@ impl Dupe for JsEventHandler {
 }
 
 impl PrekeyListener<Local> for JsEventHandler {
-    fn on_prekeys_expanded<'a>(&'a self, e: &'a Arc<Signed<AddKeyOp>>) -> LocalBoxFuture<'a, ()> {
+    fn on_prekeys_expanded<'a>(
+        &'a self,
+        e: &'a Arc<SerdeSigned<AddKeyOp>>,
+    ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeysExpanded(e.dupe()).into()) })
     }
 
-    fn on_prekey_rotated<'a>(&'a self, e: &'a Arc<Signed<RotateKeyOp>>) -> LocalBoxFuture<'a, ()> {
+    fn on_prekey_rotated<'a>(
+        &'a self,
+        e: &'a Arc<SerdeSigned<RotateKeyOp>>,
+    ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeyRotated(e.dupe()).into()) })
     }
 }
@@ -49,21 +55,24 @@ impl PrekeyListener<Local> for JsEventHandler {
 impl MembershipListener<Local, JsSigner, JsChangeId> for JsEventHandler {
     fn on_delegation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Delegation<Local, JsSigner, JsChangeId, Self>>>,
+        data: &'a Arc<SerdeSigned<Delegation<Local, JsSigner, JsChangeId, Self>>>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::Delegated(data.dupe()).into()) })
     }
 
     fn on_revocation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<Local, JsSigner, JsChangeId, Self>>>,
+        data: &'a Arc<SerdeSigned<Revocation<Local, JsSigner, JsChangeId, Self>>>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::Revoked(data.dupe()).into()) })
     }
 }
 
 impl CgkaListener<Local> for JsEventHandler {
-    fn on_cgka_op<'a>(&'a self, data: &'a Arc<Signed<CgkaOperation>>) -> LocalBoxFuture<'a, ()> {
+    fn on_cgka_op<'a>(
+        &'a self,
+        data: &'a Arc<SerdeSigned<CgkaOperation>>,
+    ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::CgkaOperation(data.dupe()).into()) })
     }
 }

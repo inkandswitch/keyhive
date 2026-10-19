@@ -45,7 +45,7 @@ use keyhive_crypto::{
     digest::Digest,
     identifier::Identifier,
     share_key::{ShareKey, ShareSecretKey},
-    signed::{Signed, SigningError},
+    signed::{SerdeSigned, SigningError},
     signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
     symmetric_key::SymmetricKey,
     verifiable::Verifiable,
@@ -129,7 +129,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>> {
+    pub fn members(
+        &self,
+    ) -> &HashMap<Identifier, NonEmpty<Arc<SerdeSigned<Delegation<F, S, T, L>>>>> {
         self.group.members()
     }
 
@@ -164,7 +166,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub fn get_capability(
         &self,
         member_id: &Identifier,
-    ) -> Option<&Arc<Signed<Delegation<F, S, T, L>>>> {
+    ) -> Option<&Arc<SerdeSigned<Delegation<F, S, T, L>>>> {
         self.group.get_capability(member_id)
     }
 
@@ -325,7 +327,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         prekeys: &HashMap<IndividualId, ShareKey>,
         authorization: CgkaAuthorization,
         signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<SerdeSigned<CgkaOperation>>, CgkaError> {
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
             if let Some(op) = self
@@ -396,14 +398,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         id: IndividualId,
         authorization: CgkaAuthorization,
         signer: &S,
-    ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
         self.cgka_mut()?.remove(id, authorization, signer).await
     }
 
     pub async fn get_agent_revocations(
         &self,
         agent: &Agent<F, S, T, L>,
-    ) -> Vec<Arc<Signed<Revocation<F, S, T, L>>>> {
+    ) -> Vec<Arc<SerdeSigned<Revocation<F, S, T, L>>>> {
         self.group.get_agent_revocations(agent).await
     }
 
@@ -415,22 +417,22 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn receive_delegation(
         &mut self,
-        delegation: Arc<Signed<Delegation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<F, S, T, L>>>, AddError> {
+        delegation: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
+    ) -> Result<Digest<SerdeSigned<Delegation<F, S, T, L>>>, AddError> {
         self.group.receive_delegation(delegation).await
     }
 
     pub async fn receive_revocation(
         &mut self,
-        revocation: Arc<Signed<Revocation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<F, S, T, L>>>, AddError> {
+        revocation: Arc<SerdeSigned<Revocation<F, S, T, L>>>,
+    ) -> Result<Digest<SerdeSigned<Revocation<F, S, T, L>>>, AddError> {
         self.group.receive_revocation(revocation).await
     }
 
     /// Merges [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.
     pub fn merge_cgka_op(
         &mut self,
-        op: Arc<Signed<CgkaOperation>>,
+        op: Arc<SerdeSigned<CgkaOperation>>,
         owner_id: IndividualId,
     ) -> Result<bool, CgkaError> {
         if self.cgka.is_none() {
@@ -447,7 +449,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[instrument(skip_all)]
     pub fn merge_cgka_invite_op(
         &mut self,
-        op: Arc<Signed<CgkaOperation>>,
+        op: Arc<SerdeSigned<CgkaOperation>>,
         sk: &ShareSecretKey,
     ) -> Result<bool, CgkaError> {
         let CgkaOperation::Add {
@@ -488,7 +490,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Signed<CgkaOperation>, LeafKeyPair), EncryptError> {
+    ) -> Result<(SerdeSigned<CgkaOperation>, LeafKeyPair), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op, new_key_pair) = self
@@ -724,8 +726,8 @@ pub struct AddMemberUpdate<
     T: ContentRef = [u8; 32],
     L: MembershipListener<F, S, T> = NoListener,
 > {
-    pub delegation: Arc<Signed<Delegation<F, S, T, L>>>,
-    pub cgka_ops: Vec<Signed<CgkaOperation>>,
+    pub delegation: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
+    pub cgka_ops: Vec<SerdeSigned<CgkaOperation>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -739,26 +741,26 @@ pub struct RevokeMemberUpdate<
     T: ContentRef = [u8; 32],
     L: MembershipListener<F, S, T> = NoListener,
 > {
-    pub(crate) revocations: Vec<Arc<Signed<Revocation<F, S, T, L>>>>,
-    pub(crate) redelegations: Vec<Arc<Signed<Delegation<F, S, T, L>>>>,
-    pub(crate) cgka_ops: Vec<Signed<CgkaOperation>>,
+    pub(crate) revocations: Vec<Arc<SerdeSigned<Revocation<F, S, T, L>>>>,
+    pub(crate) redelegations: Vec<Arc<SerdeSigned<Delegation<F, S, T, L>>>>,
+    pub(crate) cgka_ops: Vec<SerdeSigned<CgkaOperation>>,
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>
     RevokeMemberUpdate<F, S, T, L>
 {
     #[allow(clippy::type_complexity)]
-    pub fn revocations(&self) -> &[Arc<Signed<Revocation<F, S, T, L>>>] {
+    pub fn revocations(&self) -> &[Arc<SerdeSigned<Revocation<F, S, T, L>>>] {
         &self.revocations
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn redelegations(&self) -> &[Arc<Signed<Delegation<F, S, T, L>>>] {
+    pub fn redelegations(&self) -> &[Arc<SerdeSigned<Delegation<F, S, T, L>>>] {
         &self.redelegations
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn cgka_ops(&self) -> &[Signed<CgkaOperation>] {
+    pub fn cgka_ops(&self) -> &[SerdeSigned<CgkaOperation>] {
         &self.cgka_ops
     }
 }
@@ -869,7 +871,7 @@ impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
-    pub(crate) update_op: Option<Signed<CgkaOperation>>,
+    pub(crate) update_op: Option<SerdeSigned<CgkaOperation>>,
 }
 
 impl<T: ContentRef> EncryptedContentWithUpdate<T> {
@@ -877,7 +879,7 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
         &self.encrypted_content
     }
 
-    pub fn update_op(&self) -> Option<&Signed<CgkaOperation>> {
+    pub fn update_op(&self) -> Option<&SerdeSigned<CgkaOperation>> {
         self.update_op.as_ref()
     }
 }
@@ -911,19 +913,19 @@ where
     MissingIndividual(IndividualId),
 
     #[error("Cannot find delegation: {0}")]
-    MissingDelegation(Digest<Signed<Delegation<F, S, T>>>),
+    MissingDelegation(Digest<SerdeSigned<Delegation<F, S, T>>>),
 
     #[error("Cannot find revocation: {0}")]
-    MissingRevocation(Digest<Signed<Revocation<F, S, T>>>),
+    MissingRevocation(Digest<SerdeSigned<Revocation<F, S, T>>>),
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef>
-    From<MissingDependency<Digest<Signed<Delegation<F, S, T>>>>>
+    From<MissingDependency<Digest<SerdeSigned<Delegation<F, S, T>>>>>
     for TryFromDocumentArchiveError<F, S, T>
 where
     NoListener: MembershipListener<F, S, T>,
 {
-    fn from(e: MissingDependency<Digest<Signed<Delegation<F, S, T>>>>) -> Self {
+    fn from(e: MissingDependency<Digest<SerdeSigned<Delegation<F, S, T>>>>) -> Self {
         TryFromDocumentArchiveError::MissingDelegation(e.0)
     }
 }

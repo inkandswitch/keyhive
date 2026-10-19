@@ -40,7 +40,7 @@ use keyhive_crypto::{
     digest::Digest,
     identifier::Identifier,
     share_key::ShareKey,
-    signed::{Signed, SigningError},
+    signed::{SerdeSigned, SigningError},
     signer::{
         async_signer::AsyncSigner,
         ephemeral::EphemeralSigner,
@@ -74,11 +74,11 @@ pub struct Group<
 
     /// The current view of members of a group.
     #[allow(clippy::type_complexity)]
-    pub(crate) members: HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Arc<SerdeSigned<Delegation<F, S, T, L>>>>>,
 
     /// Current view of revocations
     #[allow(clippy::type_complexity)]
-    pub(crate) active_revocations: HashMap<[u8; 64], Arc<Signed<Revocation<F, S, T, L>>>>,
+    pub(crate) active_revocations: HashMap<[u8; 64], Arc<SerdeSigned<Revocation<F, S, T, L>>>>,
 
     /// The `Group`'s underlying (causal) delegation state.
     pub(crate) state: GroupState<F, S, T, L>,
@@ -93,7 +93,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[tracing::instrument(skip_all)]
     pub async fn new(
         group_id: GroupId,
-        head: Arc<Signed<Delegation<F, S, T, L>>>,
+        head: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
@@ -114,7 +114,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[tracing::instrument(skip_all)]
     pub async fn from_individual(
         individual: Individual,
-        head: Arc<Signed<Delegation<F, S, T, L>>>,
+        head: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
         delegations: Arc<Mutex<DelegationStore<F, S, T, L>>>,
         revocations: Arc<Mutex<RevocationStore<F, S, T, L>>>,
         listener: L,
@@ -269,7 +269,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn members(&self) -> &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>> {
+    pub fn members(
+        &self,
+    ) -> &HashMap<Identifier, NonEmpty<Arc<SerdeSigned<Delegation<F, S, T, L>>>>> {
         &self.members
     }
 
@@ -395,7 +397,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub fn get_capability(
         &self,
         member_id: &Identifier,
-    ) -> Option<&Arc<Signed<Delegation<F, S, T, L>>>> {
+    ) -> Option<&Arc<SerdeSigned<Delegation<F, S, T, L>>>> {
         self.members.get(member_id).and_then(|delegations| {
             delegations
                 .iter()
@@ -407,7 +409,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn get_agent_revocations(
         &self,
         agent: &Agent<F, S, T, L>,
-    ) -> Vec<Arc<Signed<Revocation<F, S, T, L>>>> {
+    ) -> Vec<Arc<SerdeSigned<Revocation<F, S, T, L>>>> {
         self.state
             .revocations
             .lock()
@@ -421,8 +423,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[tracing::instrument(skip_all)]
     pub async fn receive_delegation(
         &mut self,
-        delegation: Arc<Signed<Delegation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<F, S, T, L>>>, error::AddError> {
+        delegation: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
+    ) -> Result<Digest<SerdeSigned<Delegation<F, S, T, L>>>, error::AddError> {
         let digest = self.state.add_delegation(delegation).await?;
         tracing::info!("{:x?}", &digest);
         self.rebuild().await;
@@ -433,8 +435,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[tracing::instrument(skip(self), fields(group_id = %self.group_id()))]
     pub async fn receive_revocation(
         &mut self,
-        revocation: Arc<Signed<Revocation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Revocation<F, S, T, L>>>, error::AddError> {
+        revocation: Arc<SerdeSigned<Revocation<F, S, T, L>>>,
+    ) -> Result<Digest<SerdeSigned<Revocation<F, S, T, L>>>, error::AddError> {
         self.listener.on_revocation(&revocation).await;
         let digest = self.state.add_revocation(revocation).await?;
         self.rebuild().await;
@@ -571,7 +573,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         let mut revocations = vec![];
         let og_dlgs: Vec<_> = self.members.values().flatten().cloned().collect();
 
-        let all_to_revoke: Vec<Arc<Signed<Delegation<F, S, T, L>>>> = self
+        let all_to_revoke: Vec<Arc<SerdeSigned<Delegation<F, S, T, L>>>> = self
             .members()
             .get(&member_to_remove)
             .map(|ne| Vec::<_>::from(ne.clone())) // Semi-inexpensive because `Vec<Arc<_>>`
@@ -734,10 +736,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     async fn build_revocation(
         &mut self,
         signer: &S,
-        revoke: Arc<Signed<Delegation<F, S, T, L>>>,
-        proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
+        revoke: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
+        proof: Option<Arc<SerdeSigned<Delegation<F, S, T, L>>>>,
         after_content: BTreeMap<DocumentId, Vec<T>>,
-    ) -> Result<Arc<Signed<Revocation<F, S, T, L>>>, SigningError> {
+    ) -> Result<Arc<SerdeSigned<Revocation<F, S, T, L>>>, SigningError> {
         let revocation = keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(
             signer,
             Revocation {
@@ -757,7 +759,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.active_revocations.clear();
 
         #[allow(clippy::type_complexity)]
-        let mut dlgs_in_play: HashMap<[u8; 64], Arc<Signed<Delegation<F, S, T, L>>>> =
+        let mut dlgs_in_play: HashMap<[u8; 64], Arc<SerdeSigned<Delegation<F, S, T, L>>>> =
             HashMap::new();
         let mut revoked_dlgs: HashSet<[u8; 64]> = HashSet::new();
 
@@ -947,7 +949,7 @@ pub enum IdOrIndividual {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupArchive<T: ContentRef> {
     pub(crate) id_or_indie: IdOrIndividual,
-    pub(crate) members: HashMap<Identifier, NonEmpty<Digest<Signed<StaticDelegation<T>>>>>,
+    pub(crate) members: HashMap<Identifier, NonEmpty<Digest<SerdeSigned<StaticDelegation<T>>>>>,
     pub(crate) state: state::archive::GroupStateArchive<T>,
 }
 

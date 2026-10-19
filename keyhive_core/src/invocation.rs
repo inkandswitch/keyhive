@@ -6,7 +6,7 @@ use crate::{
 use derive_where::derive_where;
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef, signed::SerdeSigned, signer::async_signer::AsyncSigner,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -22,7 +22,7 @@ pub struct Invocation<
     T: Clone = C,
 > {
     pub(crate) invoke: T,
-    pub(crate) proof: Option<Arc<Signed<Delegation<F, S, C, L>>>>,
+    pub(crate) proof: Option<Arc<SerdeSigned<Delegation<F, S, C, L>>>>,
 }
 
 impl<
@@ -41,7 +41,7 @@ impl<
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct StaticInvocation<C: ContentRef, T: Clone> {
     pub(crate) invoke: T,
-    pub(crate) proof: Option<Digest<Signed<StaticDelegation<C>>>>,
+    pub(crate) proof: Option<Digest<SerdeSigned<StaticDelegation<C>>>>,
 }
 
 impl<F: FutureForm, S: AsyncSigner<F>, C: ContentRef, L: MembershipListener<F, S, C>, T: Clone>

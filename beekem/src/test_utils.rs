@@ -19,7 +19,7 @@ use future_form::Local;
 use keyhive_crypto::{
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
-    signed::Signed,
+    signed::SerdeSigned,
     signer::memory::MemorySigner,
 };
 use rand::rngs::StdRng;
@@ -55,8 +55,8 @@ pub struct Group {
     doc_id: TreeId,
     /// Every operation synced so far, in the order it was synced, so a member
     /// added part way through can be given a replica of their own.
-    log: Vec<Arc<Signed<CgkaOperation>>>,
-    logged: BTreeSet<Digest<Signed<CgkaOperation>>>,
+    log: Vec<Arc<SerdeSigned<CgkaOperation>>>,
+    logged: BTreeSet<Digest<SerdeSigned<CgkaOperation>>>,
 }
 
 impl Group {
@@ -102,7 +102,7 @@ impl Group {
         author: usize,
         id: MemberId,
         pk: ShareKey,
-    ) -> Arc<Signed<CgkaOperation>> {
+    ) -> Arc<SerdeSigned<CgkaOperation>> {
         self.try_add(author, id, pk)
             .await
             .expect("the added member is new")
@@ -115,7 +115,7 @@ impl Group {
         author: usize,
         id: MemberId,
         pk: ShareKey,
-    ) -> Option<Arc<Signed<CgkaOperation>>> {
+    ) -> Option<Arc<SerdeSigned<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
             .add::<Local, _>(id, pk, ADD_AUTH, signer)
@@ -125,7 +125,11 @@ impl Group {
     }
 
     /// Create a removal on `author`'s replica without delivering it.
-    pub async fn remove(&mut self, author: usize, target: MemberId) -> Arc<Signed<CgkaOperation>> {
+    pub async fn remove(
+        &mut self,
+        author: usize,
+        target: MemberId,
+    ) -> Arc<SerdeSigned<CgkaOperation>> {
         self.try_remove(author, target)
             .await
             .expect("the removed member is present")
@@ -137,7 +141,7 @@ impl Group {
         &mut self,
         author: usize,
         target: MemberId,
-    ) -> Option<Arc<Signed<CgkaOperation>>> {
+    ) -> Option<Arc<SerdeSigned<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
             .remove::<Local, _>(target, REMOVE_AUTH, signer)
@@ -147,7 +151,11 @@ impl Group {
     }
 
     /// Create a rotation on `author`'s replica without delivering it.
-    pub async fn rotate(&mut self, author: usize, rng: &mut StdRng) -> Arc<Signed<CgkaOperation>> {
+    pub async fn rotate(
+        &mut self,
+        author: usize,
+        rng: &mut StdRng,
+    ) -> Arc<SerdeSigned<CgkaOperation>> {
         self.try_rotate(author, rng)
             .await
             .expect("the rotating member is present")
@@ -159,7 +167,7 @@ impl Group {
         &mut self,
         author: usize,
         rng: &mut StdRng,
-    ) -> Option<Arc<Signed<CgkaOperation>>> {
+    ) -> Option<Arc<SerdeSigned<CgkaOperation>>> {
         let sk = ShareSecretKey::generate(rng);
         let pk = sk.share_key();
         let signer = &self.members[author].signer;
@@ -181,7 +189,7 @@ impl Group {
     }
 
     /// Deliver `op` to the replicas named by `to`, recording it in the log.
-    pub fn deliver(&mut self, op: &Arc<Signed<CgkaOperation>>, to: &[usize]) {
+    pub fn deliver(&mut self, op: &Arc<SerdeSigned<CgkaOperation>>, to: &[usize]) {
         let could_not_apply = self.try_deliver(op, to);
         assert!(
             could_not_apply.is_empty(),
@@ -191,7 +199,11 @@ impl Group {
 
     /// Deliver `op` to the replicas named by `to`, recording it in the log, and
     /// report which of them could not apply it.
-    pub fn try_deliver(&mut self, op: &Arc<Signed<CgkaOperation>>, to: &[usize]) -> Vec<usize> {
+    pub fn try_deliver(
+        &mut self,
+        op: &Arc<SerdeSigned<CgkaOperation>>,
+        to: &[usize],
+    ) -> Vec<usize> {
         let could_not_apply: Vec<usize> = to
             .iter()
             .copied()
@@ -208,7 +220,7 @@ impl Group {
     }
 
     /// Deliver `op` to every replica.
-    pub fn broadcast(&mut self, op: &Arc<Signed<CgkaOperation>>) {
+    pub fn broadcast(&mut self, op: &Arc<SerdeSigned<CgkaOperation>>) {
         self.deliver(op, &Vec::from_iter(0..self.replicas.len()));
     }
 

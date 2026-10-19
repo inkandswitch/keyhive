@@ -8,7 +8,7 @@ use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
 #[cfg(feature = "std")]
 use {
-    crate::{identifier::Identifier, signed::Signed},
+    crate::{identifier::Identifier, signed::SerdeSigned},
     alloc::vec::Vec,
     dupe::Dupe,
     serde::Serialize,
@@ -73,15 +73,15 @@ impl MemorySigner {
     /// Sign a serializable payload synchronously.
     ///
     /// Convenience method for tests. Serializes with [`bincode`],
-    /// signs the bytes, and wraps in [`Signed`].
+    /// signs the bytes, and wraps in [`SerdeSigned`].
     #[cfg(feature = "std")]
     pub fn try_sign_sync<T: Serialize + core::fmt::Debug>(
         &self,
         payload: T,
-    ) -> Result<Signed<T>, SigningError> {
+    ) -> Result<SerdeSigned<T>, SigningError> {
         let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
         let signature = self.try_sign_bytes_sync(payload_bytes.as_slice())?;
-        let signed = Signed::new(payload, Identifier::from(&self.0), signature);
+        let signed = SerdeSigned::new(payload, Identifier::from(&self.0), signature);
         Ok(signed)
     }
 }

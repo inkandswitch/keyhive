@@ -2,7 +2,7 @@
 
 use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
 use future_form::FutureForm;
-use keyhive_crypto::signed::Signed;
+use keyhive_crypto::signed::SerdeSigned;
 use std::sync::Arc;
 
 /// Trait for listening to changes to [prekeys][keyhive_crypto::share_key::ShareKey].
@@ -15,12 +15,12 @@ pub trait PrekeyListener<F: FutureForm>: Sized + Clone {
     /// React to new prekeys.
     fn on_prekeys_expanded<'a>(
         &'a self,
-        new_prekey: &'a Arc<Signed<AddKeyOp>>,
+        new_prekey: &'a Arc<SerdeSigned<AddKeyOp>>,
     ) -> F::Future<'a, ()>;
 
     /// React to rotated prekeys.
     fn on_prekey_rotated<'a>(
         &'a self,
-        rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+        rotate_key: &'a Arc<SerdeSigned<RotateKeyOp>>,
     ) -> F::Future<'a, ()>;
 }

@@ -13,7 +13,7 @@ use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
 #[cfg(feature = "std")]
 use {
-    crate::{hex::ToHexString, identifier::Identifier, signed::Signed},
+    crate::{hex::ToHexString, identifier::Identifier, signed::SerdeSigned},
     serde::Serialize,
     tracing::info,
 };
@@ -46,7 +46,7 @@ pub trait SyncSignerBasic {
     ///
     /// ```
     /// # use keyhive_crypto::{
-    /// #   signed::Signed,
+    /// #   signed::SerdeSigned,
     /// #   signer::{
     /// #     memory::MemorySigner,
     /// #     sync_signer::SyncSignerBasic
@@ -74,7 +74,7 @@ impl SyncSignerBasic for ed25519_dalek::SigningKey {
     }
 }
 
-/// Wrapper to lift the result of a low-level [`SyncSignerBasic`] into [`Signed`].
+/// Wrapper to lift the result of a low-level [`SyncSignerBasic`] into [`SerdeSigned`].
 ///
 /// Requires the `std` feature (uses [`bincode`] for serialization).
 #[cfg(feature = "std")]
@@ -83,10 +83,10 @@ pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + core::fmt::Deb
     signer: &S,
     issuer: ed25519_dalek::VerifyingKey,
     payload: T,
-) -> Result<Signed<T>, SigningError> {
+) -> Result<SerdeSigned<T>, SigningError> {
     let bytes = bincode::serialize(&payload)?;
     let signature = signer.try_sign_bytes_sync_basic(bytes.as_slice())?;
     info!("signature: {:0x?}", signature.to_bytes());
-    let signed = Signed::new(payload, Identifier::try_from(issuer)?, signature);
+    let signed = SerdeSigned::new(payload, Identifier::try_from(issuer)?, signature);
     Ok(signed)
 }

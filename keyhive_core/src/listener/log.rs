@@ -12,7 +12,7 @@ use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef, signed::SerdeSigned, signer::async_signer::AsyncSigner,
 };
 use std::sync::Arc;
 
@@ -92,14 +92,14 @@ where
 {
     fn on_prekeys_expanded<'a>(
         &'a self,
-        new_prekey: &'a Arc<Signed<AddKeyOp>>,
+        new_prekey: &'a Arc<SerdeSigned<AddKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey.dupe())).await })
     }
 
     fn on_prekey_rotated<'a>(
         &'a self,
-        rotate_key: &'a Arc<Signed<RotateKeyOp>>,
+        rotate_key: &'a Arc<SerdeSigned<RotateKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeyRotated(rotate_key.dupe())).await })
     }
@@ -113,14 +113,14 @@ where
 {
     fn on_delegation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Delegation<F, S, T, Self>>>,
+        data: &'a Arc<SerdeSigned<Delegation<F, S, T, Self>>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::Delegated(data.dupe())).await })
     }
 
     fn on_revocation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<F, S, T, Self>>>,
+        data: &'a Arc<SerdeSigned<Revocation<F, S, T, Self>>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::Revoked(data.dupe())).await })
     }
@@ -132,7 +132,7 @@ impl<F: FutureForm, S: AsyncSigner<F> + Send + Sync, T: ContentRef + Send + Sync
 where
     Self: MembershipListener<F, S, T> + Send + Sync,
 {
-    fn on_cgka_op<'a>(&'a self, data: &'a Arc<Signed<CgkaOperation>>) -> F::Future<'a, ()> {
+    fn on_cgka_op<'a>(&'a self, data: &'a Arc<SerdeSigned<CgkaOperation>>) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::CgkaOperation(data.dupe())).await })
     }
 }

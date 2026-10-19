@@ -21,8 +21,8 @@ use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_crypto::{
-    content::reference::ContentRef, identifier::Identifier, share_key::ShareKey, signed::Signed,
-    signer::async_signer::AsyncSigner, verifiable::Verifiable,
+    content::reference::ContentRef, identifier::Identifier, share_key::ShareKey,
+    signed::SerdeSigned, signer::async_signer::AsyncSigner, verifiable::Verifiable,
 };
 use nonempty::NonEmpty;
 use std::{
@@ -67,7 +67,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 #[allow(clippy::type_complexity)]
 fn push_readers<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S, T>>(
     readers: &mut Vec<Agent<F, S, T, L>>,
-    members: &HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>>,
+    members: &HashMap<Identifier, NonEmpty<Arc<SerdeSigned<Delegation<F, S, T, L>>>>>,
 ) {
     for dlgs in members.values() {
         if dlgs.iter().any(|d| d.payload.can.is_reader()) {

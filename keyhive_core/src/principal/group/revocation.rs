@@ -11,7 +11,7 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, identifier::Identifier, signed::Signed,
+    content::reference::ContentRef, digest::Digest, identifier::Identifier, signed::SerdeSigned,
     signer::async_signer::AsyncSigner,
 };
 use serde::{Deserialize, Serialize};
@@ -25,8 +25,8 @@ pub struct Revocation<
     T: ContentRef = [u8; 32],
     L: MembershipListener<F, S, T> = NoListener,
 > {
-    pub(crate) revoke: Arc<Signed<Delegation<F, S, T, L>>>,
-    pub(crate) proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
+    pub(crate) revoke: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
+    pub(crate) proof: Option<Arc<SerdeSigned<Delegation<F, S, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
@@ -37,7 +37,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.revoke.subject_id()
     }
 
-    pub fn revoked(&self) -> &Arc<Signed<Delegation<F, S, T, L>>> {
+    pub fn revoked(&self) -> &Arc<SerdeSigned<Delegation<F, S, T, L>>> {
         &self.revoke
     }
 
@@ -45,7 +45,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.revoke.payload().delegate.agent_id()
     }
 
-    pub fn proof(&self) -> Option<Arc<Signed<Delegation<F, S, T, L>>>> {
+    pub fn proof(&self) -> Option<Arc<SerdeSigned<Delegation<F, S, T, L>>>> {
         self.proof.dupe()
     }
 
@@ -88,10 +88,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct StaticRevocation<T: ContentRef = [u8; 32]> {
     /// The [`Delegation`] being revoked.
-    pub revoke: Digest<Signed<StaticDelegation<T>>>,
+    pub revoke: Digest<SerdeSigned<StaticDelegation<T>>>,
 
     /// Proof that the revoker is allowed to perform this revocation.
-    pub proof: Option<Digest<Signed<StaticDelegation<T>>>>,
+    pub proof: Option<Digest<SerdeSigned<StaticDelegation<T>>>>,
 
     /// The heads of relevant [`Document`] content at time of revocation.
     pub after_content: BTreeMap<DocumentId, Vec<T>>,

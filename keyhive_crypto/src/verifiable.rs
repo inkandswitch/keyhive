@@ -5,7 +5,7 @@
 /// This has multiple uses, including:
 /// - Retrieving a verifying key from a [`ed25519_dalek::SigningKey`].
 /// - Getting the verifying key for a principal.
-/// - Extracting the verifying key on a [`Signed`][crate::signed::Signed].
+/// - Extracting the verifying key on a [`SerdeSigned`][crate::signed::SerdeSigned].
 pub trait Verifiable {
     /// Get the [`ed25519_dalek::VerifyingKey`] for [`Self`].
     ///

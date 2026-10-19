@@ -10,7 +10,7 @@ use dupe::Dupe;
 use keyhive_crypto::{
     identifier::Identifier,
     share_key::ShareKey,
-    signed::{Signed, VerificationError},
+    signed::{SerdeSigned, VerificationError},
     verifiable::Verifiable,
 };
 use serde::{Deserialize, Serialize};
@@ -28,10 +28,10 @@ use std::{
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum KeyOp {
     /// Add a new key.
-    Add(Arc<Signed<AddKeyOp>>),
+    Add(Arc<SerdeSigned<AddKeyOp>>),
 
     /// Retire and replace an existing key.
-    Rotate(Arc<Signed<RotateKeyOp>>),
+    Rotate(Arc<SerdeSigned<RotateKeyOp>>),
 }
 
 impl KeyOp {

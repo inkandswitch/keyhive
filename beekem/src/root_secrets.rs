@@ -4,13 +4,13 @@ use crate::{
     pcs_key::PcsKey,
 };
 use alloc::vec::Vec;
-use keyhive_crypto::{digest::Digest, signed::Signed};
+use keyhive_crypto::{digest::Digest, signed::SerdeSigned};
 use serde::{Deserialize, Serialize};
 
 /// A root secret checked against the update that produced it.
 #[derive(Debug)]
 pub(crate) struct VerifiedRootSecret {
-    op_hash: Digest<Signed<CgkaOperation>>,
+    op_hash: Digest<SerdeSigned<CgkaOperation>>,
     secret: PcsKey,
 }
 
@@ -22,7 +22,7 @@ impl VerifiedRootSecret {
     /// not match it.
     pub(crate) fn verify(
         graph: &CgkaOperationGraph,
-        op_hash: Digest<Signed<CgkaOperation>>,
+        op_hash: Digest<SerdeSigned<CgkaOperation>>,
         secret: PcsKey,
     ) -> Option<Self> {
         (graph.update_root_share_key(&op_hash)? == secret.0.share_key())
@@ -38,7 +38,7 @@ impl VerifiedRootSecret {
 /// its update.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub(crate) struct RootSecrets(Map<Digest<Signed<CgkaOperation>>, PcsKey>);
+pub(crate) struct RootSecrets(Map<Digest<SerdeSigned<CgkaOperation>>, PcsKey>);
 
 impl RootSecrets {
     /// Record a verified root secret for its update.
@@ -47,14 +47,14 @@ impl RootSecrets {
     }
 
     /// The root secret recorded for `op_hash`.
-    pub(crate) fn get(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> Option<PcsKey> {
+    pub(crate) fn get(&self, op_hash: &Digest<SerdeSigned<CgkaOperation>>) -> Option<PcsKey> {
         self.0.get(op_hash).copied()
     }
 
     /// Every recorded update with its root secret.
     pub(crate) fn iter(
         &self,
-    ) -> impl Iterator<Item = (Digest<Signed<CgkaOperation>>, PcsKey)> + '_ {
+    ) -> impl Iterator<Item = (Digest<SerdeSigned<CgkaOperation>>, PcsKey)> + '_ {
         self.0.iter().map(|(op_hash, secret)| (*op_hash, *secret))
     }
 
@@ -63,7 +63,7 @@ impl RootSecrets {
     pub(crate) fn merge_from(
         &mut self,
         other: &Self,
-    ) -> Vec<(Digest<Signed<CgkaOperation>>, PcsKey)> {
+    ) -> Vec<(Digest<SerdeSigned<CgkaOperation>>, PcsKey)> {
         let mut added = Vec::new();
         for (op_hash, secret) in other.iter() {
             if self.0.insert(op_hash, secret) != Some(secret) {
@@ -79,7 +79,7 @@ impl RootSecrets {
     }
 
     #[cfg(test)]
-    pub(crate) fn remove(&mut self, op_hash: &Digest<Signed<CgkaOperation>>) {
+    pub(crate) fn remove(&mut self, op_hash: &Digest<SerdeSigned<CgkaOperation>>) {
         self.0.remove(op_hash);
     }
 }

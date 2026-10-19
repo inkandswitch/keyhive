@@ -4,7 +4,7 @@ use super::{cgka::CgkaListener, prekey::PrekeyListener};
 use crate::principal::group::{delegation::Delegation, revocation::Revocation};
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef, signed::Signed, signer::async_signer::AsyncSigner,
+    content::reference::ContentRef, signed::SerdeSigned, signer::async_signer::AsyncSigner,
 };
 use std::sync::Arc;
 
@@ -23,12 +23,12 @@ pub trait MembershipListener<F: FutureForm, S: AsyncSigner<F>, T: ContentRef>:
     /// React to new [`Delegation`]s.
     fn on_delegation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Delegation<F, S, T, Self>>>,
+        data: &'a Arc<SerdeSigned<Delegation<F, S, T, Self>>>,
     ) -> F::Future<'a, ()>;
 
     /// React to new [`Revocation`]s.
     fn on_revocation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<F, S, T, Self>>>,
+        data: &'a Arc<SerdeSigned<Revocation<F, S, T, Self>>>,
     ) -> F::Future<'a, ()>;
 }

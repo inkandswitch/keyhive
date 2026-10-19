@@ -1,12 +1,12 @@
 use super::cgka_operation::JsCgkaOperation;
 use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
-use keyhive_crypto::{signed::Signed, verifiable::Verifiable};
+use keyhive_crypto::{signed::SerdeSigned, verifiable::Verifiable};
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, From, Into)]
 #[wasm_bindgen(js_name = SignedCgkaOperation)]
-pub struct JsSignedCgkaOperation(pub(crate) Signed<CgkaOperation>);
+pub struct JsSignedCgkaOperation(pub(crate) SerdeSigned<CgkaOperation>);
 
 #[wasm_bindgen(js_class = SignedCgkaOperation)]
 impl JsSignedCgkaOperation {

@@ -35,7 +35,7 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::{Identifier, InvalidIdentifier},
     share_key::{ShareKey, ShareSecretKey},
-    signed::{Signed, SigningError},
+    signed::{SerdeSigned, SigningError},
     signer::{async_signer, async_signer::AsyncSigner},
     verifiable::Verifiable,
 };
@@ -159,7 +159,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     pub async fn generate_private_prekey<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<Arc<SerdeSigned<RotateKeyOp>>, SigningError> {
         let picked = {
             // TODO total hack
             let locked = self.individual.lock().await;
@@ -210,7 +210,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         &mut self,
         old_prekey: ShareKey,
         csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<Signed<RotateKeyOp>>, SigningError> {
+    ) -> Result<Arc<SerdeSigned<RotateKeyOp>>, SigningError> {
         let new_secret = {
             let mut locked_csprng = csprng.lock().await;
             ShareSecretKey::generate(&mut *locked_csprng)
@@ -251,7 +251,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     pub async fn expand_prekeys<R: rand::CryptoRng + rand::RngCore>(
         &mut self,
         csprng: Arc<Mutex<R>>,
-    ) -> Result<Arc<Signed<AddKeyOp>>, SigningError> {
+    ) -> Result<Arc<SerdeSigned<AddKeyOp>>, SigningError> {
         let new_secret = {
             let mut locked_csprng = csprng.lock().await;
             ShareSecretKey::generate(&mut *locked_csprng)
@@ -291,7 +291,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
     pub async fn try_sign_async<U: Serialize + std::fmt::Debug>(
         &self,
         payload: U,
-    ) -> Result<Signed<U>, SigningError> {
+    ) -> Result<SerdeSigned<U>, SigningError> {
         async_signer::try_sign_async::<F, _, _>(&self.signer, payload).await
     }
 
@@ -300,7 +300,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         &self,
         subject: Membered<F, S, T, M>,
         min: Access,
-    ) -> Option<Arc<Signed<Delegation<F, S, T, M>>>> {
+    ) -> Option<Arc<SerdeSigned<Delegation<F, S, T, M>>>> {
         subject
             .get_capability(&self.id().into())
             .await

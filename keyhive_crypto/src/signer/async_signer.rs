@@ -6,7 +6,7 @@ use crate::{signed::SigningError, verifiable::Verifiable};
 use future_form::FutureForm;
 #[cfg(feature = "std")]
 use {
-    crate::{identifier::Identifier, signed::Signed},
+    crate::{identifier::Identifier, signed::SerdeSigned},
     alloc::vec::Vec,
     serde::Serialize,
 };
@@ -41,7 +41,7 @@ pub trait AsyncSigner<F: FutureForm>: Verifiable {
 /// Sign a serializable payload asynchronously.
 ///
 /// Serializes with [`bincode`], signs the resulting bytes, and
-/// wraps the result in [`Signed`]. This is a free function rather
+/// wraps the result in [`SerdeSigned`]. This is a free function rather
 /// than a trait method because the `Sendable` form requires
 /// `T: Send` while the `Local` form does not — a constraint that
 /// cannot be expressed on a single trait method signature.
@@ -49,13 +49,13 @@ pub trait AsyncSigner<F: FutureForm>: Verifiable {
 pub async fn try_sign_async<F: FutureForm, S: AsyncSigner<F>, T: Serialize + core::fmt::Debug>(
     signer: &S,
     payload: T,
-) -> Result<Signed<T>, SigningError> {
+) -> Result<SerdeSigned<T>, SigningError> {
     let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
     let signature = signer
         .try_sign_bytes_async(payload_bytes.as_slice())
         .await?;
     let issuer = Identifier::try_from(signer.verifying_key())?;
-    let signed = Signed::new(payload, issuer, signature);
+    let signed = SerdeSigned::new(payload, issuer, signature);
     Ok(signed)
 }
 

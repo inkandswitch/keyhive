@@ -1,13 +1,13 @@
-use keyhive_crypto::{signed::Signed, verifiable::Verifiable};
+use keyhive_crypto::{signed::SerdeSigned, verifiable::Verifiable};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(js_name = Signed)]
+#[wasm_bindgen(js_name = SerdeSigned)]
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct JsSigned(pub(crate) Signed<Vec<u8>>);
+pub struct JsSigned(pub(crate) SerdeSigned<Vec<u8>>);
 
-#[wasm_bindgen(js_class = Signed)]
+#[wasm_bindgen(js_class = SerdeSigned)]
 impl JsSigned {
     #[wasm_bindgen(js_name = fromBytes)]
     pub fn from_bytes(bytes: &[u8]) -> Result<JsSigned, CannotDeserializeSignedError> {

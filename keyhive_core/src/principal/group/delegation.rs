@@ -17,7 +17,7 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
     identifier::Identifier,
-    signed::{Signed, SigningError},
+    signed::{SerdeSigned, SigningError},
     signer::async_signer::AsyncSigner,
 };
 
@@ -36,8 +36,8 @@ pub struct Delegation<
     pub(crate) delegate: Agent<F, S, T, L>,
     pub(crate) can: Access,
 
-    pub(crate) proof: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
-    pub(crate) after_revocations: Vec<Arc<Signed<Revocation<F, S, T, L>>>>,
+    pub(crate) proof: Option<Arc<SerdeSigned<Delegation<F, S, T, L>>>>,
+    pub(crate) after_revocations: Vec<Arc<SerdeSigned<Revocation<F, S, T, L>>>>,
     pub(crate) after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
@@ -66,12 +66,12 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn proof(&self) -> Option<&Arc<Signed<Delegation<F, S, T, L>>>> {
+    pub fn proof(&self) -> Option<&Arc<SerdeSigned<Delegation<F, S, T, L>>>> {
         self.proof.as_ref()
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn after_revocations(&self) -> &[Arc<Signed<Revocation<F, S, T, L>>>] {
+    pub fn after_revocations(&self) -> &[Arc<SerdeSigned<Revocation<F, S, T, L>>>] {
         &self.after_revocations
     }
 
@@ -101,7 +101,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         self.proof.is_none()
     }
 
-    pub fn proof_lineage(&self) -> Vec<Arc<Signed<Delegation<F, S, T, L>>>> {
+    pub fn proof_lineage(&self) -> Vec<Arc<SerdeSigned<Delegation<F, S, T, L>>>> {
         let mut lineage = vec![];
         let mut head = self;
 
@@ -113,7 +113,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         lineage
     }
 
-    pub fn is_descendant_of(&self, maybe_ancestor: &Signed<Delegation<F, S, T, L>>) -> bool {
+    pub fn is_descendant_of(&self, maybe_ancestor: &SerdeSigned<Delegation<F, S, T, L>>) -> bool {
         let mut head = self;
 
         while let Some(proof) = &head.proof {
@@ -127,7 +127,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         false
     }
 
-    pub fn is_ancestor_of(&self, maybe_descendant: &Signed<Delegation<F, S, T, L>>) -> bool {
+    pub fn is_ancestor_of(&self, maybe_descendant: &SerdeSigned<Delegation<F, S, T, L>>) -> bool {
         let mut head = maybe_descendant.payload();
 
         while let Some(proof) = &head.proof {
@@ -154,10 +154,10 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
 pub struct StaticDelegation<T: ContentRef> {
     pub can: Access,
 
-    pub proof: Option<Digest<Signed<StaticDelegation<T>>>>,
+    pub proof: Option<Digest<SerdeSigned<StaticDelegation<T>>>>,
     pub delegate: Identifier,
 
-    pub after_revocations: Vec<Digest<Signed<StaticRevocation<T>>>>,
+    pub after_revocations: Vec<Digest<SerdeSigned<StaticRevocation<T>>>>,
     pub after_content: BTreeMap<DocumentId, Vec<T>>,
 }
 
@@ -209,10 +209,10 @@ pub struct AfterAuth<
     L: MembershipListener<F, S, T> = NoListener,
 > {
     #[allow(clippy::type_complexity)]
-    pub(crate) optional_delegation: Option<Arc<Signed<Delegation<F, S, T, L>>>>,
+    pub(crate) optional_delegation: Option<Arc<SerdeSigned<Delegation<F, S, T, L>>>>,
 
     #[allow(clippy::type_complexity)]
-    pub(crate) revocations: &'a [Arc<Signed<Revocation<F, S, T, L>>>],
+    pub(crate) revocations: &'a [Arc<SerdeSigned<Revocation<F, S, T, L>>>],
 }
 
 /// Errors that can occur when using an active agent.

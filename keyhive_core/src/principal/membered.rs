@@ -19,7 +19,7 @@ use future_form::FutureForm;
 use futures::lock::Mutex;
 use id::MemberedId;
 use keyhive_crypto::{
-    content::reference::ContentRef, identifier::Identifier, signed::Signed,
+    content::reference::ContentRef, identifier::Identifier, signed::SerdeSigned,
     signer::async_signer::AsyncSigner, verifiable::Verifiable,
 };
 use nonempty::NonEmpty;
@@ -46,7 +46,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn get_capability(
         &self,
         agent_id: &Identifier,
-    ) -> Option<Arc<Signed<Delegation<F, S, T, L>>>> {
+    ) -> Option<Arc<SerdeSigned<Delegation<F, S, T, L>>>> {
         match self {
             Membered::Group(_, group) => {
                 let locked = group.lock().await;
@@ -90,7 +90,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn members(
         &self,
-    ) -> HashMap<Identifier, NonEmpty<Arc<Signed<Delegation<F, S, T, L>>>>> {
+    ) -> HashMap<Identifier, NonEmpty<Arc<SerdeSigned<Delegation<F, S, T, L>>>>> {
         match self {
             Membered::Group(_, group) => group.lock().await.members().clone(),
             Membered::Document(_, document) => document.lock().await.members().clone(),
@@ -165,7 +165,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     pub async fn get_agent_revocations(
         &self,
         agent: &Agent<F, S, T, L>,
-    ) -> Vec<Arc<Signed<Revocation<F, S, T, L>>>> {
+    ) -> Vec<Arc<SerdeSigned<Revocation<F, S, T, L>>>> {
         match self {
             Membered::Group(_, group) => group.lock().await.get_agent_revocations(agent).await,
             Membered::Document(_, document) => {
@@ -177,8 +177,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     #[allow(clippy::type_complexity)]
     pub async fn receive_delegation(
         &self,
-        delegation: Arc<Signed<Delegation<F, S, T, L>>>,
-    ) -> Result<Digest<Signed<Delegation<F, S, T, L>>>, AddError> {
+        delegation: Arc<SerdeSigned<Delegation<F, S, T, L>>>,
+    ) -> Result<Digest<SerdeSigned<Delegation<F, S, T, L>>>, AddError> {
         match self {
             Membered::Group(_, group) => {
                 Ok(group.lock().await.receive_delegation(delegation).await?)

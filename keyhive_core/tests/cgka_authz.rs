@@ -14,7 +14,7 @@ use keyhive_core::{
     },
 };
 use keyhive_crypto::{
-    identifier::Identifier, share_key::ShareKey, signed::Signed, verifiable::Verifiable,
+    identifier::Identifier, share_key::ShareKey, signed::SerdeSigned, verifiable::Verifiable,
 };
 use nonempty::nonempty;
 use testresult::TestResult;
@@ -22,7 +22,7 @@ use testresult::TestResult;
 type Kh = keyhive_core::test_utils::Hive;
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
-async fn cgka_heads(observer: &Kh, doc: DocumentId) -> Vec<Digest<Signed<CgkaOperation>>> {
+async fn cgka_heads(observer: &Kh, doc: DocumentId) -> Vec<Digest<SerdeSigned<CgkaOperation>>> {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap().unwrap();
     let referenced: std::collections::HashSet<_> = ops
         .iter()
@@ -49,7 +49,7 @@ async fn contains_op_from(
 }
 
 /// Whether `observer`'s tree contains `op`.
-async fn contains_op(observer: &Kh, doc: DocumentId, op: &Signed<CgkaOperation>) -> bool {
+async fn contains_op(observer: &Kh, doc: DocumentId, op: &SerdeSigned<CgkaOperation>) -> bool {
     let ops = observer
         .cgka_ops_for_doc(&doc)
         .await
@@ -123,7 +123,7 @@ async fn op_where(
     observer: &Kh,
     doc: DocumentId,
     pick: impl Fn(&CgkaOperation) -> bool,
-) -> Signed<CgkaOperation> {
+) -> SerdeSigned<CgkaOperation> {
     observer
         .cgka_ops_for_doc(&doc)
         .await
@@ -500,7 +500,7 @@ async fn a_founding_delegation_cannot_seat_an_outsider() -> TestResult {
 }
 
 /// The causal root of `doc`'s operations, which is its creator's add of themselves.
-async fn creators_own_add(observer: &Kh, doc: DocumentId) -> Signed<CgkaOperation> {
+async fn creators_own_add(observer: &Kh, doc: DocumentId) -> SerdeSigned<CgkaOperation> {
     op_where(
         observer,
         doc,

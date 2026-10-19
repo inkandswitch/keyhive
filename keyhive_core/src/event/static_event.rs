@@ -6,7 +6,7 @@ use crate::principal::{
 };
 use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
-use keyhive_crypto::{content::reference::ContentRef, signed::Signed};
+use keyhive_crypto::{content::reference::ContentRef, signed::SerdeSigned};
 use serde::{Deserialize, Serialize};
 
 /// Serailizable version of [`Event`][super::Event].
@@ -17,19 +17,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, From, Hash, TryInto, Serialize, Deserialize)]
 pub enum StaticEvent<T: ContentRef = [u8; 32]> {
     /// Prekeys were expanded.
-    PrekeysExpanded(Box<Signed<AddKeyOp>>),
+    PrekeysExpanded(Box<SerdeSigned<AddKeyOp>>),
 
     /// A prekey was rotated.
-    PrekeyRotated(Box<Signed<RotateKeyOp>>),
+    PrekeyRotated(Box<SerdeSigned<RotateKeyOp>>),
 
     /// A CGKA operation was performed.
-    CgkaOperation(Box<Signed<CgkaOperation>>),
+    CgkaOperation(Box<SerdeSigned<CgkaOperation>>),
 
     /// A delegation was created.
-    Delegated(Signed<StaticDelegation<T>>),
+    Delegated(SerdeSigned<StaticDelegation<T>>),
 
     /// A delegation was revoked.
-    Revoked(Signed<StaticRevocation<T>>),
+    Revoked(SerdeSigned<StaticRevocation<T>>),
 }
 
 #[cfg(any(test, feature = "arbitrary"))]
@@ -37,11 +37,11 @@ impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for 
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let variant = u.int_in_range(0..=4)?;
         match variant {
-            0 => Ok(Self::PrekeysExpanded(Box::new(Signed::arbitrary(u)?))),
-            1 => Ok(Self::PrekeyRotated(Box::new(Signed::arbitrary(u)?))),
-            2 => Ok(Self::CgkaOperation(Box::new(Signed::arbitrary(u)?))),
-            3 => Ok(Self::Delegated(Signed::arbitrary(u)?)),
-            4 => Ok(Self::Revoked(Signed::arbitrary(u)?)),
+            0 => Ok(Self::PrekeysExpanded(Box::new(SerdeSigned::arbitrary(u)?))),
+            1 => Ok(Self::PrekeyRotated(Box::new(SerdeSigned::arbitrary(u)?))),
+            2 => Ok(Self::CgkaOperation(Box::new(SerdeSigned::arbitrary(u)?))),
+            3 => Ok(Self::Delegated(SerdeSigned::arbitrary(u)?)),
+            4 => Ok(Self::Revoked(SerdeSigned::arbitrary(u)?)),
             _ => unreachable!(),
         }
     }
