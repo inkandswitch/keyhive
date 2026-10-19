@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::{BTreeSet, HashMap},
     hash::{DefaultHasher, Hash, Hasher},
 };
@@ -7,7 +8,7 @@ use std::{
 pub(crate) fn hash_map_keys<K: Hash, V>(
     map1: HashMap<K, V>,
     map2: HashMap<K, V>,
-) -> Option<std::cmp::Ordering> {
+) -> Option<Ordering> {
     let ordered1: BTreeSet<_> = map1
         .keys()
         .map(|k| {

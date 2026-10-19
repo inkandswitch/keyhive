@@ -10,6 +10,7 @@ use keyhive_crypto::{
     signed::{SigningError, VerificationError},
     signer::{async_signer, async_signer::AsyncSigner},
 };
+use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 
@@ -72,7 +73,7 @@ impl PrekeyState {
     /// # Errors
     ///
     /// Returns a [`SigningError`] if the operation could not be signed.
-    pub async fn generate<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn generate<F: FutureForm, S: AsyncSigner<F>, R: CryptoRng + RngCore>(
         signer: &S,
         size: NonZeroUsize,
         csprng: &mut R,
@@ -166,6 +167,7 @@ mod tests {
     use crate::principal::individual::op::rotate_key::RotateKeyOp;
     use dupe::Dupe;
     use keyhive_crypto::signer::memory::MemorySigner;
+    use rand::rngs::OsRng;
 
     #[test]
     fn test_rebuild() {
@@ -193,7 +195,7 @@ mod tests {
 
         test_utils::init_logging();
 
-        let mut rando = rand::rngs::OsRng;
+        let mut rando = OsRng;
         let signer = MemorySigner::generate(&mut rando);
 
         let share_key_1 = ShareKey::generate(&mut rando);

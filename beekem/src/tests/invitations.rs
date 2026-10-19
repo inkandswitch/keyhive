@@ -7,6 +7,7 @@ use crate::{
     test_utils::{member, Group, ADD_AUTH},
 };
 use alloc::{boxed::Box, vec, vec::Vec};
+use future_form::Local;
 use keyhive_crypto::{digest::Digest, share_key::ShareSecretKey, signer::async_signer};
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -126,7 +127,7 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
         doc_id,
     };
     let sign = |op| async {
-        async_signer::try_sign_async::<future_form::Local, _, _>(&alice_signer, op)
+        async_signer::try_sign_async::<Local, _, _>(&alice_signer, op)
             .await
             .unwrap()
     };
