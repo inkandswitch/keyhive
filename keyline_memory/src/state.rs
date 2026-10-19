@@ -177,6 +177,25 @@ impl<W> State<W> {
         }
     }
 
+    /// A new [`State`] containing the certificates specified in `certs`, taken
+    /// from `self`'s set. IDs not in that set are skipped.
+    pub fn within<'a, I: IntoIterator<Item = &'a CertificateId>>(&self, certs: I) -> Self {
+        let mut within = Self::new();
+        within.insert_all(certs.into_iter().filter_map(|cert| {
+            match cert {
+                CertificateId::Delegation(h) => self
+                    .delegations
+                    .get(h)
+                    .map(|v| VerifiedCertificate::Delegation(Arc::clone(v))),
+                CertificateId::Revocation(k) => self
+                    .revocations
+                    .get(k)
+                    .map(|v| VerifiedCertificate::Revocation(Arc::clone(v))),
+            }
+        }));
+        within
+    }
+
     /// Every certificate, in [`CertificateId`] order.
     pub fn certificates(&self) -> Vec<Certificate<W>> {
         self.in_order(self.ids().collect())

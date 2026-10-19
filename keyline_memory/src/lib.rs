@@ -13,9 +13,10 @@
 //! queries cannot starve an insert. Every future resolves on its first poll
 //! unless another task holds the lock.
 //!
-//! The evaluation is cached in [`State`] and shared by every query until the
-//! next insert that changes the set; see the [`state`] module for the
-//! evaluation program.
+//! The evaluation is cached in [`State`] and shared by every query except
+//! `members_for_subset` until the next insert that changes the set.
+//! `members_for_subset` evaluates its subset from scratch, after releasing the
+//! lock. See the [`state`] module for the evaluation program.
 //!
 //! # `no_std` support
 //!
@@ -149,6 +150,20 @@ impl<F: FutureForm, W: Encode + Decode> Keyline<F> for MemoryKeyline<W> {
 
     fn members(&self, subject: Id) -> Query<'_, F, BTreeMap<Id, Power>, Infallible> {
         F::from_future(self.read(move |s| s.members(subject)))
+    }
+
+    fn members_for_subset(
+        &self,
+        subset: BTreeSet<CertificateId>,
+        subject: Id,
+    ) -> Query<'_, F, BTreeMap<Id, Power>, Infallible> {
+        F::from_future(async move {
+            let Versioned { version, value } = self.read(|s| s.within(&subset)).await?;
+            Ok(Versioned {
+                version,
+                value: value.members(subject),
+            })
+        })
     }
 
     fn subjects(&self) -> Query<'_, F, BTreeSet<Id>, Infallible> {
