@@ -9,8 +9,8 @@
 
 * It is not possible to materialize an Automerge document without access to all events, back to genesis
 * Post-compromise security (PCS) requires that a new, unique, random key is generated periodically (ideally on every change)
-* Preventing someone from accessing future updates to a document involves removing their agent ID from the group, and thus removing their public keys from future symmetric key derivation
-* [Group membership][Group Membership] is intended to change over time, so any agent that has access now should automatically have access to all prior history, even if they weren't part of the group at the time that block was written
+* Preventing someone from accessing future updates to a document involves removing their ID from the group, and thus removing their public keys from future symmetric key derivation
+* [Group membership][Group Membership] is intended to change over time, so any principal that has access now should automatically have access to all prior history, even if they weren't part of the group at the time that block was written
 
 ## Key Management
 
@@ -261,4 +261,4 @@ flowchart
 ```
 
 <!-- External Links -->
-[Group Membership]: ./group_membership.md
+[Group Membership]: ./keyline/README.md
