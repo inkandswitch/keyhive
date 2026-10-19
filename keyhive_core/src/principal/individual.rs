@@ -115,15 +115,20 @@ impl Individual {
         Ok(())
     }
 
+    /// The prekey to seat this individual with in `doc_id`'s tree, or `None`
+    /// if it has no live prekeys (rotations can retire every one).
+    ///
+    /// Chosen from the live prekeys in sorted order by a hash of this
+    /// individual and the document: every replica holding the same prekeys
+    /// picks the same one, and different documents spread across them.
     #[instrument(skip(self), fields(indie_id = %self.id))]
-    pub fn pick_prekey(&self, doc_id: DocumentId) -> &ShareKey {
-        let mut bytes: Vec<u8> = self.id.to_bytes().to_vec();
-        bytes.extend_from_slice(&doc_id.to_bytes());
+    pub fn pick_prekey(&self, doc_id: DocumentId) -> Option<&ShareKey> {
+        let mut seed: Vec<u8> = self.id.to_bytes().to_vec();
+        seed.extend_from_slice(&doc_id.to_bytes());
 
-        let prekeys_len = self.prekeys.len();
-        let idx = pseudorandom_in_range(bytes.as_slice(), prekeys_len);
-
-        self.prekeys.iter().nth(idx).expect("index to be in range")
+        let mut sorted: Vec<&ShareKey> = self.prekeys.iter().collect();
+        sorted.sort_unstable();
+        uniform_index(&seed, sorted.len()).map(|i| sorted[i])
     }
 
     pub fn prekey_ops(&self) -> &CaMap<KeyOp> {
@@ -196,53 +201,68 @@ pub enum ReceivePrekeyOpError {
     VerificationError(#[from] VerificationError),
 }
 
-fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
-    let bound = u64::from_be_bytes(bytes)
-        .checked_shl(offset_bits as u32)
-        .unwrap_or(0);
-
-    usize::from_be(bound as usize)
-}
-
-fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
-    let digits: u8 = max
-        .checked_ilog2()
-        .unwrap_or(0)
-        .try_into()
-        .expect("usize has at most 64 bits (< 256)");
-
-    let shiftsize: u8 = 64 - digits;
-
-    let mut hash_stream = blake3::Hasher::new().update(seed).finalize_xof();
-    let mut buf = [0; 8]; // usize max
-    let mut idx = None;
-
-    // NOTE this strategy looks odd at first, but it's an established way to
-    // avoid the biases that you get when sampling a (P)RNG and using a modulous
-    // to clamp to a range. Because the range (idx in our case) is likely not
-    // the same size as the RNG, a modulous will bias towards the lower end of the range.
-    // We use resampling here instead is a way to avoid this bias.
-    //
-    // Naively reampling from `usize` would be very inefficient when the
-    // range is small because it's so unlikely to get a random number in that range.
-    // to fix this, we first truncate the random number to the closest power of 2,
-    // which gives us a >=50% chance of getting a number in the range.
-    while idx.is_none() {
-        hash_stream.fill(&mut buf);
-        let raw_idx: usize = clamp(buf, shiftsize);
-        if raw_idx <= max {
-            idx = Some(raw_idx)
+/// An index below `len`, uniform and fixed by `seed`; `None` when `len` is 0.
+///
+/// Rejection sampling over BLAKE3's output stream: a draw at or above the
+/// largest multiple of `len` that fits in a `u64` is redrawn, so reducing
+/// modulo `len` has no bias.
+fn uniform_index(seed: &[u8], len: usize) -> Option<usize> {
+    let n = u64::try_from(len).ok().filter(|&n| n > 0)?;
+    let limit = u64::MAX - u64::MAX % n;
+    let mut stream = blake3::Hasher::new_derive_key("keyhive prekey selection v1")
+        .update(seed)
+        .finalize_xof();
+    let mut buf = [0; 8];
+    loop {
+        stream.fill(&mut buf);
+        let draw = u64::from_le_bytes(buf);
+        if draw < limit {
+            return Some(usize::try_from(draw % n).expect("below `len`, a `usize`"));
         }
     }
-
-    idx.expect("index to be Some due to the check above")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::principal::individual::op::add_key::AddKeyOp;
-    use keyhive_crypto::signer::memory::MemorySigner;
+    use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
+    use keyhive_crypto::{share_key::ShareSecretKey, signer::memory::MemorySigner};
+    use std::collections::BTreeSet;
+
+    fn add(signer: &MemorySigner, share_key: ShareKey) -> KeyOp {
+        KeyOp::Add(Arc::new(
+            signer.try_sign_sync(AddKeyOp { share_key }).expect("signs"),
+        ))
+    }
+
+    fn rotate(signer: &MemorySigner, old: ShareKey, new: ShareKey) -> KeyOp {
+        KeyOp::Rotate(Arc::new(
+            signer
+                .try_sign_sync(RotateKeyOp { old, new })
+                .expect("signs"),
+        ))
+    }
+
+    fn key() -> ShareKey {
+        ShareSecretKey::generate(&mut rand::thread_rng()).share_key()
+    }
+
+    /// An individual with `n` live prekeys, its ops inserted in shuffled order.
+    fn with_prekeys(signer: &MemorySigner, n: usize) -> Individual {
+        use rand::seq::SliceRandom;
+        let mut ops: Vec<KeyOp> = (0..n).map(|_| add(signer, key())).collect();
+        ops.shuffle(&mut rand::thread_rng());
+        let mut ops = ops.into_iter();
+        let mut individual = Individual::new(ops.next().expect("at least one"));
+        for op in ops {
+            individual.receive_prekey_op(op).expect("same issuer");
+        }
+        individual
+    }
+
+    fn doc() -> DocumentId {
+        DocumentId::generate(&mut rand::thread_rng())
+    }
 
     #[test]
     fn test_to_bytes() {
@@ -255,85 +275,79 @@ mod tests {
     }
 
     #[test]
-    fn test_clamp_sequence() {
-        test_utils::init_logging();
-
-        let a = clamp([0xFF; 8], 0);
-        let b = clamp([0xFF; 8], 1);
-        let c = clamp([0xFF; 8], 8);
-        let d = clamp([0xFF; 8], 16);
-        let e = clamp([0xFF; 8], 32);
-        let f = clamp([0xFF; 8], 48);
-        let g = clamp([0xFF; 8], 64);
-
-        assert_eq!(a, usize::MAX);
-        assert!(a > b);
-        assert!(b > c);
-        assert!(c > d);
-        assert!(d > e);
-        assert!(e > f);
-        assert!(f > g);
-        assert_eq!(g, 0);
+    fn a_uniform_index_is_below_its_bound() {
+        bolero::check!()
+            .with_type::<(Vec<u8>, u16)>()
+            .for_each(|(seed, len)| {
+                let len = usize::from(*len);
+                match uniform_index(seed, len) {
+                    None => assert_eq!(len, 0),
+                    Some(i) => assert!(i < len, "{i} < {len}"),
+                }
+            });
     }
 
+    /// Every count of prekeys, including powers of two, picks one of them.
     #[test]
-    fn test_clamp_keeps_in_range() {
-        test_utils::init_logging();
-
-        let x = clamp([0xFF; 8], 48);
-        assert!(x <= 2usize.pow(64 - 48));
-        assert_eq!(x, 65535);
+    fn a_prekey_is_picked_for_every_count() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        for n in 1..=33 {
+            let individual = with_prekeys(&signer, n);
+            for _ in 0..16 {
+                let picked = individual.pick_prekey(doc()).expect("it has prekeys");
+                assert!(individual.prekeys().contains(picked));
+            }
+        }
     }
 
+    /// The pick depends on the prekeys and the document, not on the order the
+    /// ops arrived in, so replicas holding the same prekeys agree.
     #[test]
-    fn test_clamp_keeps_in_range_2() {
-        test_utils::init_logging();
-
-        let buf: [u8; 8] = rand::random();
-        let x = clamp(buf, 48);
-        assert!(x <= 2usize.pow(64 - 48));
+    fn replicas_with_the_same_prekeys_pick_the_same_one() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let keys: Vec<ShareKey> = (0..12).map(|_| key()).collect();
+        let build = |order: &[usize]| {
+            let mut ops = order.iter().map(|&i| add(&signer, keys[i]));
+            let mut individual = Individual::new(ops.next().expect("nonempty"));
+            for op in ops {
+                individual.receive_prekey_op(op).expect("same issuer");
+            }
+            individual
+        };
+        let forward = build(&(0..12).collect::<Vec<_>>());
+        let backward = build(&(0..12).rev().collect::<Vec<_>>());
+        for _ in 0..32 {
+            let d = doc();
+            assert_eq!(forward.pick_prekey(d), backward.pick_prekey(d));
+        }
     }
 
+    /// Different documents spread across the prekeys.
     #[test]
-    fn test_pseudorandom_in_range() {
-        test_utils::init_logging();
-
-        let arr = 0..39; // Not byte aligned
-        let seed: [u8; 32] = rand::random();
-        let index = pseudorandom_in_range(&seed, arr.len());
-        assert!(index < arr.len());
+    fn documents_spread_across_prekeys() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let individual = with_prekeys(&signer, 8);
+        let picked: BTreeSet<ShareKey> = (0..200)
+            .map(|_| *individual.pick_prekey(doc()).expect("it has prekeys"))
+            .collect();
+        // Missing one of 8 keys in 200 uniform picks has probability below 1e-10.
+        assert_eq!(picked.len(), 8);
     }
 
+    /// Rotations that retire each other's keys leave no live prekey: nothing to
+    /// pick, rather than a panic.
     #[test]
-    fn test_pseudorandom_generates_random_values() {
-        test_utils::init_logging();
-
-        let arr = 0..39; // Not byte aligned
-
-        let seed1: [u8; 32] = [0u8; 32];
-        let seed2: [u8; 32] = [1u8; 32];
-        let seed3: [u8; 32] = [2u8; 32];
-
-        let index1 = pseudorandom_in_range(&seed1, arr.len());
-        let index2 = pseudorandom_in_range(&seed2, arr.len());
-        let index3 = pseudorandom_in_range(&seed3, arr.len());
-
-        assert_ne!(index1, index2);
-        assert_ne!(index1, index3);
-        assert_ne!(index2, index3);
-    }
-
-    #[test]
-    fn test_pseudorandom_generates_stays_in_range() {
-        test_utils::init_logging();
-
-        let seed1: [u8; 32] = rand::random();
-        let seed2: [u8; 32] = rand::random();
-
-        let index1 = pseudorandom_in_range(&seed1, 0);
-        let index2 = pseudorandom_in_range(&seed2, 0);
-
-        assert_eq!(index1, 0);
-        assert_eq!(index1, index2);
+    fn an_individual_with_no_live_prekeys_has_none_to_pick() {
+        let signer = MemorySigner::generate(&mut rand::thread_rng());
+        let (a, b) = (key(), key());
+        let mut individual = Individual::new(add(&signer, a));
+        individual
+            .receive_prekey_op(rotate(&signer, a, b))
+            .expect("same issuer");
+        individual
+            .receive_prekey_op(rotate(&signer, b, a))
+            .expect("same issuer");
+        assert!(individual.prekeys().is_empty());
+        assert_eq!(individual.pick_prekey(doc()), None);
     }
 }

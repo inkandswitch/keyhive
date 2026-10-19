@@ -52,6 +52,7 @@ prettytable-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 beekem = { workspace = true, features = ["arbitrary", "std"] }
+bolero = { workspace = true }
 keyhive_core = { path = ".", features = ["test_utils", "debug_events"] }
 keyhive_crypto = { workspace = true, features = ["arbitrary", "std"] }
 test-utils = { workspace = true }

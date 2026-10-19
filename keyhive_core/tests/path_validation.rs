@@ -20,7 +20,7 @@ use testresult::TestResult;
 async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
     let indie = who.get_individual(who.id()).await.unwrap();
     let guard = indie.lock().await;
-    *guard.pick_prekey(doc)
+    *guard.pick_prekey(doc).expect("it has prekeys")
 }
 
 /// The current CGKA op heads for `doc` as `observer` sees them.

@@ -62,7 +62,7 @@ async fn contains_op(observer: &Kh, doc: DocumentId, op: &Signed<CgkaOperation>)
 async fn own_prekey(kh: &Kh, doc: DocumentId) -> ShareKey {
     let indie = kh.get_individual(kh.id()).await.unwrap();
     let guard = indie.lock().await;
-    *guard.pick_prekey(doc)
+    *guard.pick_prekey(doc).expect("it has prekeys")
 }
 
 /// Register `who`'s identity with `observer` so it can be added.
