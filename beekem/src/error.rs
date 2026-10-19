@@ -1,5 +1,7 @@
 //! Error types for CGKA operations.
 
+use crate::operation::CitationId;
+use alloc::collections::BTreeSet;
 use keyhive_crypto::signed::SigningError;
 
 /// Errors arising from CGKA operations.
@@ -39,6 +41,12 @@ pub enum CgkaError {
 
     #[cfg_attr(feature = "thiserror", error("Invalid operation"))]
     InvalidOperation,
+
+    #[cfg_attr(
+        feature = "thiserror",
+        error("No membership answer yet for a set of {} cited certificates", .0.len())
+    )]
+    MembershipUnknown(BTreeSet<CitationId>),
 
     #[cfg_attr(feature = "thiserror", error("Invalid path length"))]
     InvalidPathLength,
@@ -108,6 +116,11 @@ impl core::fmt::Display for CgkaError {
             }
             Self::IdentifierNotFound => write!(f, "Identifier not found"),
             Self::InvalidOperation => write!(f, "Invalid operation"),
+            Self::MembershipUnknown(cited) => write!(
+                f,
+                "No membership answer yet for a set of {} cited certificates",
+                cited.len()
+            ),
             Self::InvalidPathLength => write!(f, "Invalid path length"),
             Self::NoMembers => write!(f, "Group has no members"),
             Self::NoRootKey => write!(f, "No root key"),

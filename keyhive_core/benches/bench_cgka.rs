@@ -56,7 +56,7 @@ impl Fixture {
                 .collect::<Vec<_>>(),
         )
         .expect("at least one member");
-        block_on(tree.add_multiple::<Local, _>(adds, &members[0].signer))
+        block_on(tree.add_multiple::<Local, _>(BTreeSet::from(adds.into_iter()), &members[0].signer))
             .expect("adding new members succeeds");
         let mut fixture = Fixture {
             tree,

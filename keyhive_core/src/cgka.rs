@@ -134,7 +134,7 @@ impl Cgka {
         signer: &S,
     ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
         let converted = members.map(|(id, pk, auth)| (MemberId::from(id), pk, auth));
-        self.0.add_multiple(converted, signer).await
+        self.0.add_multiple(BTreeSet::from(converted.into_iter()), signer).await
     }
 
     pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(

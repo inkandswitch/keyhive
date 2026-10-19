@@ -34,44 +34,30 @@ use keyhive_crypto::{
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 
-/// The membership operation authorizing a [`CgkaOperation`].
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Deserialize, Serialize)]
+/// The identity of a membership certificate cited by a [`CgkaOperation`].
+///
+/// BeeKEM treats it as opaque. Used by [`crate::cgka::MembershipView`].
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Ord, PartialOrd, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub enum CgkaAuthorization {
-    /// The digest of the delegation that generated an add.
-    Delegation([u8; 32]),
+pub struct CitationId(pub [u8; 32]);
 
-    /// The digest of the revocation that generated a remove.
-    Revocation([u8; 32]),
-}
-
-/// Tag `0` for a delegation, `1` for a revocation, then the digest.
-impl Encode for CgkaAuthorization {
+/// The digest's 32 bytes.
+impl Encode for CitationId {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        let (tag, digest) = match self {
-            CgkaAuthorization::Delegation(digest) => (0, digest),
-            CgkaAuthorization::Revocation(digest) => (1, digest),
-        };
-        out.push(tag);
-        out.extend_from_slice(digest);
+        out.extend_from_slice(&self.0);
     }
 }
 
-impl Decode for CgkaAuthorization {
+impl Decode for CitationId {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         decode_exact(bytes)
     }
 }
 
-impl StreamDecode for CgkaAuthorization {
+impl StreamDecode for CitationId {
     fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
-        let (&tag, rest) = bytes.split_first().ok_or(DecodeError::UnexpectedEnd)?;
-        let (digest, rest) = <[u8; 32]>::decode_next(rest)?;
-        match tag {
-            0 => Ok((CgkaAuthorization::Delegation(digest), rest)),
-            1 => Ok((CgkaAuthorization::Revocation(digest), rest)),
-            other => Err(DecodeError::InvalidTag(other)),
-        }
+        let (digest, rest) = <[u8; 32]>::decode_next(bytes)?;
+        Ok((CitationId(digest), rest))
     }
 }
 
@@ -234,6 +220,38 @@ impl StreamDecode for PredecessorSecret {
     }
 }
 
+/// A member optionally listed in a [`CgkaOperation::Remove`].
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct RemovedMember {
+    /// The member removed.
+    pub id: MemberId,
+    /// The leaf the member occupied when the remove was created.
+    pub leaf_idx: u32,
+}
+
+/// `id || leaf_idx:bijou32 || count:bijou32 || removed_keys`, in order.
+impl Encode for RemovedMember {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.id.encode_into(out);
+        self.leaf_idx.encode_into(out);
+    }
+}
+
+impl Decode for RemovedMember {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for RemovedMember {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (id, rest) = MemberId::decode_next(bytes)?;
+        let (leaf_idx, rest) = u32::decode_next(rest)?;
+        Ok((RemovedMember { id, leaf_idx }, rest))
+    }
+}
+
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum CgkaOperation {
@@ -246,17 +264,28 @@ pub enum CgkaOperation {
         /// `None` when the adder had no root secrets to wrap, or no key pair of
         /// its own to wrap them with.
         invitation: Option<Box<Invitation>>,
+        /// Evidence that the added member published `pk`, such as its signed
+        /// prekey operation. BeeKEM does not read it. `None` when the
+        /// authorization in use does not require it.
+        key_proof: Option<Vec<u8>>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
-        authorization: CgkaAuthorization,
+        /// The membership certificates this add cites, in strictly ascending
+        /// order so that one set has one encoding. An operation's
+        /// certificate set is everything its causal ancestors cited plus these.
+        citations: Vec<CitationId>,
     },
     Remove {
-        id: MemberId,
-        leaf_idx: u32,
-        removed_keys: Vec<ShareKey>,
         predecessors: Vec<Digest<Signed<CgkaOperation>>>,
         doc_id: TreeId,
-        authorization: CgkaAuthorization,
+        /// The membership certificates this remove cites, as for an add.
+        citations: Vec<CitationId>,
+        /// The members this operation removes from the tree.
+        ///
+        /// `keyhive_core` requires this list to be empty since removed members
+        /// are determined from the cited certificate set. Clients following the
+        /// BeeKEM protocol more strictly might use this.
+        removed: Vec<RemovedMember>,
     },
     Update {
         id: MemberId,
@@ -285,6 +314,16 @@ impl CgkaOperation {
         }
     }
 
+    /// The certificates this operation cites. Empty for an update.
+    pub fn citations(&self) -> &[CitationId] {
+        match self {
+            CgkaOperation::Add { citations, .. } | CgkaOperation::Remove { citations, .. } => {
+                citations
+            }
+            CgkaOperation::Update { .. } => &[],
+        }
+    }
+
     /// Whether this is an add or a remove.
     pub(crate) fn is_membership_change(&self) -> bool {
         matches!(self, Self::Add { .. } | Self::Remove { .. })
@@ -304,7 +343,7 @@ impl CgkaOperation {
 ///
 /// Manual `Hash` impl replaces `derivative`, sorting collection keys
 /// for deterministic hashing.
-#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct CgkaOperationGraph {
     pub cgka_ops: CaMap<Signed<CgkaOperation>>,
 
@@ -318,6 +357,9 @@ pub struct CgkaOperationGraph {
     /// has as a nearest update ancestor yet. Every other update is chainable,
     /// meaning a later update could have wrapped its root secret.
     latest_updates: Set<Digest<Signed<CgkaOperation>>>,
+
+    /// Every certificate cited by an operation in the graph.
+    citations: BTreeSet<CitationId>,
 }
 
 impl Hash for CgkaOperationGraph {
@@ -330,8 +372,8 @@ impl Hash for CgkaOperationGraph {
             .collect::<BTreeSet<_>>()
             .hash(state);
 
-        // `depths` and `latest_updates` are both derived from the operations
-        // hashed above.
+        // `depths`, `latest_updates` and `citations` are derived from the
+        // operations hashed above.
     }
 }
 
@@ -364,6 +406,7 @@ impl Merge for CgkaOperationGraph {
                 .any(|op| op.payload.predecessor_list().contains(head))
         });
         self.depths.extend(fork.depths);
+        self.citations.extend(fork.citations);
     }
 }
 
@@ -374,7 +417,13 @@ impl CgkaOperationGraph {
             cgka_op_heads: Set::new(),
             depths: Map::new(),
             latest_updates: Set::new(),
+            citations: BTreeSet::new(),
         }
+    }
+
+    /// Every certificate cited by an operation in the graph.
+    pub fn citations(&self) -> &BTreeSet<CitationId> {
+        &self.citations
     }
 
     pub fn contains_op_hash(&self, op_hash: &Digest<Signed<CgkaOperation>>) -> bool {
@@ -458,6 +507,8 @@ impl CgkaOperationGraph {
         }
         self.cgka_op_heads.insert(op_hash);
         self.depths.insert(op_hash, depth);
+        self.citations
+            .extend(op.payload.citations().iter().copied());
         if !matches!(op.payload, CgkaOperation::Update { .. }) {
             return Ok(Set::new());
         }
@@ -726,9 +777,10 @@ mod causal_graph_tests {
             pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
             leaf_index,
             invitation: None,
+            key_proof: None,
             predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
             doc_id,
-            authorization: CgkaAuthorization::Delegation([0; 32]),
+            citations: Vec::new(),
         };
         async_signer::try_sign_async::<Local, _, _>(signer, op)
             .await

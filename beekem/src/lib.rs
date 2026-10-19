@@ -43,6 +43,7 @@ mod tests {
     mod concurrent_updates;
     mod group_lifecycle;
     mod invitations;
+    mod membership_view;
     mod path_secrets;
     mod predecessor_secret_chain;
 }
