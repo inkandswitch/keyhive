@@ -6,18 +6,17 @@
 use super::Levels;
 use crate::{
     delegation::Delegation,
-    id::Id,
     power::Power,
     test_utils::{
         conformance::gen::{ids, CertSet},
-        Statement,
+        Issued, Statement,
     },
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,
 };
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, identifier::Identifier};
 
 /// What the oracle derives from a set.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,14 +26,14 @@ pub struct Evaluation {
 }
 
 struct Facts {
-    nodes: BTreeSet<Id>,
-    dels: BTreeMap<Digest<Delegation>, Delegation>,
+    nodes: BTreeSet<Identifier>,
+    dels: BTreeMap<Digest<Delegation>, Issued<Delegation>>,
     // Issuer and target only: `retain` has no bearing on authority, so the
     // oracle cannot read it even by accident.
-    revocations: Vec<(Id, Digest<Delegation>)>,
+    revocations: Vec<(Identifier, Digest<Delegation>)>,
 }
 
-fn raise(m: &mut Levels, key: (Id, Id), l: Power) -> bool {
+fn raise(m: &mut Levels, key: (Identifier, Identifier), l: Power) -> bool {
     match m.get(&key) {
         Some(current) if *current >= l => false,
         _ => {
@@ -49,9 +48,9 @@ fn raise(m: &mut Levels, key: (Id, Id), l: Power) -> bool {
 /// `exclude = ∅`, every edge usable and `cap = power`, this is stratum 1.
 fn level(
     f: &Facts,
-    exclude: &BTreeSet<Id>,
+    exclude: &BTreeSet<Identifier>,
     usable: &dyn Fn(&Digest<Delegation>) -> bool,
-    cap: &dyn Fn(&Digest<Delegation>, &Delegation) -> Power,
+    cap: &dyn Fn(&Digest<Delegation>, &Issued<Delegation>) -> Power,
 ) -> Levels {
     let mut m: Levels = f
         .nodes
@@ -90,7 +89,7 @@ fn level(
 }
 
 fn facts<W>(set: &CertSet<W>) -> Facts {
-    let mut nodes: BTreeSet<Id> = ids().collect();
+    let mut nodes: BTreeSet<Identifier> = ids().collect();
     let mut dels = BTreeMap::new();
     let mut revocations = Vec::new();
     for c in &set.certs {
@@ -124,8 +123,8 @@ pub fn evaluate<W>(set: &CertSet<W>) -> Evaluation {
     let none = BTreeSet::new();
 
     let reaches = level(&f, &none, &|_| true, &|_, d| d.power);
-    let admin_reach = |k: Id| -> BTreeSet<Id> {
-        let mut s: BTreeSet<Id> = f
+    let admin_reach = |k: Identifier| -> BTreeSet<Identifier> {
+        let mut s: BTreeSet<Identifier> = f
             .nodes
             .iter()
             .copied()
@@ -134,14 +133,14 @@ pub fn evaluate<W>(set: &CertSet<W>) -> Evaluation {
         s.insert(k);
         s
     };
-    let mut covered: BTreeMap<Digest<Delegation>, BTreeSet<Id>> = BTreeMap::new();
+    let mut covered: BTreeMap<Digest<Delegation>, BTreeSet<Identifier>> = BTreeMap::new();
     for (issuer, revoke) in &f.revocations {
         covered
             .entry(*revoke)
             .or_default()
             .extend(admin_reach(*issuer));
     }
-    let revoked_by_audience = |h: &Digest<Delegation>, audience: Id| {
+    let revoked_by_audience = |h: &Digest<Delegation>, audience: Identifier| {
         f.revocations
             .iter()
             .any(|(issuer, revoke)| revoke == h && *issuer == audience)

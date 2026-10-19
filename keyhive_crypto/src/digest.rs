@@ -1,13 +1,20 @@
 //! Helpers for working with hashes.
 
-use crate::domain_separator::Domain;
+use crate::{
+    identifier::Identifier,
+    signable::{head, Kinded, TAG},
+};
 use alloc::vec::Vec;
 use core::{
     fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
 };
-use keyhive_codec::encoded::Encoded;
+use keyhive_codec::{
+    encoded::Encoded,
+    error::DecodeError,
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use serde::{Deserialize, Serialize};
 
 /// A [`blake3::Hash`] tagged with which type it is a hash of.
@@ -31,18 +38,27 @@ pub struct Digest<T> {
     pub _phantom: PhantomData<T>,
 }
 
-impl<T: Domain> Digest<T> {
-    /// The content address of an encoded value: BLAKE3 over
-    /// [`message`](crate::domain_separator::message), the same bytes a
-    /// signature over it covers.
-    pub fn of(encoded: &Encoded<T>) -> Self {
-        Self::of_bytes(encoded.as_bytes())
+impl<T: Kinded> Digest<T> {
+    /// The identity of a signed statement: BLAKE3 over
+    /// [`message`](crate::signable::message), the same bytes its signature
+    /// covers, hashed incrementally.
+    pub fn of(issuer: &Identifier, encoded: &Encoded<T>) -> Self {
+        let payload = encoded.as_bytes();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&head::<T>(issuer, payload.len()));
+        hasher.update(payload);
+        Self::from(hasher.finalize())
     }
 
-    /// [`Digest::of`] for bytes not wrapped in an [`Encoded<T>`], such as a
-    /// composite that has no `T` value of its own.
+    /// The digest of a kind that is only hashed, never signed, such as a set
+    /// of certificate identities: BLAKE3 over
+    /// `"KH" ‖ kind ‖ version ‖ bytes`.
     pub fn of_bytes(bytes: &[u8]) -> Self {
-        Self::from(blake3::hash(&crate::domain_separator::message::<T>(bytes)))
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&TAG);
+        hasher.update(&[T::KIND.to_u8(), T::VERSION]);
+        hasher.update(bytes);
+        Self::from(hasher.finalize())
     }
 }
 
@@ -277,27 +293,73 @@ impl<T> From<Digest<T>> for Vec<u8> {
     }
 }
 
+/// A digest encodes as its 32 bytes. Every byte string of that length is a
+/// digest, so the encoding is canonical and prefix-free.
+impl<T> Encode for Digest<T> {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.raw.as_bytes());
+    }
+}
+
+impl<T> Decode for Digest<T> {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl<T> StreamDecode for Digest<T> {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (raw, rest) = <[u8; 32]>::decode_next(bytes)?;
+        Ok((Digest::from(raw), rest))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain_separator::message;
+    use crate::signable::{message, Kind};
 
     struct Example;
 
-    impl Domain for Example {
-        const CONTEXT: &'static str = "test/v0/example";
+    impl Kinded for Example {
+        const KIND: Kind = Kind::CERTIFICATE_SET;
+        const VERSION: u8 = 7;
+    }
+
+    fn issuer() -> Identifier {
+        Identifier::from(&ed25519_dalek::SigningKey::from([1u8; 32]))
     }
 
     #[test]
-    fn message_is_context_nul_bytes() {
-        assert_eq!(message::<Example>(b"x"), b"test/v0/example\0x");
+    fn message_is_prefix_then_frame_without_signature() {
+        let mut expected = b"KHS\x07".to_vec();
+        expected.extend_from_slice(issuer().as_bytes());
+        expected.extend_from_slice(b"\x01x");
+        assert_eq!(message::<Example>(&issuer(), b"x"), expected);
+    }
+
+    #[test]
+    fn a_hash_only_digest_is_prefix_version_kind_bytes() {
+        assert_eq!(
+            Digest::<Example>::of_bytes(b"x").raw,
+            blake3::hash(b"KHS\x07x")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn codec_laws() {
+        keyhive_codec::laws::round_trip::<Digest<Vec<u8>>>();
+        keyhive_codec::laws::canonical_near::<Digest<Vec<u8>>>();
+        keyhive_codec::laws::stream::<Digest<Vec<u8>>>();
     }
 
     #[test]
     fn digest_covers_the_signed_message() {
+        let encoded = Encoded::<Example>::from_bytes_unchecked(b"payload".to_vec());
         assert_eq!(
-            Digest::<Example>::of_bytes(b"payload").raw,
-            blake3::hash(&message::<Example>(b"payload"))
+            Digest::of(&issuer(), &encoded).raw,
+            blake3::hash(&message::<Example>(&issuer(), b"payload"))
         );
     }
 }

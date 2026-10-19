@@ -1,6 +1,11 @@
 //! Nonce-misuse resistant initialization vector.
 
 use super::{domain_separator::SEPARATOR, symmetric_key::SymmetricKey};
+use alloc::vec::Vec;
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use serde::{Deserialize, Serialize};
 
 /// Nonce-misuse resistant initialization vector.
@@ -73,5 +78,37 @@ impl From<Siv> for chacha20poly1305::XNonce {
 impl From<chacha20poly1305::XNonce> for Siv {
     fn from(nonce: chacha20poly1305::XNonce) -> Self {
         Siv(nonce.into())
+    }
+}
+
+/// A synthetic nonce encodes as its 24 bytes: canonical and prefix-free.
+impl Encode for Siv {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0);
+    }
+}
+
+impl Decode for Siv {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for Siv {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (raw, rest) = <[u8; 24]>::decode_next(bytes)?;
+        Ok((Siv(raw), rest))
+    }
+}
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codec_laws() {
+        keyhive_codec::laws::round_trip::<Siv>();
+        keyhive_codec::laws::canonical_near::<Siv>();
+        keyhive_codec::laws::stream::<Siv>();
     }
 }

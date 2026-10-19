@@ -8,7 +8,6 @@
 use super::Levels;
 use crate::{
     delegation::Delegation,
-    id::Id,
     power::Power,
     test_utils::{
         conformance::gen::{ids, CertSet},
@@ -16,7 +15,7 @@ use crate::{
     },
 };
 use alloc::{collections::BTreeSet, vec::Vec};
-use keyhive_crypto::digest::Digest;
+use keyhive_crypto::{digest::Digest, identifier::Identifier};
 
 type Ctx = Option<Digest<Delegation>>;
 
@@ -29,9 +28,15 @@ pub struct Evaluation {
 
 pub fn evaluate<W>(set: &CertSet<W>) -> Evaluation {
     // stratum 0
-    let mut node: BTreeSet<Id> = ids().collect();
-    let mut delegation: BTreeSet<(Digest<Delegation>, Id, Id, Id, Power)> = BTreeSet::new();
-    let mut revocation: BTreeSet<(Id, Digest<Delegation>)> = BTreeSet::new();
+    let mut node: BTreeSet<Identifier> = ids().collect();
+    let mut delegation: BTreeSet<(
+        Digest<Delegation>,
+        Identifier,
+        Identifier,
+        Identifier,
+        Power,
+    )> = BTreeSet::new();
+    let mut revocation: BTreeSet<(Identifier, Digest<Delegation>)> = BTreeSet::new();
     for c in &set.certs {
         match c {
             Statement::Delegation(d) => {
@@ -48,7 +53,7 @@ pub fn evaluate<W>(set: &CertSet<W>) -> Evaluation {
     let le = |l1: Power, l2: Power| l1 <= l2;
 
     // stratum 1
-    let mut reaches: BTreeSet<(Power, Id, Id)> = level
+    let mut reaches: BTreeSet<(Power, Identifier, Identifier)> = level
         .iter()
         .flat_map(|l| node.iter().map(move |s| (*l, *s, *s)))
         .collect();
@@ -73,9 +78,9 @@ pub fn evaluate<W>(set: &CertSet<W>) -> Evaluation {
     }
 
     // stratum 1b
-    let admin_reach = |k: Id, n: Id| reaches.contains(&(Power::Admin, n, k));
+    let admin_reach = |k: Identifier, n: Identifier| reaches.contains(&(Power::Admin, n, k));
     let mut covered_total: BTreeSet<Digest<Delegation>> = BTreeSet::new();
-    let mut covered: BTreeSet<(Digest<Delegation>, Id)> = BTreeSet::new();
+    let mut covered: BTreeSet<(Digest<Delegation>, Identifier)> = BTreeSet::new();
     for &(i, c) in &revocation {
         for &(dc, di, da, _, _) in &delegation {
             if dc != c {
@@ -93,11 +98,11 @@ pub fn evaluate<W>(set: &CertSet<W>) -> Evaluation {
     let ctx: BTreeSet<Ctx> = core::iter::once(None)
         .chain(covered.iter().map(|(c, _)| Some(*c)))
         .collect();
-    let excl = |x: Ctx, n: Id| x.is_some_and(|c| covered.contains(&(c, n)));
+    let excl = |x: Ctx, n: Identifier| x.is_some_and(|c| covered.contains(&(c, n)));
     let own_ctx = |c: Digest<Delegation>| covered.iter().any(|(cc, _)| *cc == c).then_some(c);
 
     // stratum 2
-    let mut live: BTreeSet<(Ctx, Power, Id, Id)> = BTreeSet::new();
+    let mut live: BTreeSet<(Ctx, Power, Identifier, Identifier)> = BTreeSet::new();
     for &x in &ctx {
         for &s in node.iter().filter(|s| !excl(x, **s)) {
             for &l in &level {

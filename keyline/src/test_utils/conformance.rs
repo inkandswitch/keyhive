@@ -4,15 +4,24 @@
 //! every set. This module makes that checkable: [`scenarios`] are the named
 //! cases from the design documents, [`laws`] are `bolero` properties over
 //! generated sets, and [`gen`] produces the sets. Every scenario and law is a
-//! plain function generic over `K: Keyline + Default`. A backend runs the whole
-//! suite with [`keyline_conformance!`](crate::keyline_conformance), which
-//! writes one `#[test]` per scenario and law:
+//! plain function generic over a [`Backend`], which says how to build the
+//! store and drive its futures, and talks to the store through a synchronous
+//! [`Harness`]. A backend runs the whole suite with
+//! [`keyline_conformance!`](crate::keyline_conformance), which writes one
+//! `#[test]` per scenario and law:
 //!
 //! ```ignore
 //! mod conformance {
-//!     keyline::keyline_conformance!(my_crate::MyKeyline<()>);
+//!     use future_form::Local;
+//!     use keyline::test_utils::conformance::Polled;
+//!
+//!     keyline::keyline_conformance!(Polled<my_crate::MyKeyline<()>, Local>);
 //! }
 //! ```
+//!
+//! [`Polled`] suits a backend whose futures are ready on their first poll. A
+//! backend that does real I/O implements [`Backend`] itself, with its own
+//! executor in [`Backend::block_on`].
 
 // The generator, oracles and `bolero` laws need `Arbitrary` and `bolero`
 // (the `test_utils` feature, which implies `std`). The scenarios need only the
@@ -26,15 +35,26 @@ pub mod oracle;
 pub mod scenarios;
 
 use crate::{
-    contract::Keyline,
+    certificate::{Certificate, CertificateId, VerifiedCertificate},
+    contract::{CertificateSet, Keyline, Query, Version},
     delegation::Delegation,
     power::Power,
-    revocation::Revocation,
-    test_utils::{assume_verified, id, Statement},
+    revocation::{Revocation, RevocationId},
+    test_utils::{assume_verified, delegation, id, revocation, Issued, Statement},
 };
-use alloc::collections::BTreeSet;
-#[cfg(all(feature = "arbitrary", any(test, feature = "test_utils")))]
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
+use core::{
+    future::Future,
+    marker::PhantomData,
+    pin::pin,
+    task::{Context, Poll, Waker},
+};
+use future_form::FutureForm;
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_crypto::{digest::Digest, identifier::Identifier};
 
 // The cast, as small integers for `test_utils::id`. Roles first, then people
 // in the usual order (Alice, Bob, Carol, Dan, Eve, Frank).
@@ -51,12 +71,12 @@ pub const FRANK: u8 = 10;
 /// A second document, for scenarios that need a subject outside the cast.
 pub const OTHER_DOC: u8 = 11;
 
-pub fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Delegation {
-    Delegation::new(id(issuer), id(audience), id(subject), power)
+pub fn d(issuer: u8, audience: u8, subject: u8, power: Power) -> Issued<Delegation> {
+    delegation(id(issuer), id(audience), id(subject), power)
 }
 
-pub fn r<W>(issuer: u8, target: &Delegation) -> Revocation<W> {
-    Revocation::new(id(issuer), target.digest())
+pub fn r<W>(issuer: u8, target: &Issued<Delegation>) -> Issued<Revocation<W>> {
+    revocation(id(issuer), target.digest())
 }
 
 /// What a backend's watermark type must satisfy to run the generated laws.
@@ -85,12 +105,168 @@ impl<
 {
 }
 
-/// A backend holding exactly these certificates. Checks that each `insert`
-/// reports whether its certificate was new.
-pub fn build<K: Keyline + Default, I: IntoIterator<Item = Statement<K::RetentionWatermark>>>(
-    certs: I,
-) -> K {
-    let mut k = K::default();
+/// How the suite builds a backend and drives its futures.
+pub trait Backend {
+    /// The future form the store is used at.
+    type Form: FutureForm;
+
+    /// The store's [`Keyline::RetentionWatermark`].
+    type Watermark: Encode + Decode;
+
+    /// The store under test.
+    type Store: Keyline<Self::Form, RetentionWatermark = Self::Watermark> + Default;
+
+    /// Run a future to completion.
+    fn block_on<T, Fut: Future<Output = T>>(future: Fut) -> T;
+}
+
+/// A [`Backend`] for a store whose futures are ready on their first poll, as
+/// an in-memory store's are when nothing else holds its lock. Needs no
+/// executor, so it also runs without `std`.
+pub struct Polled<K, F>(PhantomData<(K, F)>);
+
+impl<K: Keyline<F> + Default, F: FutureForm> Backend for Polled<K, F> {
+    type Form = F;
+    type Watermark = K::RetentionWatermark;
+    type Store = K;
+
+    fn block_on<T, Fut: Future<Output = T>>(future: Fut) -> T {
+        match pin!(future).poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("a `Polled` backend's futures are ready on their first poll"),
+        }
+    }
+}
+
+/// A store driven synchronously, with every call checked against the
+/// interface's version contract.
+///
+/// Each query must report the version the last insert returned (the suite
+/// runs nothing concurrently), and an insert that adds a certificate must
+/// return a greater version. Errors are failures: the suite's backends must
+/// not fail.
+pub struct Harness<C: Backend> {
+    store: C::Store,
+    version: Version,
+}
+
+impl<C: Backend> Default for Harness<C> {
+    fn default() -> Self {
+        let store = C::Store::default();
+        let version = C::block_on(store.version()).expect("a conformance backend does not fail");
+        Harness { store, version }
+    }
+}
+
+impl<C: Backend> Harness<C> {
+    /// The store under test.
+    pub fn store(&self) -> &C::Store {
+        &self.store
+    }
+
+    /// The version the last insert returned.
+    pub fn version(&self) -> Version {
+        self.version
+    }
+
+    fn answer<T>(&self, query: Query<'_, C::Form, T, <C::Store as Keyline<C::Form>>::Error>) -> T {
+        let answer = C::block_on(query).expect("a conformance backend does not fail");
+        assert_eq!(
+            answer.version, self.version,
+            "an answer reports the version of the set it read"
+        );
+        answer.value
+    }
+
+    /// Insert one certificate. Returns whether it was new.
+    pub fn insert(&mut self, cert: VerifiedCertificate<C::Watermark>) -> bool {
+        let new = !self.contains(&cert.id());
+        self.insert_batch(&[cert]);
+        new
+    }
+
+    /// Insert a batch, checking the version it returns.
+    pub fn insert_batch(&mut self, batch: &[VerifiedCertificate<C::Watermark>]) -> Version {
+        let grows = batch.iter().any(|c| !self.contains(&c.id()));
+        let version = C::block_on(self.store.insert(batch.to_vec()))
+            .expect("a conformance backend does not fail");
+        if grows {
+            assert!(
+                version > self.version,
+                "an insert that adds a certificate returns a greater version"
+            );
+        } else {
+            assert!(version >= self.version, "versions never go back");
+        }
+        assert_eq!(
+            C::block_on(self.store.version()).expect("a conformance backend does not fail"),
+            version,
+            "`version` reports what the last insert returned"
+        );
+        self.version = version;
+        version
+    }
+
+    pub fn contains(&self, cert: &CertificateId) -> bool {
+        self.answer(self.store.contains(*cert))
+    }
+
+    pub fn get(&self, cert: &CertificateId) -> Option<Certificate<C::Watermark>> {
+        self.answer(self.store.get(*cert))
+    }
+
+    pub fn certificates(&self) -> Vec<Certificate<C::Watermark>> {
+        self.answer(self.store.certificates())
+    }
+
+    pub fn revocations_of(
+        &self,
+        delegation: &Digest<Delegation>,
+    ) -> BTreeSet<Digest<RevocationId>> {
+        self.answer(self.store.revocations_of(*delegation))
+    }
+
+    pub fn delegations_to(
+        &self,
+        subject: Identifier,
+        audience: Identifier,
+    ) -> BTreeMap<Digest<Delegation>, (Identifier, Delegation)> {
+        self.answer(self.store.delegations_to(subject, audience))
+    }
+
+    pub fn effective_power(&self, subject: Identifier, audience: Identifier) -> Option<Power> {
+        self.answer(self.store.effective_power(subject, audience))
+    }
+
+    pub fn members(&self, subject: Identifier) -> BTreeMap<Identifier, Power> {
+        self.answer(self.store.members(subject))
+    }
+
+    pub fn subjects(&self) -> BTreeSet<Identifier> {
+        self.answer(self.store.subjects())
+    }
+
+    pub fn is_live(&self, delegation: &Digest<Delegation>) -> bool {
+        self.answer(self.store.is_live(*delegation))
+    }
+
+    pub fn positive_power(&self, subject: Identifier, audience: Identifier) -> Option<Power> {
+        self.answer(self.store.positive_power(subject, audience))
+    }
+
+    pub fn closure(&self, subject: Identifier) -> Vec<Certificate<C::Watermark>> {
+        self.answer(self.store.closure(subject))
+    }
+
+    pub fn digest(&self) -> Digest<CertificateSet> {
+        self.answer(self.store.digest())
+    }
+}
+
+/// A backend holding exactly these certificates, inserted one at a time.
+/// Checks that each insert reports whether its certificate was new.
+pub fn build<C: Backend, I: IntoIterator<Item = Statement<C::Watermark>>>(certs: I) -> Harness<C> {
+    let mut k = Harness::<C>::default();
     let mut seen = BTreeSet::new();
     for c in certs {
         let c = assume_verified(c);
@@ -104,17 +280,16 @@ pub fn build<K: Keyline + Default, I: IntoIterator<Item = Statement<K::Retention
     k
 }
 
-pub fn power<K: Keyline>(k: &K, subject: u8, audience: u8) -> Option<Power> {
+pub fn power<C: Backend>(k: &Harness<C>, subject: u8, audience: u8) -> Option<Power> {
     k.effective_power(id(subject), id(audience))
 }
 
 /// One `#[test]` per conformance scenario and law, for the given backend.
 ///
 /// Invoke it inside its own module, since the tests take the scenarios'
-/// names. The backend must be `Keyline + Default`. The scenario
+/// names. The argument is a [`Backend`]. The scenario
 /// `retain_distinguishes_certificates_not_authority` also needs
-/// `RetentionWatermark: Clone + Default`, and the laws need
-/// [`TestWatermark`].
+/// `Watermark: Clone + Default`, and the laws need [`TestWatermark`].
 #[macro_export]
 macro_rules! keyline_conformance {
     ($backend:ty) => {
@@ -151,6 +326,8 @@ macro_rules! keyline_conformance {
             pinned_delegation_answers_to_the_role,
             caretaker_admin_severs_downstream_but_not_the_supply,
             signed_certificates_agree_with_fixtures,
+            closure_holds_what_a_document_needs,
+            delegations_to_lists_dead_delegations_too,
         );
         $crate::__keyline_conformance_laws!($backend);
     };
@@ -182,6 +359,12 @@ macro_rules! __keyline_conformance_laws {
             retain_is_inert,
             digest_identifies_the_set,
             queries_are_consistent,
+            positive_power_matches_stratum_one,
+            positive_power_is_monotone,
+            listings_match_the_set,
+            closure_is_sufficient,
+            batches_equal_singles,
+            interleaving_is_invisible,
         );
     };
 }

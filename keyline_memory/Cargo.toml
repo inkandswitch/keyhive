@@ -10,9 +10,15 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-lock = { workspace = true }
+future_form = { workspace = true }
+# `#[future_form]` expands to paths in `futures`.
+futures = { workspace = true }
 keyhive_codec = { workspace = true }
 keyhive_crypto = { workspace = true }
 keyline = { workspace = true }
+# `race::OnceBox` holds the evaluation cache; it is `Sync` and needs no `std`.
+once_cell = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }
 
 [dev-dependencies]
@@ -22,7 +28,14 @@ keyline = { workspace = true, features = ["conformance"] }
 
 [features]
 default = ["std"]
-std = ["keyhive_codec/std", "keyhive_crypto/std", "keyline/std", "tracing/std"]
+std = [
+  "async-lock/std",
+  "keyhive_codec/std",
+  "keyhive_crypto/std",
+  "keyline/std",
+  "once_cell/std",
+  "tracing/std",
+]
 # The full conformance suite, including the `bolero` laws.
 test_utils = ["keyline/test_utils"]
 
