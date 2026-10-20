@@ -1,8 +1,7 @@
 //! Identity newtypes for BeeKEM tree members and documents.
 //!
 //! Both wrap a validated [`Identifier`]: a canonical Ed25519 verifying key
-//! outside the small-order subgroup. They keep a member and a document apart in
-//! Beekem's types without depending on `keyhive_core`.
+//! outside the small-order subgroup.
 
 use core::fmt;
 use ed25519_dalek::{SigningKey, VerifyingKey};
