@@ -105,18 +105,10 @@ impl<'a, W: arbitrary::Arbitrary<'a> + Encode> arbitrary::Arbitrary<'a> for Cert
         let signature = ed25519_dalek::Signature::from_bytes(&u.arbitrary()?);
         Ok(if u.arbitrary()? {
             let d: Delegation = u.arbitrary()?;
-            Certificate::Delegation(Arc::new(Signed::from_parts(
-                u.arbitrary()?,
-                d.encode(),
-                signature,
-            )))
+            Certificate::Delegation(Arc::new(Signed::new(u.arbitrary()?, d.encode(), signature)))
         } else {
             let r: Revocation<W> = u.arbitrary()?;
-            Certificate::Revocation(Arc::new(Signed::from_parts(
-                u.arbitrary()?,
-                r.encode(),
-                signature,
-            )))
+            Certificate::Revocation(Arc::new(Signed::new(u.arbitrary()?, r.encode(), signature)))
         })
     }
 }

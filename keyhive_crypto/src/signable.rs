@@ -14,7 +14,7 @@ pub const TAG: [u8; 2] = *b"KH";
 
 /// A signed type's permanent number in the one registry of kinds.
 ///
-/// One key signs Keyline certificates, key agreement operations and prekey
+/// One key signs Keyline certificates, CGKA operations and prekey
 /// operations, so their kinds come from one table across the workspace. A
 /// retired number is never reused. Kinds are numbered with ASCII letters by
 /// convention, so a frame reads `KHD…` in a hexdump; any byte may be used
@@ -97,11 +97,15 @@ pub fn head<T: Kinded>(issuer: &Identifier, payload_len: usize) -> Vec<u8> {
     out
 }
 
-/// What a signature over a statement covers, and what identifies it:
-/// [`head`] ‖ `payload`, the frame without its signature.
+/// The bytes a statement's signature covers: its [`head`] followed by its
+/// payload. That is the whole frame except the signature.
 ///
-/// A free function rather than a trait method, so that no implementation can
-/// override it and make a signature and a digest cover different bytes.
+/// The statement's [`Digest`](crate::digest::Digest) hashes the same bytes,
+/// so it identifies the statement rather than one signature over it.
+///
+/// This is a free function rather than a trait method, so that no
+/// implementation can override it and make a signature cover different bytes
+/// than the digest.
 pub fn message<T: Kinded>(issuer: &Identifier, payload: &[u8]) -> Vec<u8> {
     let mut out = head::<T>(issuer, payload.len());
     out.extend_from_slice(payload);
