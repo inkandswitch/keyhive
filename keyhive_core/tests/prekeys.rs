@@ -171,9 +171,10 @@ async fn a_member_with_sixteen_prekeys_can_be_added_to_any_document() -> Result<
 }
 
 /// Rotations that retire each other's keys leave an individual with no live
-/// prekey. Adding them is still a delegation; they are just not seated.
+/// prekey. Adding them still delegates to them, but they are not added to the
+/// CGKA tree.
 #[tokio::test]
-async fn a_member_with_no_live_prekeys_is_added_but_not_seated() -> Result<()> {
+async fn a_member_with_no_live_prekeys_is_delegated_but_not_added_to_cgka_tree() -> Result<()> {
     use keyhive_core::principal::individual::{
         id::IndividualId,
         op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
@@ -201,14 +202,20 @@ async fn a_member_with_no_live_prekeys_is_added_but_not_seated() -> Result<()> {
     assert!(ctx.prekeys_of(&alice, carol_id).await?.is_empty());
 
     let doc = ctx.doc(&alice, "doc").await?;
-    alice.add_member(carol_id, doc, Read, &[]).await?;
+    let update = alice.add_member(carol_id, doc, Read, &[]).await?;
+    assert_eq!(
+        alice.access_for_doc(carol_id, doc).await,
+        Some(Read),
+        "the delegation stands"
+    );
+    assert!(update.cgka_ops.is_empty(), "no live prekeys to add with");
     assert!(
         !alice
             .cgka_members_for(doc)
             .await?
             .expect("alice holds the tree")
             .contains(&carol_id),
-        "nobody to seat"
+        "no live prekeys"
     );
     Ok(())
 }

@@ -42,8 +42,8 @@ impl JsIndividual {
         JsIndividualId(self.id)
     }
 
-    /// The prekey to seat this individual with in `doc_id`'s tree, or
-    /// `undefined` if it has no live prekeys.
+    /// Pick a prekey for this individual for `doc_id`, or `undefined` if it
+    /// has no live prekeys.
     #[wasm_bindgen(js_name = pickPrekey)]
     pub async fn pick_prekey(&self, doc_id: &JsDocumentId) -> Option<JsShareKey> {
         let locked = self.inner.lock().await;
