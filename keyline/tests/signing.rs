@@ -230,7 +230,7 @@ fn signature_and_digest_cover_the_same_bytes() {
 fn signature_without_the_header_fails() {
     let encoded = sample().encode();
     let bare = signing_key(1).sign(encoded.as_bytes());
-    let signed = Signed::<Delegation>::from_parts(id(1), encoded, bare);
+    let signed = Signed::<Delegation>::new(id(1), encoded, bare);
     assert_eq!(signed.verify().unwrap_err(), VerifyError::BadSignature);
 }
 
@@ -279,7 +279,7 @@ fn small_order_r_is_rejected() {
 
     assert!(issuer.verifying_key().verify(&message, &signature).is_ok());
     assert_eq!(
-        Signed::<Delegation>::from_parts(issuer, encoded, signature)
+        Signed::<Delegation>::new(issuer, encoded, signature)
             .verify()
             .unwrap_err(),
         VerifyError::BadSignature
@@ -292,7 +292,7 @@ fn small_order_r_is_rejected() {
 #[test]
 fn identity_is_issuer_bytes_and_signature() {
     let a = signed_by(&sample(), &signing_key(1));
-    let forged = Signed::from_parts(
+    let forged = Signed::new(
         a.issuer(),
         a.encoded().clone(),
         Signature::from_bytes(&[0u8; 64]),
@@ -335,13 +335,12 @@ fn hash_agrees_with_eq() {
 #[test]
 fn the_issuer_must_be_the_signer() {
     let alice = signed_by(&sample(), &signing_key(1));
-    let renamed =
-        Signed::<Delegation>::from_parts(id(2), alice.encoded().clone(), *alice.signature());
+    let renamed = Signed::<Delegation>::new(id(2), alice.encoded().clone(), *alice.signature());
     assert_eq!(renamed.verify().unwrap_err(), VerifyError::BadSignature);
 
     let encoded = sample().encode();
     let signature = signing_key(2).sign(&message::<Delegation>(&id(1), encoded.as_bytes()));
-    let forged = Signed::<Delegation>::from_parts(id(1), encoded, signature);
+    let forged = Signed::<Delegation>::new(id(1), encoded, signature);
     assert_eq!(forged.verify().unwrap_err(), VerifyError::BadSignature);
 }
 
@@ -353,7 +352,7 @@ fn tampered_bytes_fail() {
     let mut bytes = signed.encoded().clone().into_bytes();
     bytes[Identifier::LEN * 2] = Power::Read as u8;
     assert!(Delegation::decode(&bytes).is_ok());
-    let tampered = Signed::<Delegation>::from_parts(
+    let tampered = Signed::<Delegation>::new(
         id(1),
         Encoded::from_bytes_unchecked(bytes),
         *signed.signature(),
@@ -367,8 +366,7 @@ fn valid_signature_over_non_canonical_bytes_fails_to_decode() {
     let mut bytes = sample().encode().into_bytes();
     bytes.push(0);
     let signature = signing_key(1).sign(&message::<Delegation>(&id(1), &bytes));
-    let signed =
-        Signed::<Delegation>::from_parts(id(1), Encoded::from_bytes_unchecked(bytes), signature);
+    let signed = Signed::<Delegation>::new(id(1), Encoded::from_bytes_unchecked(bytes), signature);
     assert_eq!(
         signed.verify().unwrap_err(),
         VerifyError::Decode(DecodeError::TrailingBytes)
@@ -484,6 +482,6 @@ fn frame_header_is_checked() {
 fn signature_for_another_kind_fails() {
     let encoded = sample().encode();
     let signature = signing_key(1).sign(&message::<Revocation<()>>(&id(1), encoded.as_bytes()));
-    let signed = Signed::<Delegation>::from_parts(id(1), encoded, signature);
+    let signed = Signed::<Delegation>::new(id(1), encoded, signature);
     assert_eq!(signed.verify().unwrap_err(), VerifyError::BadSignature);
 }

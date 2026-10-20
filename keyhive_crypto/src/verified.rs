@@ -68,7 +68,7 @@ impl<T> Signed<T> {
     /// Assemble from parts received over a transport. Nothing is checked;
     /// call [`Signed::verify`] before trusting the payload. To produce a
     /// signed statement, use [`Verified::sign`].
-    pub fn from_parts(issuer: Identifier, encoded: Encoded<T>, signature: Signature) -> Self {
+    pub fn new(issuer: Identifier, encoded: Encoded<T>, signature: Signature) -> Self {
         Signed {
             issuer,
             encoded,
@@ -306,7 +306,7 @@ impl<T: Signable> Verified<T> {
     ) -> Result<Self, SignError> {
         let (issuer, encoded, bytes) = signing_input(value, signer)?;
         let signature = signer.try_sign_bytes_async(&bytes).await?;
-        Ok(Signed::from_parts(issuer, encoded, signature).verify()?)
+        Ok(Signed::new(issuer, encoded, signature).verify()?)
     }
 
     /// [`Verified::sign`] for a signer that answers synchronously, such as an
@@ -317,7 +317,7 @@ impl<T: Signable> Verified<T> {
     ) -> Result<Self, SignError> {
         let (issuer, encoded, bytes) = signing_input(value, signer)?;
         let signature = signer.try_sign_bytes_sync_basic(&bytes)?;
-        Ok(Signed::from_parts(issuer, encoded, signature).verify()?)
+        Ok(Signed::new(issuer, encoded, signature).verify()?)
     }
 }
 
@@ -585,8 +585,7 @@ mod tests {
 
         let other_issuer = signed(2, Note([1; 4]));
         let other_bytes = signed(1, Note([2; 4]));
-        let other_signature =
-            Signed::from_parts(s.issuer(), s.encoded().clone(), other_bytes.signature);
+        let other_signature = Signed::new(s.issuer(), s.encoded().clone(), other_bytes.signature);
         for different in [&other_issuer, &other_bytes, &other_signature] {
             assert_ne!(&s, different);
         }
@@ -600,8 +599,7 @@ mod tests {
 
         let other_issuer = signed(2, Note([1; 4]));
         let other_bytes = signed(1, Note([2; 4]));
-        let other_signature =
-            Signed::from_parts(s.issuer(), s.encoded().clone(), other_bytes.signature);
+        let other_signature = Signed::new(s.issuer(), s.encoded().clone(), other_bytes.signature);
         for different in [&other_issuer, &other_bytes, &other_signature] {
             assert_ne!(hash_of(&s, &state), hash_of(different, &state));
         }
@@ -630,7 +628,7 @@ mod tests {
     #[test]
     fn verification_needs_the_issuer_signature() {
         let s = signed(1, Note([1; 4]));
-        let swapped = Signed::from_parts(
+        let swapped = Signed::new(
             signed(2, Note([1; 4])).issuer(),
             s.encoded().clone(),
             s.signature,
@@ -647,7 +645,7 @@ mod tests {
         let bytes = message::<Loose>(&Identifier::from(&key(1)), padded.as_bytes());
         let signature =
             SyncSignerBasic::try_sign_bytes_sync_basic(&key(1), &bytes).expect("a key signs");
-        let signed = Signed::from_parts(Identifier::from(&key(1)), padded, signature);
+        let signed = Signed::new(Identifier::from(&key(1)), padded, signature);
         assert_eq!(
             signed.verify(),
             Err(VerifyError::Decode(DecodeError::NonCanonical))

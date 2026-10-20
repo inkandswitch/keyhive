@@ -165,7 +165,7 @@ pub fn assume_verified<W: Encode + Decode, X: Into<Statement<W>>>(
     statement: X,
 ) -> VerifiedCertificate<W> {
     fn assume<T: Signable>(issued: &Issued<T>) -> Verified<T> {
-        Verified::assume(Signed::from_parts(
+        Verified::assume(Signed::new(
             issued.issuer,
             issued.payload.encode(),
             Signature::from_bytes(&[0u8; 64]),
@@ -218,7 +218,7 @@ pub fn resigned<W: Encode + Decode, X: Into<Statement<W>>>(
         let encoded = payload.encode();
         let message = message::<T>(&issuer, encoded.as_bytes());
         let signature = raw_sign::<sha2::Sha512>(&expanded, &message, &key.verifying_key());
-        Signed::from_parts(issuer, encoded, signature)
+        Signed::new(issuer, encoded, signature)
             .verify()
             .expect("a signature with any nonce verifies")
     }
