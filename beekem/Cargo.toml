@@ -10,15 +10,15 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-blake3 = { version = "1.5", default-features = false }
+blake3 = { workspace = true }
 chacha20poly1305 = { workspace = true }
-ed25519-dalek = { version = "2.1", default-features = false, features = ["rand_core", "serde"] }
+ed25519-dalek = { workspace = true, features = ["rand_core", "serde"] }
 future_form = { workspace = true }
-keyhive_crypto = { version = "0.2.1", path = "../keyhive_crypto", default-features = false }
+keyhive_crypto = { workspace = true }
 nonempty = { workspace = true }
-rand = { version = "0.8.5", default-features = false }
-serde = { version = "1.0", default-features = false, features = ["alloc", "derive", "rc"] }
-tracing = { version = "0.1.40", default-features = false, features = ["attributes"] }
+rand = { workspace = true }
+serde = { workspace = true, features = ["alloc", "derive", "rc"] }
+tracing = { workspace = true, features = ["attributes"] }
 
 # std-only dependencies
 dupe = { workspace = true, optional = true }
@@ -30,7 +30,7 @@ arbitrary = { workspace = true, optional = true }
 arbitrary = { workspace = true }
 bolero.workspace = true
 beekem = { path = ".", features = ["arbitrary"] }
-tokio = { version = "1.43", features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 default = ["std"]
@@ -43,7 +43,7 @@ std = [
     "rand/std",
     "rand/std_rng",
     "serde/std",
-    "thiserror",
+    "thiserror/std",
     "tracing/std",
 ]
 arbitrary = ["dep:arbitrary", "keyhive_crypto/arbitrary"]
