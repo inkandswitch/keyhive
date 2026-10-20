@@ -115,8 +115,8 @@ impl Individual {
         Ok(())
     }
 
-    /// The prekey to seat this individual with in `doc_id`'s tree, or `None`
-    /// if it has no live prekeys (rotations can retire every one).
+    /// Pick a prekey for this individual for `doc_id`, or `None` if it has no
+    /// live prekeys (rotations can retire every one).
     ///
     /// Chosen from the live prekeys in sorted order by a hash of this
     /// individual and the document: every replica holding the same prekeys

@@ -59,12 +59,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
         }
     }
 
+    /// A prekey for each individual this peer reaches. An individual with no
+    /// live prekeys is left out.
     pub async fn pick_individual_prekeys(
         &self,
         doc_id: DocumentId,
     ) -> HashMap<IndividualId, ShareKey> {
         match self {
-            // An individual with no live prekeys has nothing to seat it with.
             Peer::Individual(id, i) => {
                 let locked = i.lock().await;
                 locked

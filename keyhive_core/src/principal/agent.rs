@@ -166,7 +166,8 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
     }
 
     /// A prekey for each individual reachable from this agent by delegations
-    /// of [`Access::Read`](crate::access::Access::Read) or better.
+    /// of [`Access::Read`](crate::access::Access::Read) or better. An
+    /// individual with no live prekeys is left out.
     pub async fn pick_individual_prekeys(
         &self,
         doc_id: DocumentId,
@@ -180,7 +181,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: MembershipListener<F, S
                 continue;
             }
             match agent {
-                // An individual with no live prekeys has nothing to seat it with.
                 Agent::Active(_, a) => {
                     let (id, prekey) = {
                         let locked = a.lock().await;
