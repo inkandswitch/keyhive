@@ -697,7 +697,7 @@ async fn an_add_through_an_individual_is_applied_once_the_individual_is_promoted
 
     // Dave receives Alice's delegation to `group` but not the delegation that
     // promotes it, so `group` is still an individual to Dave.
-    // He gets every key agreement operation but the add under test, so its
+    // He gets every CGKA operation but the add under test, so its
     // predecessors are in place.
     let without_group_to_carol = alice
         .events_for_agent(dave_id)

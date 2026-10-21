@@ -612,7 +612,7 @@ async fn test_group_member_is_known_before_its_defining_delegation() -> TestResu
     alice.add_member(group_id, doc_b_id, Power::Read).await?;
 
     // Split out Group G's defining (root) delegation, issued by G itself.
-    // Key agreement operations are left out: Carol is not a member of Doc B,
+    // CGKA operations are left out: Carol is not a member of Doc B,
     // and certificates are what this is about.
     let alice_id = { alice.active().id() };
     let all_events = alice.static_events_for_agent(alice_id).await?;

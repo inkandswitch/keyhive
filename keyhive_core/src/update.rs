@@ -1,5 +1,5 @@
 //! What a membership write produced: the Keyline certificates it inserted,
-//! and the key agreement operations it issued to bring each affected
+//! and the CGKA operations it issued to bring each affected
 //! document's tree to its new readers.
 
 use crate::content::heads::ContentHeads;

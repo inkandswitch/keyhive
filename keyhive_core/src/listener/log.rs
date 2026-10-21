@@ -155,7 +155,7 @@ mod tests {
         assert!(log.is_empty().await, "and draining it leaves it empty");
     }
 
-    /// The key agreement operations `log` heard of, in order, draining it.
+    /// The CGKA operations `log` heard of, in order, draining it.
     async fn cgka_ops(log: &Log<[u8; 32]>) -> Vec<SerdeSigned<CgkaOperation>> {
         let mut ops = Vec::new();
         while let Some(event) = log.pop().await {
@@ -167,7 +167,7 @@ mod tests {
         ops
     }
 
-    /// The listener hears of the key agreement operations this replica writes,
+    /// The listener hears of the CGKA operations this replica writes,
     /// so they can be sent on: a forced PCS update, and the update a write makes
     /// when the tree has changed since its last root secret.
     #[tokio::test]

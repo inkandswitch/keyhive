@@ -147,7 +147,7 @@ The type does not check the claim. `Encode::encode` produces canonical bytes fro
 
 ### Domain Separation
 
-The keys that sign Keyline certificates also sign in other protocols, such as key agreement operations and prekey operations. If one byte string were valid in two formats, one signature would be valid in both. So every signed statement travels as a frame that starts with Keyhive's tag, and its signature covers the frame up to the signature:
+The keys that sign Keyline certificates also sign in other protocols, such as CGKA operations and prekey operations. If one byte string were valid in two formats, one signature would be valid in both. So every signed statement travels as a frame that starts with Keyhive's tag, and its signature covers the frame up to the signature:
 
 ```
 frame              "KH" ‖ kind:u8 ‖ version:u8 ‖ issuer:32 ‖ payload_len:bijou64 ‖ payload ‖ signature:64

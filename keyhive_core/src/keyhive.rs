@@ -3238,7 +3238,7 @@ impl<E: core::error::Error + 'static> ReceiveStaticEventError<E> {
     }
 
     /// Whether the event can never be applied, however long it waits: a bad
-    /// signature, or a key agreement operation nothing could authorize. Such
+    /// signature, or a CGKA operation nothing could authorize. Such
     /// an event is dropped rather than kept pending. A missing dependency or a
     /// store failure may resolve, so those are kept.
     pub fn is_final(&self) -> bool {
@@ -4263,7 +4263,7 @@ mod tests {
         assert_eq!(
             hive_from_archive.stats().await.cgka_operations,
             hive.stats().await.cgka_operations,
-            "and so do the key agreement operations"
+            "and so do the CGKA operations"
         );
         let pcs_hash = |h: &Arc<Mutex<DocumentState<_>>>| {
             let h = h.dupe();

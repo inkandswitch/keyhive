@@ -286,7 +286,8 @@ where
     K: Keyline<F, RetentionWatermark = ContentHeads<T>>,
     K::Error: Send + Sync + 'static,
 {
-    /// The prekey this individual is seated with in `doc`'s tree.
+    /// Pick a prekey for this individual for `doc`, or `None` if it has no
+    /// live prekeys.
     pub async fn pick_prekey(&self, doc: DocumentId) -> Option<ShareKey> {
         if self.id == self.keyhive.id() {
             return self.keyhive.active().pick_prekey(doc).await;

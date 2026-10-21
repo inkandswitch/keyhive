@@ -314,7 +314,7 @@ async fn a_member_without_the_key_tree_derives_no_pcs_key() -> Result<()> {
 
     assert!(
         bob.try_pcs_key_hash(design_doc).await.is_some(),
-        "the key agreement operations let him derive one"
+        "the CGKA operations let him derive one"
     );
     Ok(())
 }
@@ -335,7 +335,7 @@ async fn stats_counts_key_agreement_only_once_the_operations_arrive() -> Result<
     assert_eq!(
         bob.stats().await.cgka_operations,
         0,
-        "bob has none of the document's key agreement operations"
+        "bob has none of the document's CGKA operations"
     );
     assert_eq!(
         bob.stats().await.docs,

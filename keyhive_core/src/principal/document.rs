@@ -464,7 +464,7 @@ where
         locked.cgka_members().ok().map(Iterator::collect)
     }
 
-    /// How many key agreement operations this replica's tree has applied;
+    /// How many CGKA operations this replica's tree has applied;
     /// `None` if it holds no tree for the document.
     pub async fn cgka_ops_count(&self) -> Option<usize> {
         let state = self.keyhive.document_state(self.id).await?;
