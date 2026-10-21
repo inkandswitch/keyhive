@@ -1,6 +1,6 @@
 //! What a membership write produced: the Keyline certificates it inserted,
-//! and the key agreement operations it issued to bring each affected
-//! document's tree to its new readers.
+//! the CGKA adds and removes it issued for each local document whose
+//! readers those certificates changed.
 
 use crate::content::heads::ContentHeads;
 use beekem::operation::CgkaOperation;
@@ -14,7 +14,8 @@ pub struct AddMemberUpdate {
     /// The delegation granting the new member its power.
     pub delegation: Arc<Verified<Delegation>>,
 
-    /// The adds that seat the new readers.
+    /// The CGKA operations issued for each local document whose readers
+    /// this write changed.
     pub cgka_ops: Vec<Signed<CgkaOperation>>,
 }
 
@@ -39,7 +40,8 @@ impl<T: ContentRef> RevokeMemberUpdate<T> {
         &self.redelegations
     }
 
-    /// The removes that unseat the lost readers.
+    /// The CGKA operations issued for each local document whose readers
+    /// this write changed.
     pub fn cgka_ops(&self) -> &[Signed<CgkaOperation>] {
         &self.cgka_ops
     }

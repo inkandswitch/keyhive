@@ -75,9 +75,7 @@ pub enum CgkaOperationDetails {
         predecessors: Vec<Hash>,
     },
     Remove {
-        id: Hash,
-        leaf_index: u32,
-        removed_keys: Vec<Hash>,
+        removed: Vec<RemovedDetails>,
         predecessors: Vec<Hash>,
     },
     Update {
@@ -86,6 +84,13 @@ pub enum CgkaOperationDetails {
         path_length: usize,
         predecessors: Vec<Hash>,
     },
+}
+
+/// A member that a CGKA remove lists.
+#[derive(Debug, Clone)]
+pub struct RemovedDetails {
+    pub id: Hash,
+    pub leaf_index: u32,
 }
 
 impl DebugEventTable {
@@ -220,18 +225,17 @@ impl DebugEventRow {
                         ("Add", op_details)
                     }
                     CgkaOperation::Remove {
-                        id,
-                        leaf_idx,
-                        removed_keys,
+                        removed,
                         predecessors,
                         ..
                     } => {
                         let op_details = CgkaOperationDetails::Remove {
-                            id: Hash::new(id.as_bytes(), nicknames),
-                            leaf_index: *leaf_idx,
-                            removed_keys: removed_keys
+                            removed: removed
                                 .iter()
-                                .map(|key| Hash::new(key.as_bytes(), nicknames))
+                                .map(|r| RemovedDetails {
+                                    id: Hash::new(r.id.as_bytes(), nicknames),
+                                    leaf_index: r.leaf_idx,
+                                })
                                 .collect(),
                             predecessors: predecessors
                                 .iter()

@@ -19,10 +19,11 @@ use crate::{
     update::{AddMemberUpdate, RevokeMemberUpdate},
 };
 use beekem::{
+    cgka::MembershipView,
     encrypted::EncryptedContent,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
+    operation::{CgkaBatch, CgkaOperation, CitationId},
 };
 use future_form::FutureForm;
 use id::DocumentId;
@@ -47,7 +48,7 @@ use std::{
 use thiserror::Error;
 use tracing::instrument;
 
-/// A document this replica is a member of: its key agreement tree and the
+/// A document this replica is a member of: its CGKA graph and the
 /// content heads it knows. Its membership is the Keyline certificate set.
 #[derive(Debug, Clone)]
 pub struct DocumentState<T: ContentRef> {
@@ -59,8 +60,8 @@ pub struct DocumentState<T: ContentRef> {
     /// them to a reader in an envelope. Not persisted, and not evicted.
     known_decryption_keys: HashMap<T, SymmetricKey>,
 
-    /// This replica's key agreement tree. A replica holds a document only as a
-    /// member whose creation or invitation has merged; a relay holds none of
+    /// This replica's CGKA graph. A replica holds a document only as a
+    /// member whose creation or invitation has merged. A relay holds none of
     /// its operations and has no `DocumentState`.
     cgka: Cgka,
 }
@@ -110,11 +111,12 @@ impl<T: ContentRef> DocumentState<T> {
     }
 
     #[instrument(skip_all)]
-    #[allow(clippy::too_many_arguments)]
-    /// A new document's tree: `founders` added in order, each citing the root
-    /// edge that admits it, then a rotation by the first, its owner, whose
-    /// prekey secret is `owner_sk`. Returns the document and its genesis
-    /// operations.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    /// A new document's CGKA graph: `founders` added in order, each with the
+    /// prekey operation that proves its key, then a rotation by the first,
+    /// its owner, whose prekey secret is `owner_sk`. `view` removes members
+    /// the cited certificates do not entitle. Returns the document and its
+    /// genesis operations.
     pub(crate) async fn generate<
         F: FutureForm,
         S: AsyncSigner<F>,
@@ -122,16 +124,23 @@ impl<T: ContentRef> DocumentState<T> {
         E: core::error::Error + 'static,
     >(
         id: DocumentId,
-        founders: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
+        founders: NonEmpty<(
+            IndividualId,
+            ShareKey,
+            Option<Vec<u8>>,
+            BTreeSet<CitationId>,
+        )>,
         owner_sk: ShareSecretKey,
+        view: Arc<dyn MembershipView>,
         initial_content_heads: NonEmpty<T>,
         signer: &S,
         csprng: &mut R,
     ) -> Result<(Self, Vec<Signed<CgkaOperation>>), GenerateDocError<E>> {
-        let (owner, owner_pk, _) = founders.head;
+        let (owner, owner_pk, _, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
         let mut cgka = Cgka::new(id, owner, owner_sks);
+        cgka.set_membership_view(view);
         let mut ops = cgka.add_multiple(founders, signer).await?;
         let (_pcs_key, update_op, _new_key_pair) =
             cgka.update(owner_pk, owner_sk, signer, csprng).await?;
@@ -146,35 +155,30 @@ impl<T: ContentRef> DocumentState<T> {
         Ok((doc, ops))
     }
 
-    /// Add individuals to this document's [`Cgka`] from pre-computed prekeys.
-    ///
-    /// Prekeys must be computed before locking the document to avoid
-    /// deadlocks when the delegate is itself a document.
+    /// Add `id` to this document's [`Cgka`] with key `pk`, which `key_proof`
+    /// shows `id` published. `None` if `id` is already a CGKA group member.
     #[instrument(skip_all)]
-    pub(crate) async fn add_cgka_members_from_prekeys<F: FutureForm, S: AsyncSigner<F>>(
-        &mut self,
-        prekeys: &HashMap<IndividualId, ShareKey>,
-        authorization: CgkaAuthorization,
-        signer: &S,
-    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
-        let mut acc = Vec::new();
-        for (id, prekey) in prekeys.iter() {
-            if let Some(op) = self.cgka.add(*id, *prekey, authorization, signer).await? {
-                acc.push(op);
-            }
-        }
-        Ok(acc)
-    }
-
-    /// `authorization` refers to the revocation that removed `id`.
-    #[instrument(skip_all)]
-    pub async fn remove_cgka_member<F: FutureForm, S: AsyncSigner<F>>(
+    pub(crate) async fn add_cgka_member<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
-        authorization: CgkaAuthorization,
+        pk: ShareKey,
+        key_proof: Option<Vec<u8>>,
+        citations: BTreeSet<CitationId>,
         signer: &S,
     ) -> Result<Option<Signed<CgkaOperation>>, CgkaError> {
-        self.cgka.remove(id, authorization, signer).await
+        self.cgka.add(id, pk, key_proof, citations, signer).await
+    }
+
+    /// Create a [`CgkaOperation::Remove`] without explicitly listing
+    /// targets. Specific members to be removed are determined by
+    /// `citations`.
+    #[instrument(skip_all)]
+    pub(crate) async fn remove_cgka_members_by_citations<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        citations: BTreeSet<CitationId>,
+        signer: &S,
+    ) -> Result<Signed<CgkaOperation>, CgkaError> {
+        self.cgka.remove_by_citations(citations, signer).await
     }
 
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
@@ -304,7 +308,16 @@ impl<T: ContentRef> DocumentState<T> {
             .cgka
             .decryption_key_for(encrypted_content)
             .map_err(|_| DecryptError::KeyNotFound)?;
+        self.try_decrypt_content_with(encrypted_content, decrypt_key)
+    }
 
+    /// Decrypt content with `decrypt_key`, its key from this document's CGKA
+    /// group, and return that key.
+    pub(crate) fn try_decrypt_content_with<P: for<'de> Deserialize<'de>>(
+        &mut self,
+        encrypted_content: &EncryptedContent<P, T>,
+        decrypt_key: SymmetricKey,
+    ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
         let mut plaintext = encrypted_content.ciphertext.clone();
         decrypt_key
             .try_decrypt(encrypted_content.nonce, &mut plaintext)
@@ -456,12 +469,15 @@ where
             .await
     }
 
-    /// The individuals in this replica's tree for the document; `None` if it
-    /// holds no tree for it.
+    /// The individuals in this replica's CGKA group for the document. `None` if it
+    /// holds no CGKA group for it, or cannot read that group, e.g., when Keyline cannot
+    /// answer a membership question a replay requires.
     pub async fn cgka_members(&self) -> Option<BTreeSet<IndividualId>> {
         let state = self.keyhive.document_state(self.id).await?;
-        let mut locked = state.lock().await;
-        locked.cgka_members().ok().map(Iterator::collect)
+        self.keyhive
+            .cgka_group_members(self.id.into(), &state)
+            .await
+            .ok()
     }
 
     /// How many key agreement operations this replica's tree has applied;
@@ -519,6 +535,18 @@ pub enum EncryptError {
 
     #[error("Failed to make app secret: {0}")]
     FailedToMakeAppSecret(CgkaError),
+
+    /// The tree could not be prepared for writing, because operations waiting
+    /// to be applied could not be applied, or the operations this replica's
+    /// certificates imply for it could not be issued.
+    #[error("could not prepare the tree for writing: {0}")]
+    PrepareToWrite(Box<dyn core::error::Error + Send + Sync>),
+
+    /// A leaf of the tree lacks `Read` in this replica's certificates, and
+    /// this replica may not sign the remove that would remove it, because it
+    /// lacks `Read` itself.
+    #[error("a leaf lacks Read, and this replica may not sign its remove")]
+    LeafLacksRead,
 }
 
 /// Why content could not be written into an [`Envelope`].
@@ -553,8 +581,9 @@ pub enum GenerateDocError<E: core::error::Error + 'static> {
 
     #[error("no secret key for the prekey the document's owner is added with")]
     OwnerHoldsNoPrekeySecret,
-    #[error("the creator has no founding delegation")]
-    MissingFoundingDelegation,
+
+    #[error("no prekey operation of the document's owner publishes the prekey it is added with")]
+    OwnerPrekeyUnproven,
 }
 
 #[derive(Debug, Error)]
@@ -602,6 +631,9 @@ pub enum DecryptError {
 
     #[error("Key not found")]
     KeyNotFound,
+
+    #[error("Keyline storage: {0}")]
+    KeylineStorage(String),
 
     #[error("Decryption error: {0}")]
     DecryptionFailed(chacha20poly1305::Error),

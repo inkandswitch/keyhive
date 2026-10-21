@@ -57,6 +57,7 @@ pub(crate) fn root_edges<I: IntoIterator<Item = Id>>(
 /// revocation causes: members of the revoked delegation's audience, and
 /// audiences of delegations its audience issued, on any subject the route
 /// passes through.
+#[cfg(test)]
 pub(crate) async fn route_through<F: FutureForm, K: Keyline<F>>(
     keyline: &K,
     doc: Id,
@@ -73,6 +74,7 @@ where
 }
 
 /// Every delegation in `doc`'s closure, with its issuer.
+#[cfg(test)]
 async fn closure_delegations<F: FutureForm, K: Keyline<F>>(
     keyline: &K,
     doc: Id,
@@ -388,7 +390,7 @@ mod tests {
     ///
     /// The converse of the first does not hold: `who` may keep its power by
     /// another route, so the property does not ask for it. It also checks that
-    /// `route_through` is monotone, which CGKA authorization relies on.
+    /// `route_through` is monotone.
     #[test]
     fn route_through_lies_between_necessity_and_standing() {
         use keyline::test_utils::{

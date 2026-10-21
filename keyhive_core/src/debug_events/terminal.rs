@@ -141,28 +141,26 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                     )
                 }
                 CgkaOperationDetails::Remove {
-                    id,
-                    leaf_index,
-                    removed_keys,
+                    removed,
                     predecessors,
                 } => {
-                    let removed = removed_keys
-                        .iter()
-                        .map(|k| k.short_hex())
-                        .collect::<Vec<String>>()
-                        .join(", ");
+                    let removed = if removed.is_empty() {
+                        "Removed: none".to_string()
+                    } else {
+                        removed
+                            .iter()
+                            .map(|r| {
+                                format!("ID: {}\nLeaf Index: {}", r.id.short_hex(), r.leaf_index)
+                            })
+                            .collect::<Vec<String>>()
+                            .join("\n")
+                    };
                     let preds = predecessors
                         .iter()
                         .map(|p| p.short_hex())
                         .collect::<Vec<String>>()
                         .join(", ");
-                    format!(
-                        "ID: {}\nLeaf Index: {}\nRemoved Keys: {}\nPredecessors: {}",
-                        id.short_hex(),
-                        leaf_index,
-                        removed,
-                        preds
-                    )
+                    format!("{}\nPredecessors: {}", removed, preds)
                 }
                 CgkaOperationDetails::Update {
                     id,

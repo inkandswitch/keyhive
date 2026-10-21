@@ -5,7 +5,7 @@ all-features = true
 
 [licenses]
 # Alphabetized. Everything must be compatible with Apache-2.0.
-allow = ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "MIT", "Unicode-3.0"]
+allow = ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "MIT", "MPL-2.0", "Unicode-3.0"]
 
 [advisories]
 ignore = [

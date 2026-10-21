@@ -244,7 +244,6 @@ async fn a_non_member_cannot_remove_a_member() -> TestResult {
     let op = CgkaOperation::Remove {
         id: MemberId::from(bob.id()),
         leaf_idx: 1,
-        removed_keys: vec![],
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
         authorization: bob_revocation,
@@ -330,7 +329,6 @@ async fn a_remove_cannot_evict_the_wrong_subject() -> TestResult {
     let op = CgkaOperation::Remove {
         id: MemberId::from(carol.id()),
         leaf_idx: 1,
-        removed_keys: vec![],
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
         authorization: bob_revocation,
@@ -401,7 +399,6 @@ async fn a_remove_citing_a_revocation_over_another_resource_is_pending() -> Test
     let op = CgkaOperation::Remove {
         id: MemberId::from(bob.id()),
         leaf_idx: 1,
-        removed_keys: vec![],
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
         authorization: rev_hash,
@@ -602,7 +599,6 @@ async fn a_remove_citing_a_revocation_that_covers_nothing_is_pending() -> TestRe
     let op = CgkaOperation::Remove {
         id: MemberId::from(bob_id),
         leaf_idx,
-        removed_keys: vec![],
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
         authorization: CgkaAuthorization::Revocation(inert_digest.into()),
@@ -818,7 +814,6 @@ async fn a_remove_citing_a_revocation_of_access_below_read_is_denied() -> TestRe
     let op = CgkaOperation::Remove {
         id: MemberId::from(bob.id()),
         leaf_idx: 1,
-        removed_keys: vec![],
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
         authorization: keyline_revocation(&alice, doc_id, bob_id).await,
@@ -836,7 +831,6 @@ async fn a_remove_citing_a_revocation_not_yet_received_is_pending() -> TestResul
     let op = CgkaOperation::Remove {
         id: MemberId::from(bob.id()),
         leaf_idx: 1,
-        removed_keys: vec![],
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
         authorization: CgkaAuthorization::Revocation([0u8; 32]),
@@ -951,7 +945,6 @@ async fn a_reader_can_remove_themselves_by_revoking_their_own_delegation() -> Te
     let op = CgkaOperation::Remove {
         id: MemberId::from(bob_id),
         leaf_idx,
-        removed_keys: vec![],
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
         authorization: CgkaAuthorization::Revocation(digest.into()),

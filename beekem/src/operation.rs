@@ -230,7 +230,7 @@ pub struct RemovedMember {
     pub leaf_idx: u32,
 }
 
-/// `id || leaf_idx:bijou32 || count:bijou32 || removed_keys`, in order.
+/// `id || leaf_idx:bijou32`, in order.
 impl Encode for RemovedMember {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.id.encode_into(out);

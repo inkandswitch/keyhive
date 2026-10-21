@@ -590,8 +590,9 @@ impl Cgka {
             .map(Some)
     }
 
-    /// Create a remove without explicitly listing targets. Specific
-    /// members to be removed are determined by [`MembershipView`].
+    /// Create a [`CgkaOperation::Remove`] without explicitly listing
+    /// targets. Specific members to be removed are determined by
+    /// [`MembershipView`].
     #[instrument(skip_all)]
     pub async fn remove_by_citations<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
@@ -599,7 +600,8 @@ impl Cgka {
         signer: &S,
     ) -> Result<Signed<CgkaOperation>, CgkaError> {
         self.replay_if_pending()?;
-        self.sign_and_complete_remove(Vec::new(), citations, signer).await
+        self.sign_and_complete_remove(Vec::new(), citations, signer)
+            .await
     }
 
     /// Sign and record a `CgkaOperation::Remove`. If a [`MembershipView`]
