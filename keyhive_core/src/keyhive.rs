@@ -3413,7 +3413,6 @@ mod tests {
         .unwrap()
     }
 
-    /// Register a peer keyhive as an individual on `owner` and return its id.
     /// Pending prekey ops are counted, and the active identity's counted again.
     /// Twice as many are the active identity's as anyone else's, so counting
     /// the wrong side changes every `_by_active` count.
@@ -3473,6 +3472,7 @@ mod tests {
         Ok(())
     }
 
+    /// Register a peer keyhive as an individual on `owner` and return its id.
     async fn register_peer(owner: &TestKeyhive, peer: &TestKeyhive) -> IndividualId {
         let add_op = peer.expand_prekeys().await.unwrap();
         let indie = Arc::new(Mutex::new(Individual::new(KeyOp::Add(add_op))));

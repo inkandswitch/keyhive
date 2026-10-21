@@ -12,8 +12,8 @@ use std::sync::Arc;
 /// If you don't want this feature, you can use the default listener:
 /// [`NoListener`][super::no_listener::NoListener].
 ///
-/// Each operation is handed over in its signed form, already verified, to
-/// forward as received.
+/// Each operation is passed in its signed form, already verified, so it can
+/// be forwarded as received.
 pub trait PrekeyListener<F: FutureForm>: Sized + Clone {
     /// React to new prekeys.
     fn on_prekeys_expanded<'a>(
