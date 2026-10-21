@@ -137,6 +137,89 @@ async fn ingesting_an_archive_merges_into_a_live_instance() -> Result<()> {
     Ok(())
 }
 
+/// Ingesting another identity's archive adds that identity as an individual;
+/// it does not merge into our own. Our next archive still loads.
+#[tokio::test]
+async fn after_ingesting_another_identitys_archive_ours_still_loads() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let own_card = alice.get_existing_contact_card().await;
+
+    alice.ingest_archive(bob.into_archive().await).await?;
+    assert_eq!(
+        alice.get_existing_contact_card().await.id(),
+        own_card.id(),
+        "alice's own individual is still only hers"
+    );
+    assert!(alice.has_individual(bob.id()).await, "bob is an individual");
+
+    let bytes = bincode::serialize(&alice.into_archive().await)
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    let archive = bincode::deserialize(&bytes).map_err(|e| TestError::Other(e.to_string()))?;
+    let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
+    assert_eq!(restored.id(), alice.id());
+    assert!(restored.has_individual(bob.id()).await);
+    Ok(())
+}
+
+/// The same, from an identity this keyhive has never met: the archive is how
+/// it learns of them.
+#[tokio::test]
+async fn ingesting_a_strangers_archive_adds_them_as_an_individual() -> Result<()> {
+    use keyhive_core::test_utils::make_simple_keyhive;
+
+    let alice = make_simple_keyhive()
+        .await
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    let bob = make_simple_keyhive()
+        .await
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    let own_card = alice.get_existing_contact_card().await;
+    assert!(
+        !alice.has_individual(bob.id()).await,
+        "precondition: strangers"
+    );
+
+    alice.ingest_archive(bob.into_archive().await).await?;
+    assert!(alice.has_individual(bob.id()).await);
+    assert_eq!(alice.get_existing_contact_card().await.id(), own_card.id());
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_archive_does_not_load_with_another_identitys_signer() -> Result<()> {
+    use future_form::Sendable;
+    use keyhive_core::{
+        keyhive::Keyhive, listener::no_listener::NoListener,
+        store::ciphertext::memory::MemoryCiphertextStore,
+    };
+    use keyhive_crypto::signer::memory::MemorySigner;
+    use std::sync::Arc;
+
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let archive = alice.into_archive().await;
+
+    let result = Keyhive::<Sendable, _, [u8; 32], Vec<u8>, _, _, _>::try_from_archive(
+        &archive,
+        MemorySigner::generate(&mut rand::rngs::OsRng),
+        MemoryCiphertextStore::new(),
+        NoListener,
+        Arc::new(futures::lock::Mutex::new(rand::rngs::OsRng)),
+    )
+    .await;
+    assert!(
+        matches!(
+            result,
+            Err(keyhive_core::keyhive::TryFromArchiveError::NotTheSigner { .. })
+        ),
+        "{:?}",
+        result.err()
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()> {
     let mut ctx = TestContext::new().await;

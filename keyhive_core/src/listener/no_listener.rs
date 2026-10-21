@@ -11,6 +11,7 @@ use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use keyhive_crypto::{
     content::reference::ContentRef, signed::SerdeSigned, signer::async_signer::AsyncSigner,
+    verified::Signed,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -23,11 +24,11 @@ pub struct NoListener;
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm> PrekeyListener<F> for NoListener {
-    fn on_prekeys_expanded<'a>(&'a self, _e: &'a Arc<SerdeSigned<AddKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekeys_expanded<'a>(&'a self, _e: &'a Arc<Signed<AddKeyOp>>) -> F::Future<'a, ()> {
         F::ready(())
     }
 
-    fn on_prekey_rotated<'a>(&'a self, _e: &'a Arc<SerdeSigned<RotateKeyOp>>) -> F::Future<'a, ()> {
+    fn on_prekey_rotated<'a>(&'a self, _e: &'a Arc<Signed<RotateKeyOp>>) -> F::Future<'a, ()> {
         F::ready(())
     }
 }

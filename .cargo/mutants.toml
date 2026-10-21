@@ -23,11 +23,15 @@ additional_cargo_args = ["--features", "test_utils"]
 # `Context::excludes_an_endpoint` is a shortcut whose answer the following
 # search recomputes, so its mutants are equivalent (see its doc comment).
 #
+# `Arbitrary` impls generate test data: mutating one only changes which
+# inputs a property test draws.
+#
 # `uniform_index` accepts a draw `< limit`; `<=` differs only when a draw is
 # exactly `limit`, which happens with probability 2^-64 and then still yields an
 # index in range (`limit` is a multiple of `len`), so no test can tell them apart.
 exclude_re = [
   "Context::excludes_an_endpoint",
+  "impl (arbitrary::)?Arbitrary",
   "impl (core::|std::)?(fmt::)?(Debug|Display) for",
   "replace < with <= in uniform_index",
 ]

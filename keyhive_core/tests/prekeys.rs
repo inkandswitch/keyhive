@@ -179,8 +179,9 @@ async fn a_member_with_no_live_prekeys_is_delegated_but_not_added_to_cgka_tree()
         id::IndividualId,
         op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
     };
-    use keyhive_crypto::{share_key::ShareSecretKey, signer::memory::MemorySigner};
-    use std::sync::Arc;
+    use keyhive_crypto::{
+        share_key::ShareSecretKey, signer::memory::MemorySigner, verified::Verified,
+    };
 
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
@@ -188,13 +189,15 @@ async fn a_member_with_no_live_prekeys_is_delegated_but_not_added_to_cgka_tree()
     let key = || ShareSecretKey::generate(&mut rand::rngs::OsRng).share_key();
     let (a, b) = (key(), key());
     for op in [
-        KeyOp::Add(Arc::new(carol.try_sign_sync(AddKeyOp { share_key: a })?)),
-        KeyOp::Rotate(Arc::new(
-            carol.try_sign_sync(RotateKeyOp { old: a, new: b })?,
-        )),
-        KeyOp::Rotate(Arc::new(
-            carol.try_sign_sync(RotateKeyOp { old: b, new: a })?,
-        )),
+        KeyOp::Add(Verified::sign_sync(&AddKeyOp { share_key: a }, &carol)?),
+        KeyOp::Rotate(Verified::sign_sync(
+            &RotateKeyOp { old: a, new: b },
+            &carol,
+        )?),
+        KeyOp::Rotate(Verified::sign_sync(
+            &RotateKeyOp { old: b, new: a },
+            &carol,
+        )?),
     ] {
         alice.receive_prekey_op(&op).await?;
     }

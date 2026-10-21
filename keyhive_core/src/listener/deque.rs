@@ -12,6 +12,7 @@ use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef, signed::SerdeSigned, signer::async_signer::AsyncSigner,
+    verified::Signed,
 };
 use std::{collections::VecDeque, sync::Arc};
 
@@ -101,14 +102,14 @@ where
 {
     fn on_prekeys_expanded<'a>(
         &'a self,
-        new_prekey: &'a Arc<SerdeSigned<AddKeyOp>>,
+        new_prekey: &'a Arc<Signed<AddKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey.dupe())).await })
     }
 
     fn on_prekey_rotated<'a>(
         &'a self,
-        rotate_key: &'a Arc<SerdeSigned<RotateKeyOp>>,
+        rotate_key: &'a Arc<Signed<RotateKeyOp>>,
     ) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::PrekeyRotated(rotate_key.dupe())).await })
     }
@@ -149,26 +150,28 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use keyhive_crypto::{share_key::ShareSecretKey, signer::memory::MemorySigner};
+    use keyhive_crypto::{
+        share_key::ShareSecretKey, signer::memory::MemorySigner, verified::Verified,
+    };
     use rand::rngs::OsRng;
 
     type TestDeque = Deque<Sendable, MemorySigner>;
 
-    fn prekey() -> Arc<SerdeSigned<AddKeyOp>> {
+    fn prekey() -> Arc<Signed<AddKeyOp>> {
         let op = AddKeyOp {
             share_key: ShareSecretKey::generate(&mut OsRng).share_key(),
         };
-        let signed = MemorySigner::generate(&mut OsRng)
-            .try_sign_sync(op)
-            .expect("signing succeeds");
-        Arc::new(signed)
+        Verified::sign_sync(&op, &MemorySigner::generate(&mut OsRng))
+            .expect("signing succeeds")
+            .signed()
+            .dupe()
     }
 
     /// The prekey op a popped event carries. `Event`'s `PartialEq` needs the
     /// listener type to be `PartialEq`, which `Deque` is not.
     fn prekey_of(
         event: Option<Event<Sendable, MemorySigner, [u8; 32], TestDeque>>,
-    ) -> Option<Arc<SerdeSigned<AddKeyOp>>> {
+    ) -> Option<Arc<Signed<AddKeyOp>>> {
         match event? {
             Event::PrekeysExpanded(op) => Some(op),
             _ => None,

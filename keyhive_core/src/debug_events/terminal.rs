@@ -102,6 +102,7 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                 new_key.short_hex()
             )
         }
+        DebugEventDetails::Undecodable => "undecodable prekey operation".to_string(),
         DebugEventDetails::CgkaOperation {
             op_type,
             doc_id,
