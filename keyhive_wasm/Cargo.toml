@@ -32,7 +32,6 @@ futures = { workspace = true, features = ["async-await", "executor", "std"] }
 nonempty = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true, features = ["derive", "rc", "std"] }
-serde_json = { workspace = true, optional = true }
 tracing = { workspace = true, features = ["attributes", "std"] }
 wasm-tracing = { workspace = true }
 
@@ -74,9 +73,8 @@ features = [
 optional = false
 
 [features]
-default = ["console_error_panic_hook", "web-sys", "json"]
+default = ["console_error_panic_hook", "web-sys"]
 browser_test = []
-json = ["dep:serde_json"]
 
 [lints]
 workspace = true

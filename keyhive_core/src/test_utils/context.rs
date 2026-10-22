@@ -666,10 +666,7 @@ impl TestContext {
                 to: to.name.to_string(),
             });
         }
-        let blob = from
-            .export_prekey_secrets()
-            .await
-            .map_err(|e| TestError::Other(e.to_string()))?;
+        let blob = from.export_prekey_secrets().await;
         let before = to.stats().await.pending_total();
         to.import_prekey_secrets(&blob)
             .await
