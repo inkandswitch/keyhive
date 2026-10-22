@@ -1,32 +1,45 @@
 use beekem::{
     error::CgkaError,
     id::{MemberId, TreeId},
-    operation::{CgkaAuthorization, CgkaOperation},
+    operation::{CgkaOperation, CitationId, RemovedMember},
     tree::PathChange,
 };
-use future_form::Sendable;
+use future_form::{FutureForm, Sendable};
 use keyhive_core::{
     content::heads::ContentHeads,
     crypto::digest::Digest,
     event::Event,
-    keyhive::ReceiveCgkaOpError,
+    keyhive::{Keyhive, ReceiveCgkaOpError},
+    listener::no_listener::NoListener,
     principal::{
         document::id::DocumentId,
-        group::id::GroupId,
+        group::RevokeMemberError,
         individual::{id::IndividualId, op::KeyOp, IndividualState},
     },
-    test_utils::Hive,
+    store::ciphertext::memory::MemoryCiphertextStore,
+    test_utils::{make_simple_keyhive, Hive, KeylineStore, TestContext},
 };
-use keyhive_crypto::{identifier::Identifier, share_key::ShareKey, signed::SerdeSigned};
+use keyhive_crypto::{
+    identifier::Identifier,
+    share_key::ShareKey,
+    signed::{SerdeSigned, SigningError},
+    signer::{async_signer::AsyncSigner, memory::MemorySigner},
+    verifiable::Verifiable,
+};
 use keyline::{
-    certificate::{Certificate, CertificateId, VerifiedCertificate},
-    contract::Keyline,
-    delegation::Delegation,
-    power::Power,
+    certificate::VerifiedCertificate, contract::Keyline, delegation::Delegation, power::Power,
     revocation::Revocation,
 };
 use nonempty::nonempty;
-use std::{collections::HashSet, convert::Infallible};
+use rand::rngs::OsRng;
+use std::{
+    collections::HashSet,
+    convert::Infallible,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 use testresult::TestResult;
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
@@ -45,26 +58,10 @@ async fn cgka_heads(observer: &Hive, doc: DocumentId) -> Vec<Digest<SerdeSigned<
         .collect()
 }
 
-/// Whether `observer`'s tree contains a CGKA op signed by `issuer`.
-async fn contains_op_from(observer: &Hive, doc: DocumentId, issuer: Identifier) -> bool {
-    let ops = observer.cgka_ops_for_doc(&doc).await.unwrap_or_default();
-    ops.iter().any(|op| op.issuer == issuer)
-}
-
-/// Whether `observer`'s tree contains `op`.
+/// Whether `observer` holds `op`.
 async fn contains_op(observer: &Hive, doc: DocumentId, op: &SerdeSigned<CgkaOperation>) -> bool {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap_or_default();
     ops.iter().any(|known| known.as_ref() == op)
-}
-
-/// One of `kh`'s own prekeys it would use to join `doc`.
-async fn own_prekey(kh: &Hive, doc: DocumentId) -> ShareKey {
-    kh.get_individual(kh.id())
-        .await
-        .expect("an instance holds its own prekeys")
-        .pick_prekey(doc)
-        .await
-        .expect("an individual has a prekey")
 }
 
 /// Register `who`'s identity with `observer` so it can be added.
@@ -76,10 +73,16 @@ async fn learn(observer: &Hive, who: &Hive) -> IndividualId {
     id
 }
 
+/// A fresh prekey of `who`'s, and the key proof an add of `who` carries.
+async fn proven_prekey(who: &Hive) -> (ShareKey, Vec<u8>) {
+    let op = who.expand_prekeys().await.expect("prekeys expand");
+    (op.payload().share_key, KeyOp::Add(op).to_key_proof())
+}
+
 /// Alice creates a document and adds Bob as a reader.
 async fn doc_with_alice_and_bob() -> TestResult<(Hive, Hive, DocumentId)> {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let bob = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
     let bob_id = learn(&alice, &bob).await;
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     alice.add_member(bob_id, doc_id, Power::Read).await?;
@@ -106,13 +109,13 @@ async fn intercepted_path(who: &Hive) -> Box<PathChange> {
         .expect("an update op was produced")
 }
 
-/// The individuals seated in `observer`'s CGKA tree for `doc`.
-async fn tree_members(observer: &Hive, doc: DocumentId) -> Vec<IndividualId> {
+/// The members of `observer`'s CGKA group for `doc`.
+async fn cgka_members(observer: &Hive, doc: DocumentId) -> Vec<IndividualId> {
     observer
         .cgka_members_for(doc)
         .await
         .expect("knows the document")
-        .expect("an initialized tree")
+        .expect("observer has joined the CGKA group")
         .into_iter()
         .collect()
 }
@@ -133,71 +136,133 @@ async fn op_where(
         .expect("the operation was produced")
 }
 
-/// `group`'s key admitting `member` to itself at `Read`, as a Keyline
-/// certificate.
-async fn keyline_twin(
-    group: &Hive,
-    group_id: IndividualId,
-    member: IndividualId,
-) -> TestResult<Certificate<ContentHeads<[u8; 32]>>> {
-    let id = |i: IndividualId| Identifier::from(i);
-    let delegation = Delegation::new(id(member), id(group_id), Power::Read);
-    let signed = group.sign_certificate(&delegation).await?;
-    Ok(VerifiedCertificate::from(signed).into_certificate())
+/// The causal root of `doc`'s operations, which is its creator's add of themselves.
+async fn creators_own_add(observer: &Hive, doc: DocumentId) -> SerdeSigned<CgkaOperation> {
+    op_where(
+        observer,
+        doc,
+        |op| matches!(op, CgkaOperation::Add { predecessors, .. } if predecessors.is_empty()),
+    )
+    .await
 }
 
-/// The Keyline delegation from `subject` to `audience` that `kh` holds, as
-/// the authorization a CGKA add cites. A grant someone issued is preferred
-/// over the subject's own root edge, which only a creator cites.
-async fn keyline_grant(
-    kh: &Hive,
-    subject: impl Into<Identifier>,
-    audience: impl Into<Identifier>,
-) -> CgkaAuthorization {
-    let subject_id: Identifier = subject.into();
-    let grants = Keyline::<Sendable>::delegations_to(kh.keyline(), subject_id, audience.into())
-        .await
-        .expect("the memory store does not fail")
-        .value;
-    let digest = grants
-        .iter()
-        .find(|(_, (issuer, _))| *issuer != subject_id)
-        .or_else(|| grants.iter().next())
-        .map(|(digest, _)| *digest)
-        .expect("a Keyline delegation");
-    CgkaAuthorization::Delegation(digest.into())
+fn kl(id: impl Into<Identifier>) -> Identifier {
+    id.into()
 }
 
-/// A Keyline revocation of a delegation from `subject` to `audience` that
-/// `kh` holds, as the authorization a CGKA remove cites.
-async fn keyline_revocation(
-    kh: &Hive,
-    subject: impl Into<Identifier>,
-    audience: impl Into<Identifier>,
-) -> CgkaAuthorization {
-    for digest in keyline_delegations(kh, subject, audience).await {
-        let revocations = Keyline::<Sendable>::revocations_of(kh.keyline(), digest)
-            .await
-            .expect("the memory store does not fail")
-            .value;
-        if let Some(revocation) = revocations.first() {
-            return CgkaAuthorization::Revocation((*revocation).into());
-        }
-    }
-    panic!("no Keyline revocation of a delegation to that audience")
+fn citation<W>(cert: &VerifiedCertificate<W>) -> CitationId {
+    CitationId(cert.id().to_bytes())
 }
 
-async fn keyline_delegations(
-    kh: &Hive,
+/// `signer`'s signature on `delegation`, not yet received by anyone.
+async fn signed_delegation(
+    signer: &Hive,
+    delegation: Delegation,
+) -> TestResult<VerifiedCertificate<ContentHeads<[u8; 32]>>> {
+    Ok(signer.sign_certificate(&delegation).await?.into())
+}
+
+/// `signer`'s revocation of a delegation from `subject` to `audience` that
+/// `holder` holds, not yet received by anyone.
+async fn signed_revocation(
+    signer: &Hive,
+    holder: &Hive,
     subject: impl Into<Identifier>,
     audience: impl Into<Identifier>,
-) -> Vec<Digest<Delegation>> {
-    Keyline::<Sendable>::delegations_to(kh.keyline(), subject.into(), audience.into())
-        .await
-        .expect("the memory store does not fail")
+) -> TestResult<VerifiedCertificate<ContentHeads<[u8; 32]>>> {
+    let target = *Keyline::<Sendable>::delegations_to(holder.keyline(), kl(subject), kl(audience))
+        .await?
         .value
-        .into_keys()
-        .collect()
+        .keys()
+        .next()
+        .ok_or("a delegation to revoke")?;
+    let revocation: Revocation<ContentHeads<[u8; 32]>> = Revocation::new(target);
+    Ok(signer.sign_certificate(&revocation).await?.into())
+}
+
+/// `issuer`'s grant of `power` over `doc` to `audience`, received by `issuer`.
+async fn issue_grant(
+    issuer: &Hive,
+    audience: impl Into<Identifier>,
+    doc: DocumentId,
+    power: Power,
+) -> TestResult<VerifiedCertificate<ContentHeads<[u8; 32]>>> {
+    let cert = signed_delegation(issuer, Delegation::new(kl(audience), kl(doc), power)).await?;
+    receive(issuer, &cert).await;
+    Ok(cert)
+}
+
+async fn receive(observer: &Hive, cert: &VerifiedCertificate<ContentHeads<[u8; 32]>>) {
+    observer
+        .receive_certificate(cert.clone().into_certificate())
+        .await
+        .expect("a valid certificate is received");
+}
+
+fn cites(certs: &[&VerifiedCertificate<ContentHeads<[u8; 32]>>]) -> Vec<CitationId> {
+    let mut cited: Vec<CitationId> = certs.iter().map(|c| citation(c)).collect();
+    cited.sort_unstable();
+    cited.dedup();
+    cited
+}
+
+/// An add of `added` with key `pk` on `doc`, on top of `observer`'s heads.
+async fn add_op(
+    observer: &Hive,
+    doc: DocumentId,
+    added: IndividualId,
+    (pk, key_proof): (ShareKey, Option<Vec<u8>>),
+    citations: Vec<CitationId>,
+) -> CgkaOperation {
+    CgkaOperation::Add {
+        added_id: MemberId::from(added),
+        pk,
+        leaf_index: 0,
+        invitation: None,
+        key_proof,
+        predecessors: cgka_heads(observer, doc).await,
+        doc_id: TreeId::from(doc),
+        citations,
+    }
+}
+
+/// An update of `id`'s key with `new_path` on `doc`, on top of `observer`'s
+/// heads.
+async fn update_op(
+    observer: &Hive,
+    doc: DocumentId,
+    id: IndividualId,
+    new_path: Box<PathChange>,
+) -> CgkaOperation {
+    CgkaOperation::Update {
+        id: MemberId::from(id),
+        new_path,
+        predecessor_secrets: Vec::new(),
+        predecessors: cgka_heads(observer, doc).await,
+        doc_id: TreeId::from(doc),
+    }
+}
+
+/// An add of `who` on `doc`, on top of `observer`'s heads, with a fresh
+/// prekey of `who`'s and the key proof for it.
+async fn proven_add(
+    observer: &Hive,
+    doc: DocumentId,
+    who: &Hive,
+    citations: Vec<CitationId>,
+) -> CgkaOperation {
+    let (pk, proof) = proven_prekey(who).await;
+    add_op(observer, doc, who.id(), (pk, Some(proof)), citations).await
+}
+
+/// A remove that lists no member, on `doc`, on top of `observer`'s heads.
+async fn remove_op(observer: &Hive, doc: DocumentId, citations: Vec<CitationId>) -> CgkaOperation {
+    CgkaOperation::Remove {
+        removed: vec![],
+        predecessors: cgka_heads(observer, doc).await,
+        doc_id: TreeId::from(doc),
+        citations,
+    }
 }
 
 fn is_denied(result: &Result<(), ReceiveCgkaOpError<Infallible>>) -> bool {
@@ -209,323 +274,228 @@ fn is_pending(result: &Result<(), ReceiveCgkaOpError<Infallible>>) -> bool {
 }
 
 #[tokio::test]
-async fn a_non_member_cannot_add_themselves() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
+async fn a_signer_without_read_in_its_signing_set_is_denied() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let mallory = make_simple_keyhive().await?;
+    let carol = make_simple_keyhive().await?;
+    let carol_id = learn(&alice, &carol).await;
+    let grant = issue_grant(&alice, carol_id, doc_id, Power::Read).await?;
 
-    // Mallory cites a real delegation, but Alice issued it, not Mallory.
-    let bob_delegation = keyline_grant(&alice, doc_id, bob.id()).await;
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: bob_delegation,
-    };
+    // Everything about the add is valid except who signed it.
+    let op = proven_add(&alice, doc_id, &carol, cites(&[&grant])).await;
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
     assert!(is_denied(&result), "{result:?}");
-    assert!(!contains_op_from(&alice, doc_id, Identifier::from(mallory.id())).await);
+    assert!(!cgka_members(&alice, doc_id).await.contains(&carol_id));
     Ok(())
 }
 
 #[tokio::test]
-async fn a_non_member_cannot_remove_a_member() -> TestResult {
+async fn an_add_of_someone_whose_route_grants_only_relay_is_denied() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let carol = make_simple_keyhive().await?;
+    let carol_id = learn(&alice, &carol).await;
+    let relay_grant = issue_grant(&alice, carol_id, doc_id, Power::Relay).await?;
 
-    // Mallory cites a real revocation, but Alice issued it, not Mallory.
-    alice
-        .revoke_member(Identifier::from(bob.id()), true, doc_id)
-        .await?;
-    let bob_revocation = keyline_revocation(&alice, doc_id, bob.id()).await;
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob.id()),
-        leaf_idx: 1,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: bob_revocation,
-    };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+    // A member signs, so only the added member's standing is in question.
+    let op = proven_add(&alice, doc_id, &carol, cites(&[&relay_grant])).await;
+    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
 
     assert!(is_denied(&result), "{result:?}");
-    assert!(!contains_op_from(&alice, doc_id, Identifier::from(mallory.id())).await);
+    assert!(!cgka_members(&alice, doc_id).await.contains(&carol_id));
     Ok(())
 }
 
 #[tokio::test]
-async fn a_non_member_cannot_update_another_members_leaf() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
-
-    let mut path = intercepted_path(&mallory).await;
-    path.leaf_id = MemberId::from(bob.id());
-    let op = CgkaOperation::Update {
-        id: MemberId::from(bob.id()),
-        new_path: path,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-    };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
-
-    assert!(is_denied(&result), "{result:?}");
-    Ok(())
-}
-
-#[tokio::test]
-async fn an_add_cannot_target_the_wrong_subject() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
-
-    let bob_delegation = keyline_grant(&alice, doc_id, bob.id()).await;
-
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: bob_delegation,
-    };
-    let signed = alice.try_sign(op).await?;
-    let result = alice.receive_cgka_op(signed.clone()).await;
-
-    // Pending because, from Alice's perspective, "Bob" could still be promoted to a group
-    // that contains Mallory.
-    assert!(is_pending(&result), "{result:?}");
-    assert!(!contains_op(&alice, doc_id, &signed).await);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_remove_cannot_evict_the_wrong_subject() -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let bob = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let carol = keyhive_core::test_utils::make_simple_keyhive().await?;
+async fn an_add_must_cite_the_route_to_its_member_even_when_the_receiver_has_it() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let group = make_simple_keyhive().await?;
+    let carol = make_simple_keyhive().await?;
+    let group_id = learn(&alice, &group).await;
+    let carol_id = learn(&alice, &carol).await;
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    for who in [&bob, &carol] {
-        let id = learn(&alice, who).await;
-        alice.add_member(id, doc_id, Power::Read).await?;
+
+    let to_group = signed_delegation(
+        &alice,
+        Delegation::new(kl(group_id), kl(doc_id), Power::Read),
+    )
+    .await?;
+    let carol_in_group = signed_delegation(
+        &group,
+        Delegation::new(kl(carol_id), kl(group_id), Power::Read),
+    )
+    .await?;
+    receive(&alice, &to_group).await;
+    receive(&alice, &carol_in_group).await;
+
+    // Alice has both certificates, but the add cites only the first.
+    let op = proven_add(&alice, doc_id, &carol, cites(&[&to_group])).await;
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    assert!(is_denied(&result), "{result:?}");
+
+    let op = proven_add(&alice, doc_id, &carol, cites(&[&to_group, &carol_in_group])).await;
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    assert!(result.is_ok(), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_add_whose_key_its_member_did_not_publish_is_denied() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let carol = make_simple_keyhive().await?;
+    let carol_id = learn(&alice, &carol).await;
+    let grant = issue_grant(&alice, carol_id, doc_id, Power::Read).await?;
+
+    let (carols_pk, carols_proof) = proven_prekey(&carol).await;
+    let (_, carols_other_proof) = proven_prekey(&carol).await;
+    let (alices_pk, alices_proof) = proven_prekey(&alice).await;
+    for (case, key) in [
+        ("no proof", (carols_pk, None)),
+        (
+            "a proof of another key",
+            (carols_pk, Some(carols_other_proof)),
+        ),
+        ("someone else's key", (alices_pk, Some(alices_proof))),
+        (
+            "not a prekey operation",
+            (carols_pk, Some(b"not a prekey op".to_vec())),
+        ),
+    ] {
+        let op = add_op(&alice, doc_id, carol_id, key, cites(&[&grant])).await;
+        let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+        assert!(is_denied(&result), "{case}: {result:?}");
     }
 
-    alice
-        .revoke_member(Identifier::from(bob.id()), true, doc_id)
-        .await?;
-    let bob_revocation = alice
-        .cgka_ops_for_doc(&doc_id)
-        .await
-        .unwrap_or_default()
-        .iter()
-        .find_map(|op| match op.payload() {
-            CgkaOperation::Remove { authorization, .. } => Some(*authorization),
-            _ => None,
-        })
-        .expect("a remove op for bob");
-
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(carol.id()),
-        leaf_idx: 1,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: bob_revocation,
-    };
-    let signed = alice.try_sign(op).await?;
-    let result = alice.receive_cgka_op(signed.clone()).await;
-
-    // Pending because, from Alice's perspective, "Bob" could still be promoted to a group
-    // that contains Carol.
-    assert!(is_pending(&result), "{result:?}");
-    assert!(!contains_op(&alice, doc_id, &signed).await);
-    Ok(())
-}
-
-/// A group of `mallory`'s own, with `subject` in it and that delegation's hash.
-async fn own_group_with(
-    mallory: &Hive,
-    subject: Identifier,
-) -> TestResult<(GroupId, CgkaAuthorization)> {
-    let group_id = mallory.generate_group(vec![]).await?;
-    let update = mallory.add_member(subject, group_id, Power::Admin).await?;
-    let _ = update;
-    Ok((group_id, keyline_grant(mallory, group_id, subject).await))
-}
-
-/// Deliver `from`'s own history to `to` as a relay would.
-async fn leak_to(from: &Hive, to: &Hive) {
-    let events = from
-        .static_events_for_agent(from.id())
-        .await
-        .expect("selects events");
-    to.ingest_unsorted_static_events(events.into_values().collect())
-        .await;
-}
-
-#[tokio::test]
-async fn an_add_citing_a_delegation_over_another_resource_is_pending() -> TestResult {
-    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
-
-    let (_, elsewhere) = own_group_with(&mallory, mallory.id().into()).await?;
-    leak_to(&mallory, &alice).await;
-
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: elsewhere,
-    };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
-
-    assert!(is_pending(&result), "{result:?}");
-    assert!(!contains_op_from(&alice, doc_id, Identifier::from(mallory.id())).await);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_remove_citing_a_revocation_over_another_resource_is_pending() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
-
-    let bob_id = learn(&mallory, &bob).await;
-    let (group_id, _) = own_group_with(&mallory, bob_id.into()).await?;
-    mallory.revoke_member(bob_id, false, group_id).await?;
-    let rev_hash = keyline_revocation(&mallory, group_id, bob_id).await;
-    leak_to(&mallory, &alice).await;
-
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob.id()),
-        leaf_idx: 1,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: rev_hash,
-    };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
-
-    assert!(is_pending(&result), "{result:?}");
-    assert!(!contains_op_from(&alice, doc_id, Identifier::from(mallory.id())).await);
-    Ok(())
-}
-
-#[tokio::test]
-async fn the_creator_cannot_update_another_members_leaf() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-
-    let mut path = intercepted_path(&alice).await;
-    path.leaf_id = MemberId::from(bob.id());
-    let op = CgkaOperation::Update {
-        id: MemberId::from(bob.id()),
-        new_path: path,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-    };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
-
-    assert!(is_denied(&result), "{result:?}");
-    Ok(())
-}
-
-#[tokio::test]
-async fn an_add_cannot_cite_a_delegation_below_read() -> TestResult {
-    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
-    let carol = keyhive_core::test_utils::make_simple_keyhive().await?;
-
-    let carol_id = learn(&alice, &carol).await;
-    alice.add_member(carol_id, doc_id, Power::Relay).await?;
-    let authorization = keyline_grant(&alice, doc_id, carol_id).await;
-
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(carol.id()),
-        pk: own_prekey(&carol, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization,
-    };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
-
-    assert!(is_denied(&result), "{result:?}");
-    assert!(!tree_members(&alice, doc_id).await.contains(&carol.id()));
-    Ok(())
-}
-
-#[tokio::test]
-async fn an_add_granting_more_than_its_subject_reaches_here_is_pending() -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let mallory_id = learn(&alice, &mallory).await;
-    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-
-    // The group only relays this document, so an admin delegation created inside
-    // it still carries no decryption access here.
-    let group_id = alice.generate_group(vec![]).await?;
-    alice.add_member(group_id, doc_id, Power::Relay).await?;
-    alice.add_member(mallory_id, group_id, Power::Admin).await?;
-
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: keyline_grant(&alice, group_id, mallory_id).await,
-    };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
-
-    assert!(is_pending(&result), "{result:?}");
-    assert!(!tree_members(&alice, doc_id).await.contains(&mallory.id()));
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_founding_delegation_cannot_seat_an_outsider() -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let doc = alice.get_document(doc_id).await.expect("the document");
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
-    learn(&alice, &mallory).await;
-
-    // The root edge to Alice, signed by the document's own key.
-    let founding = keyline_grant(&alice, doc_id, alice.id()).await;
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: founding,
-    };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
-
-    // Pending, not denied: in Keyline an individual can have members, so
-    // Mallory could still gain a route through Alice. She is not seated.
-    assert!(is_pending(&result), "{result:?}");
-    let seated = doc
-        .cgka_members()
-        .await
-        .is_some_and(|members| members.contains(&mallory.id()));
-    assert!(!seated, "mallory must not be in the tree");
-    Ok(())
-}
-
-/// The causal root of `doc`'s operations, which is its creator's add of themselves.
-async fn creators_own_add(observer: &Hive, doc: DocumentId) -> SerdeSigned<CgkaOperation> {
-    op_where(
-        observer,
-        doc,
-        |op| matches!(op, CgkaOperation::Add { predecessors, .. } if predecessors.is_empty()),
+    let op = add_op(
+        &alice,
+        doc_id,
+        carol_id,
+        (carols_pk, Some(carols_proof)),
+        cites(&[&grant]),
     )
-    .await
+    .await;
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    assert!(result.is_ok(), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_remove_that_lists_a_specific_member_is_denied() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+
+    let op = CgkaOperation::Remove {
+        removed: vec![RemovedMember {
+            id: MemberId::from(bob.id()),
+            leaf_idx: 1,
+        }],
+        predecessors: cgka_heads(&alice, doc_id).await,
+        doc_id: TreeId::from(doc_id),
+        citations: vec![],
+    };
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+
+    assert!(is_denied(&result), "{result:?}");
+    assert!(cgka_members(&alice, doc_id).await.contains(&bob.id()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn citations_must_be_strictly_ascending() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let mut grants = Vec::new();
+    for _ in 0..2 {
+        let reader = make_simple_keyhive().await?;
+        let grant = issue_grant(&alice, reader.id(), doc_id, Power::Read).await?;
+        grants.push(citation(&grant));
+    }
+    grants.sort_unstable();
+    let (low, high) = (grants[0], grants[1]);
+
+    for cited in [vec![high, low], vec![low, low]] {
+        let op = remove_op(&alice, doc_id, cited.clone()).await;
+        let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+        assert!(is_denied(&result), "{cited:?}: {result:?}");
+    }
+    let op = remove_op(&alice, doc_id, vec![low, high]).await;
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    assert!(result.is_ok(), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_member_can_cite_the_revocation_of_their_own_access() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+
+    // Alice revokes Bob in Keyline only. Bob carries the revocation into the
+    // key agreement himself.
+    let revocation = signed_revocation(&alice, &alice, doc_id, bob.id()).await?;
+    receive(&alice, &revocation).await;
+    let op = remove_op(&alice, doc_id, cites(&[&revocation])).await;
+    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+
+    assert!(result.is_ok(), "{result:?}");
+    assert!(!cgka_members(&alice, doc_id).await.contains(&bob.id()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_remove_citing_a_revocation_that_covers_nothing_removes_no_one() -> TestResult {
+    // A relay can sign a revocation of any delegation. It doesn't cover anything
+    // in Keyline since the relay neither signed the delegation nor is its
+    // audience and has no Admin. A remove citing it will not remove anyone.
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+    let relay = make_simple_keyhive().await?;
+    let relay_id = learn(&alice, &relay).await;
+    alice.add_member(relay_id, doc_id, Power::Relay).await?;
+
+    let inert = signed_revocation(&relay, &alice, doc_id, alice.id()).await?;
+    receive(&alice, &inert).await;
+    let op = remove_op(&alice, doc_id, cites(&[&inert])).await;
+    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+
+    assert!(result.is_ok(), "{result:?}");
+    let members = cgka_members(&alice, doc_id).await;
+    assert!(members.contains(&alice.id()) && members.contains(&bob.id()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_operation_citing_a_certificate_not_yet_received_waits_for_it() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let carol = make_simple_keyhive().await?;
+    let carol_id = learn(&alice, &carol).await;
+    let grant = signed_delegation(
+        &alice,
+        Delegation::new(kl(carol_id), kl(doc_id), Power::Read),
+    )
+    .await?;
+    let op = proven_add(&alice, doc_id, &carol, cites(&[&grant])).await;
+    let op = alice.try_sign(op).await?;
+
+    let result = alice.receive_cgka_op(op.clone()).await;
+    assert!(is_pending(&result), "{result:?}");
+
+    receive(&alice, &grant).await;
+    let result = alice.receive_cgka_op(op).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert!(cgka_members(&alice, doc_id).await.contains(&carol_id));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_operation_whose_predecessor_is_missing_is_pending() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let op = CgkaOperation::Update {
+        id: MemberId::from(alice.id()),
+        new_path: intercepted_path(&alice).await,
+        predecessor_secrets: Vec::new(),
+        predecessors: vec![Digest::from([9u8; 32])],
+        doc_id: TreeId::from(doc_id),
+    };
+    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+
+    assert!(is_pending(&result), "{result:?}");
+    Ok(())
 }
 
 #[tokio::test]
@@ -542,7 +512,7 @@ async fn the_creators_own_add_is_accepted_again_when_it_is_redelivered() -> Test
 
 #[tokio::test]
 async fn a_creator_delegated_as_admin_twice_can_still_process_their_founding_add() -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let alice = make_simple_keyhive().await?;
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     alice.add_member(alice.id(), doc_id, Power::Admin).await?;
 
@@ -555,76 +525,43 @@ async fn a_creator_delegated_as_admin_twice_can_still_process_their_founding_add
 }
 
 #[tokio::test]
-async fn a_member_who_did_not_found_the_document_cannot_enact_a_founding_delegation() -> TestResult
-{
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let bob = keyhive_core::test_utils::make_simple_keyhive().await?;
+async fn only_a_root_edges_audience_can_start_a_documents_history() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
     let bob_id = learn(&alice, &bob).await;
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     alice.add_member(bob_id, doc_id, Power::Admin).await?;
 
-    let reissued = creators_own_add(&alice, doc_id).await.payload().clone();
-    let result = alice.receive_cgka_op(bob.try_sign(reissued).await?).await;
-
-    assert!(is_pending(&result), "{result:?}");
-    assert!(!contains_op_from(&alice, doc_id, Identifier::from(bob.id())).await);
-    Ok(())
-}
-
-/// A revocation that covers nothing cannot evict anyone. A relay can sign a
-/// revocation of any delegation; it is inert in Keyline because the relay
-/// neither signed nor is named by it, and holds no Admin over its subject.
-#[tokio::test]
-async fn a_remove_citing_a_revocation_that_covers_nothing_is_pending() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-    let bob_id = bob.id();
-    let relay = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let relay_id = learn(&alice, &relay).await;
-    alice.add_member(relay_id, doc_id, Power::Relay).await?;
-
-    let root_edge = keyline_delegations(&alice, doc_id, alice.id())
-        .await
-        .into_iter()
+    // Bob cites his Admin grant, so he has standing, but no root edge points
+    // to him or to a node he administers.
+    let mut reissued = creators_own_add(&alice, doc_id).await.payload().clone();
+    let bobs_grant = *Keyline::<Sendable>::delegations_to(alice.keyline(), kl(doc_id), kl(bob_id))
+        .await?
+        .value
+        .keys()
         .next()
-        .expect("alice's root edge");
-    let inert: Revocation<ContentHeads<[u8; 32]>> = Revocation::new(root_edge);
-    let signed = relay.sign_certificate(&inert).await?;
-    let inert_digest = signed.digest();
-    alice
-        .receive_certificate(VerifiedCertificate::from(signed).into_certificate())
-        .await?;
+        .ok_or("bob's grant")?;
+    if let CgkaOperation::Add {
+        citations: cited, ..
+    } = &mut reissued
+    {
+        cited.push(CitationId(bobs_grant.into()));
+        cited.sort_unstable();
+    }
+    let signed = bob.try_sign(reissued).await?;
+    let result = alice.receive_cgka_op(signed.clone()).await;
 
-    let leaf_idx = tree_members(&alice, doc_id)
-        .await
-        .iter()
-        .position(|id| *id == bob_id)
-        .expect("bob seated") as u32;
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob_id),
-        leaf_idx,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: CgkaAuthorization::Revocation(inert_digest.into()),
-    };
-    let result = alice.receive_cgka_op(relay.try_sign(op).await?).await;
-
-    assert!(is_pending(&result), "{result:?}");
-    assert!(tree_members(&alice, doc_id).await.contains(&bob_id));
-    assert_eq!(
-        alice
-            .access_for_doc(Identifier::from(bob_id), doc_id)
-            .await?,
-        Some(Power::Read)
-    );
+    assert!(is_denied(&result), "{result:?}");
+    assert!(!contains_op(&alice, doc_id, &signed).await);
     Ok(())
 }
 
 #[tokio::test]
 async fn an_add_through_a_group_is_still_applied_to_cgka_graph_after_member_revoked_from_group(
 ) -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let bob = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let carol = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let carol = make_simple_keyhive().await?;
     let bob_id = learn(&alice, &bob).await;
     let carol_id = learn(&alice, &carol).await;
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
@@ -661,314 +598,429 @@ async fn an_add_through_a_group_is_still_applied_to_cgka_graph_after_member_revo
 }
 
 #[tokio::test]
-async fn an_add_through_an_individual_is_applied_once_the_individual_is_promoted_to_a_group(
-) -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let group = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let carol = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let dave = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let group_id = learn(&alice, &group).await;
-    let carol_id = learn(&alice, &carol).await;
-    let dave_id = learn(&alice, &dave).await;
-    learn(&dave, &group).await;
-    learn(&dave, &carol).await;
-    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    alice.add_member(dave_id, doc_id, Power::Read).await?;
-    dave.ingest_event_table(alice.events_for_agent(dave_id).await?)
-        .await?;
+async fn a_non_member_cannot_rotate_another_members_key() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+    let mallory = make_simple_keyhive().await?;
 
-    // Every peer first learns of `group` as an individual, from its prekeys.
-    // Its key then signs a delegation over itself that adds Carol. A peer that
-    // receives this delegation promotes `group` from an individual to a group.
-    let group_to_carol_cert = keyline_twin(&group, group_id, carol_id).await?;
-    alice
-        .receive_certificate(group_to_carol_cert.clone())
-        .await?;
-    alice.add_member(group_id, doc_id, Power::Read).await?;
-    let add_of_carol = op_where(&alice, doc_id, |op| {
-        matches!(op, CgkaOperation::Add { added_id, .. }
-            if *added_id == MemberId::from(carol.id()))
-    })
-    .await;
+    let mut path = intercepted_path(&mallory).await;
+    path.leaf_id = MemberId::from(bob.id());
+    let op = update_op(&alice, doc_id, bob.id(), path).await;
+    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
-    // Dave receives Alice's delegation to `group` but not the delegation that
-    // promotes it, so `group` is still an individual to Dave.
-    // He gets every CGKA operation but the add under test, so its
-    // predecessors are in place.
-    let without_group_to_carol = alice
-        .events_for_agent(dave_id)
-        .await?
-        .into_iter()
-        .filter(|(_, event)| match event {
-            Event::CgkaOperation(op) => **op != add_of_carol,
-            Event::Delegated(dlg) => CertificateId::from(dlg.digest()) != group_to_carol_cert.id(),
-            _ => true,
-        })
-        .collect();
-    dave.ingest_event_table(without_group_to_carol).await?;
-
-    let result = dave.receive_cgka_op(add_of_carol.clone()).await;
-    assert!(is_pending(&result), "{result:?}");
-
-    // Dave learns about the group and can now accept the pending CGKA add.
-    dave.receive_certificate(group_to_carol_cert.clone())
-        .await?;
-    let result = dave.receive_cgka_op(add_of_carol.clone()).await;
-
-    assert!(result.is_ok(), "{result:?}");
-    assert!(contains_op(&dave, doc_id, &add_of_carol).await);
+    assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
 
 #[tokio::test]
-async fn a_remove_through_an_individual_is_applied_once_the_individual_is_promoted_to_a_group(
-) -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let group = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let carol = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let dave = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let group_id = learn(&alice, &group).await;
-    let carol_id = learn(&alice, &carol).await;
-    let dave_id = learn(&alice, &dave).await;
-    learn(&dave, &group).await;
-    learn(&dave, &carol).await;
-    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    alice.add_member(dave_id, doc_id, Power::Read).await?;
-    dave.ingest_event_table(alice.events_for_agent(dave_id).await?)
-        .await?;
-    let group_to_carol_cert = keyline_twin(&group, group_id, carol_id).await?;
-    alice
-        .receive_certificate(group_to_carol_cert.clone())
-        .await?;
-    alice.add_member(group_id, doc_id, Power::Read).await?;
-    alice.revoke_member(group_id, true, doc_id).await?;
-    let remove_of_carol = op_where(&alice, doc_id, |op| {
-        matches!(op, CgkaOperation::Remove { id, .. }
-            if *id == MemberId::from(carol.id()))
-    })
-    .await;
-
-    // Dave receives the revocation of Alice's delegation to `group` while
-    // `group` is still an individual to him.
-    let without_group_to_carol = alice
-        .events_for_agent(dave_id)
-        .await?
-        .into_iter()
-        .filter(|(_, event)| match event {
-            Event::CgkaOperation(_) => false,
-            Event::Delegated(dlg) => CertificateId::from(dlg.digest()) != group_to_carol_cert.id(),
-            _ => true,
-        })
-        .collect();
-    dave.ingest_event_table(without_group_to_carol).await?;
-    dave.receive_certificate(group_to_carol_cert.clone())
-        .await?;
-    dave.ingest_event_table(alice.events_for_agent(dave_id).await?)
-        .await?;
-
-    assert!(contains_op(&dave, doc_id, &remove_of_carol).await);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
+async fn a_rotation_of_another_members_key_is_denied() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
     let mut path = intercepted_path(&alice).await;
     path.leaf_id = MemberId::from(bob.id());
-    let op = CgkaOperation::Update {
-        id: MemberId::from(bob.id()),
-        new_path: path,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-    };
+    let op = update_op(&alice, doc_id, bob.id(), path).await;
     let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
 
     assert!(is_denied(&result), "{result:?}");
-    assert!(!result.unwrap_err().is_missing_dependency());
     Ok(())
 }
 
 #[tokio::test]
-async fn a_rotation_whose_id_differs_from_its_path_leaf_is_denied() -> TestResult {
+async fn a_rotation_whose_id_differs_from_its_paths_member_is_denied() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
-    let op = CgkaOperation::Update {
-        id: MemberId::from(alice.id()),
-        new_path: intercepted_path(&bob).await,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-    };
+    let op = update_op(&alice, doc_id, alice.id(), intercepted_path(&bob).await).await;
     let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
 
     assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
 
+/// Everything `from` would send `to`, delivered.
+async fn send(from: &Hive, to: &Hive) {
+    let events = from
+        .static_events_for_agent(to.id())
+        .await
+        .expect("selects events");
+    to.ingest_unsorted_static_events(events.into_values().collect())
+        .await;
+}
+
 #[tokio::test]
-async fn a_remove_citing_a_revocation_of_access_below_read_is_denied() -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let bob = keyhive_core::test_utils::make_simple_keyhive().await?;
+async fn a_revoked_writer_adds_no_reader() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let carol = make_simple_keyhive().await?;
     let bob_id = learn(&alice, &bob).await;
+    let carol_id = learn(&bob, &carol).await;
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    alice.add_member(bob_id, doc_id, Power::Relay).await?;
+    alice.add_member(bob_id, doc_id, Power::Edit).await?;
+    send(&alice, &bob).await;
+    let grant = issue_grant(&alice, carol_id, doc_id, Power::Read).await?;
+    let revocation = signed_revocation(&alice, &alice, doc_id, bob_id).await?;
+    receive(&alice, &revocation).await;
     alice
-        .revoke_member(Identifier::from(bob_id), true, doc_id)
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
         .await?;
-
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob.id()),
-        leaf_idx: 1,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: keyline_revocation(&alice, doc_id, bob_id).await,
-    };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
-
-    assert!(is_denied(&result), "{result:?}");
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_remove_citing_a_revocation_not_yet_received_is_pending() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob.id()),
-        leaf_idx: 1,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: CgkaAuthorization::Revocation([0u8; 32]),
-    };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
-
-    assert!(is_pending(&result), "{result:?}");
-    Ok(())
-}
-
-#[tokio::test]
-async fn an_add_citing_a_delegation_not_yet_received_is_pending() -> TestResult {
-    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
-
-    let op = CgkaOperation::Add {
-        added_id: MemberId::from(mallory.id()),
-        pk: own_prekey(&mallory, doc_id).await,
-        leaf_index: 0,
-        invitation: None,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: CgkaAuthorization::Delegation([0u8; 32]),
-    };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
-
-    assert!(is_pending(&result), "{result:?}");
-    assert!(result.unwrap_err().is_missing_dependency());
-    Ok(())
-}
-
-#[tokio::test]
-async fn an_add_through_a_delegation_to_ourselves_for_someone_else_is_pending() -> TestResult {
-    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
-    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
-    learn(&alice, &mallory).await;
-
-    let mut op = creators_own_add(&alice, doc_id).await.payload().clone();
-    if let CgkaOperation::Add {
-        added_id,
-        pk,
-        predecessors,
-        ..
-    } = &mut op
-    {
-        *added_id = MemberId::from(mallory.id());
-        *pk = own_prekey(&mallory, doc_id).await;
-        *predecessors = cgka_heads(&alice, doc_id).await;
+    for cert in [&grant, &revocation] {
+        receive(&bob, cert).await;
     }
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    for op in alice.cgka_ops_for_doc(&doc_id).await.unwrap_or_default() {
+        let _ = bob.receive_cgka_op(op.as_ref().clone()).await;
+    }
+    assert!(!cgka_members(&bob, doc_id).await.contains(&bob_id));
 
-    // Pending, not denied: in Keyline an individual can have members, so
-    // Mallory could still gain a route through Alice. She is not seated.
-    assert!(is_pending(&result), "{result:?}");
-    assert!(!tree_members(&alice, doc_id).await.contains(&mallory.id()));
+    // Only Bob holds Carol's prekeys, but his revocation is in the history
+    // an add of her would build on, so every receiver would deny it.
+    let _ = bob
+        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"by bob")
+        .await;
+    let ops = bob.cgka_ops_for_doc(&doc_id).await.unwrap_or_default();
+    let carol_member = MemberId::from(carol_id);
+    assert!(!ops.iter().any(
+        |op| matches!(op.payload, CgkaOperation::Add { added_id, .. } if added_id == carol_member)
+    ));
     Ok(())
 }
 
-/// An authorized operation the tree refuses reports the tree's own error to
-/// whoever delivered it: a member's update that names no predecessors.
 #[tokio::test]
-async fn an_update_with_no_predecessors_is_refused_with_the_trees_error() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+async fn a_reader_no_writer_can_add_adds_itself() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    // Alice grants Bob Read without having any of his prekeys, so no writer
+    // can add him.
+    issue_grant(&alice, bob.id(), doc_id, Power::Read).await?;
+    alice
+        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before")
+        .await?;
+    assert!(!cgka_members(&alice, doc_id).await.contains(&bob.id()));
 
-    let op = CgkaOperation::Update {
-        id: MemberId::from(bob.id()),
-        new_path: intercepted_path(&bob).await,
-        predecessor_secrets: Vec::new(),
-        predecessors: Vec::new(),
-        doc_id: TreeId::from(doc_id),
-    };
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    send(&alice, &bob).await;
+    assert!(bob.add_self_to(doc_id).await?);
+    send(&bob, &alice).await;
+    assert!(cgka_members(&alice, doc_id).await.contains(&bob.id()));
 
-    assert!(
-        matches!(
-            result,
-            Err(ReceiveCgkaOpError::CgkaError(CgkaError::InvalidOperation))
-        ),
-        "{result:?}"
+    let ct = alice
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"for bob")
+        .await?;
+    send(&alice, &bob).await;
+    assert_eq!(
+        bob.try_decrypt_content(doc_id, ct.encrypted_content())
+            .await?,
+        b"for bob".to_vec()
     );
     Ok(())
 }
 
-// A remove is accepted when its revocation covers the delegation it names by
-// any one of the rules Keyline uses. One test per rule.
-
-/// The audience: a reader leaves by revoking the delegation to themselves and
-/// removing their own leaf. (`revoke_member` does not offer this, so the
-/// certificates and the operation are built here.)
 #[tokio::test]
-async fn a_reader_can_remove_themselves_by_revoking_their_own_delegation() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-    let bob_id = bob.id();
-    let to_bob = keyline_delegations(&alice, doc_id, bob_id)
-        .await
-        .into_iter()
-        .next()
-        .expect("alice's grant to bob");
-    let leaving: Revocation<ContentHeads<[u8; 32]>> = Revocation::new(to_bob);
-    let signed = bob.sign_certificate(&leaving).await?;
-    let digest = signed.digest();
+async fn a_member_added_under_a_key_it_rotated_away_rotates_before_writing() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let carol = make_simple_keyhive().await?;
+    let carol_id = learn(&alice, &carol).await;
+    let grant = issue_grant(&alice, carol_id, doc_id, Power::Read).await?;
+    // Carol published this prekey and then rotated it away, perhaps because
+    // it leaked. Her key proof for it is still valid, so a member can add
+    // her under it.
+    let (retired, proof) = proven_prekey(&carol).await;
+    carol.rotate_prekey(retired).await?;
+    let add = add_op(
+        &alice,
+        doc_id,
+        carol_id,
+        (retired, Some(proof)),
+        cites(&[&grant]),
+    )
+    .await;
+    alice.receive_cgka_op(alice.try_sign(add).await?).await?;
     alice
-        .receive_certificate(VerifiedCertificate::from(signed).into_certificate())
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"from alice")
+        .await?;
+    send(&alice, &carol).await;
+
+    carol
+        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"from carol")
         .await?;
 
-    let leaf_idx = tree_members(&alice, doc_id)
+    let rotated = carol
+        .cgka_ops_for_doc(&doc_id)
         .await
+        .ok_or("carol holds the document")?
         .iter()
-        .position(|id| *id == bob_id)
-        .expect("bob seated") as u32;
-    let op = CgkaOperation::Remove {
-        id: MemberId::from(bob_id),
-        leaf_idx,
-        predecessors: cgka_heads(&alice, doc_id).await,
-        doc_id: TreeId::from(doc_id),
-        authorization: CgkaAuthorization::Revocation(digest.into()),
-    };
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
-
-    assert!(result.is_ok(), "{result:?}");
-    assert!(!tree_members(&alice, doc_id).await.contains(&bob_id));
+        .any(|op| {
+            matches!(op.payload(), CgkaOperation::Update { id, new_path, .. }
+                if *id == MemberId::from(carol_id)
+                    && !new_path.leaf_pk.contains_key(&retired))
+        });
+    assert!(rotated, "carol still writes under the key she rotated away");
     Ok(())
 }
 
-/// The issuer: a reader who admitted someone takes them out again, and their
-/// remove is accepted by the document's owner.
+#[tokio::test]
+async fn a_reader_whose_prekeys_arrive_after_a_write_is_added_at_the_next_write() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let carol = make_simple_keyhive().await?;
+    issue_grant(&alice, carol.id(), doc_id, Power::Read).await?;
+    alice
+        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before her prekeys")
+        .await?;
+
+    learn(&alice, &carol).await;
+    alice
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after her prekeys")
+        .await?;
+
+    assert!(cgka_members(&alice, doc_id).await.contains(&carol.id()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_add_of_a_reader_revoked_before_being_added_is_removed_at_the_next_write() -> TestResult
+{
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    let grant = issue_grant(&alice, bob.id(), doc_id, Power::Read).await?;
+    alice
+        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before")
+        .await?;
+    let revocation = signed_revocation(&alice, &alice, doc_id, bob.id()).await?;
+    receive(&alice, &revocation).await;
+    alice
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
+        .await?;
+
+    // Bob was never added, so no remove cited the revocation. An add citing
+    // only his grant is evaluated over its own certificate set, which grants
+    // him Read, so it is accepted. The next write removes him.
+    let op = proven_add(&alice, doc_id, &bob, cites(&[&grant])).await;
+    alice.receive_cgka_op(alice.try_sign(op).await?).await?;
+    assert!(cgka_members(&alice, doc_id).await.contains(&bob.id()));
+    alice
+        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"after the add")
+        .await?;
+    assert!(!cgka_members(&alice, doc_id).await.contains(&bob.id()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_operation_built_on_a_denied_one_is_denied() -> TestResult {
+    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
+    let mallory = make_simple_keyhive().await?;
+    let denied = remove_op(&alice, doc_id, vec![]).await;
+    let denied = mallory.try_sign(denied).await?;
+    let result = alice.receive_cgka_op(denied.clone()).await;
+    assert!(is_denied(&result), "{result:?}");
+
+    let child = CgkaOperation::Remove {
+        removed: vec![],
+        predecessors: vec![Digest::hash(&denied)],
+        doc_id: TreeId::from(doc_id),
+        citations: vec![],
+    };
+    let result = alice.receive_cgka_op(bob.try_sign(child).await?).await;
+    assert!(is_denied(&result), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reader_removed_and_granted_again_can_add_itself_again() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    issue_grant(&alice, bob.id(), doc_id, Power::Read).await?;
+    alice
+        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before")
+        .await?;
+    send(&alice, &bob).await;
+    assert!(bob.add_self_to(doc_id).await?);
+    send(&bob, &alice).await;
+
+    let revocation = signed_revocation(&alice, &alice, doc_id, bob.id()).await?;
+    receive(&alice, &revocation).await;
+    alice
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"revoked")
+        .await?;
+    issue_grant(&alice, bob.id(), doc_id, Power::Edit).await?;
+    send(&alice, &bob).await;
+    assert!(!cgka_members(&bob, doc_id).await.contains(&bob.id()));
+
+    assert!(bob.add_self_to(doc_id).await?);
+    send(&bob, &alice).await;
+    let ct = alice
+        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"for bob again")
+        .await?;
+    send(&alice, &bob).await;
+    assert_eq!(
+        bob.try_decrypt_content(doc_id, ct.encrypted_content())
+            .await?,
+        b"for bob again".to_vec()
+    );
+    Ok(())
+}
+
+/// A signer that signs as many payloads as it is allowed, then refuses, as a
+/// remote or hardware signer can.
+#[derive(Debug, Clone)]
+struct RationedSigner {
+    inner: MemorySigner,
+    allowed: Arc<AtomicUsize>,
+}
+
+impl RationedSigner {
+    fn new() -> Self {
+        RationedSigner {
+            inner: MemorySigner::generate(&mut OsRng),
+            allowed: Arc::new(AtomicUsize::new(usize::MAX)),
+        }
+    }
+
+    fn allow(&self, signatures: usize) {
+        self.allowed.store(signatures, Ordering::SeqCst);
+    }
+}
+
+impl Verifiable for RationedSigner {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.inner.verifying_key()
+    }
+}
+
+impl AsyncSigner<Sendable> for RationedSigner {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        payload_bytes: &'a [u8],
+    ) -> <Sendable as FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
+        let allowed = self
+            .allowed
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+        Sendable::ready(match allowed {
+            Ok(_) => self.inner.try_sign_bytes_sync(payload_bytes),
+            Err(_) => Err(SigningError::SigningFailed(
+                ed25519_dalek::SignatureError::new(),
+            )),
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_reader_whose_remove_failed_to_sign_is_removed_at_the_next_write() -> TestResult {
+    let signer = RationedSigner::new();
+    let alice = Keyhive::generate(
+        signer.clone(),
+        MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
+        NoListener,
+        KeylineStore::new(),
+        OsRng,
+    )
+    .await?;
+    let bob = make_simple_keyhive().await?;
+    let bob_id = bob.id();
+    alice
+        .register_individual(IndividualState::new(KeyOp::Add(
+            bob.expand_prekeys().await?,
+        )))
+        .await;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    alice.add_member(bob_id, doc_id, Power::Read).await?;
+
+    // The revocation is signed. The remove it calls for is not.
+    signer.allow(1);
+    let failed = alice.revoke_member(bob_id, false, doc_id).await;
+    assert!(
+        matches!(
+            failed,
+            Err(RevokeMemberError::CgkaError(CgkaError::SigningError(_)))
+        ),
+        "{failed:?}"
+    );
+    let members = alice
+        .cgka_members_for(doc_id)
+        .await?
+        .ok_or("alice has not joined the CGKA group")?;
+    assert!(members.contains(&bob_id), "the failed remove removed bob");
+    let readers = Keyline::<Sendable>::members(alice.keyline(), kl(doc_id))
+        .await?
+        .value;
+    assert!(!readers.into_iter().any(|(id, _)| id == kl(bob_id)));
+
+    signer.allow(usize::MAX);
+    alice
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after the revocation")
+        .await?;
+    let members = alice
+        .cgka_members_for(doc_id)
+        .await?
+        .ok_or("alice has not joined the CGKA group")?;
+    assert!(!members.contains(&bob_id));
+    Ok(())
+}
+
+/// Alice grants Bob Read, adds him to the CGKA group and revokes him. Bob then
+/// grants Read to a fresh key of his own and Alice receives that grant.
+/// Returns Alice, Bob, the fresh key's keyhive, the document, Bob's grant and
+/// the fresh key's grant.
+async fn bob_revoked_with_a_fresh_key() -> TestResult<(
+    Hive,
+    Hive,
+    Hive,
+    DocumentId,
+    VerifiedCertificate<ContentHeads<[u8; 32]>>,
+    VerifiedCertificate<ContentHeads<[u8; 32]>>,
+)> {
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let fresh = make_simple_keyhive().await?;
+    let bob_id = learn(&alice, &bob).await;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    let grant = issue_grant(&alice, bob_id, doc_id, Power::Read).await?;
+    alice
+        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before")
+        .await?;
+    assert!(cgka_members(&alice, doc_id).await.contains(&bob_id));
+    let revocation = signed_revocation(&alice, &alice, doc_id, bob_id).await?;
+    receive(&alice, &revocation).await;
+    let to_fresh = signed_delegation(
+        &bob,
+        Delegation::new(kl(fresh.id()), kl(doc_id), Power::Read),
+    )
+    .await?;
+    receive(&alice, &to_fresh).await;
+    Ok((alice, bob, fresh, doc_id, grant, to_fresh))
+}
+
+#[tokio::test]
+async fn a_revoked_reader_cannot_add_a_key_they_granted_after_the_remove() -> TestResult {
+    let (alice, bob, fresh, doc_id, grant, to_fresh) = bob_revoked_with_a_fresh_key().await?;
+    alice
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
+        .await?;
+    assert!(!cgka_members(&alice, doc_id).await.contains(&bob.id()));
+    let op = proven_add(&alice, doc_id, &fresh, cites(&[&grant, &to_fresh])).await;
+    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    assert!(is_denied(&result), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_key_a_revoked_reader_added_before_the_remove_is_removed_by_it() -> TestResult {
+    let (alice, bob, fresh, doc_id, grant, to_fresh) = bob_revoked_with_a_fresh_key().await?;
+    let op = proven_add(&alice, doc_id, &fresh, cites(&[&grant, &to_fresh])).await;
+    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert!(cgka_members(&alice, doc_id).await.contains(&fresh.id()));
+    alice
+        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
+        .await?;
+    let members = cgka_members(&alice, doc_id).await;
+    assert!(
+        !members.contains(&fresh.id()) && !members.contains(&bob.id()),
+        "{members:?}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_reader_can_remove_whom_they_admitted() -> TestResult {
-    use keyhive_core::test_utils::TestContext;
-
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -978,26 +1030,21 @@ async fn a_reader_can_remove_whom_they_admitted() -> TestResult {
     ctx.sync_all_unsent().await?;
     bob.add_member(carol.id(), doc, Power::Read).await?;
     ctx.sync_all_unsent().await?;
-    assert!(tree_members(&alice, doc).await.contains(&carol.id()));
+    assert!(cgka_members(&alice, doc).await.contains(&carol.id()));
 
     bob.revoke_member(carol.id(), false, doc).await?;
     ctx.sync_all_unsent().await?;
 
     assert_eq!(alice.access_for_doc(carol.id(), doc).await?, None);
     assert!(
-        !tree_members(&alice, doc).await.contains(&carol.id()),
-        "bob's remove was accepted"
+        !cgka_members(&alice, doc).await.contains(&carol.id()),
+        "carol is still in alice's CGKA group after bob's remove"
     );
     Ok(())
 }
 
-/// Admin over the delegation's subject: a group's admin removes a member that
-/// another admin admitted, from a document the group reads, though they are
-/// not an admin of the document.
 #[tokio::test]
 async fn a_group_admin_can_remove_a_member_from_the_groups_documents() -> TestResult {
-    use keyhive_core::test_utils::TestContext;
-
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let dave = ctx.individual("dave").await?;
@@ -1013,7 +1060,7 @@ async fn a_group_admin_can_remove_a_member_from_the_groups_documents() -> TestRe
     let doc = ctx.doc(&alice, "doc").await?;
     alice.add_member(group, doc, Power::Read).await?;
     ctx.sync_all_unsent().await?;
-    assert!(tree_members(&alice, doc).await.contains(&eve.id()));
+    assert!(cgka_members(&alice, doc).await.contains(&eve.id()));
     assert_eq!(
         alice.access_for_doc(dave.id(), doc).await?,
         Some(Power::Read)
@@ -1024,8 +1071,8 @@ async fn a_group_admin_can_remove_a_member_from_the_groups_documents() -> TestRe
 
     assert_eq!(alice.access_for_doc(eve.id(), doc).await?, None);
     assert!(
-        !tree_members(&alice, doc).await.contains(&eve.id()),
-        "dave's remove was accepted"
+        !cgka_members(&alice, doc).await.contains(&eve.id()),
+        "eve is still in alice's CGKA group after dave's remove"
     );
     Ok(())
 }
