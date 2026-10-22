@@ -3,13 +3,19 @@ use crate::{
     error::CgkaError,
     id::TreeId,
     keys::ShareKeyMap,
-    test_utils::{for_each_seed, member, Group, Member, ADD_AUTH, REMOVE_AUTH},
+    test_utils::{for_each_seed, member, Group, Member, NO_CITATIONS},
     transact::{Fork, Merge},
 };
 use alloc::{sync::Arc, vec::Vec};
 use core::hash::{Hash, Hasher};
-use future_form::Local;
-use keyhive_crypto::{digest::Digest, share_key::ShareSecretKey, signer::memory::MemorySigner};
+use future_form::{FutureForm, Local};
+use keyhive_crypto::{
+    digest::Digest,
+    share_key::ShareSecretKey,
+    signed::SigningError,
+    signer::{async_signer::AsyncSigner, memory::MemorySigner},
+    verifiable::Verifiable,
+};
 use rand::{rngs::StdRng, SeedableRng};
 use std::hash::DefaultHasher;
 
@@ -21,7 +27,7 @@ async fn a_group_can_be_emptied_and_refilled() {
     let signer = group.members[0].signer.clone();
     let cgka = &mut group.replicas[0];
 
-    cgka.remove::<Local, _>(owner, REMOVE_AUTH, &signer)
+    cgka.remove::<Local, _>(owner, NO_CITATIONS, &signer)
         .await
         .expect("removing the last member is allowed");
     assert_eq!(
@@ -45,7 +51,7 @@ async fn a_group_can_be_emptied_and_refilled() {
     );
 
     let rejoin_pk = ShareSecretKey::generate(&mut rng).share_key();
-    cgka.add::<Local, _>(owner, rejoin_pk, ADD_AUTH, &signer)
+    cgka.add::<Local, _>(owner, rejoin_pk, None, NO_CITATIONS, &signer)
         .await
         .expect("the owner can rejoin an empty group");
     let rotate = ShareSecretKey::generate(&mut rng);
@@ -90,7 +96,7 @@ async fn an_operation_for_another_document_is_refused() {
     let mut here = tree_for(&mut rng);
     let mut elsewhere = tree_for(&mut rng);
     let founding_add = elsewhere
-        .add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &owner.signer)
+        .add::<Local, _>(owner.id, owner.pk, None, NO_CITATIONS, &owner.signer)
         .await
         .expect("creating the add succeeds")
         .expect("the owner is new to the tree");
@@ -141,7 +147,7 @@ async fn a_cgka_merges_forks_before_and_after_its_first_operation() {
     cgka.merge(fork);
 
     let mut fork = cgka.fork();
-    fork.add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &owner.signer)
+    fork.add::<Local, _>(owner.id, owner.pk, None, NO_CITATIONS, &owner.signer)
         .await
         .expect("the owner can add itself to an empty group");
     cgka.merge(fork);
@@ -294,4 +300,104 @@ fn an_earlier_secret_that_was_not_recorded_is_found() {
             "the earlier update's secret should be derived again, not taken from the current tree"
         );
     });
+}
+
+/// A signer that refuses every payload, as a remote or hardware signer might.
+struct FailingSigner(MemorySigner);
+
+impl Verifiable for FailingSigner {
+    fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
+        self.0.verifying_key()
+    }
+}
+
+impl AsyncSigner<Local> for FailingSigner {
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        _payload_bytes: &'a [u8],
+    ) -> <Local as FutureForm>::Future<'a, Result<ed25519_dalek::Signature, SigningError>> {
+        Local::ready(Err(SigningError::SigningFailed(
+            ed25519_dalek::SignatureError::new(),
+        )))
+    }
+}
+
+/// A group of three whose tree has a root secret and a signer for member 0
+/// that always fails.
+async fn group_with_a_failing_signer(seed: u64) -> (Group, FailingSigner, StdRng) {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut group = Group::new(3, &mut rng).await;
+    group.settle(0, &mut rng).await;
+    let failing = FailingSigner(group.members[0].signer.clone());
+    (group, failing, rng)
+}
+
+/// Members 1 and 0 each rotate, then check that every replica agrees on tree and key.
+async fn assert_agreement_after_rotations(mut group: Group, rng: &mut StdRng, context: &str) {
+    group.settle(1, rng).await;
+    group.settle(0, rng).await;
+    group.check(context);
+    group.assert_key_agreement(context);
+}
+
+#[tokio::test]
+async fn an_add_whose_signing_fails_does_not_change_the_tree() {
+    let (mut group, failing, mut rng) = group_with_a_failing_signer(0x5167_0001).await;
+    let fresh = member(&mut rng);
+    let result = group.replicas[0]
+        .add::<Local, _>(fresh.id, fresh.pk, None, NO_CITATIONS, &failing)
+        .await;
+    assert!(
+        matches!(result, Err(CgkaError::SigningError(_))),
+        "{result:?}"
+    );
+    assert_agreement_after_rotations(group, &mut rng, "after a failed add").await;
+}
+
+#[tokio::test]
+async fn a_removal_whose_signing_fails_does_not_change_the_tree() {
+    let (mut group, failing, mut rng) = group_with_a_failing_signer(0x5167_0002).await;
+    let target = group.id(2);
+    let result = group.replicas[0]
+        .remove::<Local, _>(target, NO_CITATIONS, &failing)
+        .await;
+    assert!(
+        matches!(result, Err(CgkaError::SigningError(_))),
+        "{result:?}"
+    );
+    assert_agreement_after_rotations(group, &mut rng, "after a failed removal").await;
+}
+
+#[tokio::test]
+async fn a_rotation_whose_signing_fails_does_not_change_the_tree() {
+    let (mut group, failing, mut rng) = group_with_a_failing_signer(0x5167_0003).await;
+    let sk = ShareSecretKey::generate(&mut rng);
+    let result = group.replicas[0]
+        .update::<Local, _, StdRng>(sk.share_key(), sk, &failing, &mut rng)
+        .await;
+    assert!(
+        matches!(result, Err(CgkaError::SigningError(_))),
+        "{result:?}"
+    );
+    assert_agreement_after_rotations(group, &mut rng, "after a failed rotation").await;
+}
+
+#[tokio::test]
+async fn a_first_add_whose_signing_fails_can_be_retried() {
+    let mut rng = StdRng::seed_from_u64(0x5167_0004);
+    let owner = member(&mut rng);
+    let mut cgka = cgka_with_no_operations(&owner);
+    let failing = FailingSigner(owner.signer.clone());
+    let result = cgka
+        .add::<Local, _>(owner.id, owner.pk, None, NO_CITATIONS, &failing)
+        .await;
+    assert!(
+        matches!(result, Err(CgkaError::SigningError(_))),
+        "{result:?}"
+    );
+    let retried = cgka
+        .add::<Local, _>(owner.id, owner.pk, None, NO_CITATIONS, &owner.signer)
+        .await
+        .expect("the add succeeds");
+    assert!(retried.is_some(), "the retried add created no operation");
 }

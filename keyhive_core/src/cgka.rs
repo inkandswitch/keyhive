@@ -3,13 +3,18 @@
 //! beekem IDs ([`beekem::id::MemberId`] /
 //! [`beekem::id::TreeId`]) at the API boundary.
 
+pub(crate) mod certificate_sets;
+pub(crate) mod citations;
+
 use crate::principal::{document::id::DocumentId, individual::id::IndividualId};
 use beekem::{
+    cgka::MembershipView,
+    collections::Set,
     encrypted::EncryptedContent,
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
+    operation::{CgkaBatch, CgkaOperation, CitationId},
     pcs_key::{ApplicationSecret, PcsKey},
 };
 use future_form::FutureForm;
@@ -24,9 +29,8 @@ use keyhive_crypto::{
 };
 use nonempty::NonEmpty;
 use rand::{CryptoRng, RngCore};
-use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -43,8 +47,7 @@ use std::{
 ///
 /// This is a thin wrapper around [`beekem::cgka::Cgka`] that converts between
 /// keyhive_core domain IDs and beekem IDs at the API boundary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cgka(beekem::cgka::Cgka);
 
 impl Cgka {
@@ -115,37 +118,65 @@ impl Cgka {
     }
 
     /// Add a member, returning its add operation or `None` if the member
-    /// is already in the tree.
+    /// is already in the CGKA group. `key_proof` is the encoded prekey operation in
+    /// which the member published `pk`.
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
         pk: ShareKey,
-        authorization: CgkaAuthorization,
+        key_proof: Option<Vec<u8>>,
+        citations: BTreeSet<CitationId>,
         signer: &S,
     ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
         self.0
-            .add(MemberId::from(id), pk, authorization, signer)
+            .add(MemberId::from(id), pk, key_proof, citations, signer)
             .await
     }
 
+    #[allow(clippy::type_complexity)]
     pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        members: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
+        members: NonEmpty<(
+            IndividualId,
+            ShareKey,
+            Option<Vec<u8>>,
+            BTreeSet<CitationId>,
+        )>,
         signer: &S,
     ) -> Result<Vec<SerdeSigned<CgkaOperation>>, CgkaError> {
-        let converted = members.map(|(id, pk, auth)| (MemberId::from(id), pk, auth));
+        let converted =
+            members.map(|(id, pk, proof, cited)| (MemberId::from(id), pk, proof, cited));
         self.0.add_multiple(converted, signer).await
     }
 
-    pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
+    /// Create a [`CgkaOperation::Remove`] without explicitly listing
+    /// targets. Specific members to be removed are determined by
+    /// `citations`.
+    pub async fn remove_by_citations<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        id: IndividualId,
-        authorization: CgkaAuthorization,
+        citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
-        self.0
-            .remove(MemberId::from(id), authorization, signer)
-            .await
+    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
+        self.0.remove_by_citations(citations, signer).await
+    }
+
+    /// Remove members according to `view` from now on.
+    pub(crate) fn set_membership_view(&mut self, view: Arc<dyn MembershipView>) {
+        self.0.set_membership_view(view);
+    }
+
+    /// The operations the next operation created here will have as its
+    /// predecessors.
+    pub fn heads(&self) -> &Set<Digest<SerdeSigned<CgkaOperation>>> {
+        &self.0.ops_graph().cgka_op_heads
+    }
+
+    /// The operation in the CGKA graph with this digest.
+    pub(crate) fn op(
+        &self,
+        digest: &Digest<SerdeSigned<CgkaOperation>>,
+    ) -> Option<&Arc<SerdeSigned<CgkaOperation>>> {
+        self.0.ops_graph().cgka_ops.get(digest)
     }
 
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: CryptoRng + RngCore>(
@@ -166,7 +197,20 @@ impl Cgka {
         self.0.group_size()
     }
 
-    /// The individuals currently in this document's CGKA tree.
+    /// Rebuild the materialized CGKA group from its operations if some were recorded
+    /// but not applied. Fails with `CgkaError::MembershipUnknown`, changing
+    /// nothing, if its membership view lacks an answer the rebuild needs.
+    pub(crate) fn replay_if_pending(&mut self) -> Result<(), CgkaError> {
+        self.0.replay_if_pending()
+    }
+
+    /// Every certificate set a replay of the whole history asks the
+    /// membership view about.
+    pub(crate) fn membership_sets(&self) -> Result<Vec<BTreeSet<CitationId>>, CgkaError> {
+        self.0.membership_sets()
+    }
+
+    /// The individuals currently in this document's CGKA group.
     pub fn member_ids(&mut self) -> Result<impl Iterator<Item = IndividualId> + '_, CgkaError> {
         Ok(self.0.member_ids()?.map(IndividualId::from))
     }
@@ -189,8 +233,8 @@ impl Cgka {
         self.0.contains_predecessors(preds)
     }
 
-    /// Merge an add of a leaf whose secret `sk` this replica holds: an
-    /// invitation to it. The added member becomes the owner, holding `sk`.
+    /// Merge an add whose key's secret `sk` this replica holds (an invitation
+    /// to it). The added member becomes the owner, holding `sk`.
     pub fn merge_invite(
         &mut self,
         op: Arc<SerdeSigned<CgkaOperation>>,
@@ -208,6 +252,9 @@ impl Cgka {
         if !self.contains_predecessors(&predecessors.iter().cloned().collect()) {
             return Err(CgkaError::OutOfOrderOperation);
         }
+        // Check if we should replay first, so that a replay lacking a membership answer
+        // fails before the owner changes.
+        self.replay_if_pending()?;
         let mut owner_sks = self.owner_sks().clone();
         owner_sks.insert(pk, *sk);
         *self = self.with_new_owner(added_id.into(), owner_sks)?;

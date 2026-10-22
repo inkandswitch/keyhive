@@ -57,6 +57,7 @@ pub(crate) fn root_edges<I: IntoIterator<Item = Identifier>>(
 /// revocation causes: members of the revoked delegation's audience, and
 /// audiences of delegations its audience issued, on any subject the route
 /// passes through.
+#[cfg(test)]
 pub(crate) async fn route_through<F: FutureForm, K: Keyline<F>>(
     keyline: &K,
     doc: Identifier,
@@ -73,6 +74,7 @@ where
 }
 
 /// Every delegation in `doc`'s closure, with its issuer.
+#[cfg(test)]
 async fn closure_delegations<F: FutureForm, K: Keyline<F>>(
     keyline: &K,
     doc: Identifier,
@@ -387,7 +389,7 @@ mod tests {
     ///
     /// The converse of the first does not hold: `who` may keep its power by
     /// another route, so the property does not ask for it. It also checks that
-    /// `route_through` is monotone, which CGKA authorization relies on.
+    /// `route_through` is monotone.
     #[test]
     fn route_through_lies_between_necessity_and_standing() {
         use keyline::test_utils::{
@@ -638,6 +640,14 @@ mod tests {
             subject: Identifier,
         ) -> Query<'_, Sendable, BTreeMap<Identifier, Power>, Self::Error> {
             Keyline::<Sendable>::members(&self.0, subject)
+        }
+
+        fn members_for_subset(
+            &self,
+            subset: BTreeSet<CertificateId>,
+            subject: Identifier,
+        ) -> Query<'_, Sendable, BTreeMap<Identifier, Power>, Self::Error> {
+            Keyline::<Sendable>::members_for_subset(&self.0, subset, subject)
         }
 
         fn subjects(&self) -> Query<'_, Sendable, BTreeSet<Identifier>, Self::Error> {

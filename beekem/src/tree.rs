@@ -425,6 +425,9 @@ impl BeeKem {
                     return Ok(child_sks.get(&parent_pk).cloned());
                 }
                 let secret = parent.decrypt_secret(child_node_key, child_sks, seen_idxs)?;
+                if secret.share_key() != parent_pk {
+                    return Err(CgkaError::PathSecretMismatch);
+                }
                 child_sks.insert(parent_pk, secret);
                 Some(secret)
             }
@@ -782,6 +785,67 @@ mod tests {
             placed_first, placed_last,
             "an added member resolved to a different leaf depending on whether it \
              was placed before or after the removals"
+        );
+    }
+
+    #[test]
+    fn a_member_decrypts_a_path_written_by_a_leaf_key_its_leaf_no_longer_contains() {
+        let mut rng = StdRng::seed_from_u64(0x0dd0_0002);
+        let mut sks = ShareKeyMap::new();
+        let (mut base, owner) = one_member_tree(&mut rng, &mut sks);
+        let (other, other_pk) = join_new_member_to_share_key_map(&mut rng, &mut ShareKeyMap::new());
+        base.push_leaf(other, other_pk.into());
+
+        // Two instances of the owner rotate its leaf concurrently. The leaf
+        // keeps only the lower key of the conflict, but the path above it was
+        // encrypted with the higher key.
+        let (a, b) = (
+            ShareSecretKey::generate(&mut rng),
+            ShareSecretKey::generate(&mut rng),
+        );
+        let (low, high) = if a.share_key() < b.share_key() {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        let mut low_sks = sks.clone();
+        low_sks.insert(low.share_key(), low);
+        let (_, low_path) = base
+            .clone()
+            .encrypt_path(owner, low.share_key(), &mut low_sks, &mut rng)
+            .expect("encrypting a path")
+            .expect("the owner is in the tree");
+        // A member joins before the second rotation, so the first one's path
+        // no longer fits the tree and only its leaf applies.
+        let (joiner, joiner_pk) =
+            join_new_member_to_share_key_map(&mut rng, &mut ShareKeyMap::new());
+        base.push_leaf(joiner, joiner_pk.into());
+        let mut high_sks = sks.clone();
+        high_sks.insert(high.share_key(), high);
+        let (root_secret, high_path) = base
+            .clone()
+            .encrypt_path(owner, high.share_key(), &mut high_sks, &mut rng)
+            .expect("encrypting a path")
+            .expect("the owner is in the tree");
+
+        let mut tree = base;
+        tree.apply_path(&low_path);
+        tree.apply_path(&high_path);
+        assert_eq!(
+            tree.node_key_for_id(owner).ok(),
+            Some(NodeKey::ShareKey(low.share_key()))
+        );
+
+        // Instances share their leaf secrets, but each keeps the path
+        // secrets it generated.
+        let mut instance_sks = sks;
+        instance_sks.insert(low.share_key(), low);
+        instance_sks.insert(high.share_key(), high);
+        let decrypted = tree.decrypt_tree_secret(owner, &mut instance_sks);
+        assert_eq!(
+            decrypted.as_ref().ok().copied().map(PcsKey::from),
+            Some(root_secret),
+            "{decrypted:?}"
         );
     }
 

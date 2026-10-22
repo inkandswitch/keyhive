@@ -5,7 +5,7 @@ use crate::{
     id::MemberId,
     keys::{NodeKey, ShareKeyMap},
     operation::CgkaOperation,
-    test_utils::{member, name_for, Group, Member, ADD_AUTH, REMOVE_AUTH},
+    test_utils::{member, name_for, Group, Member, NO_CITATIONS},
     tree::PathChange,
 };
 use alloc::{collections::BTreeSet, format, string::ToString, sync::Arc, vec::Vec};
@@ -101,7 +101,7 @@ async fn local_add_sees_a_pending_concurrent_add() {
     group.deliver(&add_by_b, &[0]);
 
     let local = group.replicas[0]
-        .add::<Local, _>(d.id, d.pk, ADD_AUTH, &group.members[0].signer)
+        .add::<Local, _>(d.id, d.pk, None, NO_CITATIONS, &group.members[0].signer)
         .await
         .expect("creating the add succeeds");
     assert!(
@@ -131,7 +131,7 @@ async fn local_remove_sees_a_pending_concurrent_remove() {
     group.deliver(&remove_by_b, &[0]);
 
     let local = group.replicas[0]
-        .remove::<Local, _>(c, REMOVE_AUTH, &group.members[0].signer)
+        .remove::<Local, _>(c, NO_CITATIONS, &group.members[0].signer)
         .await;
     assert!(
         matches!(local, Ok(None)),
@@ -164,7 +164,7 @@ async fn local_remove_sees_a_pending_concurrent_add() {
 
     // `a`'s tree does not place `d` yet, but its graph holds the add that will.
     let local = group.replicas[0]
-        .remove::<Local, _>(d.id, REMOVE_AUTH, &group.members[0].signer)
+        .remove::<Local, _>(d.id, NO_CITATIONS, &group.members[0].signer)
         .await
         .expect("authoring the removal succeeds");
     let removal = local.map(Arc::new).unwrap_or_else(|| {
@@ -459,7 +459,7 @@ fn replicas_converge_over_random_concurrent_operations() {
 }
 
 /// Decrypt `encrypted` with a key from `known`.
-fn try_decrypt(
+pub(super) fn try_decrypt(
     known: &ShareKeyMap,
     encrypter_pk: ShareKey,
     encrypted: &EncryptedSecret<ShareSecretKey>,
@@ -473,7 +473,7 @@ fn try_decrypt(
 
 /// Extend `known` with every node secret it can be used to decrypt from `paths`.
 /// Repeat until nothing else is learned.
-fn learn_from(mut known: ShareKeyMap, paths: &[&PathChange]) -> ShareKeyMap {
+pub(super) fn learn_from(mut known: ShareKeyMap, paths: &[&PathChange]) -> ShareKeyMap {
     loop {
         let before = known.len();
         for path in paths {
@@ -498,7 +498,7 @@ fn learn_from(mut known: ShareKeyMap, paths: &[&PathChange]) -> ShareKeyMap {
     }
 }
 
-fn new_path(op: &SerdeSigned<CgkaOperation>) -> &PathChange {
+pub(super) fn new_path(op: &SerdeSigned<CgkaOperation>) -> &PathChange {
     match op.payload() {
         CgkaOperation::Update { new_path, .. } => new_path,
         _ => panic!("a rotation is an update"),

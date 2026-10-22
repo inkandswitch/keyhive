@@ -1,5 +1,7 @@
 //! Error types for CGKA operations.
 
+use crate::operation::CitationId;
+use alloc::collections::BTreeSet;
 use keyhive_crypto::signed::SigningError;
 
 /// Errors arising from CGKA operations.
@@ -27,11 +29,24 @@ pub enum CgkaError {
     #[cfg_attr(feature = "thiserror", error("Encrypted secret not found"))]
     EncryptedSecretNotFound,
 
+    /// A path secret decrypted to a key other than its node's public key.
+    #[cfg_attr(
+        feature = "thiserror",
+        error("A path secret does not match its node's public key")
+    )]
+    PathSecretMismatch,
+
     #[cfg_attr(feature = "thiserror", error("Identifier not found"))]
     IdentifierNotFound,
 
     #[cfg_attr(feature = "thiserror", error("Invalid operation"))]
     InvalidOperation,
+
+    #[cfg_attr(
+        feature = "thiserror",
+        error("No membership answer yet for a set of {} cited certificates", .0.len())
+    )]
+    MembershipUnknown(BTreeSet<CitationId>),
 
     #[cfg_attr(feature = "thiserror", error("Invalid path length"))]
     InvalidPathLength,
@@ -96,8 +111,16 @@ impl core::fmt::Display for CgkaError {
             Self::DeriveNonce(msg) => write!(f, "Deriving nonce failed: {msg}"),
             Self::Encryption(e) => write!(f, "Encryption failed: {e}"),
             Self::EncryptedSecretNotFound => write!(f, "Encrypted secret not found"),
+            Self::PathSecretMismatch => {
+                write!(f, "A path secret does not match its node's public key")
+            }
             Self::IdentifierNotFound => write!(f, "Identifier not found"),
             Self::InvalidOperation => write!(f, "Invalid operation"),
+            Self::MembershipUnknown(cited) => write!(
+                f,
+                "No membership answer yet for a set of {} cited certificates",
+                cited.len()
+            ),
             Self::InvalidPathLength => write!(f, "Invalid path length"),
             Self::NoMembers => write!(f, "Group has no members"),
             Self::NoRootKey => write!(f, "No root key"),

@@ -16,16 +16,19 @@ use crate::{
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, NodeKey, ShareKeyMap},
     operation::{
-        CgkaAuthorization, CgkaBatch, CgkaOperation, CgkaOperationGraph, Invitation,
-        InvitationSecret, PredecessorSecret,
+        CgkaBatch, CgkaOperation, CgkaOperationGraph, CitationId, Invitation, InvitationSecret,
+        PredecessorSecret, RemovedMember,
     },
     pcs_key::{ApplicationSecret, PcsKey},
     root_secrets::{RootSecrets, VerifiedRootSecret},
     transact::{Fork, Merge},
     tree::BeeKem,
 };
-use alloc::{boxed::Box, collections::BTreeSet, sync::Arc, vec::Vec};
-use core::hash::{Hash, Hasher};
+use alloc::{boxed::Box, collections::BTreeSet, sync::Arc, vec, vec::Vec};
+use core::{
+    fmt::Debug,
+    hash::{Hash, Hasher},
+};
 use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
@@ -37,8 +40,19 @@ use keyhive_crypto::{
     symmetric_key::SymmetricKey,
 };
 use nonempty::NonEmpty;
-use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
+
+/// Decides which tree members a set of cited certificates no longer entitles
+/// to stay in the tree.
+pub trait MembershipView: Debug + Send + Sync {
+    /// The members of `leaves` that the certificates in `cited` do not entitle
+    /// to be in the tree or `None` if the view has no answer for `cited` yet.
+    fn non_members(
+        &self,
+        cited: &BTreeSet<CitationId>,
+        leaves: &BTreeSet<MemberId>,
+    ) -> Option<BTreeSet<MemberId>>;
+}
 
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
@@ -50,7 +64,7 @@ use tracing::{debug, instrument, warn};
 ///
 /// We assume that all operations are received in causal order (a property
 /// guaranteed by Keyhive as a whole).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Cgka {
     pub(crate) doc_id: TreeId,
     /// The id of the member who owns this tree.
@@ -72,22 +86,63 @@ pub struct Cgka {
     /// Chainable updates that we have not detected as verified secrets on the
     /// predecessor secrets chain.
     pub(crate) unchained_updates: Set<Digest<SerdeSigned<CgkaOperation>>>,
+
+    /// For determining when members must be removed in light of new
+    /// certificates cited by an operation.
+    membership: Option<Arc<dyn MembershipView>>,
 }
+
+impl PartialEq for Cgka {
+    fn eq(&self, other: &Self) -> bool {
+        let Cgka {
+            doc_id,
+            owner_id,
+            owner_sks,
+            tree,
+            ops_graph,
+            pending_replay,
+            root_secrets,
+            unchained_updates,
+            membership: _,
+        } = self;
+        *doc_id == other.doc_id
+            && *owner_id == other.owner_id
+            && *owner_sks == other.owner_sks
+            && *tree == other.tree
+            && *ops_graph == other.ops_graph
+            && *pending_replay == other.pending_replay
+            && *root_secrets == other.root_secrets
+            && *unchained_updates == other.unchained_updates
+    }
+}
+
+impl Eq for Cgka {}
 
 impl Hash for Cgka {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.doc_id.hash(state);
-        self.owner_id.hash(state);
-        self.owner_sks.hash(state);
-        self.tree.hash(state);
-        self.ops_graph.hash(state);
-        self.pending_replay.hash(state);
-        self.root_secrets
+        let Cgka {
+            doc_id,
+            owner_id,
+            owner_sks,
+            tree,
+            ops_graph,
+            pending_replay,
+            root_secrets,
+            unchained_updates,
+            membership: _,
+        } = self;
+        doc_id.hash(state);
+        owner_id.hash(state);
+        owner_sks.hash(state);
+        tree.hash(state);
+        ops_graph.hash(state);
+        pending_replay.hash(state);
+        root_secrets
             .iter()
             .map(|(op_hash, _)| op_hash)
             .collect::<BTreeSet<_>>()
             .hash(state);
-        self.unchained_updates
+        unchained_updates
             .iter()
             .collect::<BTreeSet<_>>()
             .hash(state);
@@ -105,6 +160,54 @@ impl Cgka {
             pending_replay: false,
             root_secrets: RootSecrets::default(),
             unchained_updates: Set::new(),
+            membership: None,
+        }
+    }
+
+    /// Remove members according to `view` from now on.
+    pub fn set_membership_view(&mut self, view: Arc<dyn MembershipView>) {
+        self.membership = Some(view);
+        self.pending_replay = !self.ops_graph.cgka_op_heads.is_empty();
+    }
+
+    /// Remove `demoted_members`. These are leaves of the tree, so removal
+    /// should not fail.
+    fn remove_demoted_members(&mut self, demoted_members: BTreeSet<MemberId>) {
+        for id in demoted_members {
+            let _ = self.tree.remove_id(id);
+        }
+    }
+
+    /// The leaves the membership view says `cited` no longer entitle to be in
+    /// the tree. Empty without a view. Fails with
+    /// [`CgkaError::MembershipUnknown`] if the view has no answer yet.
+    fn non_members(&self, cited: &BTreeSet<CitationId>) -> Result<BTreeSet<MemberId>, CgkaError> {
+        let Some(view) = &self.membership else {
+            return Ok(BTreeSet::new());
+        };
+        let leaves: BTreeSet<MemberId> = self.tree.member_ids().collect();
+        let mut demoted = view
+            .non_members(cited, &leaves)
+            .ok_or_else(|| CgkaError::MembershipUnknown(cited.clone()))?;
+        demoted.retain(|id| leaves.contains(id));
+        if !demoted.is_empty() {
+            debug!(
+                ?demoted,
+                "removing members the cited certificates do not entitle to membership"
+            );
+        }
+        Ok(demoted)
+    }
+
+    /// Remove members if `op`'s certificate set demoted them. If the view has
+    /// no answer for that set yet, the tree is rebuilt from its history before
+    /// its next use instead, which would remove them then.
+    fn handle_new_removals(&mut self, op: &CgkaOperation) {
+        if op.is_membership_change() {
+            match self.non_members(self.ops_graph.citations()) {
+                Ok(demoted) => self.remove_demoted_members(demoted),
+                Err(_) => self.pending_replay = true,
+            }
         }
     }
 
@@ -131,13 +234,15 @@ impl Cgka {
     /// Derive an [`ApplicationSecret`] from our current [`PcsKey`] for new content
     /// to encrypt.
     ///
-    /// If the tree does not currently contain a root key, then we must first
-    /// perform a leaf key rotation. The new key pair is returned as the third element,
-    /// which is `None` when there was no rotation.
+    /// If the tree has no root secret, or a path secret this member would
+    /// decrypt does not match its node's key, this member first rotates its
+    /// leaf. That update and the new key pair are returned as the second
+    /// element, which is `None` when there was no rotation.
     ///
-    /// Returns a [`CgkaError::NoMembers`] error if the group is empty and a
-    /// [`CgkaError::UnknownPcsKey`] error if the tree's root secret cannot be
-    /// recorded for the update that produced it.
+    /// Returns [`CgkaError::NoMembers`] if the group is empty,
+    /// [`CgkaError::UnknownPcsKey`] if the root secret derives but cannot be
+    /// recorded for the update that produced it, and otherwise any error from
+    /// deriving the root secret.
     ///
     /// # Security
     ///
@@ -163,7 +268,17 @@ impl Cgka {
         ),
         CgkaError,
     > {
-        let (current_pcs_key, current_op_hash, rotation) = if !self.has_tree_root_secret() {
+        self.replay_if_pending()?;
+        let known = self.record_tree_root_secret();
+        let (current_pcs_key, current_op_hash, rotation) = if let Some((op_hash, pcs_key)) = known {
+            (pcs_key, op_hash, None)
+        } else {
+            // Rotate whenever we cannot derive the root secret: the tree has
+            // none, a path another member wrote does not decrypt, or another
+            // instance of this identity rotated our leaf and we lack its secret.
+            if self.has_tree_root_secret() && self.decrypt_tree_root_secret().is_ok() {
+                return Err(CgkaError::UnknownPcsKey);
+            }
             let new_share_secret_key = ShareSecretKey::generate(csprng);
             let new_share_key = new_share_secret_key.share_key();
             let (pcs_key, update_op, key_pair) = self
@@ -171,18 +286,6 @@ impl Cgka {
                 .await?;
             let op_hash = Digest::hash(&update_op);
             (pcs_key, op_hash, Some((update_op, key_pair)))
-        } else {
-            // `has_tree_root_secret()` above guarantees a single head.
-            debug_assert!(self.ops_graph.has_single_head());
-            match self.record_tree_root_secret() {
-                Some((op_hash, pcs_key)) => (pcs_key, op_hash, None),
-                None => {
-                    // If there is a decryption error, return it. Otherwise, return
-                    // `UnknownPcsKey`.
-                    self.decrypt_tree_root_secret()?;
-                    return Err(CgkaError::UnknownPcsKey);
-                }
-            }
         };
         let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id.as_bytes());
         Ok((
@@ -225,13 +328,16 @@ impl Cgka {
     /// Add a member to the group. Returns the add operation or `None` if the
     /// member is already in the tree.
     ///
-    /// `authorization` refers to the membership delegation that generated this add.
+    /// `key_proof` is the add's evidence that `id` published `pk`, for the
+    /// layer that authorizes operations. BeeKEM does not read it.
+    /// `citations` are the certificates the add cites.
     #[instrument(skip_all)]
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: MemberId,
         pk: ShareKey,
-        authorization: CgkaAuthorization,
+        key_proof: Option<Vec<u8>>,
+        citations: BTreeSet<CitationId>,
         signer: &S,
     ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
         self.replay_if_pending()?;
@@ -240,28 +346,36 @@ impl Cgka {
         } else {
             Vec::new()
         };
-        self.add_with_ancestors::<F, S>(id, pk, authorization, &ancestors, signer)
+        self.add_with_ancestors::<F, S>(id, pk, key_proof, citations, &ancestors, signer)
             .await
     }
 
-    /// Add multiple members to group.
+    /// Add multiple members to group, each with its key proof.
+    #[allow(clippy::type_complexity)]
     pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        members: NonEmpty<(MemberId, ShareKey, CgkaAuthorization)>,
+        members: NonEmpty<(MemberId, ShareKey, Option<Vec<u8>>, BTreeSet<CitationId>)>,
         signer: &S,
     ) -> Result<Vec<SerdeSigned<CgkaOperation>>, CgkaError> {
         self.replay_if_pending()?;
         let mut ancestors = None;
         let mut ops = Vec::new();
-        for (id, pk, authorization) in members {
+        for (id, pk, key_proof, citations) in members {
             let ancestor_secrets: &[_] = if self.inviter_key_pair().is_some() {
                 ancestors.get_or_insert_with(|| self.reachable_ancestor_secrets())
             } else {
                 &[]
             };
             ops.extend(
-                self.add_with_ancestors::<F, S>(id, pk, authorization, ancestor_secrets, signer)
-                    .await?,
+                self.add_with_ancestors::<F, S>(
+                    id,
+                    pk,
+                    key_proof,
+                    citations,
+                    ancestor_secrets,
+                    signer,
+                )
+                .await?,
             );
         }
         Ok(ops)
@@ -273,7 +387,8 @@ impl Cgka {
         &mut self,
         id: MemberId,
         pk: ShareKey,
-        authorization: CgkaAuthorization,
+        key_proof: Option<Vec<u8>>,
+        citations: BTreeSet<CitationId>,
         ancestor_secrets: &[(Digest<SerdeSigned<CgkaOperation>>, PcsKey)],
         signer: &S,
     ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
@@ -294,13 +409,13 @@ impl Cgka {
             pk,
             leaf_index,
             invitation: invitation.map(Box::new),
+            key_proof,
             predecessors,
             doc_id: self.doc_id,
-            authorization,
+            citations: citations.into_iter().collect(),
         };
-
-        let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-        self.record_op(&signed_op)?;
+        let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
+        self.handle_new_removals(&signed_op.payload);
         Ok(Some(signed_op))
     }
 
@@ -382,6 +497,29 @@ impl Cgka {
         }
     }
 
+    /// Sign `op`, which the caller has already applied to the tree, and record
+    /// it. If signing fails, the tree must be reset. We replace it with a fresh
+    /// tree if `op` is the first operation. Otherwise, we set `pending_replay`
+    /// to `true` so the tree will be rebuilt before its next use.
+    async fn sign_and_record<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        op: CgkaOperation,
+        signer: &S,
+    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
+        let recorded = match async_signer::try_sign_async::<F, _, _>(signer, op).await {
+            Ok(signed_op) => self.record_op(&signed_op).map(|()| signed_op),
+            Err(e) => Err(e.into()),
+        };
+        if recorded.is_err() {
+            if self.ops_graph.cgka_op_heads.is_empty() {
+                self.tree = BeeKem::new(self.doc_id);
+            } else {
+                self.pending_replay = true;
+            }
+        }
+        recorded
+    }
+
     /// Add `op` to the operation graph and, if it includes an invitation for us,
     /// record those root secrets.
     fn record_op(&mut self, op: &SerdeSigned<CgkaOperation>) -> Result<(), CgkaError> {
@@ -429,14 +567,14 @@ impl Cgka {
 
     /// Remove member from group.
     ///
-    /// `authorization` refers to the membership revocation that generated this removal.
+    /// `citations` are the certificates the removal cites.
     ///
     /// Returns `Ok(None)` if the member is not in the group.
     #[instrument(skip_all)]
     pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: MemberId,
-        authorization: CgkaAuthorization,
+        citations: BTreeSet<CitationId>,
         signer: &S,
     ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
         self.replay_if_pending()?;
@@ -445,19 +583,46 @@ impl Cgka {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
-        let (leaf_idx, removed_keys) = self.tree.remove_id(id)?;
+        let (leaf_idx, _) = self.tree.remove_id(id)?;
+        let removed = RemovedMember { id, leaf_idx };
+        self.sign_and_complete_remove(vec![removed], citations, signer)
+            .await
+            .map(Some)
+    }
+
+    /// Create a [`CgkaOperation::Remove`] without explicitly listing
+    /// targets. Specific members to be removed are determined by
+    /// [`MembershipView`].
+    #[instrument(skip_all)]
+    pub async fn remove_by_citations<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        citations: BTreeSet<CitationId>,
+        signer: &S,
+    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
+        self.replay_if_pending()?;
+        self.sign_and_complete_remove(Vec::new(), citations, signer)
+            .await
+    }
+
+    /// Sign and record a `CgkaOperation::Remove`. If a [`MembershipView`]
+    /// is being used to determine which members to remove, make that
+    /// determination and remove those members here.
+    async fn sign_and_complete_remove<F: FutureForm, S: AsyncSigner<F>>(
+        &mut self,
+        removed: Vec<RemovedMember>,
+        citations: BTreeSet<CitationId>,
+        signer: &S,
+    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
         let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().copied());
         let op = CgkaOperation::Remove {
-            id,
-            leaf_idx,
-            removed_keys,
+            removed,
             predecessors,
             doc_id: self.doc_id,
-            authorization,
+            citations: citations.into_iter().collect(),
         };
-        let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-        self.record_op(&signed_op)?;
-        Ok(Some(signed_op))
+        let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
+        self.handle_new_removals(&signed_op.payload);
+        Ok(signed_op)
     }
 
     /// Rotate the owner's leaf to `new_pk` and encrypt a new path from it.
@@ -497,8 +662,7 @@ impl Cgka {
                 doc_id: self.doc_id,
             };
 
-            let signed_op = async_signer::try_sign_async::<F, _, _>(signer, op).await?;
-            self.record_op(&signed_op)?;
+            let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
             self.record_root_secret_for(pcs_key, Digest::hash(&signed_op));
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
@@ -524,7 +688,10 @@ impl Cgka {
 
     /// Replay the operation graph to rebuild the tree if operations were
     /// recorded but not applied.
-    fn replay_if_pending(&mut self) -> Result<(), CgkaError> {
+    ///
+    /// Fails with [`CgkaError::MembershipUnknown`], changing nothing,
+    /// if the membership view lacks an answer required for the replay.
+    pub fn replay_if_pending(&mut self) -> Result<(), CgkaError> {
         if self.pending_replay {
             self.replay_ops_graph()?;
         }
@@ -575,9 +742,15 @@ impl Cgka {
             }
         } else {
             self.replay_if_pending()?;
-            self.apply_operation_and_record_root_secret(op)?;
+            self.apply_operation_and_record_root_secret(op.clone())?;
+            self.handle_new_removals(&op.payload);
         }
         Ok(true)
+    }
+
+    /// Every operation received so far and how they are causally related.
+    pub fn ops_graph(&self) -> &CgkaOperationGraph {
+        &self.ops_graph
     }
 
     pub fn ops(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
@@ -627,10 +800,12 @@ impl Cgka {
                     self.tree.push_leaf(added_id, pk.into());
                 }
             }
-            CgkaOperation::Remove { id, .. } => {
-                // A concurrent history may have removed this member already.
-                if self.tree.contains_id(&id) {
-                    self.tree.remove_id(id)?;
+            CgkaOperation::Remove { ref removed, .. } => {
+                for RemovedMember { id, .. } in removed {
+                    // A concurrent history may have removed this member already.
+                    if self.tree.contains_id(id) {
+                        self.tree.remove_id(*id)?;
+                    }
                 }
             }
             CgkaOperation::Update { ref new_path, .. } => {
@@ -641,48 +816,86 @@ impl Cgka {
         Ok(true)
     }
 
+    /// Every certificate set a replay of the whole graph asks the membership
+    /// view about. For each batch containing an add or a remove, everything
+    /// it and the batches before it cite. Empty for an empty graph.
+    pub fn membership_sets(&self) -> Result<Vec<BTreeSet<CitationId>>, CgkaError> {
+        if self.ops_graph.cgka_op_heads.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut cited = BTreeSet::new();
+        let mut sets = Vec::new();
+        for batch in &self.ops_graph.batches()? {
+            cited.extend(batch.iter().flat_map(|op| op.payload.citations()));
+            if batch.iter().any(|op| op.payload.is_membership_change()) {
+                sets.push(cited.clone());
+            }
+        }
+        Ok(sets)
+    }
+
     /// Apply operations grouped into [`CgkaBatch`]s in order.
     #[instrument(skip_all)]
     pub(crate) fn apply_batches(&mut self, batches: &NonEmpty<CgkaBatch>) -> Result<(), CgkaError> {
+        let mut cited = BTreeSet::new();
         for batch in batches {
-            if batch.len() == 1 {
-                self.apply_operation_to_tree(batch[0].clone())?;
-            } else {
-                // If all operations in this batch are updates, we can apply them
-                // directly and move on to the next batch.
-                if batch
-                    .iter()
-                    .all(|op| matches!(op.payload, CgkaOperation::Update { .. }))
-                {
-                    for op in batch.iter() {
-                        self.apply_operation_to_tree(op.clone())?;
-                    }
-                    continue;
-                }
-
-                // A batch with at least one membership change requires blanking
-                // removed paths and sorting added leaves after all ops are applied.
-                let mut added_ids = Set::new();
-                let mut removed_ids = Set::new();
-                for op in batch.iter() {
-                    match op.payload {
-                        CgkaOperation::Add { added_id, .. } => {
-                            added_ids.insert(added_id);
-                        }
-                        CgkaOperation::Remove { id, leaf_idx, .. } => {
-                            removed_ids.insert((id, leaf_idx));
-                        }
-                        _ => {}
-                    }
-                    self.apply_operation_to_tree(op.clone())?;
-                }
-                self.tree
-                    .sort_leaves_and_blank_paths_for_concurrent_membership_changes(
-                        added_ids,
-                        removed_ids,
-                    );
-            }
+            cited.extend(batch.iter().flat_map(|op| op.payload.citations()));
+            let changes_membership = batch.iter().any(|op| op.payload.is_membership_change());
+            self.apply_batch(batch, changes_membership.then_some(&cited))?;
         }
+        Ok(())
+    }
+
+    /// Apply one [`CgkaBatch`], resolving concurrent membership changes in it.
+    /// If `cited` is provided, members it does not entitle are removed together
+    /// with the batch's removes.
+    fn apply_batch(
+        &mut self,
+        batch: &CgkaBatch,
+        cited: Option<&BTreeSet<CitationId>>,
+    ) -> Result<(), CgkaError> {
+        // A single operation, or a batch of only updates, is applied in order.
+        if batch.len() == 1
+            || batch
+                .iter()
+                .all(|op| matches!(op.payload, CgkaOperation::Update { .. }))
+        {
+            for op in batch.iter() {
+                self.apply_operation_to_tree(op.clone())?;
+            }
+            if let Some(cited) = cited {
+                let dropped = self.non_members(cited)?;
+                self.remove_demoted_members(dropped);
+            }
+            return Ok(());
+        }
+
+        // A batch with at least one membership change requires blanking
+        // removed paths and sorting added leaves after all ops are applied.
+        let mut added_ids = Set::new();
+        let mut removed_ids = Set::new();
+        for op in batch.iter() {
+            match op.payload {
+                CgkaOperation::Add { added_id, .. } => {
+                    added_ids.insert(added_id);
+                }
+                CgkaOperation::Remove { ref removed, .. } => {
+                    removed_ids.extend(removed.iter().map(|r| (r.id, r.leaf_idx)));
+                }
+                _ => {}
+            }
+            self.apply_operation_to_tree(op.clone())?;
+        }
+        for id in cited
+            .map(|c| self.non_members(c))
+            .transpose()?
+            .unwrap_or_default()
+        {
+            let leaf_idx = self.tree.leaf_index_for_id(id)?.u32();
+            removed_ids.insert((id, leaf_idx));
+        }
+        self.tree
+            .sort_leaves_and_blank_paths_for_concurrent_membership_changes(added_ids, removed_ids);
         Ok(())
     }
 
@@ -960,6 +1173,7 @@ impl Cgka {
     #[instrument(skip_all)]
     fn rebuild_cgka(&self, batches: NonEmpty<CgkaBatch>) -> Result<Cgka, CgkaError> {
         let mut rebuilt_cgka = Cgka::new(self.doc_id, self.owner_id, self.owner_sks.clone());
+        rebuilt_cgka.membership = self.membership.clone();
         rebuilt_cgka.apply_batches(&batches)?;
         rebuilt_cgka.record_tree_root_secret();
         Ok(rebuilt_cgka)
@@ -1057,8 +1271,12 @@ impl Merge for Cgka {
         self.ops_graph.merge(fork.ops_graph);
         self.merge_root_secrets(&fork.root_secrets);
         if !self.ops_graph.cgka_op_heads.is_empty() {
-            self.replay_ops_graph()
-                .expect("two valid graphs should always merge causal consistency");
+            match self.replay_ops_graph() {
+                Ok(()) => {}
+                // Replayed before the tree's next use, once the view can answer.
+                Err(CgkaError::MembershipUnknown(_)) => self.pending_replay = true,
+                Err(e) => panic!("two valid graphs should always merge causal consistency: {e}"),
+            }
         }
     }
 }

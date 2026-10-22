@@ -242,6 +242,14 @@ impl<C: Backend> Harness<C> {
         self.answer(self.store.members(subject))
     }
 
+    pub fn members_for_subset(
+        &self,
+        subset: BTreeSet<CertificateId>,
+        subject: Identifier,
+    ) -> BTreeMap<Identifier, Power> {
+        self.answer(self.store.members_for_subset(subset, subject))
+    }
+
     pub fn subjects(&self) -> BTreeSet<Identifier> {
         self.answer(self.store.subjects())
     }
@@ -363,6 +371,7 @@ macro_rules! __keyline_conformance_laws {
             positive_power_is_monotone,
             listings_match_the_set,
             closure_is_sufficient,
+            members_for_subset_answers_as_the_subset,
             batches_equal_singles,
             interleaving_is_invisible,
         );

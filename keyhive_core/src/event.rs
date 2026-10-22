@@ -126,7 +126,7 @@ mod tests {
     };
     use beekem::{
         id::{MemberId, TreeId},
-        operation::CgkaAuthorization,
+        operation::RemovedMember,
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
@@ -153,18 +153,20 @@ mod tests {
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 42,
             invitation: None,
+            key_proof: None,
             predecessors: vec![],
             doc_id: TreeId::from(doc_id1),
-            authorization: CgkaAuthorization::Delegation([0u8; 32]),
+            citations: vec![],
         })?;
 
         let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
-            id: MemberId::from(&SigningKey::generate(&mut csprng)),
-            leaf_idx: 4,
+            removed: vec![RemovedMember {
+                id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                leaf_idx: 4,
+            }],
             predecessors: vec![],
-            removed_keys: vec![],
             doc_id: TreeId::from(doc_id2),
-            authorization: CgkaAuthorization::Revocation([0u8; 32]),
+            citations: vec![],
         })?;
 
         let cgka_op_3 = signer.try_sign_sync(CgkaOperation::Add {
@@ -172,9 +174,10 @@ mod tests {
             pk: ShareKey::generate(&mut csprng),
             leaf_index: 11,
             invitation: None,
+            key_proof: None,
             predecessors: vec![],
             doc_id: TreeId::from(doc_id1),
-            authorization: CgkaAuthorization::Delegation([0u8; 32]),
+            citations: vec![],
         })?;
 
         let hash1 = Digest::hash(&cgka_op_1);

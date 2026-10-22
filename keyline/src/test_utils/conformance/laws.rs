@@ -489,6 +489,48 @@ where
         });
 }
 
+/// `members_for_subset` over any subset answers as a store containing only that
+/// subset and ignores identities the background store does not contain.
+pub fn members_for_subset_answers_as_the_subset<C: Backend>()
+where
+    C::Watermark: TestWatermark,
+{
+    bolero::check!()
+        .with_arbitrary::<(CertSet<C::Watermark>, u64)>()
+        .for_each(|(set, mask)| {
+            let all: Harness<C> = build(set.certs.iter().cloned());
+            let (kept, left_out): (Vec<_>, Vec<_>) = set
+                .certs
+                .iter()
+                .enumerate()
+                .partition(|(i, _)| mask >> (i % 64) & 1 == 1);
+            let only: Harness<C> = build(kept.into_iter().map(|(_, c)| c.clone()));
+            let subset: BTreeSet<_> = only.certificates().iter().map(|c| c.id()).collect();
+            let everything: BTreeSet<_> = set
+                .certs
+                .iter()
+                .map(|c| assume_verified(c.clone()).id())
+                .collect();
+
+            for s in ids() {
+                assert_eq!(
+                    all.members_for_subset(subset.clone(), s),
+                    only.members(s),
+                    "members_for_subset({s}) over {} of {} certificates",
+                    subset.len(),
+                    everything.len()
+                );
+                if !left_out.is_empty() {
+                    assert_eq!(
+                        only.members_for_subset(everything.clone(), s),
+                        only.members(s),
+                        "members_for_subset({s}) containing certificates the store lacks"
+                    );
+                }
+            }
+        });
+}
+
 /// Inserting a set as one batch, or as two batches split anywhere, answers as
 /// inserting it one certificate at a time.
 pub fn batches_equal_singles<C: Backend>()
