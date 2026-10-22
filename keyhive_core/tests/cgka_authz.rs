@@ -92,7 +92,7 @@ async fn intercepted_path(who: &Hive) -> Box<PathChange> {
         .generate_doc(vec![], nonempty![[7u8; 32]])
         .await
         .expect("a document");
-    who.try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"warm up".as_ref())
+    who.try_encrypt_content(doc_id, &[1u8; 32], &[], b"warm up".as_ref())
         .await
         .expect("content encrypts");
     who.cgka_ops_for_doc(&doc_id)

@@ -265,7 +265,7 @@ async fn a_member_decrypts_with_membership_from_a_relay_known_by_contact_card() 
     alice.add_member(relay_id, doc_id, Power::Relay).await?;
     alice.add_member(bob_id, doc_id, Power::Edit).await?;
     let encrypted = alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"from alice")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"from alice")
         .await?;
 
     assert_eq!(

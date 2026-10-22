@@ -5,7 +5,6 @@ use crate::{
     principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
 use beekem::operation::CgkaOperation;
-use keyhive_codec::traits::StreamDecode;
 use keyhive_crypto::content::reference::ContentRef;
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::collections::HashMap;
@@ -90,10 +89,7 @@ pub enum CgkaOperationDetails {
 
 impl DebugEventTable {
     /// Create a new debug event table from a vector of events.
-    pub fn from_events<T: ContentRef + StreamDecode>(
-        events: Vec<Event<T>>,
-        nicknames: Nicknames,
-    ) -> Self {
+    pub fn from_events<T: ContentRef>(events: Vec<Event<T>>, nicknames: Nicknames) -> Self {
         if events.is_empty() {
             return Self {
                 rows: Vec::new(),
@@ -138,11 +134,7 @@ impl DebugEventRow {
         }
     }
 
-    pub fn from_event<T: ContentRef + StreamDecode>(
-        idx: usize,
-        event: &Event<T>,
-        nicknames: &Nicknames,
-    ) -> Self {
+    pub fn from_event<T: ContentRef>(idx: usize, event: &Event<T>, nicknames: &Nicknames) -> Self {
         match event {
             Event::PrekeysExpanded(signed) => {
                 let event_hash = Hash::new(signed.digest().as_slice(), nicknames);

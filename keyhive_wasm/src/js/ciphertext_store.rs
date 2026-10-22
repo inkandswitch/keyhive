@@ -4,6 +4,7 @@ use std::sync::Arc;
 use super::{base64::Base64, change_id::JsChangeId};
 use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use future_form::{FutureForm, Local};
+use keyhive_codec::error::DecodeError;
 use keyhive_core::{
     crypto::digest::Digest,
     store::ciphertext::{memory::MemoryCiphertextStore, CiphertextStore},
@@ -11,6 +12,9 @@ use keyhive_core::{
 use keyhive_crypto::signed::SerdeSigned;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+
+#[cfg(feature = "web-sys")]
+use keyhive_codec::traits::Decode;
 
 #[wasm_bindgen(js_name = CiphertextStore)]
 #[derive(Debug, Clone)]
@@ -74,10 +78,10 @@ impl CiphertextStore<Local, JsChangeId, Vec<u8>> for JsCiphertextStore {
                         let bytes = Base64(b64).into_vec().map_err(|e| {
                             JsGetCiphertextError(JsWebStorageError::ConvertFromBase64Error(e))
                         })?;
-                        let encrypted = bincode::deserialize(&bytes)
-                            .map_err(JsWebStorageError::DeserializationError)?;
+                        let encrypted = EncryptedContent::decode(&bytes)
+                            .map_err(JsWebStorageError::DecodeError)?;
 
-                        Ok(Some(encrypted))
+                        Ok(Some(Arc::new(encrypted)))
                     } else {
                         Ok(None)
                     }
@@ -119,10 +123,10 @@ impl CiphertextStore<Local, JsChangeId, Vec<u8>> for JsCiphertextStore {
                             let bytes = Base64(b64).into_vec().map_err(|e| {
                                 JsGetCiphertextError(JsWebStorageError::ConvertFromBase64Error(e))
                             })?;
-                            let encrypted = bincode::deserialize(&bytes)
-                                .map_err(JsWebStorageError::DeserializationError)?;
+                            let encrypted = EncryptedContent::decode(&bytes)
+                                .map_err(JsWebStorageError::DecodeError)?;
 
-                            acc.push(encrypted);
+                            acc.push(Arc::new(encrypted));
                         }
                     }
 
@@ -184,7 +188,7 @@ pub enum JsWebStorageError {
     RetrievalError(JsValue),
 
     #[error(transparent)]
-    DeserializationError(#[from] bincode::Error),
+    DecodeError(#[from] DecodeError),
 
     #[error("Error while removing item from web storage: {0:?}")]
     ConvertFromBase64Error(base64_simd::Error),

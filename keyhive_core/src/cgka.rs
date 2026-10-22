@@ -72,7 +72,7 @@ impl Cgka {
 
     pub fn try_pcs_key_hash(&mut self) -> Result<Digest<PcsKey>, CgkaError> {
         let pcs_key = self.0.decrypt_tree_root_secret()?;
-        Ok(Digest::hash(&pcs_key))
+        Ok(pcs_key.digest())
     }
 
     pub fn owner_sks(&self) -> &ShareKeyMap {
@@ -91,8 +91,7 @@ impl Cgka {
     >(
         &mut self,
         content_ref: &T,
-        content: &[u8],
-        pred_refs: &Vec<T>,
+        pred_refs: &[T],
         signer: &S,
         csprng: &mut R,
     ) -> Result<
@@ -103,7 +102,7 @@ impl Cgka {
         CgkaError,
     > {
         self.0
-            .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
+            .new_app_secret_for(content_ref, pred_refs, signer, csprng)
             .await
     }
 
