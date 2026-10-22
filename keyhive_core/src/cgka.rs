@@ -118,7 +118,7 @@ impl Cgka {
     }
 
     /// Add a member, returning its add operation or `None` if the member
-    /// is already in the tree. `key_proof` is the encoded prekey operation in
+    /// is already in the CGKA group. `key_proof` is the encoded prekey operation in
     /// which the member published `pk`.
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
@@ -230,8 +230,8 @@ impl Cgka {
         self.0.contains_predecessors(preds)
     }
 
-    /// Merge an add of a leaf whose secret `sk` this replica holds (an
-    /// invitation to it). The added member becomes the owner, holding `sk`.
+    /// Merge an add whose key's secret `sk` this replica holds (an invitation
+    /// to it). The added member becomes the owner, holding `sk`.
     pub fn merge_invite(
         &mut self,
         op: Arc<Signed<CgkaOperation>>,

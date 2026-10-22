@@ -67,9 +67,9 @@ pub struct DocumentState<T: ContentRef> {
 }
 
 impl<T: ContentRef> DocumentState<T> {
-    /// A member's document: its tree, built from its operations, and the
+    /// A member's document: its CGKA, built from its operations, and the
     /// content heads it knows.
-    pub(crate) fn with_tree(
+    pub(crate) fn with_cgka(
         id: DocumentId,
         cgka: Cgka,
         content_heads: HashSet<T>,
@@ -100,10 +100,10 @@ impl<T: ContentRef> DocumentState<T> {
         &mut self.cgka
     }
 
-    /// The individuals in this document's CGKA tree.
+    /// The members of this document's CGKA group.
     ///
     /// Resolves any outstanding concurrent membership change first, which
-    /// rebuilds the tree.
+    /// replays the CGKA graph.
     ///
     /// Returns whatever error the rebuild fails with.
     pub fn cgka_members(&mut self) -> Result<impl Iterator<Item = IndividualId> + '_, CgkaError> {
@@ -146,7 +146,7 @@ impl<T: ContentRef> DocumentState<T> {
             cgka.update(owner_pk, owner_sk, signer, csprng).await?;
         ops.push(update_op);
 
-        let doc = DocumentState::with_tree(
+        let doc = DocumentState::with_cgka(
             id,
             cgka,
             initial_content_heads.into_iter().collect(),
@@ -185,7 +185,7 @@ impl<T: ContentRef> DocumentState<T> {
         self.cgka.ops()
     }
 
-    /// Rotate our CGKA key, returning the update and the new leaf key pair.
+    /// Rotate our CGKA key, returning the update and the new key pair.
     #[instrument(skip_all)]
     pub async fn pcs_update<F: FutureForm, S: AsyncSigner<F>, R: RngCore + CryptoRng>(
         &mut self,
@@ -251,7 +251,7 @@ impl<T: ContentRef> DocumentState<T> {
 
     /// Encrypt `content`, returning it with the key it is encrypted under. The third
     /// element is the update this write had to make, and the key pair it sampled for our
-    /// leaf, if the tree had no current key.
+    /// key in the CGKA group, if we had no current key.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed<
         F: FutureForm,
@@ -480,8 +480,8 @@ where
             .ok()
     }
 
-    /// How many key agreement operations this replica's tree has applied;
-    /// `None` if it holds no tree for the document.
+    /// How many operations this replica's CGKA graph for the document has;
+    /// `None` if it has not joined the document's CGKA group.
     pub async fn cgka_ops_count(&self) -> Option<usize> {
         let state = self.keyhive.document_state(self.id).await?;
         let count = state.lock().await.cgka().ops_count();
@@ -489,7 +489,7 @@ where
     }
 
     /// The content heads this replica knows for the document; `None` if it
-    /// holds no tree for it.
+    /// has not joined the document's CGKA group.
     pub async fn content_heads(&self) -> Option<HashSet<T>> {
         let state = self.keyhive.document_state(self.id).await?;
         let heads = state.lock().await.content_heads.clone();
@@ -536,17 +536,17 @@ pub enum EncryptError {
     #[error("Failed to make app secret: {0}")]
     FailedToMakeAppSecret(CgkaError),
 
-    /// The tree could not be prepared for writing, because operations waiting
+    /// The CGKA group could not be prepared for writing, because operations waiting
     /// to be applied could not be applied, or the operations this replica's
     /// certificates imply for it could not be issued.
-    #[error("could not prepare the tree for writing: {0}")]
+    #[error("could not prepare the CGKA group for writing: {0}")]
     PrepareToWrite(Box<dyn core::error::Error + Send + Sync>),
 
-    /// A leaf of the tree lacks `Read` in this replica's certificates, and
-    /// this replica may not sign the remove that would remove it, because it
-    /// lacks `Read` itself.
-    #[error("a leaf lacks Read, and this replica may not sign its remove")]
-    LeafLacksRead,
+    /// A member of the CGKA group lacks `Read` in this replica's
+    /// certificates, and this replica may not sign the remove that would
+    /// remove it, because it lacks `Read` itself.
+    #[error("a member of the CGKA group lacks Read, and this replica may not sign its remove")]
+    CgkaMemberLacksRead,
 }
 
 /// Why content could not be written into an [`Envelope`].
