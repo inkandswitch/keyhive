@@ -587,7 +587,7 @@ impl Cgka {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
-        let (leaf_idx, _) = self.tree.remove_id(id)?;
+        let leaf_idx = self.tree.remove_id(id)?;
         let removed = RemovedMember { id, leaf_idx };
         self.sign_and_complete_remove(vec![removed], citations, signer)
             .await
