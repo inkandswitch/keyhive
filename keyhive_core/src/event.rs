@@ -124,10 +124,7 @@ mod tests {
     use crate::{
         principal::individual::id::IndividualId, store::ciphertext::memory::MemoryCiphertextStore,
     };
-    use beekem::{
-        id::{MemberId, TreeId},
-        operation::RemovedMember,
-    };
+    use beekem::id::{MemberId, TreeId};
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
     use keyhive_crypto::{
@@ -160,10 +157,7 @@ mod tests {
         })?;
 
         let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
-            removed: vec![RemovedMember {
-                id: MemberId::from(&SigningKey::generate(&mut csprng)),
-                leaf_idx: 4,
-            }],
+            removed: vec![],
             predecessors: vec![],
             doc_id: TreeId::from(doc_id2),
             citations: vec![],

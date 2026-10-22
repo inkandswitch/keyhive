@@ -141,26 +141,24 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                     )
                 }
                 CgkaOperationDetails::Remove {
-                    removed,
+                    citations,
                     predecessors,
                 } => {
-                    let removed = if removed.is_empty() {
-                        "Removed: none".to_string()
+                    let cited = if citations.is_empty() {
+                        "none".to_string()
                     } else {
-                        removed
+                        citations
                             .iter()
-                            .map(|r| {
-                                format!("ID: {}\nLeaf Index: {}", r.id.short_hex(), r.leaf_index)
-                            })
+                            .map(|c| c.short_hex())
                             .collect::<Vec<String>>()
-                            .join("\n")
+                            .join(", ")
                     };
                     let preds = predecessors
                         .iter()
                         .map(|p| p.short_hex())
                         .collect::<Vec<String>>()
                         .join(", ");
-                    format!("{}\nPredecessors: {}", removed, preds)
+                    format!("Citations: {}\nPredecessors: {}", cited, preds)
                 }
                 CgkaOperationDetails::Update {
                     id,
