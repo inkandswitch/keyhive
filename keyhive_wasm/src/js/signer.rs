@@ -1,11 +1,10 @@
-use super::{signed::JsSigned, signing_error::JsSigningError};
+use super::{signed_bytes::JsSignedBytes, signing_error::JsSigningError};
 use ed25519_dalek::{Signature, SignatureError, SigningKey, VerifyingKey};
 use future_form::Local;
 use futures::future::LocalBoxFuture;
 use keyhive_crypto::{
-    signed::SigningError,
-    signer::async_signer::{self, AsyncSigner},
-    verifiable::Verifiable,
+    bytes::Bytes, signed::SigningError, signer::async_signer::AsyncSigner, verifiable::Verifiable,
+    verified::Verified,
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -133,10 +132,12 @@ impl JsSigner {
         }
     }
 
+    /// Sign bytes with this key. They verify as nothing else the key signs:
+    /// not as a certificate, a prekey operation or a CGKA operation.
     #[wasm_bindgen(js_name = trySign)]
-    pub async fn try_sign(&self, bytes: &[u8]) -> Result<JsSigned, JsSigningError> {
-        let signed = async_signer::try_sign_async::<Local, _, _>(self, bytes.to_vec()).await?;
-        Ok(JsSigned(signed))
+    pub async fn try_sign(&self, bytes: &[u8]) -> Result<JsSignedBytes, JsSigningError> {
+        let verified = Verified::sign::<Local, _>(&Bytes::from(bytes), self).await?;
+        Ok(JsSignedBytes(verified.signed().clone()))
     }
 
     #[wasm_bindgen(getter, js_name = verifyingKey)]
