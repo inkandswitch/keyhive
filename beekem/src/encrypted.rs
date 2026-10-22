@@ -33,7 +33,7 @@ use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
     signable::{Kind, Kinded, TAG},
     signed::SerdeSigned,
-    siv::Siv,
+    siv::{nonces_match, Siv},
     symmetric_key::SymmetricKey,
 };
 use serde::{Deserialize, Serialize};
@@ -67,7 +67,7 @@ const NONCE_KEY_CONTEXT: &str = "/keyhive/content/nonce-key/v1/2026-10-26";
 /// `T` is the type the plaintext is expected to be. The chunks are always
 /// well formed (see the [module docs](self)): construction and decoding check
 /// their lengths.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EncryptedContent<T, Cr: ContentRef> {
     /// The content ref the block's key is derived for.
     pub content_ref: Cr,
@@ -105,9 +105,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
             pred_refs,
             pcs_key_hash,
             pcs_update_op_hash,
-            chunks: Vec::with_capacity(
-                plaintext.len() + plaintext.len().div_ceil(CHUNK_LEN).max(1) * CHUNK_OVERHEAD,
-            ),
+            chunks: Vec::with_capacity(plaintext.len()),
             _plaintext_tag: PhantomData,
         };
         let keys = ChunkKeys::new(key, doc_id, &content.header());
@@ -118,7 +116,8 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
             let aad = keys.aad(i, i + 1 == count);
             let nonce = keys.nonce(&aad, chunk);
             let mut buf = chunk.to_vec();
-            keys.cipher.encrypt_in_place(&nonce, &aad, &mut buf)?;
+            keys.cipher
+                .encrypt_in_place(&XNonce::from(nonce), &aad, &mut buf)?;
             content.chunks.extend_from_slice(&nonce);
             content.chunks.extend_from_slice(&buf);
         }
@@ -137,14 +136,16 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
     ) -> Result<Vec<u8>, ContentDecryptError> {
         let keys = ChunkKeys::new(&key, doc_id, &self.header());
         let count = chunk_count(self.chunks.len()).expect("chunks are well formed");
-        let mut plaintext = Vec::with_capacity(self.chunks.len() - count * CHUNK_OVERHEAD);
+        let mut plaintext = Vec::with_capacity(self.chunks.len());
         for (i, chunk) in self.chunks.chunks(FULL_CHUNK).enumerate() {
-            let (nonce, ciphertext) = chunk.split_at(NONCE_LEN);
+            let (nonce, ciphertext) = chunk
+                .split_first_chunk::<NONCE_LEN>()
+                .expect("every chunk holds its nonce and tag");
             let aad = keys.aad(i, i + 1 == count);
             let mut buf = ciphertext.to_vec();
             keys.cipher
-                .decrypt_in_place(XNonce::from_slice(nonce), &aad, &mut buf)?;
-            if !same_nonce(&keys.nonce(&aad, &buf), nonce) {
+                .decrypt_in_place(&XNonce::from(*nonce), &aad, &mut buf)?;
+            if !nonces_match(&keys.nonce(&aad, &buf), nonce) {
                 return Err(ContentDecryptError::NonceMismatch);
             }
             plaintext.extend_from_slice(&buf);
@@ -220,16 +221,6 @@ impl<T, Cr: ContentRef> Decode for EncryptedContent<T, Cr> {
             chunks: chunks.to_vec(),
             _plaintext_tag: PhantomData,
         })
-    }
-}
-
-impl<T, Cr: ContentRef> core::hash::Hash for EncryptedContent<T, Cr> {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        self.content_ref.hash(state);
-        self.pred_refs.hash(state);
-        self.pcs_key_hash.hash(state);
-        self.pcs_update_op_hash.hash(state);
-        self.chunks.hash(state);
     }
 }
 
@@ -332,11 +323,11 @@ impl ChunkKeys {
         aad
     }
 
-    fn nonce(&self, aad: &[u8; 41], chunk: &[u8]) -> XNonce {
+    fn nonce(&self, aad: &[u8; 41], chunk: &[u8]) -> [u8; NONCE_LEN] {
         let mut hasher = blake3::Hasher::new_keyed(&self.nonce_key);
         hasher.update(aad);
         hasher.update(chunk);
-        let mut nonce = XNonce::default();
+        let mut nonce = [0; NONCE_LEN];
         hasher.finalize_xof().fill(&mut nonce);
         nonce
     }
@@ -350,15 +341,6 @@ fn chunk_count(len: usize) -> Option<usize> {
     let last = len.checked_sub((count - 1) * FULL_CHUNK)?;
     let well_formed = last >= CHUNK_OVERHEAD && (count == 1 || last > CHUNK_OVERHEAD);
     well_formed.then_some(count)
-}
-
-/// Compares every byte, whatever the first difference.
-fn same_nonce(expected: &XNonce, received: &[u8]) -> bool {
-    expected
-        .iter()
-        .zip(received)
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
 }
 
 /// The public information for an encrypted secret ciphertext.
