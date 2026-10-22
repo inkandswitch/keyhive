@@ -239,6 +239,14 @@ mod tests {
     }
 
     #[test]
+    fn extending_with_present_citations_keeps_the_set_shared() {
+        let set = ids(0..100);
+        let mut extended = set.dupe();
+        extended.extend(ids(0..100).iter().copied());
+        assert!(extended.ptr_eq(&set));
+    }
+
+    #[test]
     fn only_checkpoints_and_recent_sets_are_retained() {
         let mut sets = DocumentSets::default();
         let digest = |n: u64| OpDigest::from(*blake3::hash(&n.to_le_bytes()).as_bytes());
