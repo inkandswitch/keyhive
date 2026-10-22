@@ -544,10 +544,13 @@ where
     /// adopt the secrets `me` holds for its key in the CGKA group.
     /// An operation that does not apply is logged and skipped.
     ///
-    /// The operations are applied without a membership view, which requires
+    /// The operations are applied without a membership view, requiring
     /// no Keyline answer, and the CGKA then replays its graph once with that
-    /// view. If Keyline cannot answer at that point, or the replay fails, that
-    /// is logged and the replay waits for the CGKA's next use.
+    /// view. The replay asks Keyline only for what the cached non-members do
+    /// not cover, so a fork or a reload of a graph already replayed does not
+    /// require a new query. If Keyline cannot answer at that point, or the
+    /// replay fails, that is logged and the replay waits for the CGKA's next
+    /// use.
     async fn cgka_from_ops(
         &self,
         doc_id: DocumentId,
@@ -583,14 +586,9 @@ where
         }
         adopt_own_cgka_secrets(&mut cgka, me, secrets);
         cgka.set_membership_view(self.membership_view(doc));
-        // Keep the answers fetched below until the replay has used them.
-        let _replaying = self.certificates.cited.replaying(doc);
-        let replayed = async {
-            self.fetch_replay_answers(doc, &cgka).await?;
-            self.require_keyline_answers(doc, &mut cgka, Cgka::replay_if_pending)
-                .await
-        }
-        .await;
+        let replayed = self
+            .require_keyline_answers(doc, &mut cgka, Cgka::replay_if_pending)
+            .await;
         match replayed {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
