@@ -612,31 +612,68 @@ where
     ///
     /// Checking at write time means no honest writer encrypts to a member of
     /// the CGKA group that lacks `Read` in the writer's certificates. If it
-    /// cannot remove such a member, the write is refused.
-    async fn reconcile_before_writing(&self, doc_id: DocumentId) -> Result<(), EncryptError> {
+    /// cannot remove such a member, the write is refused. Appends the
+    /// operations issued to `fresh`.
+    async fn reconcile_before_writing(
+        &self,
+        reconciled: &Reconciled<'_>,
+        doc_id: DocumentId,
+        fresh: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
+    ) -> Result<(), EncryptError> {
         let doc = Identifier::from(doc_id);
         let Some(state) = self.document_state(doc_id).await else {
             return Ok(());
         };
+        let implied = self
+            .issue_implied_ops(reconciled, doc_id, doc, &state, fresh)
+            .await
+            .map_err(|e| EncryptError::PrepareToWrite(Box::new(e)))?;
+        match implied {
+            ImpliedOps::Issued => Ok(()),
+            ImpliedOps::RemoveBlocked => Err(EncryptError::CgkaMemberLacksRead),
+        }
+    }
+
+    /// Begin a write to `doc`: take the insert lock, issue the CGKA operations
+    /// this replica's certificates imply for `doc`
+    /// ([`Self::reconcile_before_writing`]), then rotate this identity's key
+    /// in its CGKA group if that key is a prekey since rotated away.
+    ///
+    /// The lock stays held until [`Self::finish_write`] so no operation
+    /// received after the reconciliation merges before the write. One could
+    /// otherwise add a member that lacks `Read` in this replica's
+    /// certificates. If preparing fails, the write is finished here.
+    async fn prepare_to_write(&self, doc: DocumentId) -> Result<Writing<'_>, EncryptError> {
+        let reconciled = self.certificates.reconciled.lock().await;
         let mut fresh = Vec::new();
-        let result: Result<(), EncryptError> = async {
-            // Serialized with reconciliation so a concurrent insert is either
-            // already in the CGKA graph or not yet in the store.
-            let reconciled = self.certificates.reconciled.lock().await;
-            let implied = self
-                .issue_implied_ops(&reconciled, doc_id, doc, &state, &mut fresh)
-                .await
-                .map_err(|e| EncryptError::PrepareToWrite(Box::new(e)))?;
-            match implied {
-                ImpliedOps::Issued => Ok(()),
-                ImpliedOps::RemoveBlocked => Err(EncryptError::CgkaMemberLacksRead),
+        let prepared = async {
+            self.reconcile_before_writing(&reconciled, doc, &mut fresh)
+                .await?;
+            if self.own_key_is_a_retired_prekey(doc).await {
+                let (op, _) = self.rotate_own_key(doc).await?;
+                fresh.push(Arc::new(op));
             }
+            Ok(())
         }
         .await;
+        let writing = Writing { reconciled, fresh };
+        match prepared {
+            Ok(()) => Ok(writing),
+            Err(error) => {
+                self.finish_write(writing).await;
+                Err(error)
+            }
+        }
+    }
+
+    /// Release a write's insert lock, then, after dropping the lock,
+    /// tell the listener about the CGKA operations it issued.
+    async fn finish_write(&self, writing: Writing<'_>) {
+        let Writing { reconciled, fresh } = writing;
+        drop(reconciled);
         for op in &fresh {
             self.event_listener.on_cgka_op(op).await;
         }
-        result
     }
 
     /// Whether this identity's key in `doc_id`'s CGKA group is a prekey it
@@ -1571,18 +1608,19 @@ where
     where
         T: for<'de> Deserialize<'de>,
     {
-        self.prepare_to_write(doc)
+        let writing = self
+            .prepare_to_write(doc)
             .await
             .map_err(EncryptInEnvelopeError::from)?;
-        let handle = self.document_by_id(doc).await?;
-        let signer = { self.active.signer.clone() };
-        let (encrypted_content, rotation) = {
+        let encrypted: Result<_, EnvelopeError<T>> = async {
+            let handle = self.document_by_id(doc).await?;
+            let signer = { self.active.signer.clone() };
             let mut locked_csprng = self.csprng.lock().await;
             let mut locked = handle.lock().await;
             self.settle_for_write(doc, &mut locked)
                 .await
                 .map_err(EncryptInEnvelopeError::from)?;
-            locked
+            Ok(locked
                 .try_encrypt_content_in_envelope(
                     content_ref,
                     content,
@@ -1590,8 +1628,11 @@ where
                     &signer,
                     &mut *locked_csprng,
                 )
-                .await?
-        };
+                .await?)
+        }
+        .await;
+        self.finish_write(writing).await;
+        let (encrypted_content, rotation) = encrypted?;
         Ok(EncryptedContentWithUpdate {
             encrypted_content,
             update_op: self.record_rotation(rotation).await,
@@ -1608,10 +1649,10 @@ where
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
-        self.prepare_to_write(doc).await?;
-        let handle = self.document_by_id(doc).await?;
-        let signer = { self.active.signer.clone() };
-        let (encrypted_content, application_secret_key, rotation) = {
+        let writing = self.prepare_to_write(doc).await?;
+        let encrypted = async {
+            let handle = self.document_by_id(doc).await?;
+            let signer = { self.active.signer.clone() };
             let mut locked_csprng = self.csprng.lock().await;
             let mut locked = handle.lock().await;
             self.settle_for_write(doc, &mut locked).await?;
@@ -1624,8 +1665,11 @@ where
                     &mut *locked_csprng,
                 )
                 .await
-                .map_err(EncryptContentError::from)?
-        };
+                .map_err(EncryptContentError::from)
+        }
+        .await;
+        self.finish_write(writing).await;
+        let (encrypted_content, application_secret_key, rotation) = encrypted?;
         let update_op = self.record_rotation(rotation).await;
         Ok((
             EncryptedContentWithUpdate {
@@ -1789,22 +1833,17 @@ where
         &self,
         doc: DocumentId,
     ) -> Result<(SerdeSigned<CgkaOperation>, LeafKeyPair), EncryptError> {
-        self.reconcile_before_writing(doc).await?;
-        self.rotate_own_key(doc).await
-    }
-
-    /// Run before encrypting into `doc`. This issues the operations this replica's
-    /// certificates imply for it, then rotates this identity's key in its CGKA
-    /// group if that key is a prekey since rotated away.
-    async fn prepare_to_write(&self, doc: DocumentId) -> Result<(), EncryptError> {
-        self.reconcile_before_writing(doc).await?;
-        if self.own_key_is_a_retired_prekey(doc).await {
-            self.rotate_own_key(doc).await?;
+        let mut writing = self.prepare_to_write(doc).await?;
+        let rotated = self.rotate_own_key(doc).await;
+        if let Ok((op, _)) = &rotated {
+            writing.fresh.push(Arc::new(op.clone()));
         }
-        Ok(())
+        self.finish_write(writing).await;
+        rotated
     }
 
-    /// Rotate this identity's key in `doc`'s CGKA group, and record the update.
+    /// Rotate this identity's key in `doc`'s CGKA group and keep the new
+    /// secret. The caller tells the listener about the update.
     async fn rotate_own_key(
         &self,
         doc: DocumentId,
@@ -1819,7 +1858,6 @@ where
         };
         let (pk, sk) = new_key_pair;
         self.active.insert_rotated_secret(pk, sk).await;
-        self.record_cgka_ops([Arc::new(op.clone())]).await;
         Ok((op, new_key_pair))
     }
 
@@ -4040,9 +4078,11 @@ struct Certificates<K> {
     /// and one keyhive's concurrent writes reach its CGKA graphs in store
     /// order.
     ///
-    /// Also held while receiving a CGKA operation, while issuing the
-    /// operations implied for a document before a write, and in [`Keyhive::add_self_to`], so an
-    /// operation's citations are chosen and signed on the same heads. A fork
+    /// Also held while receiving a CGKA operation, throughout a write (from
+    /// issuing the operations implied for the document through encrypting or
+    /// rotating), and in [`Keyhive::add_self_to`], so an operation's citations
+    /// are chosen and signed on the same heads, and no operation merges
+    /// between a write's reconciliation and the write. A fork
     /// and its trunk share it but not their CGKA graphs (see [`ForkAsync`] for
     /// `Keyhive`). Level 0 in the lock order: nothing takes it while holding
     /// any other lock.
@@ -4163,6 +4203,14 @@ impl<E: core::error::Error + 'static> LacksKeylineAnswer for ReceiveCgkaOpError<
 /// error is taken as final.
 fn never_merges(error: &CgkaError) -> bool {
     !error.is_missing_dependency() && error.lacked().is_none()
+}
+
+/// A write in progress ([`Keyhive::prepare_to_write`]): the insert lock,
+/// held until the write is finished, and the CGKA operations issued for it,
+/// for the listener once the lock is released.
+struct Writing<'a> {
+    reconciled: Reconciled<'a>,
+    fresh: Vec<Arc<SerdeSigned<CgkaOperation>>>,
 }
 
 /// The held insert lock ([`Certificates::reconciled`]). A function that
