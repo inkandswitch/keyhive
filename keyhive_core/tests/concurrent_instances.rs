@@ -94,7 +94,10 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
         predecessors: cgka_heads(&bob, design_doc).await,
         doc_id: TreeId::from(design_doc),
     };
-    let signed = alice.try_sign(op).await.map_err(|e| e.to_string())?;
+    let signed = alice
+        .serde_sign_cgka_op(op)
+        .await
+        .map_err(|e| e.to_string())?;
     bob.receive_cgka_op(signed)
         .await
         .map_err(|e| e.to_string())?;

@@ -39,7 +39,7 @@ use super::{
     principal::JsPrincipal,
     revoke_member_error::JsRevokeMemberError,
     share_key::JsShareKey,
-    signed::JsSigned,
+    signed_bytes::JsSignedBytes,
     signed_delegation::JsSignedDelegation,
     signed_revocation::JsSignedRevocation,
     signer::JsSigner,
@@ -177,10 +177,13 @@ impl JsKeyhive {
         Ok(JsDocumentId(doc_id))
     }
 
+    /// Sign bytes with this keyhive's key. They verify as nothing else the key
+    /// signs: not as a certificate, a prekey operation or a CGKA operation.
     #[wasm_bindgen(js_name = trySign)]
-    pub async fn try_sign(&self, data: &[u8]) -> Result<JsSigned, JsSigningError> {
+    pub async fn try_sign(&self, data: &[u8]) -> Result<JsSignedBytes, JsSigningError> {
         init_span!("JsKeyhive::try_sign");
-        Ok(self.0.try_sign(data.to_vec()).await.map(JsSigned)?)
+        let verified = self.0.sign_bytes(data.to_vec()).await?;
+        Ok(JsSignedBytes(verified.signed().dupe()))
     }
 
     /// Record `heads` as the document's current content heads: the
