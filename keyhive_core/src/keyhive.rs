@@ -263,7 +263,7 @@ where
             certificates: Arc::new(Certificates {
                 store: keyline,
                 reconciled: async_lock::Mutex::new(None),
-                cited: SharedCitations::new(),
+                cited: SharedCitations::default(),
             }),
             _plaintext_phantom: PhantomData,
         })))
@@ -3152,7 +3152,7 @@ where
         let certificates = Arc::new(Certificates {
             store: keyline,
             reconciled: async_lock::Mutex::new(None),
-            cited: SharedCitations::new(),
+            cited: SharedCitations::default(),
         });
         Self::from_archive_sharing(
             archive,

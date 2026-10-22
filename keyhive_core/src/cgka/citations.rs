@@ -262,10 +262,9 @@ impl CitedCertificates {
         let Some(cached) = self.cached.get_mut(&resource) else {
             return;
         };
-        while cached.len() > ANSWERS_PER_RESOURCE {
-            if let Some(key) = cached.pop_front() {
-                self.members.remove(&key);
-            }
+        let excess = cached.len().saturating_sub(ANSWERS_PER_RESOURCE);
+        for key in cached.drain(..excess) {
+            self.members.remove(&key);
         }
     }
 }
@@ -290,17 +289,12 @@ fn changed_to(base: &Members, answer: &BTreeMap<Identifier, Power>) -> Members {
 }
 
 /// [`CitedCertificates`] shared by a keyhive, its forks, and their CGKA
-/// groups.
+/// groups. A new keyhive starts from the empty default (share it with
+/// [`Dupe::dupe`]).
 #[derive(Clone, Default, Dupe)]
 pub(crate) struct SharedCitations(Arc<Mutex<CitedCertificates>>);
 
 impl SharedCitations {
-    /// Empty records and answers, for a new keyhive. Share them with
-    /// [`Dupe::dupe`].
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     pub(crate) fn lock(&self) -> MutexGuard<'_, CitedCertificates> {
         self.0.lock().expect("the citations lock is not poisoned")
     }
