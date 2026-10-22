@@ -1,8 +1,7 @@
 //! Path secrets contained in an update operation.
 
 use crate::{
-    encrypted::encrypt_secret, error::CgkaError, keys::ShareKeyMap, operation::CgkaOperation,
-    test_utils::Group,
+    encrypted::encrypt_secret, error::CgkaError, operation::CgkaOperation, test_utils::Group,
 };
 use alloc::{sync::Arc, vec};
 use future_form::Local;
@@ -89,26 +88,4 @@ async fn a_member_who_receives_forged_path_secrets_still_agrees_on_later_keys() 
     group.broadcast(&Arc::new(op));
 
     group.assert_key_agreement("after a forged update, an honest update and write");
-}
-
-#[tokio::test]
-async fn a_member_who_lacks_its_leaf_secret_rotates_its_leaf_to_write() {
-    let mut rng = StdRng::seed_from_u64(0x9a7b_0002);
-    let mut group = Group::new(3, &mut rng).await;
-    group.settle(0, &mut rng).await;
-
-    // As if another instance of this identity rotated the leaf and has not
-    // shared the new secret yet.
-    let mut stranded = group.replicas[1].clone();
-    stranded.owner_sks = ShareKeyMap::new();
-    stranded.root_secrets = Default::default();
-    let signer = group.members[1].signer.clone();
-    let leaf = stranded.owner_leaf_key();
-    let (_, rotation) = stranded
-        .new_app_secret_for::<Local, _, [u8; 32], _>(&[0; 32], b"b", &vec![], &signer, &mut rng)
-        .await
-        .expect("a member who lacks its leaf secret still writes");
-
-    assert!(rotation.is_some(), "writing rotated");
-    assert_ne!(stranded.owner_leaf_key(), leaf, "the leaf was replaced");
 }

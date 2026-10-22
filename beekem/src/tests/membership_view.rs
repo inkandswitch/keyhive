@@ -128,7 +128,7 @@ impl MembershipView for Fetched {
 }
 
 #[tokio::test]
-async fn a_removal_without_an_answer_waits_for_a_replay() {
+async fn a_replay_lacking_a_membership_answer_changes_nothing_until_answered() {
     let mut rng = StdRng::seed_from_u64(0xd00b_3333);
     let mut group = Group::new(3, &mut rng).await;
     let (a, m) = (0, 2);

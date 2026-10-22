@@ -386,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cached_answer_is_keylines_whatever_it_was_built_from() {
+    fn a_cached_answer_equals_keylines_answer_whatever_it_was_built_from() {
         let mut ids: Vec<Identifier> = (1..=4).map(id).collect();
         ids.sort();
         let [a, b, c, d] = ids[..] else {
@@ -435,10 +435,15 @@ mod tests {
         let mut cited = CitedCertificates::default();
         let (_, resource) = key(1);
         cited.begin_replay(resource);
+        cited.begin_replay(resource);
         for set in 1..=u8::try_from(ANSWERS_PER_RESOURCE + 1).expect("small") {
             cited.cache(key(set), BTreeMap::new());
         }
-        assert!(cited.members(&key(1)).is_some());
+        cited.end_replay(resource);
+        assert!(
+            cited.members(&key(1)).is_some(),
+            "a replay is still in progress"
+        );
         cited.end_replay(resource);
         assert!(cited.members(&key(1)).is_none());
     }

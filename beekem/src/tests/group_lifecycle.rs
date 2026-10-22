@@ -6,7 +6,7 @@ use crate::{
     test_utils::{for_each_seed, member, Group, Member, NO_CITATIONS},
     transact::{Fork, Merge},
 };
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec, vec::Vec};
 use core::hash::{Hash, Hasher};
 use future_form::{FutureForm, Local};
 use keyhive_crypto::{
@@ -400,4 +400,26 @@ async fn a_first_add_whose_signing_fails_can_be_retried() {
         .await
         .expect("the add succeeds");
     assert!(retried.is_some(), "the retried add created no operation");
+}
+
+#[tokio::test]
+async fn a_member_who_lacks_its_leaf_secret_rotates_its_leaf_to_write() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0002);
+    let mut group = Group::new(3, &mut rng).await;
+    group.settle(0, &mut rng).await;
+
+    // As if another instance of this identity rotated the leaf and has not
+    // shared the new secret yet.
+    let mut stranded = group.replicas[1].clone();
+    stranded.owner_sks = ShareKeyMap::new();
+    stranded.root_secrets = Default::default();
+    let signer = group.members[1].signer.clone();
+    let leaf = stranded.owner_leaf_key();
+    let (_, rotation) = stranded
+        .new_app_secret_for::<Local, _, [u8; 32], _>(&[0; 32], b"b", &vec![], &signer, &mut rng)
+        .await
+        .expect("a member who lacks its leaf secret still writes");
+
+    assert!(rotation.is_some(), "writing rotated");
+    assert_ne!(stranded.owner_leaf_key(), leaf, "the leaf was replaced");
 }

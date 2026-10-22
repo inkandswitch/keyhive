@@ -4392,12 +4392,20 @@ mod tests {
     #[tokio::test]
     async fn certificate_sets_evicted_from_long_concurrent_branches_are_rebuilt_unchanged(
     ) -> TestResult {
-        let (owner, bob) = (make_keyhive().await, make_keyhive().await);
+        let (owner, bob, carol) = (
+            make_keyhive().await,
+            make_keyhive().await,
+            make_keyhive().await,
+        );
         let bob_id = introduce(&owner, &bob).await;
+        let carol_id = introduce(&owner, &carol).await;
         let doc = owner.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
         owner.add_member(bob_id, doc, Power::Read).await?;
         send(&owner, &bob, true).await?;
-        for _ in 0..6 {
+        for i in 0..6 {
+            if i == 3 {
+                owner.add_member(carol_id, doc, Power::Read).await?;
+            }
             owner.force_pcs_update(doc).await?;
             bob.force_pcs_update(doc).await?;
         }
@@ -4407,7 +4415,7 @@ mod tests {
         let state = owner
             .document_state(doc)
             .await
-            .ok_or("has joined the CGKA group")?;
+            .ok_or("has not joined the CGKA group")?;
         let locked = state.lock().await;
         let cgka = locked.cgka();
         let heads: Vec<_> = cgka.heads().iter().collect();
@@ -4416,7 +4424,7 @@ mod tests {
         };
         assert_eq!(
             cgka.op(merge)
-                .ok_or("holds its head")?
+                .ok_or("the CGKA graph lacks its head")?
                 .payload
                 .predecessors()
                 .len(),
@@ -4427,17 +4435,29 @@ mod tests {
             .iter()
             .flat_map(|batch| batch.iter().map(|op| Digest::hash(op.as_ref())))
             .collect();
-        let early = [ops[1]];
 
         // Fewer sets kept than either branch has operations.
         let mut sets = CertificateSets::retaining(4, 1024);
         sets.predecessor_set(cgka, [merge])
-            .ok_or("holds every op")?;
-        let rebuilt = sets.predecessor_set(cgka, &early).ok_or("holds the op")?;
-        let fresh = CertificateSets::new()
-            .predecessor_set(cgka, &early)
-            .ok_or("holds the op")?;
-        assert_eq!(rebuilt, fresh);
+            .ok_or("the CGKA graph lacks an op")?;
+        let mut distinct = Vec::new();
+        for op in &ops {
+            let set = CertificateSets::new().predecessor_set(cgka, [op]);
+            if !distinct.contains(&set) {
+                distinct.push(set);
+            }
+        }
+        assert!(
+            distinct.len() > 2,
+            "the branches cite the same certificates"
+        );
+        for op in &ops {
+            assert_eq!(
+                sets.predecessor_set(cgka, [op]),
+                CertificateSets::new().predecessor_set(cgka, [op]),
+                "{op}"
+            );
+        }
         Ok(())
     }
 
@@ -4748,7 +4768,7 @@ mod tests {
         let ops = alice
             .cgka_ops_for_doc(&doc_id)
             .await
-            .ok_or("this replica has joined the document's CGKA group")?;
+            .ok_or("this replica has not joined the document's CGKA group")?;
         assert!(!ops.is_empty());
         for op in &ops {
             assert_eq!(alice.cgka_op_is_authorized(op, doc_id).await?, Ok(()));
@@ -5876,12 +5896,8 @@ mod tests {
         Ok(())
     }
 
-    /// Merging an operation adopts only the secrets for keys it gives one in
-    /// the CGKA group: an invitation's prekey for the invitee, an update's
-    /// keys for its author, and nothing for anyone else.
     #[tokio::test]
-    async fn test_own_cgka_keys_are_the_keys_an_operation_gives_one_in_the_cgka_group() -> TestResult
-    {
+    async fn own_cgka_keys_are_only_those_an_operation_gives_its_owner() -> TestResult {
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -5915,9 +5931,8 @@ mod tests {
         Ok(())
     }
 
-    /// A redundant direct membership must not put someone in the CGKA group twice.
     #[tokio::test]
-    async fn test_a_second_route_does_not_add_a_member_to_the_cgka_group_twice() -> TestResult {
+    async fn a_second_route_does_not_add_a_member_to_the_cgka_group_twice() -> TestResult {
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -5959,7 +5974,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn adding_a_reader_before_joining_the_cgka_group_succeeds() -> TestResult {
+    async fn a_reader_added_before_joining_the_cgka_group_is_added_at_the_next_write() -> TestResult
+    {
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -5986,6 +6002,15 @@ mod tests {
         let update = bob.add_member(carol, project_id, Power::Read).await?;
 
         assert!(update.cgka_ops.is_empty());
+
+        send(&alice, &bob, true).await?;
+        bob.try_encrypt_content(project_id, &[2u8; 32], &vec![[1u8; 32]], b"after joining")
+            .await?;
+        let members = bob
+            .cgka_members_for(project_id)
+            .await?
+            .ok_or("bob has not joined the project's CGKA group")?;
+        assert!(members.contains(&carol));
 
         Ok(())
     }

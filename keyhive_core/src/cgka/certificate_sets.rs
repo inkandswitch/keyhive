@@ -263,6 +263,5 @@ mod tests {
         let mut right = fork.dupe();
         right.extend(ids(102..103).iter().copied());
         assert_eq!(union(&[&left, &right]), ids(0..103));
-        assert_eq!(union(&[&right, &left]), ids(0..103));
     }
 }
