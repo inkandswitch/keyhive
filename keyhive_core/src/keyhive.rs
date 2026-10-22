@@ -714,8 +714,10 @@ where
         fresh: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
     ) -> Result<ImpliedOps, CgkaSyncError<K::Error>> {
         let signer = self.active.signer.clone();
-        let next = self.next_citations(doc, state).await?;
+        // Settle first. A replay evicts the answers cached before it, which
+        // would include the next operation's.
         let members = self.cgka_group_members(doc, state).await?;
+        let next = self.next_citations(doc, state).await?;
         let triggers_removes = members
             .iter()
             .any(|member| !next.readers.contains(&Identifier::from(*member)));
