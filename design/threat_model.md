@@ -29,13 +29,13 @@ This document describes who Keyhive defends against, what it defends, and what i
 
 Holds `Relay`: stores and forwards ciphertext; sees operation hashes, sizes, timing, and the membership graph. Cannot decrypt.
 
-_Mitigations_: content is E2EE; `Relay` is excluded from the BeeKEM tree, so a relay never receives a path secret; a relay serves only peers that can prove `Relay` or better. A relay can still remove members from a document's tree ([G3](#g3-eviction-through-a-self-revoked-delegation)).
+_Mitigations_: content is E2EE; `Relay` is excluded from the BeeKEM tree, so a relay never receives a path secret; a relay serves only peers that can prove `Relay` or better. A CGKA operation's signer needs `Read` in the operation's own certificates, so a relay cannot change a document's tree.
 
 ### A2. Revoked member
 
 Was a legitimate reader or editor. Retains every key and plaintext seen while a member.
 
-_Mitigations_: post-compromise security. The next path update after a removal produces a root secret the revoked member cannot derive. Each revocation records the content heads it was issued after, so the content layer can reject the revoked member's later edits (T5). Historical plaintext is not recoverable from them; see [Non-Goals](#non-goals). Today a revoked member can put a fresh key of its own back in the tree ([G1](#g1-a-revoked-member-can-re-seat-a-key)), and only the revoker's replica removes it ([G4](#g4-reconciliation-follows-local-writes-only)).
+_Mitigations_: post-compromise security. The next path update after a removal produces a root secret the revoked member cannot derive. Each revocation records the content heads it was issued after, so the content layer can reject the revoked member's later edits (T5). Historical plaintext is not recoverable from them; see [Non-Goals](#non-goals). Each CGKA operation is judged over the certificates its history cites, so once a revocation is in a tree's history, the revoked member can sign nothing there, and a key it adds on an older branch is dropped when that branch merges with the revocation.
 
 ### A3. Malicious member
 
@@ -66,14 +66,14 @@ _Mitigations_: unauthorised operations fail signature or capability checks. Dupl
 ### T1. Unauthorised read
 
 - Content is encrypted under per-chunk application secrets derived from the BeeKEM root secret.
-- Only members with `Read` or higher are seated as BeeKEM leaves. Not yet enforced against a revoked member ([G1](#g1-a-revoked-member-can-re-seat-a-key)) or an adder's choice of key ([G2](#g2-an-adds-key-is-not-bound-to-the-added-members-prekeys)).
+- Only members with `Read` or higher in a CGKA operation's certificates are leaves of the BeeKEM tree, and an add must show that the added member published its key. That key may be a prekey the member has since rotated away ([G2](#g2-an-add-may-use-a-retired-prekey)).
 - A prekey operation counts only once its signature verifies against its issuer, and a prekey must be a canonical X25519 key of large order, so nobody can publish keys for an identity they do not hold, or a key whose shared secrets anyone can compute.
 - Transitive access is clamped to the weakest link, so `Relay` on a group cannot become `Read` on a document.
 
 ### T2. Unauthorised write
 
 - Every certificate is signed, and every replica verifies it. Certificates carry no proof: authority is recomputed from the whole set (late binding), so there is no chain to forge.
-- A CGKA operation is accepted only from a principal whose standing over the document allows it. For a remove, that check is weaker than intended ([G3](#g3-eviction-through-a-self-revoked-delegation)).
+- A CGKA operation is accepted only from a principal with `Read` or higher in the certificates it and its history cite. A remove lists no member: it removes only those its certificates no longer entitle.
 - Content is not signed by Keyhive. Producing a chunk whose AEAD tag verifies requires the current application secret, so an adversary without `Read` cannot forge content. Distinguishing `Read` from `Edit` on the content path is the CRDT layer's responsibility, using the authority graph Keyhive exposes.
 
 ### T3. Privilege escalation by delegation
@@ -126,21 +126,13 @@ The root key of a group or document is malicious or leaked at creation.
 
 Where the current code falls short of the threats above. Each is tracked for a fix.
 
-### G1. A revoked member can re-seat a key
+### G2. An add may use a retired prekey
 
-CGKA authorization reads Keyline's positive graph, which ignores revocations, so a revoked member keeps the standing it once had. It can delegate to a fresh key of its own and sign a CGKA add that cites that delegation, and every replica seats the new key. Affects A2 and T1.
+A CGKA add carries a key proof: a prekey operation in which the added member published the add's key. Any prekey the member ever published passes, including one it has since rotated away. If that old secret leaked, a malicious member can add the reader under it, and whoever holds the secret reads the document. The member rotates such a leaf before its own next write, so a reader who never writes keeps it. Affects A3 and T1.
 
-### G2. An add's key is not bound to the added member's prekeys
+### G4. A reader whose prekeys no writer holds is not added
 
-A CGKA add names the share key to seat, and nothing checks that it is one of the added member's published prekeys. An adder can seat a key it holds itself. Affects T1.
-
-### G3. Eviction through a self-revoked delegation
-
-A remove must cite a revocation that covers a delegation on the removed member's route. Any principal with positive standing over the document, a `Relay` included, can sign a delegation to a reader, revoke it, and cite that revocation to remove the reader from the tree, though Keyline still says they read. Removing the document's creator empties the tree. This is denial of service, not disclosure: the evicted reader loses new content. Affects A1, A3 and T2.
-
-### G4. Reconciliation follows local writes only
-
-A replica adds and removes readers in its trees after its own membership writes, for the documents it holds. A certificate received from a peer changes Keyline but not the trees, so a reader that a peer revoked is removed from a tree only by the revoker's replica. A reader whose prekeys a replica does not hold is not added there.
+A writer issues the operations its certificates imply for a tree after its own membership writes and before each content write, adding each reader whose prekeys it holds. A reader whose prekeys no writer holds has no leaf until it adds itself (`Keyhive::add_self_to`), which it does not do on its own.
 
 ### G5. The nonce check after decryption is disabled
 

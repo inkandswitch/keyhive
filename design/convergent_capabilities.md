@@ -87,7 +87,7 @@ Groups may be members of groups, and the graph MAY contain cycles. Evaluation is
 
 ### Encryption
 
-The capability graph determines membership of a document's BeeKEM tree: every individual with `Read` or better is a leaf; one with only `Relay` is not. A change in a document's readers drives the tree's adds and removes, each citing the certificate behind it. A `Relay`-only sync server can evaluate the graph without holding a decryption key. Certificate capabilities alone cannot support this, because the verifier does not hold a complete view of membership.
+The capability graph determines membership of a document's BeeKEM tree: every individual with `Read` or better is a leaf; one with only `Relay` is not. A change in a document's readers drives the tree's adds and removes, each citing the certificates of the document's closure that its history does not already cite. A `Relay`-only sync server can evaluate the graph without holding a decryption key. Certificate capabilities alone cannot support this, because the verifier does not hold a complete view of membership.
 
 ## Properties
 
