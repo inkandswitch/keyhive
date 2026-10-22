@@ -8,11 +8,16 @@ use crate::util::content_addressed_map::CaMap;
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use ed25519_dalek::{Signature, VerifyingKey};
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use keyhive_crypto::{
     identifier::Identifier,
     share_key::ShareKey,
+    signable::Kind,
     verifiable::Verifiable,
-    verified::{Signed, Verified, VerifyError},
+    verified::{header, Signed, Verified, VerifyError},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -127,6 +132,40 @@ impl SignedKeyOp {
             SignedKeyOp::Add(add) => KeyOp::Add(add.verify()?),
             SignedKeyOp::Rotate(rot) => KeyOp::Rotate(rot.verify()?),
         })
+    }
+}
+
+/// The operation's `KH` frame. Its kind tells an add (`P`) from a rotation
+/// (`T`), so the encoding needs no tag of its own.
+impl Encode for SignedKeyOp {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        match self {
+            SignedKeyOp::Add(add) => add.encode_into(out),
+            SignedKeyOp::Rotate(rot) => rot.encode_into(out),
+        }
+    }
+}
+
+impl Decode for SignedKeyOp {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for SignedKeyOp {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (kind, _) = header(bytes)?;
+        match Kind::from_u8(kind) {
+            Some(Kind::ADD_KEY) => {
+                let (add, rest) = Signed::decode_next(bytes)?;
+                Ok((SignedKeyOp::Add(add), rest))
+            }
+            Some(Kind::ROTATE_KEY) => {
+                let (rot, rest) = Signed::decode_next(bytes)?;
+                Ok((SignedKeyOp::Rotate(rot), rest))
+            }
+            _ => Err(DecodeError::UnexpectedKind(kind)),
+        }
     }
 }
 
@@ -304,6 +343,41 @@ mod tests {
         assert_eq!(
             Signed::<AddKeyOp>::decode(bytes.as_bytes()),
             Err(DecodeError::UnexpectedKind(b'T'))
+        );
+    }
+
+    /// A signed key op is its frame, and reads back as the kind its frame says.
+    #[test]
+    fn a_signed_key_op_round_trips_through_its_frame() {
+        let (signer, add, rotate) = fixtures();
+        let ops = [
+            SignedKeyOp::Add(
+                Verified::sign_sync(&add, &signer)
+                    .expect("signs")
+                    .signed()
+                    .as_ref()
+                    .clone(),
+            ),
+            SignedKeyOp::Rotate(
+                Verified::sign_sync(&rotate, &signer)
+                    .expect("signs")
+                    .signed()
+                    .as_ref()
+                    .clone(),
+            ),
+        ];
+        for op in ops {
+            let bytes = op.encode();
+            assert_eq!(SignedKeyOp::decode(bytes.as_bytes()), Ok(op));
+        }
+    }
+
+    #[test]
+    fn a_signed_key_op_refuses_a_frame_of_another_kind() {
+        let bytes = [b"KHD\x00".as_slice(), &[0; 32 + 1 + 64]].concat();
+        assert_eq!(
+            SignedKeyOp::decode(&bytes),
+            Err(DecodeError::UnexpectedKind(b'D'))
         );
     }
 

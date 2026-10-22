@@ -41,9 +41,9 @@ const next = new ChangeId(nextChangeHash);
 const encrypted = await keyhive.tryEncrypt(docId, next, [head], payload);
 
 // Grant a collaborator Read access. Their contact card comes from
-// `theirKeyhive.contactCard()`, exchanged out of band. The result is the
-// signed delegation that grants it.
-const bob = await keyhive.receiveContactCard(ContactCard.fromJson(bobsCardJson));
+// `theirKeyhive.contactCard()`, exchanged out of band as `card.toBytes()`.
+// The result is the signed delegation that grants it.
+const bob = await keyhive.receiveContactCard(ContactCard.fromBytes(bobsCardBytes));
 const delegation = await keyhive.addMember(
   bob.toIdentifier(),
   MemberedId.document(docId),
