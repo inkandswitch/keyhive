@@ -734,7 +734,7 @@ where
         Some((prekey, key_proof))
     }
 
-    /// What the next CGKA operation on `doc_id` cites and what follows
+    /// What the next CGKA operation on `doc` cites and what follows
     /// from that.
     async fn next_citations(
         &self,
@@ -753,7 +753,7 @@ where
         };
         let cited = self.citations_for(doc, &predecessor_set).await?;
         // The signing set is all predecessor citations plus any delegations
-        // cited by the heads.
+        // this operation cites.
         let mut signing_set = predecessor_set;
         {
             let citations = self.certificates.cited.lock();
@@ -910,8 +910,9 @@ where
     }
 
     /// Insert `batch` and issue the CGKA operations it implies for every
-    /// document held here, through [`Self::issue_implied_ops`]. Every
-    /// document, not only the one written: a document can be a member of
+    /// document held here whose readers it changed, through
+    /// [`Self::issue_implied_ops`]. Every such document, not only the one
+    /// written: a document can be a member of
     /// another, so writing to one changes the readers of those it reaches.
     ///
     /// The insert lock is held throughout, so the diff is exactly this batch's
@@ -3830,8 +3831,9 @@ impl<E: core::error::Error + 'static> ReceiveStaticEventError<E> {
 
     /// Whether the event can never be applied, however long it waits: a bad
     /// signature, or a CGKA operation nothing could authorize. Such
-    /// an event is dropped rather than kept pending. A missing dependency or a
-    /// store failure may resolve, so those are kept.
+    /// an event is dropped rather than kept pending. A missing dependency, a
+    /// missing membership answer or a store failure may resolve, so those are
+    /// kept.
     pub fn is_final(&self) -> bool {
         match self {
             Self::ReceivePrekeyOpError(_) => true,

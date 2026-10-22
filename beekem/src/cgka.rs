@@ -164,7 +164,8 @@ impl Cgka {
         }
     }
 
-    /// Remove members according to `view` from now on.
+    /// Remove members according to `view` from now on. Operations already
+    /// recorded are replayed under it before the tree's next use.
     pub fn set_membership_view(&mut self, view: Arc<dyn MembershipView>) {
         self.membership = Some(view);
         self.pending_replay = !self.ops_graph.cgka_op_heads.is_empty();
@@ -234,15 +235,17 @@ impl Cgka {
     /// Derive an [`ApplicationSecret`] from our current [`PcsKey`] for new content
     /// to encrypt.
     ///
-    /// If the tree has no root secret, or a path secret this member would
-    /// decrypt does not match its node's key, this member first rotates its
-    /// leaf. That update and the new key pair are returned as the second
-    /// element, which is `None` when there was no rotation.
+    /// If the tree has no root secret, or this member cannot derive it (a path
+    /// secret it would decrypt does not decrypt or does not match its node's
+    /// key), this member first rotates its leaf. That update and the new key
+    /// pair are returned as the second element, which is `None` when there was
+    /// no rotation.
     ///
-    /// Returns [`CgkaError::NoMembers`] if the group is empty,
+    /// Returns [`CgkaError::MembershipUnknown`] if a pending replay lacks a
+    /// membership answer, [`CgkaError::NoMembers`] if the group is empty,
     /// [`CgkaError::UnknownPcsKey`] if the root secret derives but cannot be
     /// recorded for the update that produced it, and otherwise any error from
-    /// deriving the root secret.
+    /// rotating.
     ///
     /// # Security
     ///
@@ -498,9 +501,10 @@ impl Cgka {
     }
 
     /// Sign `op`, which the caller has already applied to the tree, and record
-    /// it. If signing fails, the tree must be reset. We replace it with a fresh
-    /// tree if `op` is the first operation. Otherwise, we set `pending_replay`
-    /// to `true` so the tree will be rebuilt before its next use.
+    /// it. If signing or recording fails, the tree must be reset. We replace it
+    /// with a fresh tree if `op` is the first operation. Otherwise, we set
+    /// `pending_replay` to `true` so the tree will be rebuilt before its next
+    /// use.
     async fn sign_and_record<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         op: CgkaOperation,

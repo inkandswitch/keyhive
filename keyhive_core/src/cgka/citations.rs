@@ -144,7 +144,7 @@ impl CitedCertificates {
 
     /// The subset of the Keyline store that `cited` refers to. This is the
     /// set of certificates recorded here as you would pass them to
-    /// [`Keyline::members_for_subset`].
+    /// [`Keyline::members_for_subset`](keyline::contract::Keyline::members_for_subset).
     pub(crate) fn certificate_subset<'a>(
         &self,
         cited: impl IntoIterator<Item = &'a CitationId>,
@@ -330,8 +330,9 @@ impl Drop for Replaying {
 ///
 /// Given a certificate set, it reports which of the CGKA group's members
 /// lack `Read` or higher standing over `resource` in that set. BeeKEM asks
-/// synchronously, so this answers only from Keyline answers already cached in
-/// [`CitedCertificates`]. Returns `None` for a set with no cached answer.
+/// synchronously, so this answers only from verdicts and Keyline answers
+/// already cached in [`CitedCertificates`]. Returns `None` for a set with
+/// neither cached.
 pub(crate) struct KeylineView {
     resource: Identifier,
     citations: SharedCitations,

@@ -160,7 +160,8 @@ impl Cgka {
         self.0.remove_by_citations(citations, signer).await
     }
 
-    /// Remove members according to `view` from now on.
+    /// Remove members according to `view` from now on. Operations already
+    /// recorded are replayed under it before the CGKA's next use.
     pub(crate) fn set_membership_view(&mut self, view: Arc<dyn MembershipView>) {
         self.0.set_membership_view(view);
     }
