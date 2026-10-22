@@ -18,8 +18,9 @@ pub const TAG: [u8; 2] = *b"KH";
 /// an application's own bytes, so their kinds come from one table across the
 /// workspace. A retired number is never reused. Kinds are numbered with ASCII
 /// letters by convention, so a frame reads `KHD…` in a hexdump; any byte may
-/// be used once the letters run out. `I` is reserved: an archive starts with
-/// `KHIV`.
+/// be used once the letters run out. Two letters are reserved for containers
+/// that are not frames: `I`, since an archive starts with `KHIV`, and `E`,
+/// since encrypted content starts with `KHE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Kind(u8);
 
@@ -43,14 +44,24 @@ impl Kind {
     /// Bytes an application signs, which Keyhive gives no meaning.
     pub const BYTES: Kind = Kind(b'B');
 
+    /// A PCS key, hashed to name the key a block was encrypted under: hashed,
+    /// never signed or sent.
+    pub const PCS_KEY: Kind = Kind(b'K');
+
+    /// The content refs a block names as its predecessors (`H` for history):
+    /// hashed into the block's key, never signed or sent.
+    pub const PREDECESSOR_REFS: Kind = Kind(b'H');
+
     /// Every kind in the registry.
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 8] = [
         Kind::DELEGATION,
         Kind::REVOCATION,
         Kind::CERTIFICATE_SET,
         Kind::ADD_KEY,
         Kind::ROTATE_KEY,
         Kind::BYTES,
+        Kind::PCS_KEY,
+        Kind::PREDECESSOR_REFS,
     ];
 
     /// The registered kind with byte `b`, if any.
@@ -131,6 +142,11 @@ mod tests {
             Kind::from_u8(b'I'),
             None,
             "reserved: an archive starts with KHIV"
+        );
+        assert_eq!(
+            Kind::from_u8(b'E'),
+            None,
+            "reserved: encrypted content starts with KHE"
         );
     }
 

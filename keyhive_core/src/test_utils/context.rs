@@ -28,6 +28,7 @@ use beekem::{encrypted::EncryptedContent, error::CgkaError};
 use dupe::Dupe;
 use future_form::Sendable;
 use futures::lock::Mutex;
+use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{
     content::reference::ContentRef, identifier::Identifier, share_key::ShareKey,
     signed::SigningError, signer::memory::MemorySigner, symmetric_key::SymmetricKey,
@@ -324,13 +325,12 @@ impl PrekeyOp {
     }
 }
 
-/// The same content with one bit of the ciphertext flipped.
+/// The same content with one bit of its last chunk flipped.
 pub fn with_a_flipped_bit(ct: &Ciphertext) -> Ciphertext {
-    let mut copy = ct.clone();
-    assert!(!copy.ciphertext.is_empty(), "nothing to flip");
-    let last = copy.ciphertext.len() - 1;
-    copy.ciphertext[last] ^= 1;
-    copy
+    let mut bytes = ct.encode().into_bytes();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
+    Ciphertext::decode(&bytes).expect("flipping a bit keeps the chunk lengths")
 }
 
 /// The content ref this harness gives a piece of content.
@@ -728,7 +728,7 @@ impl TestContext {
         content: &[u8],
     ) -> TestResult<(Ciphertext, SymmetricKey)> {
         let (out, key) = who
-            .try_encrypt_content_keyed(doc, &content_ref(content), &vec![], content)
+            .try_encrypt_content_keyed(doc, &content_ref(content), &[], content)
             .await?;
         Ok((self.record_content_write(out.encrypted_content, doc), key))
     }
@@ -1051,8 +1051,12 @@ impl Dupe for Instance {
 
 /// Decrypt with a key the test obtained some other way, rather than with one derived through
 /// the graph.
-pub fn decrypt_with_key(ct: &Ciphertext, key: SymmetricKey) -> TestResult<Vec<u8>> {
-    ct.try_decrypt(key)
+pub fn decrypt_with_key(
+    ct: &Ciphertext,
+    key: SymmetricKey,
+    doc: DocumentId,
+) -> TestResult<Vec<u8>> {
+    ct.try_decrypt(key, doc.into())
         .map_err(|e| TestError::Other(format!("decryption with the given key failed: {e}")))
 }
 

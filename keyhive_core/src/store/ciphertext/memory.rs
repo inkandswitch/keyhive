@@ -88,7 +88,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
 
     #[instrument(level = "debug", skip_all, fields(ecrypted.content_ref))]
     pub async fn insert(&self, encrypted: Arc<EncryptedContent<P, Cr>>) {
-        let digest = Digest::hash(encrypted.as_ref());
+        let digest = encrypted.digest();
         let content_ref = encrypted.content_ref.clone();
         let pcs_update_op_hash = encrypted.pcs_update_op_hash;
 
@@ -96,7 +96,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
 
         if locked
             .store
-            .insert(digest, (ByteSize(encrypted.ciphertext.len()), encrypted))
+            .insert(digest, (ByteSize(encrypted.chunks().len()), encrypted))
             .is_some()
         {
             return;

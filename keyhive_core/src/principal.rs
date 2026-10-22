@@ -27,7 +27,6 @@ use crate::{
     store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use future_form::FutureForm;
-use keyhive_codec::traits::{Encode, StreamDecode};
 use keyhive_crypto::{
     content::reference::ContentRef, identifier::Identifier, signer::async_signer::AsyncSigner,
     verified::Signed,
@@ -63,7 +62,7 @@ impl<F, S, T, P, C, L, R, K> Principal<Keyhive<F, S, T, P, C, L, R, K>>
 where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
-    T: ContentRef + Encode + StreamDecode,
+    T: ContentRef,
     P: for<'de> Deserialize<'de>,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,

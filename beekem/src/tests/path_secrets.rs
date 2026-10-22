@@ -3,7 +3,7 @@
 use crate::{
     encrypted::encrypt_secret, error::CgkaError, operation::CgkaOperation, test_utils::Group,
 };
-use alloc::{sync::Arc, vec};
+use alloc::sync::Arc;
 use future_form::Local;
 use keyhive_crypto::{share_key::ShareSecretKey, signed::SerdeSigned, signer::async_signer};
 use rand::{rngs::StdRng, SeedableRng};
@@ -81,7 +81,7 @@ async fn a_member_who_receives_forged_path_secrets_still_agrees_on_later_keys() 
     // The member on the forged node's side can still write by rotating.
     let signer = group.members[1].signer.clone();
     let (_, rotation) = group.replicas[1]
-        .new_app_secret_for::<Local, _, [u8; 32], _>(&[0; 32], b"bob", &vec![], &signer, &mut rng)
+        .new_app_secret_for::<Local, _, [u8; 32], _>(&[0; 32], &[], &signer, &mut rng)
         .await
         .expect("a member who cannot derive the root secret still writes");
     let (op, _) = rotation.expect("writing rotated");

@@ -475,10 +475,10 @@ async fn own_cgka_graph_converges_with_creators_ops(bob_sorts_first: bool) -> Te
     // Neither CGKA group has a root key yet, so each write performs an update. To read
     // the other's write, each peer replays the CGKA graph up to that update.
     let from_alice = alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"from alice")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"from alice")
         .await?;
     let from_bob = bob
-        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"from bob")
+        .try_encrypt_content(doc_id, &[2u8; 32], &[], b"from bob")
         .await?;
     bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await?)
         .await?;
@@ -500,7 +500,7 @@ async fn own_cgka_graph_converges_with_creators_ops(bob_sorts_first: bool) -> Te
     // The concurrent updates leave two heads. Alice's next write resolves them
     // with another update, after which both derive the same PCS key.
     let after = alice
-        .try_encrypt_content(doc_id, &[3u8; 32], &vec![[1u8; 32]], b"after")
+        .try_encrypt_content(doc_id, &[3u8; 32], &[[1u8; 32]], b"after")
         .await?;
     bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await?)
         .await?;

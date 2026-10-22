@@ -1,14 +1,18 @@
 //! The (plaintext) container for causal encryption.
 
+use bincode::Options;
 use derivative::Derivative;
+use keyhive_codec::{
+    error::DecodeError,
+    prefixed::{decode_len, encode_len},
+    traits::StreamDecode,
+};
 use keyhive_crypto::{
     content::reference::ContentRef, read_capability::ReadCap, symmetric_key::SymmetricKey,
 };
-use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize, Serializer};
-use std::{
-    collections::{BTreeMap, HashMap},
-    hash::{DefaultHasher, Hasher},
-};
+use serde::{de::DeserializeOwned, Serialize};
+use std::collections::HashMap;
+use thiserror::Error;
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// A container for an arbitrary payload and the [`ReadCap`]s required to identify and decrypt its ancestors.
 ///
@@ -78,16 +82,12 @@ use std::{
 /// ```
 ///
 /// [causal encryption]: https://github.com/inkandswitch/keyhive/blob/main/design/causal_encryption.md
-#[derive(Debug, Clone, PartialEq, Eq, Derivative, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Derivative)]
 pub struct Envelope<C: ContentRef + DeserializeOwned, T: Serialize> {
     /// The plaintext payload.
     pub plaintext: T,
 
     /// Any ancestors that this envelope depends on.
-    #[serde(
-        serialize_with = "ordered_map_serializer",
-        deserialize_with = "ordered_map_deserializer"
-    )]
     #[derivative(
         PartialOrd(compare_with = "crate::util::partial_eq::hash_map_keys"),
         Hash(hash_with = "crate::util::hasher::hash_map_keys")
@@ -108,30 +108,138 @@ impl<T: Serialize, C: ContentRef + DeserializeOwned> Envelope<C, T> {
     }
 }
 
-fn ordered_map_serializer<S, K: ContentRef, V: Serialize>(
-    map: &HashMap<K, V>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let ordered: BTreeMap<_, _> = map
-        .iter()
-        .map(|(k, v)| {
-            let mut hasher = DefaultHasher::new();
-            (*k).hash(&mut hasher);
-            (hasher.finish(), (k, v))
-        })
-        .collect();
-    ordered.serialize(serializer)
+impl<C: ContentRef + DeserializeOwned, T: Serialize> Envelope<C, T> {
+    /// `ancestor_count ‖ ( content_ref ‖ key:32 )* ‖ payload`, the ancestors
+    /// sorted by their content refs' encodings, so a streaming reader has
+    /// every ancestor's key first.
+    ///
+    /// The payload is still bincode, until the plaintext gets a codec of its
+    /// own in the serde removal; hence the name.
+    pub fn serde_encode(&self) -> Result<Vec<u8>, bincode::Error> {
+        let mut ancestors: Vec<(Vec<u8>, [u8; 32])> = self
+            .ancestors
+            .iter()
+            .map(|(content_ref, key)| (content_ref.encode().into_bytes(), (*key).into()))
+            .collect();
+        ancestors.sort_unstable();
+
+        let mut out = Vec::new();
+        encode_len(ancestors.len(), &mut out);
+        for (content_ref, key) in &ancestors {
+            out.extend_from_slice(content_ref);
+            out.extend_from_slice(key);
+        }
+        out.extend(payload_options().serialize(&self.plaintext)?);
+        Ok(out)
+    }
 }
 
-fn ordered_map_deserializer<'de, D, K: ContentRef + Deserialize<'de>, V: Deserialize<'de>>(
-    deserializer: D,
-) -> Result<HashMap<K, V>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let ordered: BTreeMap<u64, (K, V)> = Deserialize::deserialize(deserializer)?;
-    Ok(ordered.into_iter().map(|(_, (k, v))| (k, v)).collect())
+impl<C: ContentRef + DeserializeOwned, T: Serialize + DeserializeOwned> Envelope<C, T> {
+    /// Inverse of [`Envelope::serde_encode`]. Refuses ancestors out of order or
+    /// repeated, and payload bytes left over, so each envelope has one encoding.
+    pub fn serde_decode(bytes: &[u8]) -> Result<Self, EnvelopeDecodeError> {
+        let (count, mut rest) = decode_len(bytes)?;
+        let mut ancestors = HashMap::new();
+        let mut previous: Option<&[u8]> = None;
+        for _ in 0..count {
+            let (content_ref, after_ref) = C::decode_next(rest)?;
+            let encoded = &rest[..rest.len() - after_ref.len()];
+            if previous.is_some_and(|p| p >= encoded) {
+                return Err(DecodeError::UnsortedKeys.into());
+            }
+            let (key, after_key) = <[u8; 32]>::decode_next(after_ref)?;
+            ancestors.insert(content_ref, SymmetricKey::from(key));
+            previous = Some(encoded);
+            rest = after_key;
+        }
+        let plaintext = payload_options().deserialize(rest)?;
+        Ok(Envelope {
+            plaintext,
+            ancestors,
+        })
+    }
+}
+
+/// Why an envelope did not decode.
+#[derive(Debug, Error)]
+pub enum EnvelopeDecodeError {
+    /// The ancestors are malformed, out of order, or repeated.
+    #[error(transparent)]
+    Ancestors(#[from] DecodeError),
+
+    /// The payload does not deserialize, or has bytes left over.
+    #[error(transparent)]
+    Payload(#[from] bincode::Error),
+}
+
+/// `bincode::serialize`'s encoding, refusing trailing bytes.
+fn payload_options() -> impl Options {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Env = Envelope<[u8; 32], Vec<u8>>;
+
+    fn envelope(ancestors: &[u8], payload: &[u8]) -> Env {
+        Envelope {
+            plaintext: payload.to_vec(),
+            ancestors: ancestors
+                .iter()
+                .map(|&n| ([n; 32], SymmetricKey::from([n.wrapping_add(100); 32])))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn an_envelope_round_trips() {
+        let original = envelope(&[3, 1, 2], b"payload");
+        let bytes = original.serde_encode().expect("encodes");
+        assert_eq!(Env::serde_decode(&bytes).expect("decodes"), original);
+    }
+
+    /// A `HashMap` iterates in any order; the bytes do not depend on it.
+    #[test]
+    fn ancestors_are_written_in_order_of_their_content_refs() {
+        let bytes = envelope(&[9, 4, 7, 1], b"")
+            .serde_encode()
+            .expect("encodes");
+        let refs: Vec<u8> = (0..4).map(|i| bytes[1 + i * 64]).collect();
+        assert_eq!(refs, [1, 4, 7, 9]);
+    }
+
+    #[test]
+    fn decoding_refuses_unsorted_or_repeated_ancestors() {
+        let entry = |n: u8| [[n; 32], [0; 32]].concat();
+        let payload = payload_options()
+            .serialize(&Vec::<u8>::new())
+            .expect("serializes");
+        for (what, entries) in [
+            ("unsorted", [entry(2), entry(1)]),
+            ("repeated", [entry(1), entry(1)]),
+        ] {
+            let bytes = [vec![2], entries.concat(), payload.clone()].concat();
+            assert!(
+                matches!(
+                    Env::serde_decode(&bytes),
+                    Err(EnvelopeDecodeError::Ancestors(DecodeError::UnsortedKeys))
+                ),
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn decoding_refuses_payload_bytes_left_over() {
+        let mut bytes = envelope(&[1], b"payload").serde_encode().expect("encodes");
+        bytes.push(0);
+        assert!(matches!(
+            Env::serde_decode(&bytes),
+            Err(EnvelopeDecodeError::Payload(_))
+        ));
+    }
 }
