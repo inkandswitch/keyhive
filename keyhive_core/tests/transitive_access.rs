@@ -295,8 +295,9 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_peer_that_started_its_own_tree_converges_when_the_creators_ops_arrive() -> TestResult {
-    // Bob has the document but none of its CGKA ops. He starts a tree of his
+async fn a_peer_that_started_its_own_cgka_graph_converges_when_the_creators_ops_arrive(
+) -> TestResult {
+    // Bob has the document but none of its CGKA ops. He starts a CGKA graph of his
     // own by adding himself. Only afterwards does he receive Alice's ops.
     // Their self-adds are concurrent roots, both at leaf 0.
     test_utils::init_logging();
@@ -305,14 +306,14 @@ async fn a_peer_that_started_its_own_tree_converges_when_the_creators_ops_arrive
     // first, the sorted tree differs from the order in which either peer first
     // applied the roots. When Alice's does, the two orders match.
     for bob_sorts_first in [true, false] {
-        own_tree_converges_with_creators_ops(bob_sorts_first)
+        own_cgka_graph_converges_with_creators_ops(bob_sorts_first)
             .await
             .map_err(|e| format!("bob_sorts_first = {bob_sorts_first}: {e:?}"))?;
     }
     Ok(())
 }
 
-async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResult {
+async fn own_cgka_graph_converges_with_creators_ops(bob_sorts_first: bool) -> TestResult {
     let mut signers = [
         MemorySigner::generate(&mut OsRng),
         MemorySigner::generate(&mut OsRng),
@@ -370,7 +371,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     // Without key agreement, the document is not yet a document to Bob.
     assert!(bob.get_document(doc_id).await.is_none());
 
-    // Bob starts his own tree. His add has no predecessors, so it is a
+    // Bob starts his own CGKA graph. His add has no predecessors, so it is a
     // causal root of the operation graph.
     {
         let bob_active_id = bob.active().id();
@@ -401,7 +402,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
                 &bob_signer,
             )
             .await?
-            .ok_or("bob is not yet in his own tree, so adding him yields an op")?;
+            .ok_or("bob is not yet in his own CGKA group, so adding him yields an op")?;
 
         // His add is authorized by his founding delegation, so it makes the
         // document known to him.
@@ -418,7 +419,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
 
     bob.ingest_event_table(cgka_only)
         .await
-        .map_err(|e| format!("alice's ops should merge with the tree bob started: {e:?}"))?;
+        .map_err(|e| format!("alice's ops should merge with the CGKA graph bob started: {e:?}"))?;
 
     let dave = make_simple_keyhive().await?;
     let dave_on_bob = IndividualState::new(KeyOp::Add(dave.expand_prekeys().await?));
@@ -426,7 +427,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     assert!(bob.register_individual(dave_on_bob).await);
     bob.add_member(dave_id, doc_id, Power::Read)
         .await
-        .map_err(|e| format!("bob's tree should still take an add: {e:?}"))?;
+        .map_err(|e| format!("bob's `Cgka` should still take an add: {e:?}"))?;
 
     assert_eq!(
         bob.docs_reachable_by_agent(dave_id).await?.len(),
@@ -434,7 +435,8 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         "the document bob just admitted Dave to should be reachable by Dave"
     );
 
-    // Exchange everything in both directions. The two trees should now agree.
+    // Exchange everything in both directions. Their CGKA graphs, and so their
+    // CGKA groups, should now agree.
     bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await?)
         .await?;
     alice
@@ -449,26 +451,29 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     let alice_members = doc_on_alice
         .cgka_members()
         .await
-        .ok_or("alice holds a tree")?;
+        .ok_or("alice has joined the CGKA group")?;
     let alice_ops = doc_on_alice
         .cgka_ops_count()
         .await
-        .ok_or("alice holds a tree")?;
-    let bob_members = doc_on_bob.cgka_members().await.ok_or("bob holds a tree")?;
+        .ok_or("alice has joined the CGKA group")?;
+    let bob_members = doc_on_bob
+        .cgka_members()
+        .await
+        .ok_or("bob has joined the CGKA group")?;
     let bob_ops = doc_on_bob
         .cgka_ops_count()
         .await
-        .ok_or("bob holds a tree")?;
+        .ok_or("bob has joined the CGKA group")?;
     assert_eq!(
         alice_members, bob_members,
-        "both trees hold the same members"
+        "both CGKA groups have the same members"
     );
     assert!(alice_members.contains(&bob.id()), "bob is a member");
-    assert_eq!(alice_ops, bob_ops, "both trees hold the same ops");
+    assert_eq!(alice_ops, bob_ops, "both CGKA graphs have the same ops");
 
     // Each can read what the other writes, even when they write concurrently.
-    // Neither tree has a root key yet, so each write performs an update. To read
-    // the other's write, each peer rebuilds the tree up to that update.
+    // Neither CGKA group has a root key yet, so each write performs an update. To read
+    // the other's write, each peer replays the CGKA graph up to that update.
     let from_alice = alice
         .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"from alice")
         .await?;
@@ -512,7 +517,10 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         .try_pcs_key_hash(doc_id)
         .await
         .ok_or("bob derives a key")?;
-    assert_eq!(alice_pcs, bob_pcs, "both trees derive the same PCS key");
+    assert_eq!(
+        alice_pcs, bob_pcs,
+        "both CGKA groups derive the same PCS key"
+    );
 
     Ok(())
 }

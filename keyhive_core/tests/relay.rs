@@ -3,7 +3,7 @@
 //!
 //! It holds the certificates and prekeys, so it answers who may do what as a
 //! member would. It holds no key agreement: it is sent no CGKA operations and
-//! has no tree. Members exchange those among themselves (or through a sync
+//! has no CGKA graph. Members exchange those among themselves (or through a sync
 //! layer that carries them opaquely).
 
 use keyhive_core::test_utils::{EventKind, TestContext, TestResult as Result};
@@ -41,7 +41,7 @@ async fn a_relay_answers_for_membership_and_holds_no_key_agreement() -> Result<(
         );
         assert!(
             !relay.has_document(design_doc).await,
-            "it holds no tree for the document (order {seed})"
+            "it has no CGKA graph for the document (order {seed})"
         );
         assert!(relay.cgka_ops_for_doc(&design_doc).await.is_none());
         assert_eq!(
