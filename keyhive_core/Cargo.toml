@@ -46,6 +46,7 @@ derive-where = { workspace = true }
 dupe = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true, features = ["async-await", "executor", "std"] }
+imbl = { workspace = true }
 nonempty = { workspace = true }
 tracing = { workspace = true, features = ["attributes", "std"] }
 
