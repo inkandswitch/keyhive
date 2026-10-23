@@ -81,6 +81,18 @@ impl From<chacha20poly1305::XNonce> for Siv {
     }
 }
 
+/// Whether two nonces are equal, comparing every byte whatever the first
+/// difference, so the time taken does not tell where they differ. For the
+/// check after decryption that a nonce is the synthetic nonce of what it
+/// decrypted to.
+pub fn nonces_match(expected: &[u8; 24], received: &[u8; 24]) -> bool {
+    expected
+        .iter()
+        .zip(received)
+        .fold(0u8, |differ, (a, b)| differ | (a ^ b))
+        == 0
+}
+
 /// A synthetic nonce encodes as its 24 bytes: canonical and prefix-free.
 impl Encode for Siv {
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -110,5 +122,24 @@ mod tests {
         keyhive_codec::laws::round_trip::<Siv>();
         keyhive_codec::laws::canonical_near::<Siv>();
         keyhive_codec::laws::stream::<Siv>();
+    }
+
+    #[test]
+    fn nonces_match_only_when_every_byte_does() {
+        let nonce = [7u8; 24];
+        assert!(nonces_match(&nonce, &nonce));
+
+        for at in [0, 11, 23] {
+            let mut other = nonce;
+            other[at] ^= 0x80;
+            assert!(!nonces_match(&nonce, &other), "byte {at} differs");
+        }
+
+        // Two bytes that differ by the same bit: an XOR of the differences
+        // would cancel, so every difference has to count.
+        let mut twice = nonce;
+        twice[3] ^= 1;
+        twice[17] ^= 1;
+        assert!(!nonces_match(&nonce, &twice));
     }
 }

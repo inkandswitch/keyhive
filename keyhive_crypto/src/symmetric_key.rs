@@ -1,6 +1,10 @@
 //! Symmetric cipher newtype.
 
-use super::{domain_separator::SEPARATOR, separable::Separable, siv::Siv};
+use super::{
+    domain_separator::SEPARATOR,
+    separable::Separable,
+    siv::{nonces_match, Siv},
+};
 use alloc::vec::Vec;
 use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305};
 use serde::{Deserialize, Serialize};
@@ -108,13 +112,10 @@ impl SymmetricKey {
         let mut buf = ciphertext.to_vec();
         self.to_xchacha()
             .decrypt_in_place(nonce.as_xnonce(), associated_data, &mut buf)?;
-        let expected = Siv::new(self, &buf, associated_data);
-        let differ = expected
-            .as_bytes()
-            .iter()
-            .zip(nonce.as_bytes())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
-        if differ != 0 {
+        if !nonces_match(
+            Siv::new(self, &buf, associated_data).as_bytes(),
+            nonce.as_bytes(),
+        ) {
             return Err(chacha20poly1305::Error);
         }
         Ok(buf)
