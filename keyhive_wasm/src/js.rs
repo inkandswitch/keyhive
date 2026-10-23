@@ -20,6 +20,7 @@ pub mod generate_group_error;
 pub mod group;
 pub mod group_id;
 pub mod identifier;
+pub mod import_prekey_secrets_error;
 pub mod individual;
 pub mod individual_id;
 pub mod keyhive;

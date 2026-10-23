@@ -93,7 +93,7 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
 
     // The second instance holds the first's secrets, including the leaf it just rotated,
     // like two clients sharing storage.
-    let prekey_bytes = alice.export_prekey_secrets().await?;
+    let prekey_bytes = alice.export_prekey_secrets().await;
     alice_worker.import_prekey_secrets(&prekey_bytes).await?;
 
     // The first instance's events to the second.

@@ -228,6 +228,27 @@ impl StreamDecode for ShareKey {
     }
 }
 
+/// The secret's 32 bytes. Every 32 bytes are a secret (X25519 clamps them
+/// when it uses them), so decoding refuses only the wrong length.
+impl Encode for ShareSecretKey {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.0);
+    }
+}
+
+impl Decode for ShareSecretKey {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for ShareSecretKey {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (secret, rest) = <[u8; 32]>::decode_next(bytes)?;
+        Ok((ShareSecretKey(secret), rest))
+    }
+}
+
 /// Whether little-endian `u` is below p = 2^255 − 19 (`ed ff … ff 7f`).
 fn is_canonical_u(u: &[u8; 32]) -> bool {
     let top_clear = u[31] & 0x80 == 0;

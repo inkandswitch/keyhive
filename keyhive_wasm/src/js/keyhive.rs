@@ -32,6 +32,7 @@ use super::{
     generate_group_error::JsGenerateGroupError,
     group::JsGroup,
     identifier::{JsIdentifier, JsIdentifierRef},
+    import_prekey_secrets_error::JsImportPrekeySecretsError,
     individual_id::JsIndividualId,
     keyline_storage_error::JsKeylineStorageError,
     membered_id::JsMemberedId,
@@ -602,24 +603,24 @@ impl JsKeyhive {
         Ok(members.get(&id.0).copied().map(JsPower))
     }
 
+    /// This keyhive's prekey secrets, for backup or for another instance of
+    /// the same identity. The bytes are unencrypted secret key material.
     #[wasm_bindgen(js_name = exportPrekeySecrets)]
-    pub async fn export_prekey_secrets(&self) -> Result<Box<[u8]>, JsSerializationError> {
+    pub async fn export_prekey_secrets(&self) -> Box<[u8]> {
         init_span!("JsKeyhive::export_prekey_secrets");
-        self.0
-            .export_prekey_secrets()
-            .await
-            .map(Vec::into_boxed_slice)
-            .map_err(JsSerializationError::from)
+        self.0.export_prekey_secrets().await.into_boxed_slice()
     }
 
+    /// Add the secrets from `exportPrekeySecrets`. Refused if any secret does
+    /// not produce the key it is paired with.
     #[wasm_bindgen(js_name = importPrekeySecrets)]
-    pub async fn import_prekey_secrets(&self, bytes: &[u8]) -> Result<(), JsSerializationError> {
+    pub async fn import_prekey_secrets(
+        &self,
+        bytes: &[u8],
+    ) -> Result<(), JsImportPrekeySecretsError> {
         init_span!("JsKeyhive::import_prekey_secrets");
-        self.0
-            .import_prekey_secrets(bytes)
-            .await
-            .map(|_| ())
-            .map_err(JsSerializationError::from)
+        self.0.import_prekey_secrets(bytes).await?;
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = toArchive)]
