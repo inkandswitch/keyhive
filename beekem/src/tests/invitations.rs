@@ -3,7 +3,7 @@ use crate::{
     keys::ShareKeyMap,
     operation::{CgkaOperation, Invitation, InvitationSecret},
     pcs_key::PcsKey,
-    test_utils::{member, Group, ADD_AUTH},
+    test_utils::{member, Group},
 };
 use alloc::{boxed::Box, vec, vec::Vec};
 use future_form::Local;
@@ -73,7 +73,8 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
         added_id: bob_id,
         pk: bob_pk,
         leaf_index: 1,
-        authorization: ADD_AUTH,
+        citations: Vec::new(),
+        key_proof: None,
         invitation: Some(Box::new(Invitation {
             inviter_pk,
             ancestor_secrets: vec![InvitationSecret {

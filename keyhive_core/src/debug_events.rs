@@ -75,9 +75,7 @@ pub enum CgkaOperationDetails {
         predecessors: Vec<Hash>,
     },
     Remove {
-        id: Hash,
-        leaf_index: u32,
-        removed_keys: Vec<Hash>,
+        citations: Vec<Hash>,
         predecessors: Vec<Hash>,
     },
     Update {
@@ -220,18 +218,14 @@ impl DebugEventRow {
                         ("Add", op_details)
                     }
                     CgkaOperation::Remove {
-                        id,
-                        leaf_idx,
-                        removed_keys,
+                        citations,
                         predecessors,
                         ..
                     } => {
                         let op_details = CgkaOperationDetails::Remove {
-                            id: Hash::new(id.as_bytes(), nicknames),
-                            leaf_index: *leaf_idx,
-                            removed_keys: removed_keys
+                            citations: citations
                                 .iter()
-                                .map(|key| Hash::new(key.as_bytes(), nicknames))
+                                .map(|cited| Hash::new(&cited.0, nicknames))
                                 .collect(),
                             predecessors: predecessors
                                 .iter()

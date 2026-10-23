@@ -3,7 +3,7 @@ use crate::{
     error::CgkaError,
     id::TreeId,
     keys::ShareKeyMap,
-    test_utils::{for_each_seed, member, Group, Member, ADD_AUTH, REMOVE_AUTH},
+    test_utils::{for_each_seed, member, Group, Member, NO_CITATIONS},
     transact::{Fork, Merge},
 };
 use alloc::{sync::Arc, vec, vec::Vec};
@@ -27,7 +27,7 @@ async fn a_group_can_be_emptied_and_refilled() {
     let signer = group.members[0].signer.clone();
     let cgka = &mut group.replicas[0];
 
-    cgka.remove::<Local, _>(owner, REMOVE_AUTH, &signer)
+    cgka.remove::<Local, _>(owner, NO_CITATIONS, &signer)
         .await
         .expect("removing the last member is allowed");
     assert_eq!(
@@ -51,7 +51,7 @@ async fn a_group_can_be_emptied_and_refilled() {
     );
 
     let rejoin_pk = ShareSecretKey::generate(&mut rng).share_key();
-    cgka.add::<Local, _>(owner, rejoin_pk, ADD_AUTH, &signer)
+    cgka.add::<Local, _>(owner, rejoin_pk, None, NO_CITATIONS, &signer)
         .await
         .expect("the owner can rejoin an empty group");
     let rotate = ShareSecretKey::generate(&mut rng);
@@ -96,7 +96,7 @@ async fn an_operation_for_another_document_is_refused() {
     let mut here = tree_for(&mut rng);
     let mut elsewhere = tree_for(&mut rng);
     let founding_add = elsewhere
-        .add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &owner.signer)
+        .add::<Local, _>(owner.id, owner.pk, None, NO_CITATIONS, &owner.signer)
         .await
         .expect("creating the add succeeds")
         .expect("the owner is new to the tree");
@@ -147,7 +147,7 @@ async fn a_cgka_merges_forks_before_and_after_its_first_operation() {
     cgka.merge(fork);
 
     let mut fork = cgka.fork();
-    fork.add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &owner.signer)
+    fork.add::<Local, _>(owner.id, owner.pk, None, NO_CITATIONS, &owner.signer)
         .await
         .expect("the owner can add itself to an empty group");
     cgka.merge(fork);
@@ -345,7 +345,7 @@ async fn an_add_whose_signing_fails_does_not_change_the_tree() {
     let (mut group, failing, mut rng) = group_with_a_failing_signer(0x5167_0001).await;
     let fresh = member(&mut rng);
     let result = group.replicas[0]
-        .add::<Local, _>(fresh.id, fresh.pk, ADD_AUTH, &failing)
+        .add::<Local, _>(fresh.id, fresh.pk, None, NO_CITATIONS, &failing)
         .await;
     assert!(
         matches!(result, Err(CgkaError::SigningError(_))),
@@ -359,7 +359,7 @@ async fn a_removal_whose_signing_fails_does_not_change_the_tree() {
     let (mut group, failing, mut rng) = group_with_a_failing_signer(0x5167_0002).await;
     let target = group.id(2);
     let result = group.replicas[0]
-        .remove::<Local, _>(target, REMOVE_AUTH, &failing)
+        .remove::<Local, _>(target, NO_CITATIONS, &failing)
         .await;
     assert!(
         matches!(result, Err(CgkaError::SigningError(_))),
@@ -394,14 +394,14 @@ async fn a_first_add_whose_signing_fails_can_be_retried() {
     let mut cgka = cgka_with_no_operations(&owner);
     let failing = FailingSigner(owner.signer.clone());
     let result = cgka
-        .add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &failing)
+        .add::<Local, _>(owner.id, owner.pk, None, NO_CITATIONS, &failing)
         .await;
     assert!(
         matches!(result, Err(CgkaError::SigningError(_))),
         "{result:?}"
     );
     let retried = cgka
-        .add::<Local, _>(owner.id, owner.pk, ADD_AUTH, &owner.signer)
+        .add::<Local, _>(owner.id, owner.pk, None, NO_CITATIONS, &owner.signer)
         .await
         .expect("the add succeeds");
     assert!(retried.is_some(), "the retried add created no operation");

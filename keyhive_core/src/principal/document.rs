@@ -22,7 +22,7 @@ use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
+    operation::{CgkaBatch, CgkaOperation, CitationId},
 };
 use future_form::FutureForm;
 use id::DocumentId;
@@ -110,7 +110,7 @@ impl<T: ContentRef> DocumentState<T> {
     }
 
     #[instrument(skip_all)]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     /// A new document's tree: `founders` added in order, each citing the root
     /// edge that admits it, then a rotation by the first, its owner, whose
     /// prekey secret is `owner_sk`. Returns the document and its genesis
@@ -122,13 +122,18 @@ impl<T: ContentRef> DocumentState<T> {
         E: core::error::Error + 'static,
     >(
         id: DocumentId,
-        founders: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
+        founders: NonEmpty<(
+            IndividualId,
+            ShareKey,
+            Option<Vec<u8>>,
+            BTreeSet<CitationId>,
+        )>,
         owner_sk: ShareSecretKey,
         initial_content_heads: NonEmpty<T>,
         signer: &S,
         csprng: &mut R,
     ) -> Result<(Self, Vec<SerdeSigned<CgkaOperation>>), GenerateDocError<E>> {
-        let (owner, owner_pk, _) = founders.head;
+        let (owner, owner_pk, _, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
         let mut cgka = Cgka::new(id, owner, owner_sks);
@@ -154,27 +159,31 @@ impl<T: ContentRef> DocumentState<T> {
     pub(crate) async fn add_cgka_members_from_prekeys<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         prekeys: &HashMap<IndividualId, ShareKey>,
-        authorization: CgkaAuthorization,
+        citations: BTreeSet<CitationId>,
         signer: &S,
     ) -> Result<Vec<SerdeSigned<CgkaOperation>>, CgkaError> {
         let mut acc = Vec::new();
         for (id, prekey) in prekeys.iter() {
-            if let Some(op) = self.cgka.add(*id, *prekey, authorization, signer).await? {
+            if let Some(op) = self
+                .cgka
+                .add(*id, *prekey, None, citations.clone(), signer)
+                .await?
+            {
                 acc.push(op);
             }
         }
         Ok(acc)
     }
 
-    /// `authorization` refers to the revocation that removed `id`.
+    /// `citations` are the revocation that removed `id`.
     #[instrument(skip_all)]
     pub async fn remove_cgka_member<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
-        authorization: CgkaAuthorization,
+        citations: BTreeSet<CitationId>,
         signer: &S,
     ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
-        self.cgka.remove(id, authorization, signer).await
+        self.cgka.remove(id, citations, signer).await
     }
 
     pub fn cgka_ops(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
