@@ -281,6 +281,10 @@ pub enum CgkaOperation {
         /// The membership citations for this remove, as for an add.
         citations: Vec<CitationId>,
         /// The members this operation removes from the tree.
+        ///
+        /// `keyhive_core` requires this list to be empty since removed members
+        /// are determined from the cited certificate set. Clients following the
+        /// BeeKEM protocol more strictly might use this.
         removed: Vec<RemovedMember>,
     },
     Update {
