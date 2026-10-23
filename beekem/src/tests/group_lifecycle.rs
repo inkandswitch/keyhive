@@ -6,7 +6,7 @@ use crate::{
     test_utils::{for_each_seed, member, Group, Member, NO_CITATIONS},
     transact::{Fork, Merge},
 };
-use alloc::{sync::Arc, vec, vec::Vec};
+use alloc::{collections::BTreeSet, sync::Arc, vec, vec::Vec};
 use core::hash::{Hash, Hasher};
 use future_form::{FutureForm, Local};
 use keyhive_crypto::{
@@ -16,6 +16,7 @@ use keyhive_crypto::{
     signer::{async_signer::AsyncSigner, memory::MemorySigner},
     verifiable::Verifiable,
 };
+use nonempty::nonempty;
 use rand::{rngs::StdRng, SeedableRng};
 use std::hash::DefaultHasher;
 
@@ -121,6 +122,30 @@ async fn a_removed_member_can_merge_a_fork_after_a_rotation() {
     group.broadcast(&rotate);
 
     group.assert_trees_match_replay("after the owner was removed and the group rotated");
+}
+
+#[tokio::test]
+async fn add_multiple_adds_each_member() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_000a);
+    let mut group = Group::new(1, &mut rng).await;
+    let (d, e) = (member(&mut rng), member(&mut rng));
+    let signer = group.members[0].signer.clone();
+    let cgka = &mut group.replicas[0];
+
+    cgka.add_multiple::<Local, _>(
+        nonempty![
+            (d.id, d.pk, None, NO_CITATIONS),
+            (e.id, e.pk, None, NO_CITATIONS)
+        ],
+        &signer,
+    )
+    .await
+    .expect("adding new members succeeds");
+    let members: BTreeSet<_> = cgka.member_ids().expect("no replay is pending").collect();
+    assert!(
+        members.contains(&d.id) && members.contains(&e.id),
+        "add_multiple left out a member"
+    );
 }
 
 fn cgka_with_no_operations(owner: &Member) -> Cgka {

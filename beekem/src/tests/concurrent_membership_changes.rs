@@ -73,6 +73,39 @@ async fn every_replica_has_a_tree_root_secret_after_rotation_resolves_concurrent
 }
 
 #[tokio::test]
+async fn concurrently_added_members_are_placed_in_id_order() {
+    let mut rng = StdRng::seed_from_u64(0xa11d_0001);
+    let mut group = Group::new(4, &mut rng).await;
+    let mut joiners: Vec<Member> = (0..4).map(|_| member(&mut rng)).collect();
+
+    let mut adds = Vec::new();
+    for (author, joiner) in joiners.iter().enumerate() {
+        adds.push(group.add(author, joiner.id, joiner.pk).await);
+    }
+    for add in &adds {
+        group.broadcast(add);
+    }
+
+    joiners.sort_by_key(|joiner| joiner.id);
+    let cgka = &mut group.replicas[0];
+    cgka.replay_if_pending()
+        .expect("replaying the concurrent adds succeeds");
+    let leaves: Vec<u32> = joiners
+        .iter()
+        .map(|joiner| {
+            cgka.tree
+                .leaf_index_for_id(joiner.id)
+                .expect("joiner is placed")
+                .u32()
+        })
+        .collect();
+    assert!(
+        leaves.is_sorted(),
+        "concurrent adds were not placed in id order: {leaves:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_concurrent_add_is_not_applied_before_a_replay() {
     let mut rng = StdRng::seed_from_u64(0xb0f0_0001);
     let mut group = Group::new(3, &mut rng).await;

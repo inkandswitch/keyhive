@@ -355,3 +355,22 @@ fn revoked_members_learn_nothing_of_a_rotation_after_their_removal() {
         }
     });
 }
+
+#[tokio::test]
+async fn a_view_changes_a_cgka_only_by_scheduling_a_replay_of_its_history() {
+    let mut rng = StdRng::seed_from_u64(0xd00b_4444);
+    let group = Group::new(2, &mut rng).await;
+    let view = Arc::new(Revocations(BTreeMap::new()));
+
+    let empty = Cgka::new(group.replicas[0].doc_id, group.id(0), ShareKeyMap::new());
+    let mut viewed = empty.clone();
+    viewed.set_membership_view(view.clone());
+    assert_eq!(viewed, empty, "a view changed a CGKA with no history");
+
+    let mut viewed = group.replicas[0].clone();
+    viewed.set_membership_view(view);
+    assert_ne!(
+        viewed, group.replicas[0],
+        "a view did not schedule a replay of the history"
+    );
+}

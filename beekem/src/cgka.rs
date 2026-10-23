@@ -191,10 +191,10 @@ impl Cgka {
             .non_members(cited, &leaves)
             .ok_or_else(|| CgkaError::MembershipUnknown(cited.clone()))?;
         demoted.retain(|id| leaves.contains(id));
-        if !demoted.is_empty() {
+        for id in &demoted {
             debug!(
-                ?demoted,
-                "removing members the citations do not entitle to membership"
+                ?id,
+                "removing a member the citations do not entitle to membership"
             );
         }
         Ok(demoted)
@@ -752,11 +752,6 @@ impl Cgka {
             self.handle_new_removals(&op.payload);
         }
         Ok(true)
-    }
-
-    /// Every operation received so far and how they are causally related.
-    pub fn ops_graph(&self) -> &CgkaOperationGraph {
-        &self.ops_graph
     }
 
     pub fn ops(&self) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
