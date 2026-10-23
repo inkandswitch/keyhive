@@ -114,7 +114,7 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
 
     // The second instance writes.
     let encrypted = alice_worker
-        .try_encrypt_content(doc_id, &init_hash, &vec![], &init_content)
+        .try_encrypt_content(doc_id, &init_hash, &[], &init_content)
         .await?;
 
     // What the sync protocol would send: the second instance's events, from its log.

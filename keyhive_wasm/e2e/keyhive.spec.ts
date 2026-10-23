@@ -332,6 +332,42 @@ test.describe("Keyhive", async () => {
     expect(out.events[0]).toBe("PREKEYS_EXPANDED");
   });
 
+  test("encrypted content is KHE bytes, bound to its document", async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      const { ChangeId, Keyhive, Signer, CiphertextStore, Encrypted } = window.keyhive;
+      const kh = await Keyhive.init(
+        await Signer.generate(),
+        CiphertextStore.newInMemory(),
+        (_) => {},
+      );
+      const docId = await kh.generateDocument([], new ChangeId(new Uint8Array(32).fill(1)), []);
+      const otherId = await kh.generateDocument([], new ChangeId(new Uint8Array(32).fill(2)), []);
+      const keyed = await kh.tryEncryptKeyed(
+        docId,
+        new ChangeId(new Uint8Array(32).fill(3)),
+        [],
+        new Uint8Array([1, 2, 3]),
+      );
+      const bytes = keyed.encryptedContent().toBytes();
+      const read = Encrypted.fromBytes(bytes);
+      let otherDocRefused = false;
+      try {
+        read.decryptWithKey(keyed.applicationSecret, otherId);
+      } catch {
+        otherDocRefused = true;
+      }
+      return {
+        header: Array.from(bytes.slice(0, 4)),
+        plaintext: Array.from(read.decryptWithKey(keyed.applicationSecret, docId)),
+        otherDocRefused,
+      };
+    });
+
+    expect(out.header).toStrictEqual([0x4b, 0x48, 0x45, 0x00]); // "KHE", version 0
+    expect(out.plaintext).toStrictEqual([1, 2, 3]);
+    expect(out.otherDocRefused).toBe(true);
+  });
+
   test("a listener that throws leaves the keyhive usable", async ({ page }) => {
     const out = await page.evaluate(async () => {
       const { Keyhive, Signer, CiphertextStore } = window.keyhive;

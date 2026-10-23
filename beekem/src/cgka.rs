@@ -11,7 +11,7 @@
 
 use crate::{
     collections::Set,
-    encrypted::{encrypt_secret_with, EncryptedContent, PairedKey},
+    encrypted::{encrypt_secret_with, EncryptedContent, PairedKey, PredecessorRefs},
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, NodeKey, ShareKeyMap},
@@ -33,7 +33,6 @@ use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
     signed::SerdeSigned,
     signer::async_signer::{self, AsyncSigner},
-    siv::Siv,
     symmetric_key::SymmetricKey,
 };
 use nonempty::NonEmpty;
@@ -152,8 +151,7 @@ impl Cgka {
     >(
         &mut self,
         content_ref: &T,
-        content: &[u8],
-        pred_refs: &Vec<T>,
+        pred_refs: &[T],
         signer: &S,
         csprng: &mut R,
     ) -> Result<
@@ -184,12 +182,10 @@ impl Cgka {
                 }
             }
         };
-        let nonce = Siv::new(&current_pcs_key.into(), content, self.doc_id.as_bytes());
         Ok((
             current_pcs_key.derive_application_secret(
-                &nonce,
                 content_ref,
-                &Digest::hash(pred_refs),
+                &PredecessorRefs::digest(pred_refs),
                 &current_op_hash,
             ),
             rotation,
@@ -208,7 +204,6 @@ impl Cgka {
         let pcs_key =
             self.root_secret_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
         let app_secret = pcs_key.derive_application_secret(
-            &encrypted.nonce,
             &encrypted.content_ref,
             &encrypted.pred_refs,
             &encrypted.pcs_update_op_hash,
@@ -706,7 +701,7 @@ impl Cgka {
         update_op_hash: &Digest<SerdeSigned<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
         let pcs_key = self.find_or_derive_root_secret(update_op_hash)?;
-        if &Digest::hash(&pcs_key) != pcs_key_hash {
+        if &pcs_key.digest() != pcs_key_hash {
             return Err(CgkaError::UnknownPcsKey);
         }
         Ok(pcs_key)
@@ -890,7 +885,9 @@ impl Cgka {
             .filter(|entry| should_decrypt(&entry.update_op_hash))
             .filter_map(|entry| {
                 let key = key.get_or_insert_with(|| pcs_key.derive_predecessor_secrets_key());
-                let plaintext = key.try_open(&entry.encrypted_root_secret).ok()?;
+                let plaintext = key
+                    .try_open(&entry.encrypted_root_secret, self.doc_id.as_bytes())
+                    .ok()?;
                 Some((
                     entry.update_op_hash,
                     PcsKey::from_decrypted_secret(plaintext)?,

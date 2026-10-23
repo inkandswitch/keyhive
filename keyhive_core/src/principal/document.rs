@@ -19,14 +19,13 @@ use crate::{
     update::{AddMemberUpdate, RevokeMemberUpdate},
 };
 use beekem::{
-    encrypted::EncryptedContent,
+    encrypted::{ContentDecryptError, EncryptedContent},
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
 };
 use future_form::FutureForm;
 use id::DocumentId;
-use keyhive_codec::traits::{Encode, StreamDecode};
 use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::Identifier,
@@ -210,7 +209,7 @@ impl<T: ContentRef> DocumentState<T> {
         &mut self,
         content_ref: &T,
         content: &[u8],
-        pred_refs: &Vec<T>,
+        pred_refs: &[T],
         signer: &S,
         csprng: &mut R,
     ) -> Result<
@@ -237,7 +236,7 @@ impl<T: ContentRef> DocumentState<T> {
             plaintext: content.to_vec(),
             ancestors,
         };
-        let bytes = bincode::serialize(&envelope)?;
+        let bytes = envelope.serde_encode()?;
 
         let (encrypted, _key, rotation) = self
             .try_encrypt_content_keyed::<F, S, R>(content_ref, &bytes, pred_refs, signer, csprng)
@@ -257,7 +256,7 @@ impl<T: ContentRef> DocumentState<T> {
         &mut self,
         content_ref: &T,
         content: &[u8],
-        pred_refs: &Vec<T>,
+        pred_refs: &[T],
         signer: &S,
         csprng: &mut R,
     ) -> Result<
@@ -270,7 +269,7 @@ impl<T: ContentRef> DocumentState<T> {
     > {
         let (app_secret, rotation) = self
             .cgka
-            .new_app_secret_for(content_ref, content, pred_refs, signer, csprng)
+            .new_app_secret_for(content_ref, pred_refs, signer, csprng)
             .await
             .map_err(EncryptError::FailedToMakeAppSecret)?;
 
@@ -279,7 +278,7 @@ impl<T: ContentRef> DocumentState<T> {
             .insert(content_ref.clone(), application_secret_key);
 
         let encrypted_content = app_secret
-            .try_encrypt(content)
+            .try_encrypt(self.doc_id().into(), content)
             .map_err(EncryptError::EncryptionFailed)?;
 
         Ok((encrypted_content, application_secret_key, rotation))
@@ -305,24 +304,13 @@ impl<T: ContentRef> DocumentState<T> {
             .decryption_key_for(encrypted_content)
             .map_err(|_| DecryptError::KeyNotFound)?;
 
-        let mut plaintext = encrypted_content.ciphertext.clone();
-        decrypt_key
-            .try_decrypt(encrypted_content.nonce, &mut plaintext)
-            .map_err(DecryptError::DecryptionFailed)?;
+        let plaintext = encrypted_content
+            .try_decrypt(decrypt_key, self.doc_id().into())
+            .map_err(DecryptError::from)?;
 
         self.known_decryption_keys
             .insert(encrypted_content.content_ref.clone(), decrypt_key);
 
-        // FIXME for some reason this decrypts successfully,
-        // but the bytes of the symmetric key are different,
-        // so we get a different nonce.
-        //
-        // FIXME the above is because the nonce is ignored due to CGKA changes. Fix this.
-        //
-        // let expected_siv = Siv::new(&decrypt_key, &plaintext, self.doc_id())?;
-        // if expected_siv != encrypted_content.nonce {
-        //     Err(DecryptError::SivMismatch)?;
-        // }
         Ok((plaintext, decrypt_key))
     }
 
@@ -343,10 +331,8 @@ impl<T: ContentRef> DocumentState<T> {
 
         let mut acc = CausalDecryptionState::new();
 
-        let entrypoint_envelope: Envelope<T, Vec<u8>> = bincode::deserialize(
-            raw_entrypoint.as_slice(),
-        )
-        .map_err(|e| CausalDecryptionError::<F, T, P, C> {
+        let entrypoint_envelope = Envelope::<T, Vec<u8>>::serde_decode(raw_entrypoint.as_slice())
+            .map_err(|e| CausalDecryptionError::<F, T, P, C> {
             progress: Box::new(acc.clone()),
             cannot: HashMap::from_iter([(
                 encrypted_content.content_ref.clone(),
@@ -367,7 +353,9 @@ impl<T: ContentRef> DocumentState<T> {
             }
         }
 
-        Ok(store.try_causal_decrypt(&mut to_decrypt).await?)
+        Ok(store
+            .try_causal_decrypt(self.doc_id(), &mut to_decrypt)
+            .await?)
     }
 
     #[instrument(skip_all)]
@@ -410,7 +398,7 @@ impl<F, S, T, P, C, L, R, K> Document<Keyhive<F, S, T, P, C, L, R, K>>
 where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
-    T: ContentRef + Encode + StreamDecode,
+    T: ContentRef,
     P: for<'de> Deserialize<'de>,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
@@ -611,4 +599,15 @@ pub enum DecryptError {
 
     #[error("Unable to build SIV due to IO error: {0}")]
     IoErrorOnSivBuild(#[from] std::io::Error),
+}
+
+impl From<ContentDecryptError> for DecryptError {
+    fn from(err: ContentDecryptError) -> Self {
+        match err {
+            ContentDecryptError::Decryption => {
+                DecryptError::DecryptionFailed(chacha20poly1305::Error)
+            }
+            ContentDecryptError::NonceMismatch => DecryptError::SivMismatch,
+        }
+    }
 }
