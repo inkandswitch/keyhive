@@ -4,9 +4,8 @@
 //! A CGKA add or remove cites certificates by [`CitationId`]. An operation's
 //! predecessor set is everything its causal ancestors cited. Its certificate
 //! set adds what it cites itself and its signing set adds only the
-//! delegations it cites. Implicit removal is evaluated over the certificate
-//! set and a replica signs an operation only if it has `Read` in its signing
-//! set.
+//! delegations it cites. CGKA authorization and implicit removal are evaluated
+//! over those sets.
 
 use beekem::{cgka::MembershipView, id::MemberId, operation::CitationId};
 use dupe::Dupe;
@@ -91,7 +90,8 @@ impl QueryHash {
 }
 
 /// How many of Keyline's answers about a resource are kept outside a replay.
-/// Writes and merges ask about sets near the current heads, a few at a time.
+/// Authorization and writes ask about sets near the current heads, a few at a
+/// time.
 const ANSWERS_PER_RESOURCE: usize = 8;
 
 /// The certificates CGKA operations cite or may cite, and Keyline's answers
@@ -129,7 +129,7 @@ pub(crate) struct CitedCertificates {
 }
 
 impl CitedCertificates {
-    /// Record `cert` so that operations citing it can be evaluated.
+    /// Record `cert`, for authorizing operations that cite it.
     pub(crate) fn insert<W>(&mut self, cert: &VerifiedCertificate<W>) {
         self.certificates
             .insert(citation_of(cert.id()), Cited::from(cert));
