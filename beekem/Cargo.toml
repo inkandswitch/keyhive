@@ -14,6 +14,7 @@ blake3 = { workspace = true }
 chacha20poly1305 = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["rand_core", "serde"] }
 future_form = { workspace = true }
+keyhive_codec = { workspace = true }
 keyhive_crypto = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true }
@@ -31,6 +32,7 @@ arbitrary = { workspace = true }
 bolero.workspace = true
 beekem = { path = ".", features = ["arbitrary"] }
 curve25519-dalek = { workspace = true }
+keyhive_codec = { workspace = true, features = ["laws"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
@@ -39,6 +41,7 @@ std = [
     "blake3/std",
     "dupe",
     "ed25519-dalek/std",
+    "keyhive_codec/std",
     "keyhive_crypto/std",
     "nonempty/std",
     "rand/std",

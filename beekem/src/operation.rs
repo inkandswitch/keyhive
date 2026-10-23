@@ -21,6 +21,11 @@ use core::{
     mem,
     ops::Deref,
 };
+use keyhive_codec::{
+    error::DecodeError,
+    prefixed::{decode_bytes, decode_list, encode_bytes, encode_list},
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use keyhive_crypto::{
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
@@ -38,6 +43,36 @@ pub enum CgkaAuthorization {
 
     /// The digest of the revocation that generated a remove.
     Revocation([u8; 32]),
+}
+
+/// Tag `0` for a delegation, `1` for a revocation, then the digest.
+impl Encode for CgkaAuthorization {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let (tag, digest) = match self {
+            CgkaAuthorization::Delegation(digest) => (0, digest),
+            CgkaAuthorization::Revocation(digest) => (1, digest),
+        };
+        out.push(tag);
+        out.extend_from_slice(digest);
+    }
+}
+
+impl Decode for CgkaAuthorization {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for CgkaAuthorization {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (&tag, rest) = bytes.split_first().ok_or(DecodeError::UnexpectedEnd)?;
+        let (digest, rest) = <[u8; 32]>::decode_next(rest)?;
+        match tag {
+            0 => Ok((CgkaAuthorization::Delegation(digest), rest)),
+            1 => Ok((CgkaAuthorization::Revocation(digest), rest)),
+            other => Err(DecodeError::InvalidTag(other)),
+        }
+    }
 }
 
 /// An ordered [`NonEmpty`] of [`CgkaOperation`]s that a replay applies
@@ -81,6 +116,34 @@ pub struct InvitationSecret {
     pub encrypted_root_secret: EncryptedSecret<ShareSecretKey>,
 }
 
+/// `update_op_hash ‖ encrypted_root_secret`.
+impl Encode for InvitationSecret {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.update_op_hash.encode_into(out);
+        self.encrypted_root_secret.encode_into(out);
+    }
+}
+
+impl Decode for InvitationSecret {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for InvitationSecret {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (update_op_hash, rest) = Digest::decode_next(bytes)?;
+        let (encrypted_root_secret, rest) = EncryptedSecret::decode_next(rest)?;
+        Ok((
+            InvitationSecret {
+                update_op_hash,
+                encrypted_root_secret,
+            },
+            rest,
+        ))
+    }
+}
+
 /// When a member is added, it can't derive a root secret from the tree until the next
 /// update. An invitation provides it the root secrets the inviter could reach at the
 /// point it was added.
@@ -95,6 +158,34 @@ pub struct Invitation {
     /// for this add's nearest update ancestors and for every chainable update
     /// whose root secret it had not yet decrypted from a later update.
     pub ancestor_secrets: Vec<InvitationSecret>,
+}
+
+/// `inviter_pk ‖ count:bijou32 ‖ ancestor_secrets`, in order.
+impl Encode for Invitation {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.inviter_pk.encode_into(out);
+        encode_list(&self.ancestor_secrets, out);
+    }
+}
+
+impl Decode for Invitation {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for Invitation {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (inviter_pk, rest) = ShareKey::decode_next(bytes)?;
+        let (ancestor_secrets, rest) = decode_list(rest)?;
+        Ok((
+            Invitation {
+                inviter_pk,
+                ancestor_secrets,
+            },
+            rest,
+        ))
+    }
 }
 
 /// An earlier update's root secret, wrapped by a later update.
@@ -113,6 +204,34 @@ pub struct PredecessorSecret {
     /// The root secret, encrypted under a key derived from the root secret of the
     /// update that contains this entry.
     pub encrypted_root_secret: Vec<u8>,
+}
+
+/// `update_op_hash ‖ len:bijou32 ‖ encrypted_root_secret`.
+impl Encode for PredecessorSecret {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.update_op_hash.encode_into(out);
+        encode_bytes(&self.encrypted_root_secret, out);
+    }
+}
+
+impl Decode for PredecessorSecret {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for PredecessorSecret {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (update_op_hash, rest) = Digest::decode_next(bytes)?;
+        let (encrypted_root_secret, rest) = decode_bytes(rest)?;
+        Ok((
+            PredecessorSecret {
+                update_op_hash,
+                encrypted_root_secret: encrypted_root_secret.to_vec(),
+            },
+            rest,
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
