@@ -15,7 +15,7 @@ async fn the_chain_goes_back_past_the_secret_an_invitation_wraps() -> Result<()>
     alice.force_pcs_update(design_doc).await?;
     let third = ctx.encrypt(&alice, design_doc, b"under the third").await?;
 
-    // Carol was in the tree for none of those rotations.
+    // Carol was in the CGKA group for none of those rotations.
     let carol = ctx.individual("carol").await?;
     alice.add_member(carol.id(), design_doc, Read).await?;
     ctx.sync(&alice, &carol).await?;
@@ -69,7 +69,7 @@ async fn a_later_update_encrypts_a_secret_no_invitation_wrapped() -> Result<()> 
     assert_eq!(
         carol.try_decrypt_content(design_doc, &on_bob).await?,
         b"on bob".to_vec(),
-        "carol derives alice's newest secret from the tree and traverses the chain back to bob's"
+        "carol derives alice's newest secret from the CGKA group and traverses the chain back to bob's"
     );
     Ok(())
 }

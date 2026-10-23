@@ -61,12 +61,12 @@ pub struct IndividualState {
 
     /// [`ShareKey`] pre-keys.
     ///
-    /// Prekeys are used to invite this `IndividualState` to [`DocumentState`] read access trees.
-    /// The core idea is that the invited `IndividualState` is offline, but needs to be added to
-    /// the encryption tree for a particular [`DocumentState`]. They publish a set of public keys
+    /// Prekeys are used to invite this `IndividualState` to the CGKA groups of documents it can
+    /// read. The core idea is that the invited `IndividualState` is offline, but needs to be added
+    /// to the CGKA group for a particular [`DocumentState`]. They publish a set of public keys
     /// in advance. The inviter can then deterministically select one, and use it as the
-    /// initial key for the invitee's BeeKEM entry. The next time they're online, the invitee
-    /// should then remove the prekey from their public set and rotate the BeeKEM key on the [`DocumentState`].
+    /// initial key for the invitee in the CGKA group. The next time they're online, the invitee
+    /// should then remove the prekey from their public set and rotate their key in the CGKA group.
     ///
     /// The use of unique prekeys for each new [`DocumentState`] invite isolates each [`DocumentState`] from
     /// the compromise of one prekey affecting the security of other [`DocumentState`]s. Since we operate

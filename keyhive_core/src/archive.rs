@@ -2,9 +2,9 @@
 //!
 //! What a replica cannot recompute: its identity and key pairs, the
 //! individuals it knows, the certificate set, every CGKA operation it holds,
-//! each document's content heads, and the events still waiting. Trees are
-//! rebuilt from the operations on load, as a second instance of an identity
-//! builds them; group membership is the certificate set.
+//! each document's content heads, and the events still waiting. CGKA groups
+//! are rebuilt from the operations on load, as a second instance of an
+//! identity builds them; group membership is the certificate set.
 
 use crate::{
     content::heads::ContentHeads,

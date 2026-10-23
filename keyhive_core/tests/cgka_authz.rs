@@ -47,7 +47,7 @@ async fn cgka_heads(observer: &Hive, doc: DocumentId) -> Vec<Digest<SerdeSigned<
     let ops = observer
         .cgka_ops_for_doc(&doc)
         .await
-        .expect("the observer holds the document");
+        .expect("the observer has the document");
     let referenced: HashSet<_> = ops
         .iter()
         .flat_map(|op| op.payload.predecessors())
@@ -58,7 +58,7 @@ async fn cgka_heads(observer: &Hive, doc: DocumentId) -> Vec<Digest<SerdeSigned<
         .collect()
 }
 
-/// Whether `observer` holds `op`.
+/// Whether `observer` has `op`.
 async fn contains_op(observer: &Hive, doc: DocumentId, op: &SerdeSigned<CgkaOperation>) -> bool {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap_or_default();
     ops.iter().any(|known| known.as_ref() == op)
@@ -73,7 +73,7 @@ async fn learn(observer: &Hive, who: &Hive) -> IndividualId {
     id
 }
 
-/// A fresh prekey of `who`'s, and the key proof an add of `who` carries.
+/// A fresh prekey of `who`'s, and the key proof an add of `who` contains.
 async fn proven_prekey(who: &Hive) -> (ShareKey, Vec<u8>) {
     let op = who.expand_prekeys().await.expect("prekeys expand");
     (op.payload().share_key, KeyOp::Add(op).to_key_proof())
@@ -100,7 +100,7 @@ async fn intercepted_path(who: &Hive) -> Box<PathChange> {
         .expect("content encrypts");
     who.cgka_ops_for_doc(&doc_id)
         .await
-        .expect("the writer holds the document")
+        .expect("the writer has the document")
         .iter()
         .find_map(|op| match op.payload() {
             CgkaOperation::Update { new_path, .. } => Some(new_path.clone()),
@@ -129,7 +129,7 @@ async fn op_where(
     observer
         .cgka_ops_for_doc(&doc)
         .await
-        .expect("the observer holds the document")
+        .expect("the observer has the document")
         .iter()
         .find(|op| pick(op.payload()))
         .map(|op| op.as_ref().clone())
@@ -163,7 +163,7 @@ async fn signed_delegation(
 }
 
 /// `signer`'s revocation of a delegation from `subject` to `audience` that
-/// `holder` holds, not yet received by anyone.
+/// `holder` has, not yet received by anyone.
 async fn signed_revocation(
     signer: &Hive,
     holder: &Hive,
@@ -455,8 +455,8 @@ async fn citations_must_be_strictly_ascending() -> TestResult {
 async fn a_member_can_cite_the_revocation_of_their_own_access() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
-    // Alice revokes Bob in Keyline only. Bob carries the revocation into the
-    // key agreement himself.
+    // Alice revokes Bob in Keyline only. Bob cites the revocation in a CGKA
+    // remove himself.
     let revocation = signed_revocation(&alice, &alice, doc_id, bob.id()).await?;
     receive(&alice, &revocation).await;
     let op = remove_op(&alice, doc_id, cites(&[&revocation])).await;
@@ -741,7 +741,7 @@ async fn a_revoked_writer_adds_no_reader() -> TestResult {
     }
     assert!(!cgka_members(&bob, doc_id).await.contains(&bob_id));
 
-    // Only Bob holds Carol's prekeys, but his revocation is in the history
+    // Only Bob has Carol's prekeys, but his revocation is in the history
     // an add of her would build on, so every receiver would deny it.
     let _ = bob
         .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"by bob")
@@ -816,7 +816,7 @@ async fn a_member_added_under_a_key_it_rotated_away_rotates_before_writing() -> 
     let rotated = carol
         .cgka_ops_for_doc(&doc_id)
         .await
-        .ok_or("carol holds the document")?
+        .ok_or("carol has the document")?
         .iter()
         .any(|op| {
             matches!(op.payload(), CgkaOperation::Update { id, new_path, .. }

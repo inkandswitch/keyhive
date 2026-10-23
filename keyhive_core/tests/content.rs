@@ -272,7 +272,7 @@ async fn writing_again_does_not_rotate_the_key_each_time() -> Result<()> {
     assert_eq!(
         alice.stats().await.cgka_operations,
         settled,
-        "each write found a key already in the tree, so none of them rotated"
+        "each write found a current group key, so none of them rotated"
     );
     Ok(())
 }

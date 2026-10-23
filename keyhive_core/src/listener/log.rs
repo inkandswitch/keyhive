@@ -169,7 +169,7 @@ mod tests {
 
     /// The listener hears of the CGKA operations this replica writes,
     /// so they can be sent on: a forced PCS update, and the update a write makes
-    /// when the tree has changed since its last root secret.
+    /// when the CGKA group has changed since its last root secret.
     #[tokio::test]
     async fn own_key_agreement_updates_are_announced() {
         let log: Log<[u8; 32]> = Log::new();
