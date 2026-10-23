@@ -224,7 +224,9 @@ async fn a_non_member_cannot_add_themselves() -> TestResult {
         doc_id: TreeId::from(doc_id),
         authorization: bob_delegation,
     };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(mallory.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, Identifier::from(mallory.id())).await);
@@ -249,7 +251,9 @@ async fn a_non_member_cannot_remove_a_member() -> TestResult {
         doc_id: TreeId::from(doc_id),
         authorization: bob_revocation,
     };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(mallory.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, Identifier::from(mallory.id())).await);
@@ -270,7 +274,9 @@ async fn a_non_member_cannot_update_another_members_leaf() -> TestResult {
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
     };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(mallory.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     Ok(())
@@ -292,7 +298,7 @@ async fn an_add_cannot_target_the_wrong_subject() -> TestResult {
         doc_id: TreeId::from(doc_id),
         authorization: bob_delegation,
     };
-    let signed = alice.try_sign(op).await?;
+    let signed = alice.serde_sign_cgka_op(op).await?;
     let result = alice.receive_cgka_op(signed.clone()).await;
 
     // Pending because, from Alice's perspective, "Bob" could still be promoted to a group
@@ -335,7 +341,7 @@ async fn a_remove_cannot_evict_the_wrong_subject() -> TestResult {
         doc_id: TreeId::from(doc_id),
         authorization: bob_revocation,
     };
-    let signed = alice.try_sign(op).await?;
+    let signed = alice.serde_sign_cgka_op(op).await?;
     let result = alice.receive_cgka_op(signed.clone()).await;
 
     // Pending because, from Alice's perspective, "Bob" could still be promoted to a group
@@ -383,7 +389,9 @@ async fn an_add_citing_a_delegation_over_another_resource_is_pending() -> TestRe
         doc_id: TreeId::from(doc_id),
         authorization: elsewhere,
     };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(mallory.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, Identifier::from(mallory.id())).await);
@@ -409,7 +417,9 @@ async fn a_remove_citing_a_revocation_over_another_resource_is_pending() -> Test
         doc_id: TreeId::from(doc_id),
         authorization: rev_hash,
     };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(mallory.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, Identifier::from(mallory.id())).await);
@@ -429,7 +439,9 @@ async fn the_creator_cannot_update_another_members_leaf() -> TestResult {
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     Ok(())
@@ -453,7 +465,9 @@ async fn an_add_cannot_cite_a_delegation_below_read() -> TestResult {
         doc_id: TreeId::from(doc_id),
         authorization,
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     assert!(!tree_members(&alice, doc_id).await.contains(&carol.id()));
@@ -482,7 +496,9 @@ async fn an_add_granting_more_than_its_subject_reaches_here_is_pending() -> Test
         doc_id: TreeId::from(doc_id),
         authorization: keyline_grant(&alice, group_id, mallory_id).await,
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_pending(&result), "{result:?}");
     assert!(!tree_members(&alice, doc_id).await.contains(&mallory.id()));
@@ -508,7 +524,9 @@ async fn a_founding_delegation_cannot_seat_an_outsider() -> TestResult {
         doc_id: TreeId::from(doc_id),
         authorization: founding,
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     // Pending, not denied: in Keyline an individual can have members, so
     // Mallory could still gain a route through Alice. She is not seated.
@@ -567,7 +585,9 @@ async fn a_member_who_did_not_found_the_document_cannot_enact_a_founding_delegat
     alice.add_member(bob_id, doc_id, Power::Admin).await?;
 
     let reissued = creators_own_add(&alice, doc_id).await.payload().clone();
-    let result = alice.receive_cgka_op(bob.try_sign(reissued).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(reissued).await?)
+        .await;
 
     assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, Identifier::from(bob.id())).await);
@@ -610,7 +630,9 @@ async fn a_remove_citing_a_revocation_that_covers_nothing_is_pending() -> TestRe
         doc_id: TreeId::from(doc_id),
         authorization: CgkaAuthorization::Revocation(inert_digest.into()),
     };
-    let result = alice.receive_cgka_op(relay.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(relay.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_pending(&result), "{result:?}");
     assert!(tree_members(&alice, doc_id).await.contains(&bob_id));
@@ -787,7 +809,9 @@ async fn a_rotation_of_another_members_leaf_is_denied() -> TestResult {
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     assert!(!result.unwrap_err().is_missing_dependency());
@@ -805,7 +829,9 @@ async fn a_rotation_whose_id_differs_from_its_path_leaf_is_denied() -> TestResul
         predecessors: cgka_heads(&alice, doc_id).await,
         doc_id: TreeId::from(doc_id),
     };
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     Ok(())
@@ -830,7 +856,9 @@ async fn a_remove_citing_a_revocation_of_access_below_read_is_denied() -> TestRe
         doc_id: TreeId::from(doc_id),
         authorization: keyline_revocation(&alice, doc_id, bob_id).await,
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     Ok(())
@@ -848,7 +876,9 @@ async fn a_remove_citing_a_revocation_not_yet_received_is_pending() -> TestResul
         doc_id: TreeId::from(doc_id),
         authorization: CgkaAuthorization::Revocation([0u8; 32]),
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_pending(&result), "{result:?}");
     Ok(())
@@ -868,7 +898,9 @@ async fn an_add_citing_a_delegation_not_yet_received_is_pending() -> TestResult 
         doc_id: TreeId::from(doc_id),
         authorization: CgkaAuthorization::Delegation([0u8; 32]),
     };
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(mallory.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_pending(&result), "{result:?}");
     assert!(result.unwrap_err().is_missing_dependency());
@@ -894,7 +926,9 @@ async fn an_add_through_a_delegation_to_ourselves_for_someone_else_is_pending() 
         *pk = own_prekey(&mallory, doc_id).await;
         *predecessors = cgka_heads(&alice, doc_id).await;
     }
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     // Pending, not denied: in Keyline an individual can have members, so
     // Mallory could still gain a route through Alice. She is not seated.
@@ -916,7 +950,9 @@ async fn an_update_with_no_predecessors_is_refused_with_the_trees_error() -> Tes
         predecessors: Vec::new(),
         doc_id: TreeId::from(doc_id),
     };
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(
         matches!(
@@ -963,7 +999,9 @@ async fn a_reader_can_remove_themselves_by_revoking_their_own_delegation() -> Te
         doc_id: TreeId::from(doc_id),
         authorization: CgkaAuthorization::Revocation(digest.into()),
     };
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(result.is_ok(), "{result:?}");
     assert!(!tree_members(&alice, doc_id).await.contains(&bob_id));

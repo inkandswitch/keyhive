@@ -147,7 +147,7 @@ The type does not check the claim. `Encode::encode` produces canonical bytes fro
 
 ### Domain Separation
 
-The keys that sign Keyline certificates also sign in other protocols, such as CGKA operations and prekey operations. If one byte string were valid in two formats, one signature would be valid in both. So every signed statement travels as a frame that starts with Keyhive's tag, and its signature covers the frame up to the signature:
+The keys that sign Keyline certificates also sign in other protocols, such as CGKA operations, prekey operations and bytes an application signs. If one byte string were valid in two formats, one signature would be valid in both. So every signed statement travels as a frame that starts with Keyhive's tag, and its signature covers the frame up to the signature:
 
 ```
 frame              "KH" ‖ kind:u8 ‖ version:u8 ‖ issuer:32 ‖ payload_len:bijou64 ‖ payload ‖ signature:64
@@ -156,13 +156,14 @@ signed and hashed  the frame without its signature
 
 The kind is the type's permanent number in one registry for the whole workspace, `keyhive_crypto::signable::Kind`; a retired number is never reused. Kinds are ASCII letters by convention, so a frame reads `KHD…` in a hexdump; any byte may be used once the letters run out. `I` is reserved, because an archive starts with `KHIV`. No common file format starts with `KH` at offset 0. The version is the version of the type's encoding, a byte starting at `0x00`.
 
-| Type             | Kind      | Used for                          |
-|------------------|-----------|-----------------------------------|
-| `Delegation`     | `D` (`0x44`) | signing, and its digest           |
-| `Revocation<W>`  | `R` (`0x52`) | signing, and its digest           |
+| Type             | Kind         | Used for                                                           |
+|------------------|--------------|--------------------------------------------------------------------|
+| `Delegation`     | `D` (`0x44`) | signing, and its digest                                            |
+| `Revocation<W>`  | `R` (`0x52`) | signing, and its digest                                            |
 | `CertificateSet` | `S` (`0x53`) | the set digest only; never signed: `"KH" ‖ kind ‖ version ‖ bytes` |
-| `AddKeyOp`       | `P` (`0x50`) | prekey operations (`keyhive_core`): signing, and its digest |
-| `RotateKeyOp`    | `T` (`0x54`) | prekey operations (`keyhive_core`): signing, and its digest |
+| `AddKeyOp`       | `P` (`0x50`) | prekey operations (`keyhive_core`): signing, and its digest        |
+| `RotateKeyOp`    | `T` (`0x54`) | prekey operations (`keyhive_core`): signing, and its digest        |
+| `Bytes`          | `B` (`0x42`) | application bytes (`keyhive_crypto`): signing, and its digest      |
 
 A type with a kind implements `keyhive_crypto::signable::Kinded` (`KIND`, `VERSION`). `Signable` is `Kinded + Encode + Decode`, with a blanket impl: what can be signed and verified. `CertificateSet` is `Kinded` but has no codec, so it cannot be signed. The two kinds of certificate are separated by their kinds, which is also why their digests can share one key type without a tag. The free function `signable::message::<T>` builds the bytes a signature covers, and `Digest::of` hashes exactly those bytes, so a signature and a digest always cover the same input; being a free function, no implementation can override it. Because the tag, kind, version, issuer and length are part of the frame, everything stored except the signature is signed: a frame whose kind, version, issuer or length was changed does not verify. The signed bytes are one contiguous span from the frame's first byte, so a digest is BLAKE3 over that span. Each type declares its kind next to its definition, and `keyline/tests/invariants.rs` checks that they are distinct. Separation from a protocol that signs unprefixed bytes, such as `keyhive_core`'s serde payloads today, still relies on that protocol's formats.
 

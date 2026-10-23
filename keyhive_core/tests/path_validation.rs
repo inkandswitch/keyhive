@@ -88,7 +88,8 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
     };
 
     // We should ignore the forged path and not panic.
-    bob.receive_cgka_op(alice.try_sign(op).await?).await?;
+    bob.receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await?;
 
     Ok(())
 }
