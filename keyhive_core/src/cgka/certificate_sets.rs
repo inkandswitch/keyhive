@@ -10,7 +10,7 @@ use dupe::Dupe;
 use imbl::{ordset::DiffItem, OrdSet};
 use keyhive_crypto::{digest::Digest, signed::SerdeSigned};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ops::Deref,
 };
 
@@ -73,6 +73,10 @@ pub(crate) struct CertificateSets {
     /// Each document's certificate sets.
     docs: HashMap<TreeId, DocumentSets>,
 
+    /// Operations recorded as denied. An operation that depends on one
+    /// is denied as well.
+    denied: HashSet<OpDigest>,
+
     /// [`RECENT_SETS`] (fewer in tests).
     recent_sets: usize,
 
@@ -106,9 +110,20 @@ impl CertificateSets {
     pub(crate) fn retaining(recent_sets: usize, checkpoint_every: u64) -> Self {
         Self {
             docs: HashMap::new(),
+            denied: HashSet::new(),
             recent_sets,
             checkpoint_every,
         }
+    }
+
+    /// Record that the operation `digest` was denied.
+    pub(crate) fn deny(&mut self, digest: OpDigest) {
+        self.denied.insert(digest);
+    }
+
+    /// Whether the operation `digest` was recorded as denied.
+    pub(crate) fn is_denied(&self, digest: &OpDigest) -> bool {
+        self.denied.contains(digest)
     }
 
     /// Every certificate the operations at `heads` and their causal ancestors
