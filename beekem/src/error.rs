@@ -27,6 +27,13 @@ pub enum CgkaError {
     #[cfg_attr(feature = "thiserror", error("Encrypted secret not found"))]
     EncryptedSecretNotFound,
 
+    /// A path secret decrypted to a key other than its node's public key.
+    #[cfg_attr(
+        feature = "thiserror",
+        error("A path secret does not match its node's public key")
+    )]
+    PathSecretMismatch,
+
     #[cfg_attr(feature = "thiserror", error("Identifier not found"))]
     IdentifierNotFound,
 
@@ -96,6 +103,9 @@ impl core::fmt::Display for CgkaError {
             Self::DeriveNonce(msg) => write!(f, "Deriving nonce failed: {msg}"),
             Self::Encryption(e) => write!(f, "Encryption failed: {e}"),
             Self::EncryptedSecretNotFound => write!(f, "Encrypted secret not found"),
+            Self::PathSecretMismatch => {
+                write!(f, "A path secret does not match its node's public key")
+            }
             Self::IdentifierNotFound => write!(f, "Identifier not found"),
             Self::InvalidOperation => write!(f, "Invalid operation"),
             Self::InvalidPathLength => write!(f, "Invalid path length"),
