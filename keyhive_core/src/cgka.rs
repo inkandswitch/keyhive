@@ -3,8 +3,13 @@
 //! beekem IDs ([`beekem::id::MemberId`] /
 //! [`beekem::id::TreeId`]) at the API boundary.
 
+pub(crate) mod certificate_sets;
+pub(crate) mod citations;
+
 use crate::principal::{document::id::DocumentId, individual::id::IndividualId};
 use beekem::{
+    cgka::MembershipView,
+    collections::Set,
     encrypted::EncryptedContent,
     error::CgkaError,
     id::{MemberId, TreeId},
@@ -144,13 +149,35 @@ impl Cgka {
         self.0.add_multiple(converted, signer).await
     }
 
-    pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
+    /// Create a [`CgkaOperation::Remove`] without explicitly listing
+    /// targets. Specific members to be removed are determined by
+    /// `citations`.
+    pub async fn remove_by_citations<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        id: IndividualId,
         citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
-        self.0.remove(MemberId::from(id), citations, signer).await
+    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
+        self.0.remove_by_citations(citations, signer).await
+    }
+
+    /// Remove members according to `view` from now on. Operations already
+    /// recorded are replayed under it before the CGKA's next use.
+    pub(crate) fn set_membership_view(&mut self, view: Arc<dyn MembershipView>) {
+        self.0.set_membership_view(view);
+    }
+
+    /// The operations the next operation created here will have as its
+    /// predecessors.
+    pub fn heads(&self) -> &Set<Digest<SerdeSigned<CgkaOperation>>> {
+        &self.0.ops_graph().cgka_op_heads
+    }
+
+    /// The operation in the CGKA graph with this digest.
+    pub(crate) fn op(
+        &self,
+        digest: &Digest<SerdeSigned<CgkaOperation>>,
+    ) -> Option<&Arc<SerdeSigned<CgkaOperation>>> {
+        self.0.ops_graph().cgka_ops.get(digest)
     }
 
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: CryptoRng + RngCore>(
@@ -169,6 +196,19 @@ impl Cgka {
 
     pub fn group_size(&self) -> u32 {
         self.0.group_size()
+    }
+
+    /// Rebuild the materialized CGKA group from its operations if some were recorded
+    /// but not applied. Fails with `CgkaError::MembershipUnknown`, changing
+    /// nothing, if its membership view lacks an answer the rebuild needs.
+    pub(crate) fn replay_if_pending(&mut self) -> Result<(), CgkaError> {
+        self.0.replay_if_pending()
+    }
+
+    /// Every certificate set a replay of the whole history asks the
+    /// membership view about.
+    pub(crate) fn membership_sets(&self) -> Result<Vec<BTreeSet<CitationId>>, CgkaError> {
+        self.0.membership_sets()
     }
 
     /// The individuals currently in this document's CGKA tree.
@@ -213,6 +253,9 @@ impl Cgka {
         if !self.contains_predecessors(&predecessors.iter().cloned().collect()) {
             return Err(CgkaError::OutOfOrderOperation);
         }
+        // Check if we should replay first, so that a replay lacking a membership answer
+        // fails before the owner changes.
+        self.replay_if_pending()?;
         let mut owner_sks = self.owner_sks().clone();
         owner_sks.insert(pk, *sk);
         *self = self.with_new_owner(added_id.into(), owner_sks)?;
