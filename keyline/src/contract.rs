@@ -141,6 +141,15 @@ pub trait Keyline<F: FutureForm> {
         subject: Identifier,
     ) -> Query<'_, F, BTreeMap<Identifier, Power>, Self::Error>;
 
+    /// [`Keyline::members`] over only the certificates of `subset` that the
+    /// background set contains. Identities the background set does not contain
+    /// are ignored.
+    fn members_for_subset(
+        &self,
+        subset: BTreeSet<CertificateId>,
+        subject: Identifier,
+    ) -> Query<'_, F, BTreeMap<Identifier, Power>, Self::Error>;
+
     /// The subject of every delegation in the set, live or not: everything
     /// the set says something about. Monotone in the set.
     fn subjects(&self) -> Query<'_, F, BTreeSet<Identifier>, Self::Error>;

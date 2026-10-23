@@ -640,6 +640,14 @@ mod tests {
             Keyline::<Sendable>::members(&self.0, subject)
         }
 
+        fn members_for_subset(
+            &self,
+            subset: BTreeSet<CertificateId>,
+            subject: Identifier,
+        ) -> Query<'_, Sendable, BTreeMap<Identifier, Power>, Self::Error> {
+            Keyline::<Sendable>::members_for_subset(&self.0, subset, subject)
+        }
+
         fn subjects(&self) -> Query<'_, Sendable, BTreeSet<Identifier>, Self::Error> {
             Keyline::<Sendable>::subjects(&self.0)
         }
