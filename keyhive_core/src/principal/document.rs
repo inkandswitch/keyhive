@@ -48,7 +48,7 @@ use std::{
 use thiserror::Error;
 use tracing::instrument;
 
-/// A document this replica is a member of: its key agreement tree and the
+/// A document this replica is a member of: its CGKA group and the
 /// content heads it knows. Its membership is the Keyline certificate set.
 #[derive(Debug, Clone)]
 pub struct DocumentState<T: ContentRef> {
@@ -60,16 +60,16 @@ pub struct DocumentState<T: ContentRef> {
     /// them to a reader in an envelope. Not persisted, and not evicted.
     known_decryption_keys: HashMap<T, SymmetricKey>,
 
-    /// This replica's key agreement tree. A replica holds a document only as a
-    /// member whose creation or invitation has merged; a relay holds none of
+    /// This replica's CGKA group. A replica has a document only as a
+    /// member whose creation or invitation has merged. A relay has none of
     /// its operations and has no `DocumentState`.
     cgka: Cgka,
 }
 
 impl<T: ContentRef> DocumentState<T> {
-    /// A member's document: its tree, built from its operations, and the
+    /// A member's document: its CGKA group, built from its operations, and the
     /// content heads it knows.
-    pub(crate) fn with_tree(
+    pub(crate) fn with_cgka(
         id: DocumentId,
         cgka: Cgka,
         content_heads: HashSet<T>,
@@ -100,10 +100,10 @@ impl<T: ContentRef> DocumentState<T> {
         &mut self.cgka
     }
 
-    /// The individuals in this document's CGKA tree.
+    /// The members of this document's CGKA group.
     ///
     /// Resolves any outstanding concurrent membership change first, which
-    /// rebuilds the tree.
+    /// rebuilds the CGKA group.
     ///
     /// Returns whatever error the rebuild fails with.
     pub fn cgka_members(&mut self) -> Result<impl Iterator<Item = IndividualId> + '_, CgkaError> {
@@ -146,7 +146,7 @@ impl<T: ContentRef> DocumentState<T> {
             cgka.update(owner_pk, owner_sk, signer, csprng).await?;
         ops.push(update_op);
 
-        let doc = DocumentState::with_tree(
+        let doc = DocumentState::with_cgka(
             id,
             cgka,
             initial_content_heads.into_iter().collect(),
@@ -185,7 +185,7 @@ impl<T: ContentRef> DocumentState<T> {
         self.cgka.ops()
     }
 
-    /// Rotate our CGKA key, returning the update and the new leaf key pair.
+    /// Rotate our CGKA key, returning the update and the new key pair.
     #[instrument(skip_all)]
     pub async fn pcs_update<F: FutureForm, S: AsyncSigner<F>, R: RngCore + CryptoRng>(
         &mut self,
@@ -251,7 +251,7 @@ impl<T: ContentRef> DocumentState<T> {
 
     /// Encrypt `content`, returning it with the key it is encrypted under. The third
     /// element is the update this write had to make, and the key pair it sampled for our
-    /// leaf, if the tree had no current key.
+    /// key in the CGKA group, if we had no current key.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed<
         F: FutureForm,
@@ -470,7 +470,7 @@ where
     }
 
     /// The individuals in this replica's CGKA group for the document. Returns `None` if it
-    /// holds no CGKA group for it or cannot read that group, e.g., when Keyline cannot
+    /// has no CGKA group for it or cannot read that group, e.g., when Keyline cannot
     /// answer a membership question a replay requires.
     pub async fn cgka_members(&self) -> Option<BTreeSet<IndividualId>> {
         let state = self.keyhive.document_state(self.id).await?;
@@ -489,7 +489,7 @@ where
     }
 
     /// The content heads this replica knows for the document; `None` if it
-    /// holds no tree for it.
+    /// has not joined the document's CGKA group.
     pub async fn content_heads(&self) -> Option<HashSet<T>> {
         let state = self.keyhive.document_state(self.id).await?;
         let heads = state.lock().await.content_heads.clone();

@@ -171,9 +171,10 @@ async fn a_member_with_sixteen_prekeys_can_be_added_to_any_document() -> Result<
 
 /// Rotations that retire each other's keys leave an individual with no live
 /// prekey. Adding them still delegates to them, but they are not added to the
-/// CGKA tree.
+/// CGKA group.
 #[tokio::test]
-async fn a_member_with_no_live_prekeys_is_delegated_but_not_added_to_cgka_tree() -> Result<()> {
+async fn a_member_with_no_live_prekeys_is_delegated_but_not_added_to_the_cgka_group() -> Result<()>
+{
     use keyhive_core::principal::individual::op::{
         add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp,
     };
@@ -215,7 +216,7 @@ async fn a_member_with_no_live_prekeys_is_delegated_but_not_added_to_cgka_tree()
         !alice
             .cgka_members_for(doc)
             .await?
-            .expect("alice holds the tree")
+            .expect("alice has joined the CGKA group")
             .contains(&carol_id.into()),
         "no live prekeys"
     );

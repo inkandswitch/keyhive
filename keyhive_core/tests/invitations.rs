@@ -14,7 +14,7 @@ async fn an_invitation_wraps_a_secret_from_after_the_inviter_joined() -> Result<
     alice.add_member(bob.id(), design_doc, Admin).await?;
 
     // Adding bob blanked the root, so this write is under a later secret. Bob is
-    // in the tree at this point.
+    // in the CGKA group at this point.
     let second = ctx.encrypt(&alice, design_doc, b"under the second").await?;
     ctx.sync(&alice, &bob).await?;
 
@@ -53,7 +53,7 @@ async fn an_invitation_is_useless_to_a_non_member() -> Result<()> {
 
     assert!(
         !carol.has_document(design_doc).await,
-        "carol is not a member, so she holds no tree for the document"
+        "carol is not a member, so she has no CGKA graph for the document"
     );
     assert!(
         !matches!(carol.can_decrypt_content(design_doc, &ct).await, Ok(true)),
@@ -82,7 +82,7 @@ async fn an_invitation_can_wrap_a_secret_the_inviter_got_from_its_own_invitation
     ctx.sync(&alice, &bob).await?;
 
     // Neither admin sees the other before acting. Bob's add blanked the root, so he
-    // never derived the earlier secret from the tree and wraps the one his invitation gave him.
+    // never derived the earlier secret from the CGKA group and wraps the one his invitation gave him.
     let carol = ctx.individual("carol").await?;
     let dave = ctx.individual("dave").await?;
     alice.add_member(carol.id(), design_doc, Read).await?;

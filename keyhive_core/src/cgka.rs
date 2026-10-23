@@ -211,7 +211,7 @@ impl Cgka {
         self.0.membership_sets()
     }
 
-    /// The individuals currently in this document's CGKA tree.
+    /// The individuals currently in this document's CGKA group.
     pub fn member_ids(&mut self) -> Result<impl Iterator<Item = IndividualId> + '_, CgkaError> {
         Ok(self.0.member_ids()?.map(IndividualId::from))
     }
@@ -234,8 +234,8 @@ impl Cgka {
         self.0.contains_predecessors(preds)
     }
 
-    /// Merge an add of a leaf whose secret `sk` this replica holds: an
-    /// invitation to it. The added member becomes the owner, holding `sk`.
+    /// Merge an add whose key's secret `sk` this replica has (an invitation
+    /// to it). The added member becomes the owner.
     pub fn merge_invite(
         &mut self,
         op: Arc<SerdeSigned<CgkaOperation>>,

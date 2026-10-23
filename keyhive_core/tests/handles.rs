@@ -61,7 +61,7 @@ async fn a_principal_handle_tells_what_its_id_names() -> Result<()> {
     Ok(())
 }
 
-/// An individual's handle picks the prekey that individual is seated with,
+/// An individual's handle picks the prekey that individual is added with,
 /// whether it is the active identity or someone else.
 #[tokio::test]
 async fn an_individual_handle_picks_its_own_prekey() -> Result<()> {
@@ -89,7 +89,7 @@ async fn an_individual_handle_picks_its_own_prekey() -> Result<()> {
 }
 
 #[tokio::test]
-async fn a_document_handle_reads_its_members_tree_and_heads() -> Result<()> {
+async fn a_document_handle_reads_its_members_cgka_graph_and_heads() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -118,7 +118,7 @@ async fn a_document_handle_reads_its_members_tree_and_heads() -> Result<()> {
         .len();
     assert!(
         held > 1,
-        "the document's creation and bob's seat made operations"
+        "the document's creation and bob's add made operations"
     );
     assert_eq!(doc.cgka_ops_count().await, Some(held));
     assert_eq!(doc.content_heads().await, Some(HashSet::from([[0u8; 32]])));

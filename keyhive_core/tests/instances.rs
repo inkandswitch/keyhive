@@ -116,7 +116,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     assert!(invited.has_document(design_doc).await);
     assert!(
         !sibling.has_document(design_doc).await,
-        "the sibling cannot open the invitation yet, so it holds no tree"
+        "the sibling cannot open the invitation yet, so it has no CGKA graph"
     );
 
     let stuck = sibling.stats().await.pending_total();
@@ -511,14 +511,14 @@ async fn two_instances_of_one_writer(
     Ok((alice, alice_replica, bob, design_doc))
 }
 
-/// Write, asserting that it had to rotate the leaf.
+/// Write, asserting that it had to rotate its key in the CGKA group.
 async fn write_rotating(who: &Instance, doc: DocumentId, content: &[u8]) -> Result<Ciphertext> {
     let out = who
         .try_encrypt_content(doc, &content_ref(content), &vec![], content)
         .await?;
     assert!(
         out.update_op().is_some(),
-        "this write was supposed to rotate the leaf"
+        "this write was supposed to rotate its key in the CGKA group"
     );
     Ok(out.encrypted_content().clone())
 }
@@ -660,7 +660,7 @@ async fn a_rotation_keeps_its_leaf_key_out_of_the_published_prekeys() -> Result<
         .await?;
     assert!(
         written.update_op().is_some(),
-        "this test needs the write to rotate the leaf"
+        "this test needs the write to rotate its key in the CGKA group"
     );
     ctx.sync_all_unsent().await?;
 
