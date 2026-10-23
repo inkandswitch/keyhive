@@ -45,6 +45,12 @@ additional_cargo_args = ["--features", "test_utils"]
 # `Arbitrary` impls generate test data: mutating one only changes which
 # inputs a property test draws.
 #
+# `Cgka::apply_batch` applies a single operation, or a batch of only updates,
+# in order. The concurrent path builds the same tree for those: it pops a lone
+# added leaf and pushes it back in place, `remove_id` has already reclaimed
+# trailing blank leaves, and with no adds or removes it changes nothing. So
+# routing them through it with `&&` is equivalent.
+#
 # `uniform_index` accepts a draw `< limit`; `<=` differs only when a draw is
 # exactly `limit`, which happens with probability 2^-64 and then still yields an
 # index in range (`limit` is a multiple of `len`), so no test can tell them apart.
@@ -55,6 +61,7 @@ exclude_re = [
   "impl (arbitrary::)?Arbitrary",
   "impl (core::|std::)?(fmt::)?(Debug|Display) for",
   "replace != with == in Keyhive<[^>]*>::reconcile_locked",
+  "replace \\|\\| with && in Cgka::apply_batch",
   "replace \\|\\| with && in Keyhive<[^>]*>::subject_views",
   "replace < with <= in uniform_index",
 ]

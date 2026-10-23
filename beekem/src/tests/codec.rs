@@ -3,7 +3,7 @@
 
 use crate::{
     encrypted::EncryptedSecret,
-    operation::{CgkaAuthorization, Invitation, InvitationSecret, PredecessorSecret},
+    operation::{CitationId, Invitation, InvitationSecret, PredecessorSecret, RemovedMember},
     secret_store::{SecretStore, SecretStoreVersion},
     treemath::TreeNodeIndex,
 };
@@ -39,8 +39,13 @@ where
 }
 
 #[test]
-fn authorization_laws() {
-    laws::<CgkaAuthorization>();
+fn citation_laws() {
+    laws::<CitationId>();
+}
+
+#[test]
+fn removed_member_laws() {
+    laws::<RemovedMember>();
 }
 
 #[test]
@@ -67,16 +72,6 @@ fn invitation_laws() {
 #[test]
 fn predecessor_secret_laws() {
     laws::<PredecessorSecret>();
-}
-
-#[test]
-fn an_authorization_tag_past_one_is_rejected() {
-    let mut bytes = CgkaAuthorization::Revocation([7; 32]).encode().into_bytes();
-    bytes[0] = 2;
-    assert_eq!(
-        CgkaAuthorization::decode(&bytes),
-        Err(DecodeError::InvalidTag(2))
-    );
 }
 
 fn version(seed: u8) -> SecretStoreVersion {

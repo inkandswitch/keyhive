@@ -9,7 +9,7 @@ use beekem::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaBatch, CgkaOperation},
+    operation::{CgkaBatch, CgkaOperation, CitationId},
     pcs_key::{ApplicationSecret, PcsKey},
 };
 use future_form::FutureForm;
@@ -24,9 +24,8 @@ use keyhive_crypto::{
 };
 use nonempty::NonEmpty;
 use rand::{CryptoRng, RngCore};
-use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -43,8 +42,7 @@ use std::{
 ///
 /// This is a thin wrapper around [`beekem::cgka::Cgka`] that converts between
 /// keyhive_core domain IDs and beekem IDs at the API boundary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cgka(beekem::cgka::Cgka);
 
 impl Cgka {
@@ -115,37 +113,44 @@ impl Cgka {
     }
 
     /// Add a member, returning its add operation or `None` if the member
-    /// is already in the tree.
+    /// is already in the CGKA group. `key_proof` is the encoded prekey operation in
+    /// which the member published `pk`.
     pub async fn add<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
         pk: ShareKey,
-        authorization: CgkaAuthorization,
+        key_proof: Option<Vec<u8>>,
+        citations: BTreeSet<CitationId>,
         signer: &S,
     ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
         self.0
-            .add(MemberId::from(id), pk, authorization, signer)
+            .add(MemberId::from(id), pk, key_proof, citations, signer)
             .await
     }
 
+    #[allow(clippy::type_complexity)]
     pub async fn add_multiple<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        members: NonEmpty<(IndividualId, ShareKey, CgkaAuthorization)>,
+        members: NonEmpty<(
+            IndividualId,
+            ShareKey,
+            Option<Vec<u8>>,
+            BTreeSet<CitationId>,
+        )>,
         signer: &S,
     ) -> Result<Vec<SerdeSigned<CgkaOperation>>, CgkaError> {
-        let converted = members.map(|(id, pk, auth)| (MemberId::from(id), pk, auth));
+        let converted =
+            members.map(|(id, pk, proof, cited)| (MemberId::from(id), pk, proof, cited));
         self.0.add_multiple(converted, signer).await
     }
 
     pub async fn remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         id: IndividualId,
-        authorization: CgkaAuthorization,
+        citations: BTreeSet<CitationId>,
         signer: &S,
     ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
-        self.0
-            .remove(MemberId::from(id), authorization, signer)
-            .await
+        self.0.remove(MemberId::from(id), citations, signer).await
     }
 
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: CryptoRng + RngCore>(

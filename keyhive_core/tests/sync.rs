@@ -494,7 +494,8 @@ async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_
     assert!(
         update.cgka_ops().iter().any(|op| matches!(
             op.payload(),
-            CgkaOperation::Remove { id, .. } if IndividualId::from(*id) == grace.id()
+            CgkaOperation::Remove { removed, .. }
+                if removed.iter().any(|r| IndividualId::from(r.id) == grace.id())
         )),
         "the revocation produced no CGKA removal for the member it revoked"
     );

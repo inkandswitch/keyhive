@@ -8,7 +8,7 @@ use beekem::{
     id::TreeId,
     keys::ShareKeyMap,
     operation::CgkaOperation,
-    test_utils::{member, Member, ADD_AUTH},
+    test_utils::{member, Member, NO_CITATIONS},
 };
 use divan::Bencher;
 use future_form::Local;
@@ -54,7 +54,7 @@ impl Fixture {
         let adds = NonEmpty::from_vec(
             members
                 .iter()
-                .map(|m| (m.id, m.pk, ADD_AUTH))
+                .map(|m| (m.id, m.pk, None, NO_CITATIONS))
                 .collect::<Vec<_>>(),
         )
         .expect("at least one member");
@@ -101,7 +101,8 @@ impl Fixture {
                 let op = block_on(replica.add::<Local, _>(
                     added.id,
                     added.pk,
-                    ADD_AUTH,
+                    None,
+                    NO_CITATIONS,
                     &fixture.members[author].signer,
                 ))
                 .expect("adding succeeds")

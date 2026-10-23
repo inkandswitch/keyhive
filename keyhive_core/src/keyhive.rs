@@ -44,7 +44,7 @@ use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaAuthorization, CgkaOperation},
+    operation::{CgkaOperation, CitationId, RemovedMember},
     pcs_key::PcsKey,
 };
 use dupe::{Dupe, OptionDupedExt};
@@ -503,7 +503,7 @@ where
                 let Some(individual) = self.individual_state(*added).await else {
                     continue; // no prekeys here to seat them with
                 };
-                let Some(authorization) = self.grant_for(doc, batch, *added).await? else {
+                let Some(citation) = self.grant_for(doc, batch, *added).await? else {
                     tracing::warn!(%doc_id, "no certificate in the batch explains a new reader");
                     continue;
                 };
@@ -514,19 +514,19 @@ where
                 let made = state
                     .lock()
                     .await
-                    .add_cgka_members_from_prekeys(&prekeys, authorization, &signer)
+                    .add_cgka_members_from_prekeys(&prekeys, [citation].into(), &signer)
                     .await?;
                 ops.extend(made.into_iter().map(Arc::new));
             }
             for lost in before.difference(&after) {
-                let Some(authorization) = self.revocation_for(doc, batch, *lost).await? else {
+                let Some(citation) = self.revocation_for(doc, batch, *lost).await? else {
                     tracing::warn!(%doc_id, "no certificate in the batch explains a lost reader");
                     continue;
                 };
                 let made = state
                     .lock()
                     .await
-                    .remove_cgka_member(*lost, authorization, &signer)
+                    .remove_cgka_member(*lost, [citation].into(), &signer)
                     .await?;
                 ops.extend(made.into_iter().map(Arc::new));
             }
@@ -594,7 +594,7 @@ where
         doc: Identifier,
         batch: &[VerifiedCertificate<ContentHeads<T>>],
         reader: IndividualId,
-    ) -> Result<Option<CgkaAuthorization>, KeylineStorageError<K::Error>> {
+    ) -> Result<Option<CitationId>, KeylineStorageError<K::Error>> {
         let reader = Identifier::from(reader);
         for cert in batch {
             if let VerifiedCertificate::Delegation(d) = cert {
@@ -602,7 +602,7 @@ where
                     .route_through(doc, d.issuer(), d.payload(), reader)
                     .await?
                 {
-                    return Ok(Some(CgkaAuthorization::Delegation(d.digest().into())));
+                    return Ok(Some(CitationId(d.digest().into())));
                 }
             }
         }
@@ -616,7 +616,7 @@ where
         doc: Identifier,
         batch: &[VerifiedCertificate<ContentHeads<T>>],
         reader: IndividualId,
-    ) -> Result<Option<CgkaAuthorization>, KeylineStorageError<K::Error>> {
+    ) -> Result<Option<CitationId>, KeylineStorageError<K::Error>> {
         let reader = Identifier::from(reader);
         for cert in batch {
             if let VerifiedCertificate::Revocation(r) = cert {
@@ -629,7 +629,7 @@ where
                     .route_through(doc, revoked_issuer, &revoked, reader)
                     .await?
                 {
-                    return Ok(Some(CgkaAuthorization::Revocation(r.digest().into())));
+                    return Ok(Some(CitationId(r.digest().into())));
                 }
             }
         }
@@ -806,7 +806,7 @@ where
         }
         let mut founders = Vec::with_capacity(readers.len());
         for reader in readers {
-            let authorization = self
+            let citation = self
                 .grant_for(doc_kl, roots, reader)
                 .await?
                 .ok_or(GenerateDocError::MissingFoundingDelegation)?;
@@ -821,10 +821,10 @@ where
                 };
                 prekey
             };
-            founders.push((reader, prekey, authorization));
+            founders.push((reader, prekey, None, [citation].into()));
         }
         // The owner first, so that the tree's causal root is its creator's.
-        founders.sort_by_key(|(id, _, _)| (*id != owner, *id));
+        founders.sort_by_key(|(id, _, _, _)| (*id != owner, *id));
         let founders = NonEmpty::from_vec(founders).ok_or(GenerateDocError::OwnerCannotRead)?;
 
         let (doc, made) = {
@@ -2195,9 +2195,10 @@ where
 
     /// Whether the membership graph authorizes `signed_op` on this document.
     ///
-    /// An add cites a delegation that routes to the added member, and a remove
-    /// a revocation that covers a delegation routing to the removed one. An
-    /// update cites nothing and is checked against the leaf it rotates.
+    /// An add cites one delegation, which routes to the added member. A remove
+    /// lists one member and cites one revocation, which covers a delegation
+    /// routing to that member. An update cites nothing and is checked against
+    /// the leaf it rotates.
     async fn cgka_op_is_authorized(
         &self,
         signed_op: &SerdeSigned<CgkaOperation>,
@@ -2210,15 +2211,17 @@ where
 
         match &signed_op.payload {
             CgkaOperation::Add {
-                authorization,
+                citations,
                 added_id,
                 ..
             } => {
-                let CgkaAuthorization::Delegation(digest) = authorization else {
+                let [CitationId(digest)] = citations[..] else {
                     return Ok(Err(Denied));
                 };
-                let Some((grant_issuer, grant)) = self.stored_delegation(*digest).await? else {
-                    return Ok(Err(Pending));
+                let Some((grant_issuer, grant)) = self.stored_delegation(digest).await? else {
+                    // An add must cite a delegation, not a revocation.
+                    let revocation = self.stored_revocation(digest).await?.is_some();
+                    return Ok(Err(if revocation { Denied } else { Pending }));
                 };
                 let added = added_id.id();
                 if !grant.power.is_reader() {
@@ -2252,14 +2255,18 @@ where
                 Ok(Ok(()))
             }
             CgkaOperation::Remove {
-                authorization, id, ..
+                citations, removed, ..
             } => {
-                let CgkaAuthorization::Revocation(digest) = authorization else {
+                let ([CitationId(digest)], [RemovedMember { id, .. }]) =
+                    (&citations[..], &removed[..])
+                else {
                     return Ok(Err(Denied));
                 };
                 let Some((revocation_issuer, revocation)) = self.stored_revocation(*digest).await?
                 else {
-                    return Ok(Err(Pending));
+                    // A remove must cite a revocation, not a delegation.
+                    let delegation = self.stored_delegation(*digest).await?.is_some();
+                    return Ok(Err(if delegation { Denied } else { Pending }));
                 };
                 if revocation_issuer != signer {
                     return Ok(Err(Denied));
@@ -3793,7 +3800,8 @@ mod tests {
         let update = owner.revoke_member(alice_id, false, doc).await?;
         assert!(update.cgka_ops().iter().any(|op| matches!(
             op.payload,
-            CgkaOperation::Remove { id, .. } if IndividualId::from(id) == bob_id
+            CgkaOperation::Remove { ref removed, .. }
+                if removed.iter().any(|r| IndividualId::from(r.id) == bob_id)
         )));
         assert!(!seated(&owner).await.contains(&bob_id));
         Ok(())
@@ -4848,10 +4856,7 @@ mod tests {
     #[tokio::test]
     async fn stats_count_groups_certificates_and_pending_events() -> TestResult {
         use crate::principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
-        use beekem::{
-            id::{MemberId, TreeId},
-            operation::CgkaAuthorization,
-        };
+        use beekem::id::{MemberId, TreeId};
         use keyhive_crypto::share_key::ShareSecretKey;
         use rand::rngs::OsRng;
 
@@ -4885,9 +4890,10 @@ mod tests {
                 pk: share_key(),
                 leaf_index: 0,
                 invitation: None,
+                key_proof: None,
                 predecessors: Vec::new(),
                 doc_id: TreeId::from(doc),
-                authorization: CgkaAuthorization::Delegation([0; 32]),
+                citations: Vec::new(),
             })?;
             let delegation = Delegation::new(
                 Identifier::from(indie.id()),
@@ -5128,9 +5134,11 @@ mod tests {
             .cgka_ops()
             .iter()
             .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove { id, .. } => Some(id.verifying_key()),
+                CgkaOperation::Remove { removed, .. } => Some(removed),
                 _ => None,
             })
+            .flatten()
+            .map(|removed| removed.id.verifying_key())
             .collect();
 
         assert!(
@@ -5167,9 +5175,11 @@ mod tests {
             .cgka_ops()
             .iter()
             .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove { id, .. } => Some(id.verifying_key()),
+                CgkaOperation::Remove { removed, .. } => Some(removed),
                 _ => None,
             })
+            .flatten()
+            .map(|removed| removed.id.verifying_key())
             .collect();
 
         for (who, id) in [("dave", dave_id), ("eve", eve_id)] {
