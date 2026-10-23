@@ -146,14 +146,19 @@ pub struct KeyhiveState<
 
     /// The Keyline store, with the lock that serializes inserts into it.
     ///
-    /// A fork shares it rather than copying it, so a transaction is not
-    /// isolated for certificates: see [`ForkAsync`] for `Keyhive`.
+    /// The copy of a keyhive that a transaction works on (its fork, see
+    /// [`ForkAsync`] for `Keyhive`) shares this store rather than copying it,
+    /// so a transaction is not isolated for certificates.
     certificates: Arc<Certificates<K>>,
 
     _plaintext_phantom: PhantomData<P>,
 }
 
-// Manual: a derive would require `Clone` of every parameter.
+/// Cloning a [`Keyhive`] is `O(1)`: it is an `Arc` refcount bump, not a copy.
+/// The clones share live state, so a clone observes later changes rather
+/// than a snapshot. [`Dupe`] is the same.
+///
+/// Written by hand: a derive would require `Clone` of every parameter.
 impl<F, S, T, P, C, L, R, K> Clone for Keyhive<F, S, T, P, C, L, R, K>
 where
     F: FutureForm,
@@ -223,10 +228,13 @@ where
         self.active.id()
     }
 
-    /// A new replica with a fresh active individual. `keyline` becomes this
-    /// keyhive's own: share it with no other keyhive and write to it only
-    /// through this one, or the insert lock, the listener and reconciliation
-    /// are bypassed.
+    /// A new replica with a fresh active individual.
+    ///
+    /// This keyhive must be the only writer to the store behind `keyline`.
+    /// Moving `keyline` in ensures that for a backend that owns its data, such
+    /// as `MemoryKeyline`, but not for one that is a handle to shared storage,
+    /// such as a database: another handle writing to the same store would
+    /// bypass the insert lock, the listener and reconciliation.
     #[instrument(skip_all)]
     pub async fn generate(
         signer: S,
@@ -1564,7 +1572,7 @@ where
         &self,
         who: impl Into<Identifier>,
     ) -> Result<HashMap<Digest<Event<T>>, Event<T>>, KeylineStorageError<K::Error>> {
-        let (certs, cgka, prekeys) = self.all_for_agent(who.into()).await?;
+        let (certs, cgka_ops, prekeys) = self.ops_for_agent(who.into()).await?;
         let mut ops = HashMap::new();
 
         for key_op in prekeys.values().flatten() {
@@ -1572,7 +1580,7 @@ where
             ops.insert(Digest::hash(&op), op);
         }
 
-        for cgka_op in cgka {
+        for cgka_op in cgka_ops {
             let op = Event::<T>::from(cgka_op);
             ops.insert(Digest::hash(&op), op);
         }
@@ -1588,7 +1596,7 @@ where
     /// The certificates, CGKA operations and prekey operations `who` is sent,
     /// each computed once.
     #[allow(clippy::type_complexity)]
-    async fn all_for_agent(
+    async fn ops_for_agent(
         &self,
         who: Identifier,
     ) -> Result<
@@ -1600,30 +1608,32 @@ where
         KeylineStorageError<K::Error>,
     > {
         let certs = self.certificates_for_agent(who).await?;
-        let cgka = self.cgka_ops_reachable_by_agent(who).await?;
-        let prekeys = self.prekey_ops_named_by(who, &certs, &cgka).await?;
-        Ok((certs, cgka, prekeys))
+        let cgka_ops = self.cgka_ops_reachable_by_agent(who).await?;
+        let prekeys = self
+            .prekey_ops_referenced_by(who, &certs, &cgka_ops)
+            .await?;
+        Ok((certs, cgka_ops, prekeys))
     }
 
-    /// The prekey operations of `who` and of every agent `certs` or `cgka`
-    /// name: what a recipient of those needs to check each CGKA add's key
+    /// The prekey operations of `who` and of every agent `certs` or `cgka_ops`
+    /// reference: what a recipient of those needs to check each CGKA add's key
     /// against the added member's published prekeys.
-    async fn prekey_ops_named_by(
+    async fn prekey_ops_referenced_by(
         &self,
         who: Identifier,
         certs: &[Certificate<ContentHeads<T>>],
-        cgka: &[Arc<SerdeSigned<CgkaOperation>>],
+        cgka_ops: &[Arc<SerdeSigned<CgkaOperation>>],
     ) -> Result<KeyOps, KeylineStorageError<K::Error>> {
-        let mut named = BTreeSet::from([who]);
+        let mut referenced = BTreeSet::from([who]);
         for cert in certs {
-            named.extend(named_by(cert)?);
+            referenced.extend(referenced_by(cert)?);
         }
-        for op in cgka {
-            named.extend(named_by_cgka_op(op));
+        for op in cgka_ops {
+            referenced.extend(referenced_by_cgka_op(op));
         }
 
         let mut map: HashMap<Identifier, CaMap<KeyOp>> = HashMap::new();
-        for id in named {
+        for id in referenced {
             if let Some(state) = self.individual_state(IndividualId(id)).await {
                 map.insert(id, state.lock().await.prekey_ops().clone());
             }
@@ -1674,12 +1684,12 @@ where
         for subject in self.subjects().await? {
             let closure = self.closure(subject).await?;
             let live: BTreeSet<Identifier> = self.members_of(subject).await?.into_keys().collect();
-            let mut named: BTreeSet<Identifier> = BTreeSet::new();
+            let mut referenced: BTreeSet<Identifier> = BTreeSet::new();
             for cert in &closure {
-                named.extend(named_by(cert)?);
+                referenced.extend(referenced_by(cert)?);
             }
             let mut cut = Vec::new();
-            for audience in named {
+            for audience in referenced {
                 let id = audience;
                 if audience == subject
                     || live.contains(&id)
@@ -1790,14 +1800,14 @@ where
     }
 
     /// Every prekey op `who` is sent, grouped by the identifier they belong
-    /// to: its own, and those of every agent named by the certificates and
+    /// to: its own, and those of every agent referenced by the certificates and
     /// CGKA operations it is sent.
     #[instrument(skip_all)]
     pub async fn reachable_prekey_ops_for_agent(
         &self,
         who: impl Into<Identifier>,
     ) -> Result<KeyOps, KeylineStorageError<K::Error>> {
-        Ok(self.all_for_agent(who.into()).await?.2)
+        Ok(self.ops_for_agent(who.into()).await?.2)
     }
 
     /// [`Self::reachable_prekey_ops_for_agent`] for every principal, in one pass.
@@ -1815,8 +1825,8 @@ where
         self.prekey_ops_for_views(&views, &all_cgka).await
     }
 
-    /// The bulk form of [`Self::prekey_ops_named_by`]: each principal is sent
-    /// its own prekey ops and those of every agent named in what it is sent,
+    /// The bulk form of [`Self::prekey_ops_referenced_by`]: each principal is sent
+    /// its own prekey ops and those of every agent referenced by what it is sent,
     /// the closures of the subjects it stands over, its explanations, and the
     /// CGKA operations of the documents it reads.
     async fn prekey_ops_for_views(
@@ -1826,32 +1836,35 @@ where
     ) -> Result<AllReachablePrekeyOps, KeylineStorageError<K::Error>> {
         let active_id: Identifier = { self.active.id().into() };
 
-        // What each source names.
-        let mut named_by_closure: HashMap<Identifier, BTreeSet<Identifier>> = HashMap::new();
-        let mut named_by_explanation: HashMap<Identifier, BTreeSet<Identifier>> = HashMap::new();
+        // What each source references.
+        let mut referenced_by_closure: HashMap<Identifier, BTreeSet<Identifier>> = HashMap::new();
+        let mut referenced_by_explanation: HashMap<Identifier, BTreeSet<Identifier>> =
+            HashMap::new();
         let mut sources: HashMap<Identifier, BTreeSet<Identifier>> = HashMap::new();
         for view in views {
-            let named = named_by_closure.entry(view.subject).or_default();
+            let referenced = referenced_by_closure.entry(view.subject).or_default();
             for cert in &view.closure {
-                named.extend(named_by(cert)?);
+                referenced.extend(referenced_by(cert)?);
             }
             for member in view.live.iter().chain([&view.subject]) {
                 sources.entry(*member).or_default().insert(view.subject);
             }
             for (who, certs) in &view.cut {
-                let named = named_by_explanation.entry(*who).or_default();
+                let referenced = referenced_by_explanation.entry(*who).or_default();
                 for cert in certs {
-                    named.extend(named_by(cert)?);
+                    referenced.extend(referenced_by(cert)?);
                 }
             }
         }
-        let named_by_cgka: HashMap<Identifier, BTreeSet<Identifier>> = all_cgka
+        let referenced_by_cgka: HashMap<Identifier, BTreeSet<Identifier>> = all_cgka
             .ops
             .iter()
             .map(|(doc, ops)| {
                 (
                     *doc,
-                    ops.iter().flat_map(|op| named_by_cgka_op(op)).collect(),
+                    ops.iter()
+                        .flat_map(|op| referenced_by_cgka_op(op))
+                        .collect(),
                 )
             })
             .collect();
@@ -1866,7 +1879,7 @@ where
             .collect();
         agents.insert(active_id);
         agents.extend(sources.keys().copied());
-        agents.extend(named_by_explanation.keys().copied());
+        agents.extend(referenced_by_explanation.keys().copied());
         agents.extend(all_cgka.index.keys().copied());
 
         let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
@@ -1874,11 +1887,11 @@ where
             let needs = index.entry(*agent).or_default();
             needs.insert(*agent);
             for subject in sources.get(agent).into_iter().flatten() {
-                needs.extend(named_by_closure.get(subject).into_iter().flatten());
+                needs.extend(referenced_by_closure.get(subject).into_iter().flatten());
             }
-            needs.extend(named_by_explanation.get(agent).into_iter().flatten());
+            needs.extend(referenced_by_explanation.get(agent).into_iter().flatten());
             for doc in all_cgka.index.get(agent).into_iter().flatten() {
-                needs.extend(named_by_cgka.get(doc).into_iter().flatten());
+                needs.extend(referenced_by_cgka.get(doc).into_iter().flatten());
             }
         }
 
@@ -1939,14 +1952,14 @@ where
         &self,
         agent: impl Into<Identifier>,
     ) -> Result<HashSet<EventDigest<T>>, KeylineStorageError<K::Error>> {
-        let (certs, cgka, prekeys) = self.all_for_agent(agent.into()).await?;
+        let (certs, cgka_ops, prekeys) = self.ops_for_agent(agent.into()).await?;
         let mut digests = HashSet::new();
 
         for key_op in prekeys.values().flatten() {
             let event: Event<T> = Event::from(key_op.as_ref().clone());
             digests.insert(Digest::hash(&event));
         }
-        for cgka_op in cgka {
+        for cgka_op in cgka_ops {
             let event: Event<T> = Event::from(cgka_op);
             digests.insert(Digest::hash(&event));
         }
@@ -3491,12 +3504,12 @@ struct SubjectView<T: ContentRef> {
     cut: Vec<(Identifier, Vec<Certificate<ContentHeads<T>>>)>,
 }
 
-/// The identifiers a certificate names: a delegation's issuer, audience and
+/// The identifiers a certificate references: a delegation's issuer, audience and
 /// subject, and a revocation's issuer. Read without verifying: the store
 /// verified it on insert. A revocation sent to anyone travels with the
 /// delegation it revokes (both closures and explanations hold it), so that
-/// delegation's audience is named too.
-fn named_by<W, E: core::error::Error + 'static>(
+/// delegation's audience is referenced too.
+fn referenced_by<W, E: core::error::Error + 'static>(
     cert: &Certificate<W>,
 ) -> Result<Vec<Identifier>, KeylineStorageError<E>> {
     Ok(match cert {
@@ -3508,9 +3521,9 @@ fn named_by<W, E: core::error::Error + 'static>(
     })
 }
 
-/// The individuals a CGKA operation names: its issuer and, for an add, the
+/// The individuals a CGKA operation references: its issuer and, for an add, the
 /// added member.
-fn named_by_cgka_op(op: &SerdeSigned<CgkaOperation>) -> Vec<Identifier> {
+fn referenced_by_cgka_op(op: &SerdeSigned<CgkaOperation>) -> Vec<Identifier> {
     match &op.payload {
         CgkaOperation::Add { added_id, .. } => vec![op.issuer, added_id.id()],
         _ => vec![op.issuer],

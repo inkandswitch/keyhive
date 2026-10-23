@@ -11,9 +11,12 @@ use keyhive_codec::{
 ///
 /// Keyline carries it per subject in `Revocation::retain`, as the
 /// `RetentionWatermark`, and never reads it. The content layer does: content
-/// at or before these heads is kept. A set of references covers more than
-/// Automerge: its heads are change hashes, a Lamport clock is a set of one
-/// timestamp, and a vector clock is a set of `(actor, counter)` entries.
+/// at or before these heads is kept.
+///
+/// It is a set of `T`, not Automerge's own heads type, so that other content
+/// systems' versions fit too. Automerge's heads are a set of change hashes;
+/// a system versioned by a vector clock would use one `(actor, counter)`
+/// entry per actor.
 ///
 /// # Encoding
 ///
