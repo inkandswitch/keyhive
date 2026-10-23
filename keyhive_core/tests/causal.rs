@@ -372,13 +372,10 @@ async fn two_missing_ancestors_are_each_reported_with_their_own_key() -> Result<
     Ok(())
 }
 
-/// `DocumentState::try_causal_decrypt_content` collects the entrypoint's missing ancestors into
-/// a local `CausalDecryptionState` and then returns the store walk's own state instead,
-/// dropping what it collected. So a reader passed a write before the content it points at
-/// is told there is nothing outstanding when what it needs is exactly that list and the
-/// keys in it.
+/// A reader passed a write before the content it points at is told which content to fetch,
+/// with the keys to open it. The entrypoint's own ancestors are reported like those deeper
+/// in the walk.
 #[tokio::test]
-#[ignore = "an ancestor the entrypoint lists is dropped from the report when it is missing"]
 async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<()> {
     let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
 
@@ -414,9 +411,9 @@ async fn an_ancestor_the_entrypoint_lists_is_reported_when_missing() -> Result<(
 /// `CiphertextStore` must stop serving content once it has been decrypted, whether by
 /// removing it or by tracking what has been read.
 ///
-/// The second walk does not report the consumed content as outstanding, because the
-/// entrypoint lists it directly. `an_ancestor_the_entrypoint_lists_is_reported_when_missing`
-/// covers that case.
+/// A store that no longer serves content cannot tell "already read" from "never delivered",
+/// so the second walk reports the consumed content as outstanding, with its key, as it does
+/// for any ancestor the store does not serve.
 #[tokio::test]
 async fn a_walk_consumes_the_content_it_reads() -> Result<()> {
     let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
@@ -440,6 +437,10 @@ async fn a_walk_consumes_the_content_it_reads() -> Result<()> {
         second.recovered(),
         contents(&[]),
         "the first walk took it out of the store"
+    );
+    assert!(
+        second.key_for_missing(&genesis).is_some(),
+        "so it is reported as outstanding, with its key"
     );
 
     ctx.give_content(&bob, &genesis).await?;

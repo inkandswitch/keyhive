@@ -329,11 +329,9 @@ impl<T: ContentRef> DocumentState<T> {
     {
         let raw_entrypoint = self.try_decrypt_content(encrypted_content)?;
 
-        let mut acc = CausalDecryptionState::new();
-
         let entrypoint_envelope = Envelope::<T, Vec<u8>>::serde_decode(raw_entrypoint.as_slice())
             .map_err(|e| CausalDecryptionError::<F, T, P, C> {
-            progress: Box::new(acc.clone()),
+            progress: Box::new(CausalDecryptionState::new()),
             cannot: HashMap::from_iter([(
                 encrypted_content.content_ref.clone(),
                 ErrorReason::DeserializationFailed(e),
@@ -341,6 +339,7 @@ impl<T: ContentRef> DocumentState<T> {
         })?;
 
         let mut to_decrypt: Vec<(Arc<EncryptedContent<P, T>>, SymmetricKey)> = vec![];
+        let mut not_served = HashMap::new();
         for (digest, symm_key) in entrypoint_envelope.ancestors.iter() {
             if let Some(encrypted) = store
                 .get_ciphertext(digest)
@@ -349,13 +348,21 @@ impl<T: ContentRef> DocumentState<T> {
             {
                 to_decrypt.push((encrypted, *symm_key));
             } else {
-                acc.next.insert(digest.clone(), *symm_key);
+                not_served.insert(digest.clone(), *symm_key);
             }
         }
 
-        Ok(store
+        // The walk reports the ancestors it could not fetch below the ones it
+        // was given. The entrypoint's own go in the same report, with their
+        // keys, so the reader knows what to fetch and can open it.
+        let mut walked = store
             .try_causal_decrypt(self.doc_id(), &mut to_decrypt)
-            .await?)
+            .await;
+        match &mut walked {
+            Ok(state) => state.next.extend(not_served),
+            Err(err) => err.progress.next.extend(not_served),
+        }
+        Ok(walked?)
     }
 
     #[instrument(skip_all)]
