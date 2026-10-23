@@ -8,6 +8,7 @@ use crate::util::content_addressed_map::CaMap;
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use ed25519_dalek::{Signature, VerifyingKey};
+use keyhive_codec::traits::Encode;
 use keyhive_crypto::{
     identifier::Identifier,
     share_key::ShareKey,
@@ -69,6 +70,16 @@ impl KeyOp {
             KeyOp::Add(add) => SignedKeyOp::Add(Signed::clone(add.signed())),
             KeyOp::Rotate(rot) => SignedKeyOp::Rotate(Signed::clone(rot.signed())),
         }
+    }
+
+    /// This operation's signed frame, as a CGKA add's key proof.
+    pub fn to_key_proof(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        match self {
+            KeyOp::Add(add) => add.signed().encode_into(&mut out),
+            KeyOp::Rotate(rot) => rot.signed().encode_into(&mut out),
+        }
+        out
     }
 }
 

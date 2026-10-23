@@ -232,6 +232,11 @@ impl Cgka {
         self.ops_graph.cgka_ops.len()
     }
 
+    /// The graph of CGKA operations.
+    pub fn ops_graph(&self) -> &CgkaOperationGraph {
+        &self.ops_graph
+    }
+
     /// Derive an [`ApplicationSecret`] from our current [`PcsKey`] for new content
     /// to encrypt.
     ///

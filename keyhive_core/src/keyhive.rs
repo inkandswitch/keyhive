@@ -3,11 +3,12 @@
 use crate::{
     all_agent_events::{AllAgentEvents, EventDigest},
     archive::{Archive, ArchiveVersion},
-    certificate::{
-        decode_stored, explanation, root_edges, route_through, CertificateError,
-        KeylineStorageError,
+    certificate::{decode_stored, explanation, root_edges, CertificateError, KeylineStorageError},
+    cgka::{
+        certificate_sets::{CertificateSets, CitationSet},
+        citations::{citation_of, KeylineView, Members, SharedCitations},
+        AllCgkaOps, Cgka,
     },
-    cgka::{AllCgkaOps, Cgka},
     contact_card::ContactCard,
     content::heads::ContentHeads,
     error::not_found::NotFound,
@@ -41,10 +42,11 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::{
+    cgka::MembershipView,
     encrypted::EncryptedContent,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaOperation, CitationId, RemovedMember},
+    operation::{CgkaOperation, CitationId},
     pcs_key::PcsKey,
 };
 use dupe::{Dupe, OptionDupedExt};
@@ -131,6 +133,11 @@ pub struct KeyhiveState<
     /// arrive, in causal order; the tree moves to `documents` once the
     /// invitation merges.
     awaiting_invitation: Mutex<HashMap<DocumentId, Cgka>>,
+
+    /// What each CGKA operation's causal past cites. Used for choosing what
+    /// the next operation this replica issues cites. Locked after a document's
+    /// lock or `awaiting_invitation` when both are held.
+    certificate_sets: Mutex<CertificateSets>,
 
     /// [`StaticEvent`]s that are still awaiting dependencies.
     pending_events: Mutex<Vec<Arc<StaticEvent<T>>>>,
@@ -254,6 +261,7 @@ where
             active: inner_active,
             documents: Mutex::new(HashMap::new()),
             awaiting_invitation: Mutex::new(HashMap::new()),
+            certificate_sets: Mutex::new(CertificateSets::new()),
             pending_events: Mutex::new(Vec::new()),
             ciphertext_store,
             event_listener,
@@ -261,6 +269,7 @@ where
             certificates: Arc::new(Certificates {
                 store: keyline,
                 reconciled: async_lock::Mutex::new(None),
+                cited: SharedCitations::default(),
             }),
             _plaintext_phantom: PhantomData,
         })))
@@ -382,8 +391,547 @@ where
                 .await
                 .map_err(KeylineStorageError::new)?;
             *reconciled = Some(version);
+            self.certificates.cited.lock().insert_multiple(&fresh);
         }
         Ok(fresh)
+    }
+
+    /// A view used for removing CGKA members of `doc` that a CGKA batch's certificate
+    /// set (what it and the batches before it cite) does not entitle to remain in the
+    /// CGKA group.
+    fn membership_view(&self, doc: Identifier) -> Arc<dyn MembershipView> {
+        Arc::new(KeylineView::new(doc, self.certificates.cited.dupe()))
+    }
+
+    /// `resource`'s members over the certificates of `cited` this replica
+    /// records, according to Keyline. It's cached by the subset and a
+    /// [`KeylineView`] reads the answer from the cache.
+    async fn members_over<Ids: Sync>(
+        &self,
+        cited: &Ids,
+        resource: Identifier,
+    ) -> Result<Members, KeylineStorageError<K::Error>>
+    where
+        for<'a> &'a Ids: IntoIterator<Item = &'a CitationId>,
+    {
+        let (subset, key) = {
+            let citations = self.certificates.cited.lock();
+            let key = citations.key(cited, resource);
+            if let Some(hit) = citations.members(&key) {
+                return Ok(hit);
+            }
+            (citations.certificate_subset(cited), key)
+        };
+        let answer = self
+            .keyline()
+            .members_for_subset(subset, resource)
+            .await
+            .map_err(KeylineStorageError::new)?
+            .value;
+        Ok(self.certificates.cited.lock().cache(key, answer))
+    }
+
+    /// Every node with `Read` or higher standing over `resource` in the cited
+    /// certificates.
+    async fn readers_over(
+        &self,
+        cited: &CitationSet,
+        resource: Identifier,
+    ) -> Result<BTreeSet<Identifier>, KeylineStorageError<K::Error>> {
+        Ok(self
+            .members_over(cited, resource)
+            .await?
+            .iter()
+            .filter(|(_, power)| power.is_reader())
+            .map(|(id, _)| *id)
+            .collect())
+    }
+
+    /// Whether `who` has `Read` or higher standing over `resource` in the
+    /// cited certificates.
+    async fn is_reader_over(
+        &self,
+        cited: &CitationSet,
+        resource: Identifier,
+        who: Identifier,
+    ) -> Result<bool, KeylineStorageError<K::Error>> {
+        Ok(self
+            .members_over(cited, resource)
+            .await?
+            .get(&who)
+            .is_some_and(|power| power.is_reader()))
+    }
+
+    /// Cache Keyline's answer to every certificate set a replay of cgka's CGKA
+    /// graph queries, fetching those not already cached.
+    async fn cache_replay_answers(
+        &self,
+        doc: Identifier,
+        cgka: &Cgka,
+    ) -> Result<(), KeylineStorageError<K::Error>> {
+        for set in cgka.membership_sets().unwrap_or_default() {
+            self.members_over(&set, doc).await?;
+        }
+        Ok(())
+    }
+
+    /// Run `f` on `cgka`, the CGKA for `doc`, first fetching from Keyline any
+    /// membership answers `f` requires.
+    ///
+    /// BeeKEM queries its membership view synchronously but Keyline answers
+    /// asynchronously so the view answers only from the cache in
+    /// `CitedCertificates`. When a cached answer is missing, the CGKA fails with
+    /// `CgkaError::MembershipUnknown` and makes no changes. This function fetches
+    /// that answer and runs `f` again. A replay asks about every batch of the
+    /// CGKA graph, which would mean one rerun per batch. So the first time an
+    /// answer is missing, it also fetches every answer a replay of the whole
+    /// graph requests, and the second run normally succeeds.
+    ///
+    /// Fails if Keyline does. Otherwise returns `f`'s result once `f` no longer
+    /// lacks an answer.
+    async fn require_keyline_answers<V, E: LacksKeylineAnswer>(
+        &self,
+        doc: Identifier,
+        cgka: &mut Cgka,
+        mut f: impl FnMut(&mut Cgka) -> Result<V, E>,
+    ) -> Result<Result<V, E>, KeylineStorageError<K::Error>> {
+        // Keep every answer cached for `doc` until this returns.
+        let _replaying = self.certificates.cited.replaying(doc);
+        let mut fetched = BTreeSet::new();
+        loop {
+            let result = f(cgka);
+            let Some(cited) = result.as_ref().err().and_then(LacksKeylineAnswer::lacked) else {
+                return Ok(result);
+            };
+            let cited = cited.clone();
+            // If we're missing an answer we've already fetched, fetching again won't help.
+            if !fetched.insert(self.certificates.cited.lock().key(&cited, doc)) {
+                return Ok(result);
+            }
+            self.members_over(&cited, doc).await?;
+            // We only cache replay answers the first time. Doing it again
+            // would be wasted work.
+            if fetched.len() == 1 {
+                self.cache_replay_answers(doc, cgka).await?;
+            }
+        }
+    }
+
+    /// Replay `doc`'s CGKA graph in `state` if operations are pending,
+    /// fetching the required membership answers.
+    async fn settle_cgka(
+        &self,
+        doc: Identifier,
+        state: &mut DocumentState<T>,
+    ) -> Result<(), CgkaSyncError<K::Error>> {
+        self.require_keyline_answers(doc, state.cgka_mut(), Cgka::replay_if_pending)
+            .await??;
+        Ok(())
+    }
+
+    /// [`Self::settle_cgka`] under the lock a write holds, so that an
+    /// operation received after the write's reconciliation is applied before
+    /// it.
+    async fn settle_for_write(
+        &self,
+        doc: DocumentId,
+        state: &mut DocumentState<T>,
+    ) -> Result<(), EncryptError> {
+        self.settle_cgka(doc.into(), state)
+            .await
+            .map_err(|e| EncryptError::PrepareToWrite(Box::new(e)))
+    }
+
+    /// The members of `doc`'s CGKA group in `state`, replaying its CGKA graph
+    /// first if operations are pending.
+    pub(crate) async fn cgka_group_members(
+        &self,
+        doc: Identifier,
+        state: &Arc<Mutex<DocumentState<T>>>,
+    ) -> Result<BTreeSet<IndividualId>, CgkaSyncError<K::Error>> {
+        let mut locked = state.lock().await;
+        self.settle_cgka(doc, &mut locked).await?;
+        let members = locked.cgka_members()?.collect();
+        Ok(members)
+    }
+
+    /// Build a CGKA from `ops`. Apply them in causal order, then adopt the
+    /// the secrets `me` holds for its key in the CGKA group. An operation
+    /// that cannot be applied is logged and skipped. Returns the
+    /// CGKA and the operations left out because a predecessor is missing.
+    ///
+    /// The operations are applied without a membership view and the CGKA then
+    /// replays its graph once with that view. The replay asks Keyline only for
+    /// what the cached non-members do not cover, so a fork or a reload of a graph
+    /// already replayed does not require a new query. If Keyline cannot answer
+    /// at that point, or the replay fails, that is logged and the replay waits
+    /// for the CGKA's next use.
+    async fn cgka_from_ops(
+        &self,
+        doc_id: DocumentId,
+        mut ops: Vec<Arc<SerdeSigned<CgkaOperation>>>,
+        me: IndividualId,
+        secrets: &BTreeMap<ShareKey, ShareSecretKey>,
+    ) -> (Cgka, Vec<Arc<SerdeSigned<CgkaOperation>>>) {
+        let doc = Identifier::from(doc_id);
+        let mut cgka = Cgka::new(doc_id, me, ShareKeyMap::new());
+        let mut has_progressed = true;
+        while has_progressed {
+            has_progressed = false;
+            ops.retain(|op| {
+                match apply_one::<core::convert::Infallible>(&mut cgka, op.dupe(), me, secrets) {
+                    Ok(_) => {
+                        has_progressed = true;
+                        false
+                    }
+                    Err(ReceiveCgkaOpError::CgkaError(CgkaError::OutOfOrderOperation)) => true,
+                    Err(error) => {
+                        tracing::warn!(%doc_id, %error, "an archived operation does not apply");
+                        false
+                    }
+                }
+            });
+        }
+        adopt_own_leaf_secrets(&mut cgka, me, secrets);
+        cgka.set_membership_view(self.membership_view(doc));
+        let replayed = self
+            .require_keyline_answers(doc, &mut cgka, Cgka::replay_if_pending)
+            .await;
+        match replayed {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%doc_id, %error, "an archived CGKA graph does not replay");
+            }
+            Err(error) => {
+                tracing::warn!(%doc_id, %error, "Keyline could not answer for an archived CGKA graph");
+            }
+        }
+        (cgka, ops)
+    }
+
+    /// Before writing to `doc_id`, issue the CGKA operations this
+    /// replica's certificates imply for it ([`Self::issue_implied_cgka_ops`]).
+    ///
+    /// A CGKA graph can lag behind this replica's certificates. Inserting a
+    /// certificate issues operations only for the documents the inserting
+    /// replica has locally. Two certificates from different signers can also
+    /// potentially remove a member only together, so that neither signer issues
+    /// the remove.
+    ///
+    /// Checking at write time means no honest writer encrypts to a member of
+    /// the CGKA group that lacks `Read` in the writer's certificates. If it
+    /// cannot remove such a member, the write is refused. Appends the
+    /// operations issued to `fresh`.
+    async fn reconcile_before_writing(
+        &self,
+        reconciled: &Reconciled<'_>,
+        doc_id: DocumentId,
+        fresh: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
+    ) -> Result<(), EncryptError> {
+        let doc = Identifier::from(doc_id);
+        let Some(state) = self.document_state(doc_id).await else {
+            return Ok(());
+        };
+        let implied = self
+            .issue_implied_cgka_ops(reconciled, doc_id, doc, &state, fresh)
+            .await
+            .map_err(|e| EncryptError::PrepareToWrite(Box::new(e)))?;
+        match implied {
+            ImpliedCgkaOpsOutcome::Success => Ok(()),
+            ImpliedCgkaOpsOutcome::RemoveBlocked => Err(EncryptError::CgkaMemberLacksRead),
+        }
+    }
+
+    /// Begin a write to `doc`. Take the insert lock, issue the CGKA operations
+    /// this replica's certificates imply for `doc`
+    /// ([`Self::reconcile_before_writing`]), then rotate this identity's key
+    /// in its CGKA group if that key is a prekey that's been rotated away.
+    ///
+    /// The lock stays held until [`Self::finish_write`] so no operation
+    /// received after the reconciliation merges before the write. One could
+    /// otherwise add a member that lacks `Read` in this replica's
+    /// certificates. If preparing fails, the write is finished here.
+    async fn prepare_to_write(&self, doc: DocumentId) -> Result<Writing<'_>, EncryptError> {
+        let reconciled = self.certificates.reconciled.lock().await;
+        let mut fresh = Vec::new();
+        let prepared = async {
+            self.reconcile_before_writing(&reconciled, doc, &mut fresh)
+                .await?;
+            if self.own_key_is_a_retired_prekey(doc).await {
+                let (op, _) = self.rotate_own_key(doc).await?;
+                fresh.push(Arc::new(op));
+            }
+            Ok(())
+        }
+        .await;
+        let writing = Writing { reconciled, fresh };
+        match prepared {
+            Ok(()) => Ok(writing),
+            Err(error) => {
+                self.finish_write(writing).await;
+                Err(error)
+            }
+        }
+    }
+
+    /// Release a write's insert lock, then, after dropping the lock,
+    /// tell the listener about the CGKA operations it issued.
+    async fn finish_write(&self, writing: Writing<'_>) {
+        let Writing { reconciled, fresh } = writing;
+        drop(reconciled);
+        for op in &fresh {
+            self.event_listener.on_cgka_op(op).await;
+        }
+    }
+
+    /// Whether this identity's key in `doc_id`'s CGKA group is a prekey it
+    /// has since rotated away. The adder chooses that key, and a key proof
+    /// shows only that the member once published it, so a malicious member
+    /// could add someone under a key that leaked. Writing rotates such a key
+    /// first.
+    async fn own_key_is_a_retired_prekey(&self, doc_id: DocumentId) -> bool {
+        let Some(state) = self.document_state(doc_id).await else {
+            return false;
+        };
+        let Some(key) = state.lock().await.cgka().owner_leaf_key() else {
+            return false;
+        };
+        let individual = self.active.individual();
+        let locked = individual.lock().await;
+        locked
+            .prekey_ops()
+            .values()
+            .any(|op| matches!(op.as_ref(), KeyOp::Rotate(r) if r.payload().old == key))
+    }
+
+    /// Issue the CGKA operations this replica's certificates imply for
+    /// `doc_id`. Issues a remove if a member of the CGKA group lacks `Read`
+    /// in the next operation's certificate set, then an add, with a key proof,
+    /// for each reader who is not currently a CGKA member and whose prekeys
+    /// this replica has locally.
+    ///
+    /// Each operation is issued only if this replica has `Read` in its signing
+    /// set according to Keyline.
+    ///
+    /// Appends the operations stored to `fresh`.
+    async fn issue_implied_cgka_ops(
+        &self,
+        _reconciled: &Reconciled<'_>,
+        doc_id: DocumentId,
+        doc: Identifier,
+        state: &Arc<Mutex<DocumentState<T>>>,
+        fresh: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
+    ) -> Result<ImpliedCgkaOpsOutcome, CgkaSyncError<K::Error>> {
+        let signer = self.active.signer.clone();
+        // Settle first. A replay evicts the answers cached before it, which
+        // would include the next operation's.
+        let members = self.cgka_group_members(doc, state).await?;
+        let next = self.next_citations(doc, state).await?;
+        let triggers_removes = members
+            .iter()
+            .any(|member| !next.readers.contains(&Identifier::from(*member)));
+        if !next.may_sign {
+            return Ok(if triggers_removes {
+                ImpliedCgkaOpsOutcome::RemoveBlocked
+            } else {
+                ImpliedCgkaOpsOutcome::Success
+            });
+        }
+        if triggers_removes {
+            let remove_op = state
+                .lock()
+                .await
+                .remove_cgka_members_by_citations(next.cited, &signer)
+                .await?;
+            fresh.push(Arc::new(remove_op));
+        }
+        for reader in next.readers.iter().map(|id| IndividualId::from(*id)) {
+            if members.contains(&reader) {
+                continue;
+            }
+            let Some((prekey, key_proof)) = self.addable_key(reader, doc_id).await else {
+                continue;
+            };
+            // The remove above may have cited this replica's own revocation.
+            let NextCitations {
+                cited, may_sign, ..
+            } = self.next_citations(doc, state).await?;
+            if !may_sign {
+                break;
+            }
+            let made = state
+                .lock()
+                .await
+                .add_cgka_member(reader, prekey, Some(key_proof), cited, &signer)
+                .await?;
+            fresh.extend(made.into_iter().map(Arc::new));
+        }
+        Ok(ImpliedCgkaOpsOutcome::Success)
+    }
+
+    /// The prekey `reader` would be added to `doc_id` with, and the encoded
+    /// prekey operation proving it, if this replica has both.
+    async fn addable_key(
+        &self,
+        reader: IndividualId,
+        doc_id: DocumentId,
+    ) -> Option<(ShareKey, Vec<u8>)> {
+        let individual = self.individual_state(reader).await?;
+        let prekey = individual.lock().await.pick_prekey(doc_id).copied()?;
+        let key_proof = self.key_proof(reader, &prekey).await?;
+        Some((prekey, key_proof))
+    }
+
+    /// What the next CGKA operation on `doc` cites and what follows
+    /// from that.
+    async fn next_citations(
+        &self,
+        doc: Identifier,
+        state: &Arc<Mutex<DocumentState<T>>>,
+    ) -> Result<NextCitations, KeylineStorageError<K::Error>> {
+        let predecessor_set = {
+            let locked = state.lock().await;
+            let cgka = locked.cgka();
+            // Every head is in the CGKA graph.
+            self.certificate_sets
+                .lock()
+                .await
+                .predecessor_set(cgka, cgka.heads())
+                .unwrap_or_default()
+        };
+        let cited = self.citations_for(doc, &predecessor_set).await?;
+        // The signing set is all predecessor citations plus any delegations
+        // this operation cites.
+        let mut signing_set = predecessor_set;
+        {
+            let citations = self.certificates.cited.lock();
+            signing_set.extend(
+                cited
+                    .iter()
+                    .filter(|c| citations.delegation(c).is_some())
+                    .copied(),
+            );
+        }
+        let may_sign = self
+            .is_reader_over(&signing_set, doc, self.active.id().into())
+            .await?;
+        let mut certificate_set = signing_set;
+        certificate_set.extend(cited.iter().copied());
+        let readers = self.readers_over(&certificate_set, doc).await?;
+        Ok(NextCitations {
+            cited,
+            readers,
+            may_sign,
+        })
+    }
+
+    /// What an operation on `doc` cites when its predecessor set is
+    /// `predecessor_set`, i.e., every certificate of `closure(doc)` not
+    /// in that predecessor set.
+    async fn citations_for(
+        &self,
+        doc: Identifier,
+        predecessor_set: &CitationSet,
+    ) -> Result<BTreeSet<CitationId>, KeylineStorageError<K::Error>> {
+        let closure = self
+            .keyline()
+            .closure(doc)
+            .await
+            .map_err(KeylineStorageError::new)?
+            .value;
+        let cited: Vec<_> = closure
+            .iter()
+            .filter(|cert| !predecessor_set.contains(&citation_of(cert.id())))
+            .collect();
+        // The store can hold certificates this keyhive never inserted, such
+        // as those it had when the keyhive was rebuilt from an archive.
+        let unrecorded: Vec<_> = {
+            let recorded = self.certificates.cited.lock();
+            cited
+                .iter()
+                .filter(|cert| !recorded.contains(&citation_of(cert.id())))
+                .map(|cert| (*cert).clone())
+                .collect()
+        };
+        if !unrecorded.is_empty() {
+            // The store verified them on insert. Verifying again is the only
+            // way back to a `Verified` delegation, which the signing set is
+            // built from.
+            let verified: Vec<_> = unrecorded
+                .into_iter()
+                .filter_map(|cert| cert.verify().ok())
+                .collect();
+            self.certificates.cited.lock().insert_multiple(&verified);
+        }
+        // A certificate that does not verify is not cited.
+        let recorded = self.certificates.cited.lock();
+        Ok(cited
+            .iter()
+            .map(|cert| citation_of(cert.id()))
+            .filter(|citation| recorded.contains(citation))
+            .collect())
+    }
+
+    /// Make sure every certificate `op` cites is recorded in
+    /// [`CitedCertificates`], fetching any missing one from the Keyline
+    /// store. Returns `false` if the store lacks one.
+    async fn record_citations(
+        &self,
+        op: &CgkaOperation,
+    ) -> Result<bool, KeylineStorageError<K::Error>> {
+        for citation in op.citations() {
+            let recorded = self.certificates.cited.lock().contains(citation);
+            if recorded {
+                continue;
+            }
+            let Some(cert) = self.stored_certificate(citation).await? else {
+                return Ok(false);
+            };
+            self.certificates.cited.lock().insert(&cert);
+        }
+        Ok(true)
+    }
+
+    /// The certificate `citation` refers to, if the Keyline store has it.
+    async fn stored_certificate(
+        &self,
+        citation: &CitationId,
+    ) -> Result<Option<VerifiedCertificate<ContentHeads<T>>>, KeylineStorageError<K::Error>> {
+        let ids = [
+            CertificateId::Delegation(Digest::from(citation.0)),
+            CertificateId::Revocation(Digest::from(citation.0)),
+        ];
+        for id in ids {
+            let cert = self
+                .keyline()
+                .get(id)
+                .await
+                .map_err(KeylineStorageError::new)?
+                .value;
+            if let Some(cert) = cert {
+                // The store verified it on insert. Verifying again is the only
+                // way back to a `Verified` delegation, which authorization
+                // reads.
+                return Ok(cert.verify().ok());
+            }
+        }
+        Ok(None)
+    }
+
+    /// The encoded prekey operation in which `who` published `pk`, if this
+    /// replica has it.
+    async fn key_proof(&self, who: IndividualId, pk: &ShareKey) -> Option<Vec<u8>> {
+        let state = if who == self.active.id() {
+            self.active.individual()
+        } else {
+            self.individual_state(who).await?
+        };
+        let state = state.lock().await;
+        state
+            .prekey_ops()
+            .values()
+            .find(|op| op.new_key() == pk)
+            .map(|op| op.to_key_proof())
     }
 
     /// Tell the listener about CGKA operations this replica wrote. They are
@@ -406,30 +954,30 @@ where
         }
     }
 
-    /// Insert `batch` and bring the CGKA of every document held here to its
-    /// new readers: an add for each new reader whose prekeys this replica
-    /// holds, a remove for each lost reader seated in the tree. Every
-    /// document, not only `written`: a document can be a member of another,
-    /// so writing to one changes the readers of those it reaches.
+    /// Insert `batch` and issue the CGKA operations it implies for every
+    /// document held here whose readers it changed, through
+    /// [`Self::issue_implied_cgka_ops`]. Every such document, not only the one
+    /// written: a document can be a member of
+    /// another, so writing to one changes the readers of those it reaches.
     ///
     /// The insert lock is held throughout, so the diff is exactly this batch's
-    /// effect, and concurrent writes on this keyhive reach its trees in the
-    /// order they reached the store. That does not hold between a fork and its
-    /// trunk, which share the store but not the trees (see [`ForkAsync`] for
-    /// `Keyhive`). Each operation is collected as soon as it is made, so the
-    /// listener hears of every operation a tree took, together with the new
-    /// certificates, once the lock is released, whether or not reconciliation
-    /// finished.
-    async fn insert_and_reconcile<E: From<KeylineStorageError<K::Error>> + From<CgkaError>>(
+    /// effect, and concurrent writes on this keyhive reach its CGKA graphs in
+    /// the order they reached the store. That does not hold between a fork and
+    /// its trunk, which share the store but not the CGKA graphs (see
+    /// [`ForkAsync`] for `Keyhive`). Each operation is collected as soon as it
+    /// is made, so the listener hears of every operation a CGKA graph took,
+    /// together with the new certificates, once the lock is released, whether
+    /// or not reconciliation finished. A document a failure left behind gets
+    /// its operations from the next member to write to it ([`Self::reconcile_before_writing`]).
+    async fn insert_and_reconcile<E: From<KeylineStorageError<K::Error>>>(
         &self,
         batch: &[VerifiedCertificate<ContentHeads<T>>],
-        written: Option<DocumentId>,
     ) -> Result<Vec<SerdeSigned<CgkaOperation>>, E> {
         let mut fresh = Vec::new();
         let mut ops = Vec::new();
         let result = {
             let mut reconciled = self.certificates.reconciled.lock().await;
-            self.reconcile_locked::<E>(&mut reconciled, batch, written, &mut fresh, &mut ops)
+            self.reconcile_locked::<E>(&mut reconciled, batch, &mut fresh, &mut ops)
                 .await
         };
         // Listeners run with no lock held, so they may call back in.
@@ -446,32 +994,22 @@ where
     /// certificates it inserts to `fresh` and the operations it stores to
     /// `ops`, including when it fails partway.
     ///
-    /// Each operation cites a certificate of the batch that explains it: an
-    /// add, a delegation the new reader has a route through; a remove, a
-    /// revocation of a delegation the lost reader had a route through.
-    async fn reconcile_locked<E: From<KeylineStorageError<K::Error>> + From<CgkaError>>(
+    /// Each document whose readers the batch changed gets the operations
+    /// [`Self::issue_implied_cgka_ops`] issues.
+    async fn reconcile_locked<E: From<KeylineStorageError<K::Error>>>(
         &self,
-        reconciled: &mut Option<Version>,
+        reconciled: &mut Reconciled<'_>,
         batch: &[VerifiedCertificate<ContentHeads<T>>],
-        written: Option<DocumentId>,
         fresh: &mut Vec<VerifiedCertificate<ContentHeads<T>>>,
         ops: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
     ) -> Result<(), E> {
-        // The written document is diffed even when this replica holds no entry
-        // for it: if its readers change, reconciliation cannot follow, and says
-        // so before any tree changes. A document whose identifier is not a
-        // Keyline key has no members, so there is nothing to follow.
-        let docs: Vec<(DocumentId, Identifier, Option<Arc<Mutex<DocumentState<T>>>>)> = {
-            let docs = self.documents.lock().await;
-            let unheld = written
-                .filter(|id| !docs.contains_key(id))
-                .map(|id| (id, None));
-            docs.iter()
-                .map(|(id, d)| (*id, Some(d.dupe())))
-                .chain(unheld)
-                .map(|(id, d)| (id, Identifier::from(id), d))
-                .collect()
-        };
+        let docs: Vec<(DocumentId, Identifier, Arc<Mutex<DocumentState<T>>>)> = self
+            .documents
+            .lock()
+            .await
+            .iter()
+            .map(|(id, d)| (*id, Identifier::from(*id), d.dupe()))
+            .collect();
 
         let mut before = Vec::with_capacity(docs.len());
         for (doc_id, doc, _) in &docs {
@@ -485,50 +1023,19 @@ where
         if fresh.is_empty() {
             return Ok(());
         }
-        let mut diffs = Vec::with_capacity(docs.len());
         for ((doc_id, doc, state), before) in docs.into_iter().zip(before) {
-            let (_, after) = self.readers(doc).await?;
-            if before == after {
-                continue;
-            }
-            let Some(state) = state else {
-                return Err(CgkaError::NotInitialized.into());
+            // Inserting is not refused for a remove this replica may not
+            // sign. The next write to the document refuses instead.
+            let issued = match self.readers(doc).await {
+                Ok((_, readers)) if readers == before => continue,
+                Ok(_) => self
+                    .issue_implied_cgka_ops(reconciled, doc_id, doc, &state, ops)
+                    .await
+                    .map(|_| ()),
+                Err(e) => Err(e.into()),
             };
-            diffs.push((doc_id, doc, state, before, after));
-        }
-
-        let signer = self.active.signer.clone();
-        for (doc_id, doc, state, before, after) in diffs {
-            for added in after.difference(&before) {
-                let Some(individual) = self.individual_state(*added).await else {
-                    continue; // no prekeys here to seat them with
-                };
-                let Some(citation) = self.grant_for(doc, batch, *added).await? else {
-                    tracing::warn!(%doc_id, "no certificate in the batch explains a new reader");
-                    continue;
-                };
-                let Some(prekey) = individual.lock().await.pick_prekey(doc_id).copied() else {
-                    continue; // no live prekeys to seat them with
-                };
-                let prekeys = HashMap::from([(*added, prekey)]);
-                let made = state
-                    .lock()
-                    .await
-                    .add_cgka_members_from_prekeys(&prekeys, [citation].into(), &signer)
-                    .await?;
-                ops.extend(made.into_iter().map(Arc::new));
-            }
-            for lost in before.difference(&after) {
-                let Some(citation) = self.revocation_for(doc, batch, *lost).await? else {
-                    tracing::warn!(%doc_id, "no certificate in the batch explains a lost reader");
-                    continue;
-                };
-                let made = state
-                    .lock()
-                    .await
-                    .remove_cgka_member(*lost, [citation].into(), &signer)
-                    .await?;
-                ops.extend(made.into_iter().map(Arc::new));
+            if let Err(error) = issued {
+                tracing::warn!(%doc_id, %error, "could not issue the CGKA operations the certificates imply");
             }
         }
         Ok(())
@@ -586,54 +1093,6 @@ where
             }
         }
         Ok(retain)
-    }
-
-    /// A delegation in `batch` that `reader` has a route to `doc` through.
-    async fn grant_for(
-        &self,
-        doc: Identifier,
-        batch: &[VerifiedCertificate<ContentHeads<T>>],
-        reader: IndividualId,
-    ) -> Result<Option<CitationId>, KeylineStorageError<K::Error>> {
-        let reader = Identifier::from(reader);
-        for cert in batch {
-            if let VerifiedCertificate::Delegation(d) = cert {
-                if self
-                    .route_through(doc, d.issuer(), d.payload(), reader)
-                    .await?
-                {
-                    return Ok(Some(CitationId(d.digest().into())));
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    /// A revocation in `batch` of a delegation that `reader` had a route to
-    /// `doc` through.
-    async fn revocation_for(
-        &self,
-        doc: Identifier,
-        batch: &[VerifiedCertificate<ContentHeads<T>>],
-        reader: IndividualId,
-    ) -> Result<Option<CitationId>, KeylineStorageError<K::Error>> {
-        let reader = Identifier::from(reader);
-        for cert in batch {
-            if let VerifiedCertificate::Revocation(r) = cert {
-                let Some((revoked_issuer, revoked)) =
-                    self.stored_delegation(r.payload().revoke.into()).await?
-                else {
-                    continue;
-                };
-                if self
-                    .route_through(doc, revoked_issuer, &revoked, reader)
-                    .await?
-                {
-                    return Ok(Some(CitationId(r.digest().into())));
-                }
-            }
-        }
-        Ok(None)
     }
 
     /// Adoption: the delegations that keep `removed`'s admissions alive once
@@ -735,9 +1194,9 @@ where
         Ok(Verified::sign::<F, S>(value, &signer).await?)
     }
 
-    /// Generate a document: root edges as for a group, and a tree seating
-    /// every reader they admit, each add citing a root edge it has a route
-    /// through.
+    /// Generate a document: root edges as for a group, and a CGKA group
+    /// containing every reader they admit whose prekey operation this replica
+    /// has.
     #[instrument(skip_all)]
     pub async fn generate_doc(
         &self,
@@ -800,16 +1259,21 @@ where
             .get(&owner_pk)
             .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
 
-        let (_, readers) = self.readers(doc_kl).await?;
+        // The owner's add has no predecessors, so it cites the whole closure,
+        // root edges included, and every later add has it as an ancestor.
+        // The founders are the readers included in that set.
+        let cited = self.citations_for(doc_kl, &CitationSet::default()).await?;
+        let readers: Vec<IndividualId> = self
+            .readers_over(&cited.iter().copied().collect(), doc_kl)
+            .await?
+            .into_iter()
+            .map(IndividualId::from)
+            .collect();
         if !readers.contains(&owner) {
             return Err(GenerateDocError::OwnerCannotRead);
         }
         let mut founders = Vec::with_capacity(readers.len());
         for reader in readers {
-            let citation = self
-                .grant_for(doc_kl, roots, reader)
-                .await?
-                .ok_or(GenerateDocError::MissingFoundingDelegation)?;
             let prekey = if reader == owner {
                 owner_pk
             } else {
@@ -821,11 +1285,18 @@ where
                 };
                 prekey
             };
-            founders.push((reader, prekey, None, [citation].into()));
+            let Some(key_proof) = self.key_proof(reader, &prekey).await else {
+                if reader == owner {
+                    return Err(GenerateDocError::OwnerPrekeyUnproven);
+                }
+                continue;
+            };
+            founders.push((reader, prekey, Some(key_proof), BTreeSet::new()));
         }
         // The owner first, so that the tree's causal root is its creator's.
         founders.sort_by_key(|(id, _, _, _)| (*id != owner, *id));
-        let founders = NonEmpty::from_vec(founders).ok_or(GenerateDocError::OwnerCannotRead)?;
+        let mut founders = NonEmpty::from_vec(founders).ok_or(GenerateDocError::OwnerCannotRead)?;
+        founders.head.3 = cited;
 
         let (doc, made) = {
             let mut csprng = self.csprng.lock().await;
@@ -833,6 +1304,7 @@ where
                 doc_id,
                 founders,
                 owner_sk,
+                self.membership_view(doc_kl),
                 initial_content_heads,
                 &signer,
                 &mut *csprng,
@@ -946,8 +1418,7 @@ where
         if !self.is_known(to_add).await? {
             return Err(NotFound::new(to_add).into());
         }
-        let written = self
-            .written_document::<AddMemberError<K::Error>>(resource)
+        self.ensure_known::<AddMemberError<K::Error>>(resource)
             .await?;
 
         let issuer = Identifier::from(self.id());
@@ -968,10 +1439,9 @@ where
         let delegation = Arc::new(self.sign_certificate(&certificate).await?);
 
         let cgka_ops = self
-            .insert_and_reconcile::<AddMemberError<K::Error>>(
-                &[VerifiedCertificate::Delegation(delegation.dupe())],
-                written,
-            )
+            .insert_and_reconcile::<AddMemberError<K::Error>>(&[VerifiedCertificate::Delegation(
+                delegation.dupe(),
+            )])
             .await?;
 
         Ok(AddMemberUpdate {
@@ -1000,8 +1470,7 @@ where
     ) -> Result<RevokeMemberUpdate<T>, RevokeMemberError<K::Error>> {
         let to_revoke = to_revoke.into();
         let resource = resource.into();
-        let written = self
-            .written_document::<RevokeMemberError<K::Error>>(resource)
+        self.ensure_known::<RevokeMemberError<K::Error>>(resource)
             .await?;
         let issuer = Identifier::from(self.id());
         let subject = Identifier::from(resource);
@@ -1066,7 +1535,7 @@ where
             )
             .collect();
         let cgka_ops = self
-            .insert_and_reconcile::<RevokeMemberError<K::Error>>(&batch, written)
+            .insert_and_reconcile::<RevokeMemberError<K::Error>>(&batch)
             .await?;
 
         Ok(RevokeMemberUpdate {
@@ -1091,19 +1560,15 @@ where
             .contains(&id))
     }
 
-    /// The document written, if `resource` is one. `NotFound` if this replica
-    /// does not know `resource`.
-    async fn written_document<E: From<NotFound> + From<KeylineStorageError<K::Error>>>(
+    /// Returns `NotFound` error if this replica does not know `resource`.
+    async fn ensure_known<E: From<NotFound> + From<KeylineStorageError<K::Error>>>(
         &self,
         resource: MemberedId,
-    ) -> Result<Option<DocumentId>, E> {
+    ) -> Result<(), E> {
         if !self.is_known(resource.into()).await? {
             return Err(NotFound::new(resource).into());
         }
-        Ok(match resource {
-            MemberedId::DocumentId(doc_id) => Some(doc_id),
-            MemberedId::GroupId(_) => None,
-        })
+        Ok(())
     }
 
     /// Record `heads` as `doc`'s current content heads: the watermark this
@@ -1155,13 +1620,19 @@ where
     where
         T: for<'de> Deserialize<'de>,
     {
-        let handle = self.document_by_id(doc).await?;
-        let signer = { self.active.signer.clone() };
-        let (encrypted_content, rotation) = {
+        let writing = self
+            .prepare_to_write(doc)
+            .await
+            .map_err(EncryptInEnvelopeError::from)?;
+        let encrypted: Result<_, EnvelopeError<T>> = async {
+            let handle = self.document_by_id(doc).await?;
+            let signer = { self.active.signer.clone() };
             let mut locked_csprng = self.csprng.lock().await;
-            handle
-                .lock()
+            let mut locked = handle.lock().await;
+            self.settle_for_write(doc, &mut locked)
                 .await
+                .map_err(EncryptInEnvelopeError::from)?;
+            Ok(locked
                 .try_encrypt_content_in_envelope(
                     content_ref,
                     content,
@@ -1169,8 +1640,11 @@ where
                     &signer,
                     &mut *locked_csprng,
                 )
-                .await?
-        };
+                .await?)
+        }
+        .await;
+        self.finish_write(writing).await;
+        let (encrypted_content, rotation) = encrypted?;
         Ok(EncryptedContentWithUpdate {
             encrypted_content,
             update_op: self.record_rotation(rotation).await,
@@ -1187,12 +1661,14 @@ where
         pred_refs: &Vec<T>,
         content: &[u8],
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
-        let doc = self.document_by_id(doc).await?;
-        let signer = { self.active.signer.clone() };
-        let (encrypted_content, application_secret_key, rotation) = {
+        let writing = self.prepare_to_write(doc).await?;
+        let encrypted = async {
+            let handle = self.document_by_id(doc).await?;
+            let signer = { self.active.signer.clone() };
             let mut locked_csprng = self.csprng.lock().await;
-            doc.lock()
-                .await
+            let mut locked = handle.lock().await;
+            self.settle_for_write(doc, &mut locked).await?;
+            locked
                 .try_encrypt_content_keyed(
                     content_ref,
                     content,
@@ -1201,8 +1677,11 @@ where
                     &mut *locked_csprng,
                 )
                 .await
-                .map_err(EncryptContentError::from)?
-        };
+                .map_err(EncryptContentError::from)
+        }
+        .await;
+        self.finish_write(writing).await;
+        let (encrypted_content, application_secret_key, rotation) = encrypted?;
         let update_op = self.record_rotation(rotation).await;
         Ok((
             EncryptedContentWithUpdate {
@@ -1226,8 +1705,9 @@ where
         Some(op)
     }
 
-    /// The identities in `doc`'s encryption tree. `None` if this replica can
-    /// read it but its invitation has not merged yet.
+    /// The members of `doc`'s CGKA group. `None` if this replica can
+    /// read it but its invitation has not merged yet, or if Keyline cannot
+    /// answer a membership question a replay of its CGKA graph requires.
     ///
     /// Returns an error if `doc` is not known.
     #[cfg(any(test, feature = "test_utils"))]
@@ -1235,16 +1715,10 @@ where
         &self,
         doc: DocumentId,
     ) -> Result<Option<BTreeSet<IndividualId>>, NotFound> {
-        let Some(doc) = self.member_document(doc).await? else {
+        let Some(state) = self.member_document(doc).await? else {
             return Ok(None);
         };
-        let members = doc
-            .lock()
-            .await
-            .cgka_members()
-            .ok()
-            .map(|ids| ids.collect());
-        Ok(members)
+        Ok(self.cgka_group_members(doc.into(), &state).await.ok())
     }
 
     /// The hash of `doc`'s current PCS key. Returns `None` if it has no key to hash.
@@ -1308,11 +1782,29 @@ where
         doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
-        let Some(doc) = self.member_document(doc).await? else {
+        let Some(state) = self.member_document(doc).await? else {
             return Err(DecryptError::KeyNotFound); // invited, no keys yet
         };
-        let out = doc.lock().await.try_decrypt_content_keyed(encrypted);
-        out
+        let mut locked = state.lock().await;
+        let key = self.decryption_key(doc, &mut locked, encrypted).await?;
+        locked.try_decrypt_content_with(encrypted, key)
+    }
+
+    /// The key for `encrypted` in `doc`'s CGKA, fetching any membership answer
+    /// needed to replay its CGKA graph up to an earlier update. The CGKA
+    /// records the root secret it derives.
+    async fn decryption_key<Q>(
+        &self,
+        doc: DocumentId,
+        state: &mut DocumentState<T>,
+        encrypted: &EncryptedContent<Q, T>,
+    ) -> Result<SymmetricKey, DecryptError> {
+        self.require_keyline_answers(doc.into(), state.cgka_mut(), |cgka| {
+            cgka.decryption_key_for(encrypted)
+        })
+        .await
+        .map_err(|e| DecryptError::KeylineStorage(e.to_string()))?
+        .map_err(|_| DecryptError::KeyNotFound)
     }
 
     /// Walk back from `encrypted` through the ancestors it lists.
@@ -1325,12 +1817,19 @@ where
         T: for<'de> Deserialize<'de>,
         P: Serialize + Clone,
     {
-        let Some(doc) = self.member_document(doc).await? else {
+        let Some(state) = self.member_document(doc).await? else {
             // Invited, no keys yet.
             return Err(DocCausalDecryptionError::from(DecryptError::KeyNotFound).into());
         };
         let out = {
-            let mut locked = doc.lock().await;
+            let mut locked = state.lock().await;
+            // The traversal derives the entrypoint's key itself. Deriving it here
+            // first fetches any required membership answer and records it.
+            if let Err(e @ DecryptError::KeylineStorage(_)) =
+                self.decryption_key(doc, &mut locked, encrypted).await
+            {
+                return Err(DocCausalDecryptionError::from(e).into());
+            }
             locked
                 .try_causal_decrypt_content(encrypted, self.ciphertext_store.clone())
                 .await
@@ -1338,8 +1837,25 @@ where
         Ok(out?)
     }
 
+    /// Rotate this identity's key in `doc`'s CGKA group, after first issuing
+    /// the CGKA operations this replica's certificates imply for the document.
     #[instrument(skip_all)]
     pub async fn force_pcs_update(
+        &self,
+        doc: DocumentId,
+    ) -> Result<(SerdeSigned<CgkaOperation>, LeafKeyPair), EncryptError> {
+        let mut writing = self.prepare_to_write(doc).await?;
+        let rotated = self.rotate_own_key(doc).await;
+        if let Ok((op, _)) = &rotated {
+            writing.fresh.push(Arc::new(op.clone()));
+        }
+        self.finish_write(writing).await;
+        rotated
+    }
+
+    /// Rotate this identity's key in `doc`'s CGKA group and keep the new
+    /// secret. The caller tells the listener about the update.
+    async fn rotate_own_key(
         &self,
         doc: DocumentId,
     ) -> Result<(SerdeSigned<CgkaOperation>, LeafKeyPair), EncryptError> {
@@ -1347,15 +1863,12 @@ where
         let signer = { self.active.signer.clone() };
         let (op, new_key_pair) = {
             let mut locked_csprng = self.csprng.lock().await;
-            handle
-                .lock()
-                .await
-                .pcs_update(&signer, &mut *locked_csprng)
-                .await?
+            let mut locked = handle.lock().await;
+            self.settle_for_write(doc, &mut locked).await?;
+            locked.pcs_update(&signer, &mut *locked_csprng).await?
         };
         let (pk, sk) = new_key_pair;
         self.active.insert_rotated_secret(pk, sk).await;
-        self.record_cgka_ops([Arc::new(op.clone())]).await;
         Ok((op, new_key_pair))
     }
 
@@ -2193,12 +2706,12 @@ where
         Ok(())
     }
 
-    /// Whether the membership graph authorizes `signed_op` on this document.
+    /// Whether `signed_op` can be merged on this document.
     ///
-    /// An add cites one delegation, which routes to the added member. A remove
-    /// lists one member and cites one revocation, which covers a delegation
-    /// routing to that member. An update cites nothing and is checked against
-    /// the leaf it rotates.
+    /// Pending until every certificate it cites is recorded, so that merging
+    /// it removes the members its certificate set does not entitle. Adds and
+    /// removes are then accepted. An update cites nothing and is checked
+    /// against the leaf it rotates.
     async fn cgka_op_is_authorized(
         &self,
         signed_op: &SerdeSigned<CgkaOperation>,
@@ -2206,113 +2719,26 @@ where
     ) -> Result<Result<(), CgkaUnauthorized>, KeylineStorageError<K::Error>> {
         use CgkaUnauthorized::{Denied, Pending};
 
+        if !self.record_citations(&signed_op.payload).await? {
+            return Ok(Err(Pending));
+        }
+        let CgkaOperation::Update { id, new_path, .. } = &signed_op.payload else {
+            return Ok(Ok(()));
+        };
         let doc = Identifier::from(doc_id);
         let signer = signed_op.issuer;
-
-        match &signed_op.payload {
-            CgkaOperation::Add {
-                citations,
-                added_id,
-                ..
-            } => {
-                let [CitationId(digest)] = citations[..] else {
-                    return Ok(Err(Denied));
-                };
-                let Some((grant_issuer, grant)) = self.stored_delegation(digest).await? else {
-                    // An add must cite a delegation, not a revocation.
-                    let revocation = self.stored_revocation(digest).await?.is_some();
-                    return Ok(Err(if revocation { Denied } else { Pending }));
-                };
-                let added = added_id.id();
-                if !grant.power.is_reader() {
-                    return Ok(Err(Denied));
-                }
-                let founding = grant_issuer == doc && grant.subject == doc;
-                if founding {
-                    // A root edge is signed by the document's own key, which is
-                    // discarded, so only a creator (the audience of a root edge)
-                    // may cite one. Its root edge may not have arrived yet.
-                    let creator = self
-                        .keyline()
-                        .delegations_to(doc, signer)
-                        .await
-                        .map_err(KeylineStorageError::new)?
-                        .value
-                        .values()
-                        .any(|(issuer, _)| *issuer == doc);
-                    if !creator {
-                        return Ok(Err(Pending));
-                    }
-                } else if grant_issuer != signer {
-                    return Ok(Err(Denied));
-                }
-                if !self.reads_ever(doc, signer).await?
-                    || !self.reads_ever(doc, added).await?
-                    || !self.route_through(doc, grant_issuer, &grant, added).await?
-                {
-                    return Ok(Err(Pending));
-                }
-                Ok(Ok(()))
-            }
-            CgkaOperation::Remove {
-                citations, removed, ..
-            } => {
-                let ([CitationId(digest)], [RemovedMember { id, .. }]) =
-                    (&citations[..], &removed[..])
-                else {
-                    return Ok(Err(Denied));
-                };
-                let Some((revocation_issuer, revocation)) = self.stored_revocation(*digest).await?
-                else {
-                    // A remove must cite a revocation, not a delegation.
-                    let delegation = self.stored_delegation(*digest).await?.is_some();
-                    return Ok(Err(if delegation { Denied } else { Pending }));
-                };
-                if revocation_issuer != signer {
-                    return Ok(Err(Denied));
-                }
-                let Some((revoked_issuer, revoked)) =
-                    self.stored_delegation(revocation.revoke.into()).await?
-                else {
-                    return Ok(Err(Pending));
-                };
-                if !revoked.power.is_reader() {
-                    return Ok(Err(Denied));
-                }
-                let removed = id.id();
-                // The revocation must cover the delegation it names, as in
-                // Keyline: its issuer signed it or is named by it, or ever held
-                // Admin over its subject or this document. Admin reach only
-                // grows, so a revocation that covers nothing yet may later.
-                let covers = signer == revoked_issuer
-                    || signer == revoked.audience
-                    || self.positive_power(revoked.subject, signer).await? == Some(Power::Admin)
-                    || self.positive_power(doc, signer).await? == Some(Power::Admin);
-                if !covers
-                    || self.positive_power(doc, signer).await?.is_none()
-                    || !self
-                        .route_through(doc, revoked_issuer, &revoked, removed)
-                        .await?
-                {
-                    return Ok(Err(Pending));
-                }
-                Ok(Ok(()))
-            }
-            CgkaOperation::Update { id, new_path, .. } => {
-                if *id != new_path.leaf_id {
-                    return Ok(Err(Denied));
-                }
-                // An update must be signed by the owner of the leaf it rotates.
-                if new_path.leaf_id.id() != signed_op.issuer {
-                    return Ok(Err(Denied));
-                }
-                // Its leaf is checked against the tree on merge. A replica that
-                // is still awaiting its invitation has no complete tree, so the
-                // signer must also read the document in Keyline's positive
-                // graph.
-                Ok(ensure(self.reads_ever(doc, signer).await?, Pending))
-            }
+        if *id != new_path.leaf_id {
+            return Ok(Err(Denied));
         }
+        // An update must be signed by the owner of the leaf it rotates.
+        if new_path.leaf_id.id() != signer {
+            return Ok(Err(Denied));
+        }
+        // Its leaf is checked against the tree on merge. A replica that
+        // is still awaiting its invitation has no complete tree, so the
+        // signer must also read the document in Keyline's positive
+        // graph.
+        Ok(ensure(self.reads_ever(doc, signer).await?, Pending))
     }
 
     /// `audience`'s power over `subject` in Keyline's positive graph, which
@@ -2343,54 +2769,6 @@ where
             .is_some_and(|power| power.is_reader()))
     }
 
-    /// [`route_through`] over this replica's store.
-    async fn route_through(
-        &self,
-        doc: Identifier,
-        issuer: Identifier,
-        delegation: &Delegation,
-        who: Identifier,
-    ) -> Result<bool, KeylineStorageError<K::Error>> {
-        route_through(self.keyline(), doc, issuer, delegation, who).await
-    }
-
-    /// The Keyline delegation with this digest and its issuer, if this replica
-    /// holds it.
-    async fn stored_delegation(
-        &self,
-        digest: [u8; 32],
-    ) -> Result<Option<(Identifier, Delegation)>, KeylineStorageError<K::Error>> {
-        let cert = self
-            .keyline()
-            .get(CertificateId::Delegation(Digest::from(digest)))
-            .await
-            .map_err(KeylineStorageError::new)?
-            .value;
-        Ok(match cert {
-            Some(Certificate::Delegation(signed)) => Some(decode_stored(&signed)?),
-            _ => None,
-        })
-    }
-
-    /// The Keyline revocation with this digest and its issuer, if this replica
-    /// holds it.
-    async fn stored_revocation(
-        &self,
-        digest: [u8; 32],
-    ) -> Result<Option<(Identifier, Revocation<ContentHeads<T>>)>, KeylineStorageError<K::Error>>
-    {
-        let cert = self
-            .keyline()
-            .get(CertificateId::Revocation(Digest::from(digest)))
-            .await
-            .map_err(KeylineStorageError::new)?
-            .value;
-        Ok(match cert {
-            Some(Certificate::Revocation(signed)) => Some(decode_stored(&signed)?),
-            _ => None,
-        })
-    }
-
     #[instrument(skip_all)]
     pub async fn receive_cgka_op(
         &self,
@@ -2413,9 +2791,6 @@ where
             }
         }
 
-        // A member merges it into its tree. An operation that arrives before
-        // its predecessors fails `OutOfOrderOperation` and waits in the pending
-        // queue, as does one for a document this replica does not hold.
         let op = Arc::new(signed_op);
         let me = self.active.id();
         let secrets: BTreeMap<ShareKey, ShareSecretKey> = {
@@ -2425,39 +2800,63 @@ where
                 .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, *sk)))
                 .collect()
         };
-        if let Some(doc) = self.document_state(doc_id).await {
-            let merged = {
-                let mut locked = doc.lock().await;
-                merge_one(locked.cgka_mut(), op.dupe(), me, &secrets)?
-            };
-            if merged {
-                self.event_listener.on_cgka_op(&op).await;
-            }
-            return Ok(());
+        let merged = {
+            // Serialized with writes, which choose an operation's citations
+            // from the CGKA graph's heads and then sign it on those same heads.
+            let _reconciled = self.certificates.reconciled.lock().await;
+            self.merge_received(doc_id, op.dupe(), me, &secrets).await?
+        };
+        if merged {
+            self.event_listener.on_cgka_op(&op).await;
+        }
+        Ok(())
+    }
+
+    /// Merge an authorized operation, whose predecessors the CGKA graph
+    /// already has, into this replica's CGKA for `doc_id`. `true` if the graph
+    /// did not have it. For a document whose CGKA group this replica has not
+    /// joined, the operation goes into the CGKA graph awaiting its invitation
+    /// or fails with `UnknownDocument` if this replica cannot read the document.
+    async fn merge_received(
+        &self,
+        doc_id: DocumentId,
+        op: Arc<SerdeSigned<CgkaOperation>>,
+        me: IndividualId,
+        secrets: &BTreeMap<ShareKey, ShareSecretKey>,
+    ) -> Result<bool, ReceiveCgkaOpError<K::Error>> {
+        let doc = Identifier::from(doc_id);
+        if let Some(state) = self.document_state(doc_id).await {
+            let mut locked = state.lock().await;
+            return self
+                .require_keyline_answers(doc, locked.cgka_mut(), |cgka| {
+                    merge_one(cgka, op.dupe(), me, secrets)
+                })
+                .await?;
         }
 
         // Not a member yet. If this replica can read the document in Keyline,
-        // an invitation is due: its operations merge into a tree awaiting it
-        // as they come, in causal order, and the tree becomes this replica's
-        // document once the invitation has merged. Starting it on the first
-        // operation, not only on the invitation, lets every arriving operation
-        // make progress. A replica that cannot read it, such as a relay, keeps
-        // the operation pending.
-        let can_join = invites(&op, me) || self.reads_ever(doc_id.into(), me.into()).await?;
+        // an invitation is due: its operations merge into a CGKA awaiting it
+        // as they come, in causal order, and that CGKA becomes part of this
+        // replica's document once the invitation has merged. Starting it
+        // on the first operation, not only on the invitation, lets every
+        // arriving operation make progress.
+        let can_join = invites(&op, me) || self.reads_ever(doc, me.into()).await?;
         let (merged, joined) = {
             let mut awaiting = self.awaiting_invitation.lock().await;
-            let tree = match awaiting.entry(doc_id) {
+            let cgka = match awaiting.entry(doc_id) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) if can_join => {
-                    entry.insert(Cgka::new(doc_id, me, ShareKeyMap::new()))
+                    let mut cgka = Cgka::new(doc_id, me, ShareKeyMap::new());
+                    cgka.set_membership_view(self.membership_view(doc));
+                    entry.insert(cgka)
                 }
                 Entry::Vacant(_) => {
                     return Err(ReceiveCgkaOpError::UnknownDocument(Box::new(doc_id)))
                 }
             };
-            let merged = merge_one(tree, op.dupe(), me, &secrets)?;
-            // The invitation is in the tree's operation graph now. (The tree
-            // itself may replay it lazily, so its leaves are not the test.)
+            let merged = self
+                .require_keyline_answers(doc, cgka, |cgka| merge_one(cgka, op.dupe(), me, secrets))
+                .await??;
             let joined = if invites(&op, me) {
                 awaiting.remove(&doc_id)
             } else {
@@ -2465,7 +2864,7 @@ where
             };
             (merged, joined)
         };
-        if let Some(tree) = joined {
+        if let Some(cgka) = joined {
             self.documents
                 .lock()
                 .await
@@ -2473,16 +2872,89 @@ where
                 .or_insert_with(|| {
                     Arc::new(Mutex::new(DocumentState::with_tree(
                         doc_id,
-                        tree,
+                        cgka,
                         HashSet::new(),
                         HashSet::new(),
                     )))
                 });
         }
-        if merged {
-            self.event_listener.on_cgka_op(&op).await;
+        Ok(merged)
+    }
+
+    /// Add this identity to `doc_id`'s CGKA group, for a reader who is not a
+    /// member because no writer has its prekeys. Returns whether it did.
+    ///
+    /// Does nothing if this identity is already a member, if an add of it is
+    /// waiting to be applied (that add may contain an invitation, which a
+    /// self-add ordered ahead of it would lose), or if the add's certificate
+    /// set would not give this identity `Read`.
+    ///
+    /// The new member can read content from the next update by another member
+    /// onwards, since an add of oneself wraps no root secrets.
+    pub async fn add_self_to(&self, doc_id: DocumentId) -> Result<bool, CgkaSyncError<K::Error>> {
+        let me = self.active.id();
+        let (doc, my_id) = (Identifier::from(doc_id), Identifier::from(me));
+        let Some(prekey) = self.active.pick_prekey(doc_id).await else {
+            return Ok(false);
+        };
+        let sk = { self.active.key_pairs.lock().await.get(&prekey).copied() };
+        let (Some(sk), Some(key_proof)) = (sk, self.key_proof(me, &prekey).await) else {
+            return Ok(false);
+        };
+        let waiting_add = self.pending_events.lock().await.iter().any(|event| {
+            matches!(event.as_ref(), StaticEvent::CgkaOperation(op)
+                if DocumentId::from(*op.payload.doc_id()) == doc_id && invites(op, me))
+        });
+        if waiting_add {
+            return Ok(false);
         }
-        Ok(())
+
+        let mut fresh = Vec::new();
+        {
+            // Held throughout, so no operation is received into a CGKA graph
+            // awaiting its invitation while it becomes a document.
+            let _reconciled = self.certificates.reconciled.lock().await;
+            let held = self.document_state(doc_id).await;
+            let state = match &held {
+                Some(state) => state.dupe(),
+                None => {
+                    let Some(cgka) = self.awaiting_invitation.lock().await.get(&doc_id).cloned()
+                    else {
+                        return Ok(false);
+                    };
+                    Arc::new(Mutex::new(DocumentState::with_tree(
+                        doc_id,
+                        cgka,
+                        HashSet::new(),
+                        HashSet::new(),
+                    )))
+                }
+            };
+            if self.cgka_group_members(doc, &state).await?.contains(&me) {
+                return Ok(false);
+            }
+            let NextCitations { cited, readers, .. } = self.next_citations(doc, &state).await?;
+            if !readers.contains(&my_id) {
+                return Ok(false);
+            }
+            let signer = self.active.signer.clone();
+            let made = {
+                let mut locked = state.lock().await;
+                locked.cgka_mut().owner_sks_mut().insert(prekey, sk);
+                locked
+                    .add_cgka_member(me, prekey, Some(key_proof), cited, &signer)
+                    .await?
+            };
+            if held.is_none() {
+                self.awaiting_invitation.lock().await.remove(&doc_id);
+                self.documents.lock().await.insert(doc_id, state);
+            }
+            fresh.extend(made.into_iter().map(Arc::new));
+        }
+        for op in &fresh {
+            self.event_listener.on_cgka_op(op).await;
+        }
+        Ok(true)
     }
 
     /// Adopt into every held tree the secrets this identity holds for its own
@@ -2596,6 +3068,7 @@ where
         let certificates = Arc::new(Certificates {
             store: keyline,
             reconciled: async_lock::Mutex::new(None),
+            cited: SharedCitations::default(),
         });
         Self::from_archive_sharing(
             archive,
@@ -2635,50 +3108,13 @@ where
         }
         individuals.insert(archive.active.individual.id(), raw_active.individual.dupe());
 
-        // Each tree is rebuilt from its operations: a held document if its
-        // invitation (or creation) has merged, and still awaiting it otherwise.
-        let me = raw_active.id();
-        let secrets = raw_active.key_pairs.lock().await.clone();
-        let mut by_doc: HashMap<DocumentId, Vec<Arc<SerdeSigned<CgkaOperation>>>> = HashMap::new();
-        for op in archive.cgka_ops.iter() {
-            let doc_id = DocumentId::from(*op.payload.doc_id());
-            by_doc.entry(doc_id).or_default().push(Arc::new(op.clone()));
-        }
-        let mut documents = HashMap::new();
-        let mut awaiting_invitation = HashMap::new();
-        for (doc_id, ops) in by_doc {
-            let invitations: HashSet<_> = ops
-                .iter()
-                .filter(|op| invites(op, me))
-                .map(|op| Digest::hash(op.as_ref()))
-                .collect();
-            let tree = tree_from_ops(doc_id, ops, me, &secrets);
-            if invitations.is_empty() || !tree.contains_predecessors(&invitations) {
-                awaiting_invitation.insert(doc_id, tree);
-                continue;
-            }
-            let (heads, state) = archive
-                .docs
-                .get(&doc_id)
-                .map(|d| (d.content_heads.clone(), d.content_state.clone()))
-                .unwrap_or_default();
-            documents.insert(
-                doc_id,
-                Arc::new(Mutex::new(DocumentState::with_tree(
-                    doc_id, tree, heads, state,
-                ))),
-            );
-        }
-        for doc_id in archive.docs.keys().filter(|id| !documents.contains_key(id)) {
-            tracing::warn!(%doc_id, "the archived tree does not rebuild from its operations");
-        }
-
         let verified: Vec<_> = archive
             .certificates
             .iter()
             .cloned()
             .map(Certificate::verify)
             .collect::<Result<Vec<_>, _>>()?;
+        shared.cited.lock().insert_multiple(&verified);
         // A fork's archive holds none: it shares the store.
         if !verified.is_empty() {
             let mut last = shared.reconciled.lock().await;
@@ -2691,11 +3127,14 @@ where
             );
         }
 
+        let me = raw_active.id();
+        let secrets = raw_active.key_pairs.lock().await.clone();
         let hive = Keyhive(Arc::new(KeyhiveState {
             active: raw_active,
             individuals: Mutex::new(individuals),
-            documents: Mutex::new(documents),
-            awaiting_invitation: Mutex::new(awaiting_invitation),
+            documents: Mutex::new(HashMap::new()),
+            awaiting_invitation: Mutex::new(HashMap::new()),
+            certificate_sets: Mutex::new(CertificateSets::new()),
             pending_events: Mutex::new(
                 archive
                     .pending_events
@@ -2710,6 +3149,84 @@ where
             certificates: shared,
             _plaintext_phantom: PhantomData,
         }));
+
+        // Each document's CGKA is rebuilt from its operations, with the
+        // certificates above recorded for its membership view. It becomes a
+        // held document if its invitation (or creation) has merged, and
+        // otherwise still awaits it.
+        let mut by_doc: HashMap<DocumentId, Vec<Arc<SerdeSigned<CgkaOperation>>>> = HashMap::new();
+        let mut deferred = HashSet::new();
+        for op in archive.cgka_ops.iter() {
+            if !hive.record_citations(&op.payload).await? {
+                // Kept, to apply once the certificate arrives.
+                deferred.insert(Digest::hash(op));
+                hive.pending_events
+                    .lock()
+                    .await
+                    .push(Arc::new(StaticEvent::CgkaOperation(Box::new(op.clone()))));
+                continue;
+            }
+            let doc_id = DocumentId::from(*op.payload.doc_id());
+            by_doc.entry(doc_id).or_default().push(Arc::new(op.clone()));
+        }
+        let mut documents = HashMap::new();
+        let mut awaiting_invitation = HashMap::new();
+        for (doc_id, ops) in by_doc {
+            let invitations: HashSet<_> = ops
+                .iter()
+                .filter(|op| invites(op, me))
+                .map(|op| Digest::hash(op.as_ref()))
+                .collect();
+            let (cgka, mut unapplied) = hive.cgka_from_ops(doc_id, ops, me, &secrets).await;
+            // Operations that descend from a deferred operation are deferred with it.
+            let mut has_progressed = true;
+            while has_progressed {
+                has_progressed = false;
+                let mut pending = hive.pending_events.lock().await;
+                unapplied.retain(|op| {
+                    let should_wait = op
+                        .payload
+                        .predecessors()
+                        .iter()
+                        .any(|p| deferred.contains(p));
+                    if should_wait {
+                        deferred.insert(Digest::hash(op.as_ref()));
+                        pending.push(Arc::new(StaticEvent::CgkaOperation(Box::new(
+                            op.as_ref().clone(),
+                        ))));
+                        has_progressed = true;
+                    }
+                    !should_wait
+                });
+            }
+            for op in &unapplied {
+                tracing::warn!(
+                    %doc_id,
+                    op = %Digest::hash(op.as_ref()),
+                    "an archived operation's predecessors are missing or did not apply"
+                );
+            }
+            if invitations.is_empty() || !cgka.contains_predecessors(&invitations) {
+                awaiting_invitation.insert(doc_id, cgka);
+                continue;
+            }
+            let (heads, state) = archive
+                .docs
+                .get(&doc_id)
+                .map(|d| (d.content_heads.clone(), d.content_state.clone()))
+                .unwrap_or_default();
+            documents.insert(
+                doc_id,
+                Arc::new(Mutex::new(DocumentState::with_tree(
+                    doc_id, cgka, heads, state,
+                ))),
+            );
+        }
+        for doc_id in archive.docs.keys().filter(|id| !documents.contains_key(id)) {
+            tracing::warn!(%doc_id, "the archived CGKA graph does not rebuild from its operations");
+        }
+        *hive.documents.lock().await = documents;
+        *hive.awaiting_invitation.lock().await = awaiting_invitation;
 
         Ok(hive)
     }
@@ -3259,8 +3776,9 @@ impl<E: core::error::Error + 'static> ReceiveStaticEventError<E> {
 
     /// Whether the event can never be applied, however long it waits: a bad
     /// signature, or a CGKA operation nothing could authorize. Such
-    /// an event is dropped rather than kept pending. A missing dependency or a
-    /// store failure may resolve, so those are kept.
+    /// an event is dropped rather than kept pending. A missing dependency, a
+    /// missing membership answer or a store failure may resolve, so those are
+    /// kept.
     pub fn is_final(&self) -> bool {
         match self {
             Self::ReceivePrekeyOpError(_) => true,
@@ -3269,7 +3787,7 @@ impl<E: core::error::Error + 'static> ReceiveStaticEventError<E> {
             Self::ReceiveCgkaOpError(e) => match e {
                 ReceiveCgkaOpError::VerificationError(_)
                 | ReceiveCgkaOpError::UnauthorizedCgkaOp(_) => true,
-                ReceiveCgkaOpError::CgkaError(cgka) => !cgka.is_missing_dependency(),
+                ReceiveCgkaOpError::CgkaError(cgka) => never_merges(cgka),
                 ReceiveCgkaOpError::UnknownDocument(_)
                 | ReceiveCgkaOpError::UnknownInvitePrekey(_)
                 | ReceiveCgkaOpError::PendingCgkaAuthorization(_)
@@ -3351,44 +3869,6 @@ fn tree_ops(tree: &Cgka) -> Vec<Arc<SerdeSigned<CgkaOperation>>> {
     tree.ops()
         .map(|batches| batches.into_iter().flatten().collect())
         .unwrap_or_default()
-}
-
-/// Rebuild a tree from archived operations: apply them in causal order, as
-/// far as they go, then adopt the secrets `me` holds for its own leaf. An
-/// operation that does not apply is logged and skipped.
-fn tree_from_ops(
-    doc_id: DocumentId,
-    mut waiting: Vec<Arc<SerdeSigned<CgkaOperation>>>,
-    me: IndividualId,
-    secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-) -> Cgka {
-    let mut tree = Cgka::new(doc_id, me, ShareKeyMap::new());
-    let mut progress = true;
-    while progress {
-        progress = false;
-        waiting.retain(|op| {
-            match apply_one::<core::convert::Infallible>(&mut tree, op.dupe(), me, secrets) {
-                Ok(_) => {
-                    progress = true;
-                    false
-                }
-                Err(ReceiveCgkaOpError::CgkaError(CgkaError::OutOfOrderOperation)) => true,
-                Err(error) => {
-                    tracing::warn!(%doc_id, %error, "an archived operation does not apply");
-                    false
-                }
-            }
-        });
-    }
-    for op in &waiting {
-        tracing::warn!(
-            %doc_id,
-            op = %Digest::hash(op.as_ref()),
-            "an archived operation's predecessors are not in the archive"
-        );
-    }
-    adopt_own_leaf_secrets(&mut tree, me, secrets);
-    tree
 }
 
 /// Merge one operation into `tree`, adopting the secrets `me` holds for the
@@ -3491,14 +3971,27 @@ fn adopt_leaf_secrets<I: IntoIterator<Item = ShareKey>>(
 struct Certificates<K> {
     store: K,
 
-    /// The store version the CGKA trees of the last keyhive to write reflect,
+    /// The store version the CGKA graphs of the last keyhive to write reflect,
     /// or `None` before the first insert. Held across every insert and the
-    /// tree changes that follow it, so a CGKA diff brackets exactly one batch
-    /// and one keyhive's concurrent writes reach its trees in store order. A
-    /// fork and its trunk share it but not their trees (see [`ForkAsync`] for
+    /// CGKA changes that follow it, so a CGKA diff brackets exactly one batch
+    /// and one keyhive's concurrent writes reach its CGKA graphs in store
+    /// order.
+    ///
+    /// Also held while receiving a CGKA operation, throughout a write (from
+    /// issuing the operations implied for the document through encrypting or
+    /// rotating), and in [`Keyhive::add_self_to`], so an operation's citations
+    /// are chosen and signed on the same heads, and no operation merges
+    /// between a write's reconciliation and the write. A fork
+    /// and its trunk share it but not their CGKA graphs (see [`ForkAsync`] for
     /// `Keyhive`). Level 0 in the lock order: nothing takes it while holding
     /// any other lock.
     reconciled: async_lock::Mutex<Option<Version>>,
+
+    /// The certificates CGKA operations cite or may cite, for evaluating them
+    /// over their own certificate sets. Every certificate inserted through a
+    /// keyhive sharing this store is kept here, so forks and their trunk
+    /// agree. A cited certificate missing here is fetched from the store.
+    cited: SharedCitations,
 }
 
 /// One subject's share of selection: its closure, its live members,
@@ -3579,6 +4072,84 @@ impl<E: core::error::Error + 'static> ReceiveCgkaOpError<E> {
     }
 }
 
+/// An error that may say a CGKA lacked a membership answer
+/// ([`CgkaError::MembershipUnknown`]).
+trait LacksKeylineAnswer {
+    /// The cited certificates the CGKA lacked Keyline's answer for.
+    fn lacked(&self) -> Option<&BTreeSet<CitationId>>;
+}
+
+impl LacksKeylineAnswer for CgkaError {
+    fn lacked(&self) -> Option<&BTreeSet<CitationId>> {
+        match self {
+            CgkaError::MembershipUnknown(cited) => Some(cited),
+            _ => None,
+        }
+    }
+}
+
+impl<E: core::error::Error + 'static> LacksKeylineAnswer for ReceiveCgkaOpError<E> {
+    fn lacked(&self) -> Option<&BTreeSet<CitationId>> {
+        match self {
+            ReceiveCgkaOpError::CgkaError(e) => e.lacked(),
+            _ => None,
+        }
+    }
+}
+
+/// Whether an operation whose merge failed with `error` is never retried.
+/// A missing dependency or membership answer may still arrive. Any other
+/// error is taken as final.
+fn never_merges(error: &CgkaError) -> bool {
+    !error.is_missing_dependency() && error.lacked().is_none()
+}
+
+/// A write in progress ([`Keyhive::prepare_to_write`]): the insert lock,
+/// held until the write is finished, and the CGKA operations issued for it,
+/// for the listener once the lock is released.
+struct Writing<'a> {
+    reconciled: Reconciled<'a>,
+    fresh: Vec<Arc<SerdeSigned<CgkaOperation>>>,
+}
+
+/// The held insert lock ([`Certificates::reconciled`]). A function that
+/// must run under it takes this as an argument.
+type Reconciled<'a> = async_lock::MutexGuard<'a, Option<Version>>;
+
+/// Whether all CGKA ops implied by a certificate set were issued.
+#[must_use]
+enum ImpliedCgkaOpsOutcome {
+    /// Every implied operation this replica may sign was issued.
+    Success,
+    /// A member of the CGKA group lacks `Read` in the queried certificate
+    /// set but this replica may not sign the remove.
+    RemoveBlocked,
+}
+
+/// What the next CGKA operation on a document cites, and what follows.
+struct NextCitations {
+    /// The certificates it cites.
+    cited: BTreeSet<CitationId>,
+    /// The readers of the document according to its certificate set.
+    readers: BTreeSet<Identifier>,
+    /// Whether this replica has `Read` in its signing set. It issues the
+    /// operation only then.
+    may_sign: bool,
+}
+
+/// Why issuing the CGKA operations a replica's certificates imply for a
+/// document, or [`Keyhive::add_self_to`], failed.
+#[derive(Debug, Error)]
+pub enum CgkaSyncError<E: core::error::Error + 'static> {
+    /// The Keyline store failed.
+    #[error(transparent)]
+    KeylineStorage(#[from] KeylineStorageError<E>),
+
+    /// The CGKA refused an operation or signing one failed.
+    #[error(transparent)]
+    Cgka(#[from] CgkaError),
+}
+
 /// Why [`Keyhive::cgka_op_is_authorized`] denies a CGKA op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CgkaUnauthorized {
@@ -3614,10 +4185,12 @@ pub enum EncryptContentError {
 mod tests {
     use super::*;
     use crate::{
-        listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
-        test_utils::Hive, transact::transact_async,
+        certificate::route_through,
+        listener::no_listener::NoListener,
+        store::ciphertext::memory::MemoryCiphertextStore,
+        test_utils::{has_remove_citing_its_revocation, Hive},
+        transact::transact_async,
     };
-    use beekem::operation::CgkaOperation;
     use future_form::Sendable;
     use keyhive_codec::traits::Decode;
     use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
@@ -3764,6 +4337,74 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn certificate_sets_evicted_from_long_concurrent_branches_are_rebuilt_unchanged(
+    ) -> TestResult {
+        let (owner, bob, carol) = (
+            make_keyhive().await,
+            make_keyhive().await,
+            make_keyhive().await,
+        );
+        let bob_id = introduce(&owner, &bob).await;
+        let carol_id = introduce(&owner, &carol).await;
+        let doc = owner.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        owner.add_member(bob_id, doc, Power::Read).await?;
+        send(&owner, &bob, true).await?;
+        for i in 0..6 {
+            if i == 3 {
+                owner.add_member(carol_id, doc, Power::Read).await?;
+            }
+            owner.force_pcs_update(doc).await?;
+            bob.force_pcs_update(doc).await?;
+        }
+        send(&bob, &owner, false).await?;
+        owner.force_pcs_update(doc).await?;
+
+        let state = owner
+            .document_state(doc)
+            .await
+            .ok_or("has not joined the CGKA group")?;
+        let locked = state.lock().await;
+        let cgka = locked.cgka();
+        let heads: Vec<_> = cgka.heads().iter().collect();
+        let [merge] = heads[..] else {
+            return Err("the last update merges both branches".into());
+        };
+        let predecessors = cgka
+            .op(merge)
+            .ok_or("the CGKA graph lacks its head")?
+            .payload
+            .predecessors()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let [left, right] = predecessors[..] else {
+            return Err("the last update merges both branches".into());
+        };
+        assert_ne!(
+            CertificateSets::new().predecessor_set(cgka, [&left]),
+            CertificateSets::new().predecessor_set(cgka, [&right]),
+            "the branches cite the same certificates"
+        );
+        let ops: Vec<Digest<SerdeSigned<CgkaOperation>>> = cgka
+            .ops()?
+            .iter()
+            .flat_map(|batch| batch.iter().map(|op| Digest::hash(op.as_ref())))
+            .collect();
+
+        // Fewer sets kept than either branch has operations.
+        let mut sets = CertificateSets::retaining(4, 1024);
+        sets.predecessor_set(cgka, [merge])
+            .ok_or("the CGKA graph lacks an op")?;
+        for op in &ops {
+            assert_eq!(
+                sets.predecessor_set(cgka, [op]),
+                CertificateSets::new().predecessor_set(cgka, [op]),
+                "{op}"
+            );
+        }
+        Ok(())
+    }
+
     /// A lost reader is removed from the tree even when this replica never
     /// received their prekeys: a removal does not need them.
     #[tokio::test]
@@ -3798,12 +4439,23 @@ mod tests {
         );
 
         let update = owner.revoke_member(alice_id, false, doc).await?;
-        assert!(update.cgka_ops().iter().any(|op| matches!(
-            op.payload,
-            CgkaOperation::Remove { ref removed, .. }
-                if removed.iter().any(|r| IndividualId::from(r.id) == bob_id)
-        )));
+        assert!(has_remove_citing_its_revocation(&update));
         assert!(!seated(&owner).await.contains(&bob_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn revoking_a_reader_who_is_not_a_cgka_member_issues_no_remove() -> TestResult {
+        let hive = make_keyhive().await;
+        let group_id = hive.generate_group(vec![]).await?;
+        let doc = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        hive.add_member(group_id, doc, Power::Read).await?;
+
+        let update = hive.revoke_member(group_id, false, doc).await?;
+        assert!(!update
+            .cgka_ops()
+            .iter()
+            .any(|op| matches!(op.payload(), CgkaOperation::Remove { .. })));
         Ok(())
     }
 
@@ -4110,32 +4762,27 @@ mod tests {
         }
 
         assert!(
-            alice
-                .route_through(doc, id(&alice), &to_bob, id(&bob))
+            route_through::<Sendable, _>(alice.keyline(), doc, id(&alice), &to_bob, id(&bob))
                 .await?,
             "the audience"
         );
         assert!(
-            alice
-                .route_through(doc, id(&alice), &to_bob, id(&carol))
+            route_through::<Sendable, _>(alice.keyline(), doc, id(&alice), &to_bob, id(&carol))
                 .await?,
             "someone the audience admitted"
         );
         assert!(
-            alice
-                .route_through(doc, id(&alice), &to_group, id(&dave))
+            route_through::<Sendable, _>(alice.keyline(), doc, id(&alice), &to_group, id(&dave))
                 .await?,
             "a member of the audience"
         );
         assert!(
-            !alice
-                .route_through(doc, id(&alice), &to_bob, id(&dave))
+            !route_through::<Sendable, _>(alice.keyline(), doc, id(&alice), &to_bob, id(&dave))
                 .await?,
             "Dave's route does not pass through the grant to Bob"
         );
         assert!(
-            !alice
-                .route_through(doc, id(&alice), &to_group, id(&carol))
+            !route_through::<Sendable, _>(alice.keyline(), doc, id(&alice), &to_group, id(&carol))
                 .await?,
             "nor Carol's through the grant to the group"
         );
@@ -4170,6 +4817,60 @@ mod tests {
         assert_eq!(
             keyline_members(&loaded, doc_id).await,
             keyline_members(&hive, doc_id).await
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_archived_operation_built_on_one_awaiting_a_certificate_waits_with_it() -> TestResult
+    {
+        let hive = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let bob_id = introduce(&hive, &bob).await;
+        let doc_id = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        hive.add_member(Identifier::from(bob_id), doc_id, Power::Read)
+            .await?;
+        hive.force_pcs_update(doc_id).await?;
+
+        let mut archive = hive.into_archive().await?;
+        let bob_member = beekem::id::MemberId::from(bob_id);
+        let add_of_bob = archive
+            .cgka_ops
+            .iter()
+            .find(|op| matches!(op.payload, CgkaOperation::Add { added_id, .. } if added_id == bob_member))
+            .ok_or("bob was added")?;
+        let cited: BTreeSet<CitationId> = add_of_bob.payload.citations().iter().copied().collect();
+        let update = archive
+            .cgka_ops
+            .iter()
+            .find(|op| {
+                op.payload
+                    .predecessors()
+                    .contains(&Digest::hash(add_of_bob))
+            })
+            .ok_or("an update follows the add of bob")?
+            .clone();
+        archive
+            .certificates
+            .retain(|cert| !cited.contains(&citation_of(cert.id())));
+
+        let signer = hive.active.signer.clone();
+        let loaded: TestKeyhive = Keyhive::try_from_archive(
+            &archive,
+            signer,
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            MemoryKeyline::new(),
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await?;
+
+        let pending = loaded.pending_events.lock().await;
+        assert!(
+            pending.iter().any(
+                |event| matches!(event.as_ref(), StaticEvent::CgkaOperation(op) if **op == update)
+            ),
+            "the update built on the add of bob was discarded"
         );
         Ok(())
     }
@@ -4817,7 +5518,7 @@ mod tests {
         use core::convert::Infallible;
 
         let doc = DocumentId::generate(&mut rand::rngs::OsRng);
-        let cases: [(ReceiveStaticEventError<Infallible>, bool, bool); 5] = [
+        let cases: [(ReceiveStaticEventError<Infallible>, bool, bool); 6] = [
             (
                 ReceiveCgkaOpError::UnknownDocument(Box::new(doc)).into(),
                 true,
@@ -4832,6 +5533,11 @@ mod tests {
                 ReceiveCgkaOpError::CgkaError(CgkaError::InvalidPathLength).into(),
                 false,
                 true,
+            ),
+            (
+                ReceiveCgkaOpError::CgkaError(CgkaError::MembershipUnknown(BTreeSet::new())).into(),
+                false,
+                false,
             ),
             (
                 ReceiveCgkaOpError::UnauthorizedCgkaOp(Box::new(doc)).into(),
@@ -5130,20 +5836,17 @@ mod tests {
 
         let update = alice.revoke_member(bob_id, true, doc).await?;
 
-        let removed_vks: HashSet<_> = update
-            .cgka_ops()
-            .iter()
-            .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove { removed, .. } => Some(removed),
-                _ => None,
-            })
-            .flatten()
-            .map(|removed| removed.id.verifying_key())
-            .collect();
-
         assert!(
-            removed_vks.contains(&bob_id.verifying_key()),
-            "revoking Bob should report his removal in the update's CGKA ops"
+            has_remove_citing_its_revocation(&update),
+            "revoking Bob should report a CGKA remove citing it in the update"
+        );
+        assert!(
+            !alice
+                .cgka_members_for(doc)
+                .await?
+                .ok_or("has not joined the CGKA group")?
+                .contains(&bob_id),
+            "Bob is still in the CGKA group"
         );
 
         Ok(())
@@ -5171,21 +5874,18 @@ mod tests {
 
         let update = alice.revoke_member(inner_id, true, outer_id).await?;
 
-        let removed_vks: HashSet<_> = update
-            .cgka_ops()
-            .iter()
-            .filter_map(|op| match op.payload() {
-                CgkaOperation::Remove { removed, .. } => Some(removed),
-                _ => None,
-            })
-            .flatten()
-            .map(|removed| removed.id.verifying_key())
-            .collect();
-
+        assert!(
+            has_remove_citing_its_revocation(&update),
+            "revoking the subgroup should report a CGKA remove citing it in the update"
+        );
+        let members = alice
+            .cgka_members_for(doc)
+            .await?
+            .ok_or("has not joined the CGKA group")?;
         for (who, id) in [("dave", dave_id), ("eve", eve_id)] {
             assert!(
-                removed_vks.contains(&id.verifying_key()),
-                "{who} came in through the revoked subgroup and their removal was not reported"
+                !members.contains(&id),
+                "{who} came in through the revoked subgroup and is still in the CGKA group"
             );
         }
 
@@ -5273,10 +5973,9 @@ mod tests {
         Ok(())
     }
 
-    /// `add_member` must refuse when the document's CGKA state is missing rather
-    /// than proceed without it.
     #[tokio::test]
-    async fn test_add_member_refuses_when_the_key_agreement_is_not_initialized() -> TestResult {
+    async fn a_reader_added_before_joining_the_cgka_group_is_added_at_the_next_write() -> TestResult
+    {
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -5300,16 +5999,69 @@ mod tests {
 
         let carol_card = make_keyhive().await.get_existing_contact_card().await;
         let carol = bob.receive_contact_card(&carol_card).await?;
-        let result = bob.add_member(carol, project_id, Power::Read).await;
+        let update = bob.add_member(carol, project_id, Power::Read).await?;
 
+        assert!(update.cgka_ops.is_empty());
+
+        send(&alice, &bob, true).await?;
+        bob.try_encrypt_content(project_id, &[2u8; 32], &vec![[1u8; 32]], b"after joining")
+            .await?;
+        let members = bob
+            .cgka_members_for(project_id)
+            .await?
+            .ok_or("bob has not joined the project's CGKA group")?;
+        assert!(members.contains(&carol));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_fork_and_its_trunk_keep_each_others_cgka_group_members() -> TestResult {
+        let alice = make_keyhive().await;
+        let (bob, carol) = (make_keyhive().await, make_keyhive().await);
+        let bob_id = introduce(&alice, &bob).await;
+        let carol_id = introduce(&alice, &carol).await;
+        let doc = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        alice.add_member(bob_id, doc, Power::Read).await?;
+        let trunk = Arc::new(Mutex::new(alice));
+
+        transact_async(
+            &trunk,
+            |fork: Keyhive<Sendable, _, _, _, _, Log<[u8; 32]>, _, _>| async move {
+                let members = fork
+                    .cgka_members_for(doc)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if !members.is_some_and(|s| s.contains(&bob_id)) {
+                    return Err("the fork's CGKA group lost bob".to_string());
+                }
+                fork.add_member(carol_id, doc, Power::Read)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>(fork)
+            },
+        )
+        .await?;
+
+        // Writing issues the operations the trunk's certificates imply for the
+        // document, which would remove carol if the trunk lacked the
+        // certificates the fork inserted.
+        let trunk = trunk.lock().await;
+        trunk
+            .try_encrypt_content(doc, &[2u8; 32], &vec![], b"after the fork")
+            .await?;
+        let members = trunk
+            .cgka_members_for(doc)
+            .await?
+            .ok_or("has not joined the CGKA group")?;
         assert!(
-            matches!(
-                result,
-                Err(AddMemberError::CgkaError(CgkaError::NotInitialized))
-            ),
-            "expected a non-initialized CGKA error, got {result:?}"
+            members.contains(&bob_id),
+            "bob is not a member of the CGKA group"
         );
-
+        assert!(
+            members.contains(&carol_id),
+            "carol is not a member of the CGKA group"
+        );
         Ok(())
     }
 
