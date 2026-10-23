@@ -10,23 +10,22 @@
 #![deny(unreachable_pub)]
 #![allow(clippy::type_complexity)]
 
-pub mod access;
 pub mod all_agent_events;
 pub mod archive;
+pub mod certificate;
 pub mod cgka;
 pub mod contact_card;
 pub mod content;
 pub mod crypto;
 pub mod error;
 pub mod event;
-pub mod invocation;
 pub mod keyhive;
 pub mod listener;
 pub mod principal;
-pub mod reversed;
 pub mod stats;
 pub mod store;
 pub mod transact;
+pub mod update;
 pub mod util;
 
 #[cfg(any(test, feature = "test_utils"))]

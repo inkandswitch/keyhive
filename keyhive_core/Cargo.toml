@@ -16,6 +16,9 @@ rust-version.workspace = true
 beekem = { workspace = true, features = ["std"] }
 keyhive_codec = { workspace = true, features = ["std"] }
 keyhive_crypto = { workspace = true, features = ["serde", "std"] }
+keyline = { workspace = true, features = ["serde", "std"] }
+# The in-memory Keyline store, for the test helpers.
+keyline_memory = { workspace = true, features = ["std"], optional = true }
 
 # Docs
 aquamarine = { workspace = true, optional = true }
@@ -36,6 +39,7 @@ x25519-dalek = { workspace = true }
 thiserror = { workspace = true }
 
 # Utilities
+async-lock = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true, features = ["std"] }
 derive-where = { workspace = true }
@@ -53,13 +57,15 @@ prettytable-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 beekem = { workspace = true, features = ["arbitrary", "std"] }
-bolero = { workspace = true }
 keyhive_codec = { workspace = true, features = ["laws", "std"] }
 keyhive_core = { path = ".", features = ["test_utils", "debug_events"] }
 keyhive_crypto = { workspace = true, features = ["arbitrary", "std"] }
 test-utils = { workspace = true }
 
 arbitrary.workspace = true
+bolero.workspace = true
+keyline = { workspace = true, features = ["arbitrary", "serde", "std", "test_utils"] }
+keyline_memory = { workspace = true, features = ["std"] }
 lazy_static = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tokio-test = { workspace = true }
@@ -75,9 +81,10 @@ tracing-subscriber = { workspace = true, features = ["ansi", "env-filter"] }
 
 [features]
 default = []
+arbitrary = ["dep:arbitrary", "keyline/arbitrary"]
 debug_events = ["prettytable-rs"]
 mermaid_docs = ["aquamarine"]
-test_utils = ["beekem/test_utils", "proptest", "proptest-derive"]
+test_utils = ["beekem/test_utils", "dep:keyline_memory", "proptest", "proptest-derive"]
 
 [[bench]]
 name = "bench_cgka"
@@ -100,17 +107,12 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
-name = "bench_reverse_topsort"
-harness = false
-required-features = ["test_utils"]
-
-[[bench]]
 name = "bench_reachable_prekey_ops_all"
 harness = false
 required-features = ["test_utils"]
 
 [[bench]]
-name = "bench_membership_ops_all"
+name = "bench_event_selection"
 harness = false
 required-features = ["test_utils"]
 

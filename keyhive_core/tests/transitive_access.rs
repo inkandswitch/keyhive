@@ -1,14 +1,24 @@
-use dupe::Dupe;
+use beekem::operation::CgkaAuthorization;
+use future_form::Sendable;
 use keyhive_core::{
-    access::Access,
     event::static_event::StaticEvent,
-    principal::{agent::Agent, document::id::DocumentId},
-    test_utils::make_simple_keyhive,
+    keyhive::Keyhive,
+    listener::no_listener::NoListener,
+    principal::{
+        document::id::DocumentId,
+        individual::{id::IndividualId, op::KeyOp, IndividualState},
+    },
+    store::ciphertext::memory::MemoryCiphertextStore,
+    test_utils::{make_simple_keyhive, Hive, TestContext},
 };
 use keyhive_crypto::{
-    identifier::Identifier, signer::memory::MemorySigner, verifiable::Verifiable,
+    identifier::Identifier, signer::memory::MemorySigner, verifiable::Verifiable, verified::Signed,
 };
+use keyline::{contract::Keyline, delegation::Delegation, power::Power};
+use keyline_memory::MemoryKeyline;
 use nonempty::nonempty;
+use rand::rngs::OsRng;
+use std::collections::HashMap;
 use testresult::TestResult;
 
 #[tokio::test]
@@ -33,79 +43,35 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
     // │       Doc B         │◀─────────┘
     // └─────────────────────┘
     // Test: After Bob adds Carol, Bob should also be able to revoke Carol.
+    // Bob writes on his own replica, and Alice learns of it by sync.
     test_utils::init_logging();
-
-    let bob_signer = MemorySigner::generate(&mut rand::rngs::OsRng);
-
-    let alice = make_simple_keyhive().await?;
-    let bob = keyhive_core::keyhive::Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
-        bob_signer.clone(),
-        keyhive_core::store::ciphertext::memory::MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
-        keyhive_core::listener::no_listener::NoListener,
-        rand::rngs::OsRng,
-    )
-    .await?;
-    let carol = make_simple_keyhive().await?;
-
-    let bob_contact = bob.generate_contact_card().await?;
-    let bob_id = alice.receive_contact_card(&bob_contact).await?;
-
-    let carol_contact = carol.generate_contact_card().await?;
-    let carol_id = alice.receive_contact_card(&carol_contact).await?;
-    let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
+    let (alice, bob, carol_id, alice_on_bob, bob_on_alice) = cast().await?;
 
     let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
-
     let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b = alice.get_document(doc_b_id).await.expect("just created");
-
-    // Alice adds Doc A as Admin of Doc B, Bob as Admin of Doc A
+    alice.add_member(doc_a_id, doc_b_id, Power::Admin).await?;
     alice
-        .add_member(doc_a_id, doc_b_id, Access::Admin, &[])
+        .add_member(bob_on_alice, doc_a_id, Power::Admin)
         .await?;
-    alice
-        .add_member(bob_id, doc_a_id, Access::Admin, &[])
+    bob.ingest_event_table(alice.events_for_agent(bob_on_alice).await?)
         .await?;
 
-    // Bob adds Carol to Doc B
-    {
-        let mut locked = doc_b.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(carol_id, carol_on_alice.dupe()),
-                Access::Edit,
-                &bob_signer,
-                &[],
-            )
-            .await?;
-    }
-
-    // Verify Carol can reach Doc B
-    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await;
+    bob.add_member(carol_id, doc_b_id, Power::Edit).await?;
+    alice
+        .ingest_event_table(bob.events_for_agent(alice_on_bob).await?)
+        .await?;
     assert_eq!(
-        carol_reachable.len(),
+        alice.docs_reachable_by_agent(carol_id).await?.len(),
         1,
         "Carol should reach Doc B before revoke"
     );
 
-    // Bob revokes Carol from Doc B
-    {
-        let carol_identifier: Identifier = carol_id.into();
-        let mut locked = doc_b.lock().await;
-        locked
-            .revoke_member(
-                carol_identifier,
-                true,
-                &bob_signer,
-                &mut std::collections::BTreeMap::new(),
-            )
-            .await?;
-    }
-
-    // Verify Carol can no longer reach Doc B
-    let carol_reachable_after = alice.docs_reachable_by_agent(carol_id).await;
+    bob.revoke_member(carol_id, true, doc_b_id).await?;
+    alice
+        .ingest_event_table(bob.events_for_agent(alice_on_bob).await?)
+        .await?;
     assert_eq!(
-        carol_reachable_after.len(),
+        alice.docs_reachable_by_agent(carol_id).await?.len(),
         0,
         "Carol should not reach Doc B after revoke"
     );
@@ -117,70 +83,33 @@ async fn test_transitive_admin_can_revoke() -> TestResult {
 async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
     // Same as above but with Group as intermediary.
     test_utils::init_logging();
-
-    let bob_signer = MemorySigner::generate(&mut rand::rngs::OsRng);
-
-    let alice = make_simple_keyhive().await?;
-    let bob = keyhive_core::keyhive::Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
-        bob_signer.clone(),
-        keyhive_core::store::ciphertext::memory::MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
-        keyhive_core::listener::no_listener::NoListener,
-        rand::rngs::OsRng,
-    )
-    .await?;
-    let carol = make_simple_keyhive().await?;
-
-    let bob_contact = bob.generate_contact_card().await?;
-    let bob_id = alice.receive_contact_card(&bob_contact).await?;
-
-    let carol_contact = carol.generate_contact_card().await?;
-    let carol_id = alice.receive_contact_card(&carol_contact).await?;
-    let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
+    let (alice, bob, carol_id, alice_on_bob, bob_on_alice) = cast().await?;
 
     let group_id = alice.generate_group(vec![]).await?;
-
     let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
-    let doc_b = alice.get_document(doc_b_id).await.expect("just created");
-
-    // Alice adds Group G as Admin of Doc B, Bob as Admin of Group G
+    alice.add_member(group_id, doc_b_id, Power::Admin).await?;
     alice
-        .add_member(group_id, doc_b_id, Access::Admin, &[])
+        .add_member(bob_on_alice, group_id, Power::Admin)
         .await?;
-    alice
-        .add_member(bob_id, group_id, Access::Admin, &[])
+    bob.ingest_event_table(alice.events_for_agent(bob_on_alice).await?)
         .await?;
 
-    // Bob adds Carol to Doc B
-    {
-        let mut locked = doc_b.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(carol_id, carol_on_alice.dupe()),
-                Access::Edit,
-                &bob_signer,
-                &[],
-            )
-            .await?;
-    }
-
-    // Bob revokes Carol from Doc B
-    {
-        let carol_identifier: Identifier = carol_id.into();
-        let mut locked = doc_b.lock().await;
-        locked
-            .revoke_member(
-                carol_identifier,
-                true,
-                &bob_signer,
-                &mut std::collections::BTreeMap::new(),
-            )
-            .await?;
-    }
-
-    // Verify Carol can no longer reach Doc B
-    let carol_reachable = alice.docs_reachable_by_agent(carol_id).await;
+    bob.add_member(carol_id, doc_b_id, Power::Edit).await?;
+    alice
+        .ingest_event_table(bob.events_for_agent(alice_on_bob).await?)
+        .await?;
     assert_eq!(
-        carol_reachable.len(),
+        alice.docs_reachable_by_agent(carol_id).await?.len(),
+        1,
+        "Carol should reach Doc B before revoke"
+    );
+
+    bob.revoke_member(carol_id, true, doc_b_id).await?;
+    alice
+        .ingest_event_table(bob.events_for_agent(alice_on_bob).await?)
+        .await?;
+    assert_eq!(
+        alice.docs_reachable_by_agent(carol_id).await?.len(),
         0,
         "Carol should not reach Doc B after revoke"
     );
@@ -188,17 +117,33 @@ async fn test_transitive_admin_can_revoke_via_group() -> TestResult {
     Ok(())
 }
 
+/// Alice and Bob, each known to the other, and Carol, known to both. Returns
+/// the two keyhives, Carol's id, Alice's id on Bob, and Bob's id on Alice.
+async fn cast(
+) -> Result<(Hive, Hive, IndividualId, IndividualId, IndividualId), Box<dyn std::error::Error>> {
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let carol = make_simple_keyhive().await?;
+
+    let bob_on_alice = alice
+        .receive_contact_card(&bob.generate_contact_card().await?)
+        .await?;
+    let alice_on_bob = bob
+        .receive_contact_card(&alice.generate_contact_card().await?)
+        .await?;
+    let carol_card = carol.generate_contact_card().await?;
+    let carol_id = alice.receive_contact_card(&carol_card).await?;
+    bob.receive_contact_card(&carol_card).await?;
+
+    Ok((alice, bob, carol_id, alice_on_bob, bob_on_alice))
+}
+
 #[tokio::test]
 async fn test_deep_chain_revocation() -> TestResult {
-    // Regression test: the old add_revocation proof chain validation used a
-    // try_fold that returned the outer `proof` variable instead of advancing
-    // to `next_proof`. This kept `head` stuck at the first element, causing
-    // valid revocations to be rejected when the proof's lineage had 2+ hops.
-    //
-    // Chain: Alice (owner) → Bob → Carol → Dave → Eve
-    // Carol revokes Eve. The revocation proof is Carol→Dave, whose lineage
-    // is [Bob→Carol, Alice→Bob]. At hop 2, the old code compared Carol's
-    // key (stuck head) against Bob (Alice→Bob's delegate) and failed.
+    // Chain: Alice (owner) → Bob → Carol → Dave → Eve, each link written by
+    // its issuer's own replica. Carol revokes Eve: her standing is three hops
+    // from the group, and her revocation still reaches Eve's delegation,
+    // which hangs off a node Carol holds Admin over.
     //
     // ┌─────────┐
     // │  Alice  │  (Group owner)
@@ -223,120 +168,39 @@ async fn test_deep_chain_revocation() -> TestResult {
     // ┌─────────┐
     // │   Eve   │  ← revoked
     // └─────────┘
-    test_utils::init_logging();
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let dave = ctx.individual("dave").await?;
+    let eve = ctx.individual("eve").await?;
+    let group = ctx.group(&alice, "group").await?;
 
-    let bob_signer = MemorySigner::generate(&mut rand::rngs::OsRng);
-    let carol_signer = MemorySigner::generate(&mut rand::rngs::OsRng);
-    let dave_signer = MemorySigner::generate(&mut rand::rngs::OsRng);
-
-    let alice = make_simple_keyhive().await?;
-    let bob = keyhive_core::keyhive::Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
-        bob_signer.clone(),
-        keyhive_core::store::ciphertext::memory::MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
-        keyhive_core::listener::no_listener::NoListener,
-        rand::rngs::OsRng,
-    )
-    .await?;
-    let carol =
-        keyhive_core::keyhive::Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
-            carol_signer.clone(),
-            keyhive_core::store::ciphertext::memory::MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
-            keyhive_core::listener::no_listener::NoListener,
-            rand::rngs::OsRng,
-        )
-        .await?;
-    let dave = keyhive_core::keyhive::Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
-        dave_signer.clone(),
-        keyhive_core::store::ciphertext::memory::MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
-        keyhive_core::listener::no_listener::NoListener,
-        rand::rngs::OsRng,
-    )
-    .await?;
-    let eve = make_simple_keyhive().await?;
-
-    // Register everyone on Alice's keyhive
-    let bob_contact = bob.generate_contact_card().await?;
-    let bob_id = alice.receive_contact_card(&bob_contact).await?;
-
-    let carol_contact = carol.generate_contact_card().await?;
-    let carol_id = alice.receive_contact_card(&carol_contact).await?;
-    let carol_on_alice = alice.get_individual(carol_id).await.expect("just received");
-
-    let dave_contact = dave.generate_contact_card().await?;
-    let dave_id = alice.receive_contact_card(&dave_contact).await?;
-    let dave_on_alice = alice.get_individual(dave_id).await.expect("just received");
-
-    let eve_contact = eve.generate_contact_card().await?;
-    let eve_id = alice.receive_contact_card(&eve_contact).await?;
-    let eve_on_alice = alice.get_individual(eve_id).await.expect("just received");
-
-    // Alice creates Group G
-    let group_id = alice.generate_group(vec![]).await?;
-    let group = alice.get_group(group_id).await.expect("just created");
-
-    // Build the 5-level chain: Alice → Bob → Carol → Dave → Eve
-    alice
-        .add_member(bob_id, group_id, Access::Admin, &[])
-        .await?;
-
-    {
-        let mut locked = group.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(carol_id, carol_on_alice.dupe()),
-                Access::Admin,
-                &bob_signer,
-                &[],
-            )
-            .await?;
+    for (issuer, audience, power) in [
+        (&alice, &bob, Power::Admin),
+        (&bob, &carol, Power::Admin),
+        (&carol, &dave, Power::Admin),
+        (&dave, &eve, Power::Edit),
+    ] {
+        issuer.add_member(audience.id(), group, power).await?;
+        ctx.sync_all_unsent().await?;
     }
-
-    {
-        let mut locked = group.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(dave_id, dave_on_alice.dupe()),
-                Access::Admin,
-                &carol_signer,
-                &[],
-            )
-            .await?;
-    }
-
-    {
-        let mut locked = group.lock().await;
-        locked
-            .add_member(
-                Agent::Individual(eve_id, eve_on_alice.dupe()),
-                Access::Edit,
-                &dave_signer,
-                &[],
-            )
-            .await?;
-    }
-
-    // Carol revokes Eve — proof is Carol→Dave, lineage [Bob→Carol, Alice→Bob].
-    // The old buggy fold would reject this at the second lineage hop.
-    {
-        let eve_identifier: Identifier = eve_id.into();
-        let mut locked = group.lock().await;
-        locked
-            .revoke_member(
-                eve_identifier,
-                true,
-                &carol_signer,
-                &std::collections::BTreeMap::new(),
-            )
-            .await?;
-    }
-
-    // Verify Eve is no longer a member
-    let members = { group.lock().await.members().clone() };
-    assert!(
-        !members.contains_key(&eve_id.into()),
-        "Eve should no longer be a member after revocation"
+    assert_eq!(
+        alice.reachable_members(group).await?.get(&eve.id().into()),
+        Some(&Power::Edit),
+        "Eve is a member at the end of the chain"
     );
 
+    carol.revoke_member(eve.id(), true, group).await?;
+    ctx.sync_all_unsent().await?;
+
+    assert!(
+        !alice
+            .reachable_members(group)
+            .await?
+            .contains_key(&eve.id().into()),
+        "Eve should no longer be a member after revocation"
+    );
     Ok(())
 }
 
@@ -353,90 +217,74 @@ async fn test_concurrent_cgka_adds_merge_correctly() -> TestResult {
 
     // Cross-register
     let bob_prekey_op = bob.expand_prekeys().await?;
-    let bob_on_alice = std::sync::Arc::new(futures::lock::Mutex::new(
-        keyhive_core::principal::individual::Individual::new(
-            keyhive_core::principal::individual::op::KeyOp::Add(bob_prekey_op),
-        ),
-    ));
-    let bob_on_alice_id = bob_on_alice.lock().await.id();
-    assert!(alice.register_individual(bob_on_alice.dupe()).await);
+    let bob_on_alice = IndividualState::new(KeyOp::Add(bob_prekey_op));
+    let bob_on_alice_id = bob_on_alice.id();
+    assert!(alice.register_individual(bob_on_alice).await);
 
     let alice_prekey_op = alice.expand_prekeys().await?;
-    let alice_on_bob = std::sync::Arc::new(futures::lock::Mutex::new(
-        keyhive_core::principal::individual::Individual::new(
-            keyhive_core::principal::individual::op::KeyOp::Add(alice_prekey_op),
-        ),
-    ));
-    let alice_on_bob_id = alice_on_bob.lock().await.id();
-    assert!(bob.register_individual(alice_on_bob.dupe()).await);
+    let alice_on_bob = IndividualState::new(KeyOp::Add(alice_prekey_op));
+    let alice_on_bob_id = alice_on_bob.id();
+    assert!(bob.register_individual(alice_on_bob).await);
 
     // Alice creates doc, adds Bob as Admin
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
 
     alice
-        .add_member(bob_on_alice_id, doc_id, Access::Admin, &[])
+        .add_member(bob_on_alice_id, doc_id, Power::Admin)
         .await?;
 
     // Share ALL events (including CGKA) to Bob so his CGKA is initialized
-    let events_for_bob = alice.events_for_agent(bob_on_alice_id).await;
+    let events_for_bob = alice.events_for_agent(bob_on_alice_id).await?;
     bob.ingest_event_table(events_for_bob).await?;
 
     // Now both have the doc with CGKA initialized.
     // Alice adds Carol concurrently with Bob adding Dave.
     let carol = make_simple_keyhive().await?;
     let carol_prekey_op = carol.expand_prekeys().await?;
-    let carol_on_alice = std::sync::Arc::new(futures::lock::Mutex::new(
-        keyhive_core::principal::individual::Individual::new(
-            keyhive_core::principal::individual::op::KeyOp::Add(carol_prekey_op.clone()),
-        ),
-    ));
-    let carol_on_alice_id = carol_on_alice.lock().await.id();
-    assert!(alice.register_individual(carol_on_alice.dupe()).await);
+    let carol_on_alice = IndividualState::new(KeyOp::Add(carol_prekey_op.clone()));
+    let carol_on_alice_id = carol_on_alice.id();
+    assert!(alice.register_individual(carol_on_alice).await);
 
     // Also register Carol on Bob
-    let carol_on_bob = std::sync::Arc::new(futures::lock::Mutex::new(
-        keyhive_core::principal::individual::Individual::new(
-            keyhive_core::principal::individual::op::KeyOp::Add(carol_prekey_op),
-        ),
-    ));
-    assert!(bob.register_individual(carol_on_bob.dupe()).await);
+    let carol_on_bob = IndividualState::new(KeyOp::Add(carol_prekey_op));
+    assert!(bob.register_individual(carol_on_bob).await);
 
     // Alice adds Carol as Edit member
     alice
-        .add_member(carol_on_alice_id, doc_id, Access::Edit, &[])
+        .add_member(carol_on_alice_id, doc_id, Power::Edit)
         .await?;
 
     let dave = make_simple_keyhive().await?;
-    let dave_id = bob
-        .receive_contact_card(&dave.get_existing_contact_card().await)
-        .await?;
+    let dave_on_bob = IndividualState::new(KeyOp::Add(dave.expand_prekeys().await?));
+    let dave_id = dave_on_bob.id();
+    assert!(bob.register_individual(dave_on_bob).await);
 
     // Bob adds Dave as Read member (concurrently, before syncing)
-    bob.add_member(dave_id, doc_id, Access::Read, &[]).await?;
+    bob.add_member(dave_id, doc_id, Power::Read).await?;
 
     // Now sync: Alice sends to Bob, Bob sends to Alice
-    let events_alice_to_bob = alice.events_for_agent(bob_on_alice_id).await;
-    let events_bob_to_alice = bob.events_for_agent(alice_on_bob_id).await;
+    let events_alice_to_bob = alice.events_for_agent(bob_on_alice_id).await?;
+    let events_bob_to_alice = bob.events_for_agent(alice_on_bob_id).await?;
 
     bob.ingest_event_table(events_alice_to_bob).await?;
     alice.ingest_event_table(events_bob_to_alice).await?;
 
     // Both should see Carol and Dave on the doc
-    let alice_reachable = alice.docs_reachable_by_agent(carol_on_alice_id).await;
+    let alice_reachable = alice.docs_reachable_by_agent(carol_on_alice_id).await?;
     assert_eq!(
         alice_reachable.len(),
         1,
         "Alice should see Carol on the doc"
     );
 
-    let alice_dave_reachable = alice.docs_reachable_by_agent(dave_id).await;
+    let alice_dave_reachable = alice.docs_reachable_by_agent(dave_id).await?;
     assert_eq!(
         alice_dave_reachable.len(),
         1,
         "Alice should see Dave on the doc after ingesting Bob's events"
     );
 
-    let bob_dave_reachable = bob.docs_reachable_by_agent(dave_id).await;
+    let bob_dave_reachable = bob.docs_reachable_by_agent(dave_id).await?;
     assert_eq!(
         bob_dave_reachable.len(),
         1,
@@ -466,8 +314,8 @@ async fn a_peer_that_started_its_own_tree_converges_when_the_creators_ops_arrive
 
 async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResult {
     let mut signers = [
-        MemorySigner::generate(&mut rand::rngs::OsRng),
-        MemorySigner::generate(&mut rand::rngs::OsRng),
+        MemorySigner::generate(&mut OsRng),
+        MemorySigner::generate(&mut OsRng),
     ];
     signers.sort_by_key(|signer| signer.verifying_key().to_bytes());
     let [first, second] = signers;
@@ -477,39 +325,33 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         (second, first)
     };
 
-    let alice = keyhive_core::keyhive::Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
+    let alice = Keyhive::<Sendable, _, _, _, _, _, _, _>::generate(
         alice_signer,
-        keyhive_core::store::ciphertext::memory::MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
-        keyhive_core::listener::no_listener::NoListener,
-        rand::rngs::OsRng,
+        MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
+        NoListener,
+        MemoryKeyline::new(),
+        OsRng,
     )
     .await?;
-    let bob = keyhive_core::keyhive::Keyhive::<future_form::Sendable, _, _, _, _, _, _>::generate(
+    let bob = Keyhive::<Sendable, _, _, _, _, _, _, _>::generate(
         bob_signer.clone(),
-        keyhive_core::store::ciphertext::memory::MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
-        keyhive_core::listener::no_listener::NoListener,
-        rand::rngs::OsRng,
+        MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
+        NoListener,
+        MemoryKeyline::new(),
+        OsRng,
     )
     .await?;
 
     // Cross-register
     let bob_prekey_op = bob.expand_prekeys().await?;
-    let bob_on_alice = std::sync::Arc::new(futures::lock::Mutex::new(
-        keyhive_core::principal::individual::Individual::new(
-            keyhive_core::principal::individual::op::KeyOp::Add(bob_prekey_op),
-        ),
-    ));
-    let bob_on_alice_id = bob_on_alice.lock().await.id();
-    assert!(alice.register_individual(bob_on_alice.dupe()).await);
+    let bob_on_alice = IndividualState::new(KeyOp::Add(bob_prekey_op));
+    let bob_on_alice_id = bob_on_alice.id();
+    assert!(alice.register_individual(bob_on_alice).await);
 
     let alice_prekey_op = alice.expand_prekeys().await?;
-    let alice_on_bob = std::sync::Arc::new(futures::lock::Mutex::new(
-        keyhive_core::principal::individual::Individual::new(
-            keyhive_core::principal::individual::op::KeyOp::Add(alice_prekey_op),
-        ),
-    ));
-    let alice_on_bob_id = alice_on_bob.lock().await.id();
-    assert!(bob.register_individual(alice_on_bob.dupe()).await);
+    let alice_on_bob = IndividualState::new(KeyOp::Add(alice_prekey_op));
+    let alice_on_bob_id = alice_on_bob.id();
+    assert!(bob.register_individual(alice_on_bob).await);
 
     // Alice creates the doc with Bob as a co-founder, so Bob holds a founding
     // delegation he may enact himself.
@@ -518,56 +360,61 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         .await?;
 
     // Share only delegation events (no CGKA) to Bob
-    let events_for_bob = alice.events_for_agent(bob_on_alice_id).await;
-    let events_without_cgka: std::collections::HashMap<_, _> = events_for_bob
+    let events_for_bob = alice.events_for_agent(bob_on_alice_id).await?;
+    let events_without_cgka: HashMap<_, _> = events_for_bob
         .into_iter()
         .filter(|(_, event)| !matches!(event, keyhive_core::event::Event::CgkaOperation(_)))
         .collect();
     bob.ingest_event_table(events_without_cgka).await?;
 
-    // Bob has the doc but with cgka=None
-    let doc_on_bob = bob.get_document(doc_id).await.unwrap();
+    // Without key agreement, the document is not yet a document to Bob.
+    assert!(bob.get_document(doc_id).await.is_none());
 
     // Bob starts his own tree. His add has no predecessors, so it is a
     // causal root of the operation graph.
     {
-        let bob_active_id = bob.active().lock().await.id();
+        let bob_active_id = bob.active().id();
         let bob_pk = bob
             .active()
-            .lock()
-            .await
             .pick_prekey(doc_id)
             .await
             .expect("bob has prekeys");
-        let bob_founding = doc_on_bob
-            .lock()
-            .await
-            .get_capability(&Identifier::from(bob_active_id))
-            .ok_or("bob holds a founding delegation")?
-            .digest()
-            .into();
+        // Bob's founding delegation: the document's Keyline root edge to him.
+        let doc_kl = Identifier::from(doc_id);
+        let bob_founding: [u8; 32] = Keyline::<Sendable>::delegations_to(
+            bob.keyline(),
+            doc_kl,
+            Identifier::from(bob_active_id),
+        )
+        .await?
+        .value
+        .into_iter()
+        .find(|(_, (issuer, _))| *issuer == doc_kl)
+        .ok_or("bob holds a founding delegation")?
+        .0
+        .into();
 
         let mut bob_tree =
             keyhive_core::cgka::Cgka::new(doc_id, bob_active_id, beekem::keys::ShareKeyMap::new());
         let bob_add = bob_tree
-            .add::<future_form::Sendable, _>(
+            .add::<Sendable, _>(
                 bob_active_id,
                 bob_pk,
-                beekem::operation::CgkaAuthorization::Delegation(bob_founding),
+                CgkaAuthorization::Delegation(bob_founding),
                 &bob_signer,
             )
             .await?
             .ok_or("bob is not yet in his own tree, so adding him yields an op")?;
 
-        doc_on_bob
-            .lock()
-            .await
-            .merge_cgka_op(std::sync::Arc::new(bob_add), bob_active_id)?;
+        // His add is authorized by his founding delegation, so it makes the
+        // document known to him.
+        bob.receive_cgka_op(bob_add).await?;
+        assert!(bob.get_document(doc_id).await.is_some());
     }
 
     // Now Alice sends her CGKA ops to Bob, starting with her add of herself
-    let all_events_for_bob = alice.events_for_agent(bob_on_alice_id).await;
-    let cgka_only: std::collections::HashMap<_, _> = all_events_for_bob
+    let all_events_for_bob = alice.events_for_agent(bob_on_alice_id).await?;
+    let cgka_only: HashMap<_, _> = all_events_for_bob
         .into_iter()
         .filter(|(_, event)| matches!(event, keyhive_core::event::Event::CgkaOperation(_)))
         .collect();
@@ -577,37 +424,44 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         .map_err(|e| format!("alice's ops should merge with the tree bob started: {e:?}"))?;
 
     let dave = make_simple_keyhive().await?;
-    let dave_id = bob
-        .receive_contact_card(&dave.get_existing_contact_card().await)
-        .await?;
-    bob.add_member(dave_id, doc_id, Access::Read, &[])
+    let dave_on_bob = IndividualState::new(KeyOp::Add(dave.expand_prekeys().await?));
+    let dave_id = dave_on_bob.id();
+    assert!(bob.register_individual(dave_on_bob).await);
+    bob.add_member(dave_id, doc_id, Power::Read)
         .await
         .map_err(|e| format!("bob's tree should still take an add: {e:?}"))?;
 
     assert_eq!(
-        bob.docs_reachable_by_agent(dave_id).await.len(),
+        bob.docs_reachable_by_agent(dave_id).await?.len(),
         1,
         "the document bob just admitted Dave to should be reachable by Dave"
     );
 
     // Exchange everything in both directions. The two trees should now agree.
-    bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await)
+    bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await?)
         .await?;
     alice
-        .ingest_event_table(bob.events_for_agent(alice_on_bob_id).await)
+        .ingest_event_table(bob.events_for_agent(alice_on_bob_id).await?)
         .await?;
 
     let doc_on_alice = alice.get_document(doc_id).await.unwrap();
-    let (alice_members, alice_ops) = {
-        let mut locked = doc_on_alice.lock().await;
-        let members: std::collections::BTreeSet<_> = locked.cgka_members()?.collect();
-        (members, locked.cgka()?.ops_count())
-    };
-    let (bob_members, bob_ops) = {
-        let mut locked = doc_on_bob.lock().await;
-        let members: std::collections::BTreeSet<_> = locked.cgka_members()?.collect();
-        (members, locked.cgka()?.ops_count())
-    };
+    let doc_on_bob = bob
+        .get_document(doc_id)
+        .await
+        .ok_or("bob knows the document")?;
+    let alice_members = doc_on_alice
+        .cgka_members()
+        .await
+        .ok_or("alice holds a tree")?;
+    let alice_ops = doc_on_alice
+        .cgka_ops_count()
+        .await
+        .ok_or("alice holds a tree")?;
+    let bob_members = doc_on_bob.cgka_members().await.ok_or("bob holds a tree")?;
+    let bob_ops = doc_on_bob
+        .cgka_ops_count()
+        .await
+        .ok_or("bob holds a tree")?;
     assert_eq!(
         alice_members, bob_members,
         "both trees hold the same members"
@@ -623,10 +477,10 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     let from_bob = bob
         .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"from bob")
         .await?;
-    bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await)
+    bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await?)
         .await?;
     alice
-        .ingest_event_table(bob.events_for_agent(alice_on_bob_id).await)
+        .ingest_event_table(bob.events_for_agent(alice_on_bob_id).await?)
         .await?;
     assert_eq!(
         bob.try_decrypt_content(doc_id, from_alice.encrypted_content())
@@ -645,57 +499,61 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     let after = alice
         .try_encrypt_content(doc_id, &[3u8; 32], &vec![[1u8; 32]], b"after")
         .await?;
-    bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await)
+    bob.ingest_event_table(alice.events_for_agent(bob_on_alice_id).await?)
         .await?;
     assert_eq!(
         bob.try_decrypt_content(doc_id, after.encrypted_content())
             .await?,
         b"after".to_vec()
     );
-    let alice_pcs = doc_on_alice.lock().await.cgka_mut()?.try_pcs_key_hash()?;
-    let bob_pcs = doc_on_bob.lock().await.cgka_mut()?.try_pcs_key_hash()?;
+    let alice_pcs = alice
+        .try_pcs_key_hash(doc_id)
+        .await
+        .ok_or("alice derives a key")?;
+    let bob_pcs = bob
+        .try_pcs_key_hash(doc_id)
+        .await
+        .ok_or("bob derives a key")?;
     assert_eq!(alice_pcs, bob_pcs, "both trees derive the same PCS key");
 
     Ok(())
 }
 
-/// A Document referenced as a delegate (member of another doc) before its own
-/// defining delegation arrives must be reified as a Document, not a Group.
+/// A document that is a member of another document is known as a document
+/// once its key agreement is authorized, whatever order its events arrive in.
 ///
-/// When the cross-delegation `subject = Doc B, delegate = Doc A` is ingested
-/// before Doc A's defining (root) delegation, Doc A is an unknown delegate.
-/// The unknown-delegate recovery registers a placeholder Individual for Doc A's
-/// id. Earlier, when Doc A's defining delegation finally arrived, that
-/// placeholder was unconditionally promoted to a *Group*, dropping Doc A's
-/// content heads. It must instead become a Document because the defining
-/// delegation carries content heads for that id.
+/// Doc A's genesis key agreement cites its root edge. Delivered to an invited
+/// member without the root edge, it waits, and the member does not hold Doc A
+/// yet; once the root edge arrives, it applies.
 #[tokio::test]
-async fn test_document_delegate_before_defining_event_reified_as_document() -> TestResult {
+async fn test_document_waits_for_its_defining_delegation() -> TestResult {
     test_utils::init_logging();
 
     let alice = make_simple_keyhive().await?;
+    let carol = make_simple_keyhive().await?;
+    alice
+        .receive_contact_card(&carol.get_existing_contact_card().await)
+        .await?;
 
-    // Alice owns Doc A and Doc B, and adds Doc A as a Read member of Doc B.
+    // Alice owns Doc A and Doc B, adds Doc A as a Read member of Doc B, and
+    // invites Carol to Doc A.
     let doc_a_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
-    alice
-        .add_member(doc_a_id, doc_b_id, Access::Read, &[])
-        .await?;
+    alice.add_member(doc_a_id, doc_b_id, Power::Read).await?;
+    alice.add_member(carol.id(), doc_a_id, Power::Read).await?;
 
-    // Collect all of Alice's events, then split out Doc A's defining (root)
+    // Collect what Carol is sent, then split out Doc A's defining (root)
     // delegation, i.e. the one issued by Doc A itself, so it is delivered last.
-    let alice_id = { alice.active().lock().await.id() };
-    let all_events = alice.static_events_for_agent(alice_id).await;
+    let alice_id = { alice.active().id() };
+    let all_events = alice.static_events_for_agent(carol.id()).await?;
 
     let doc_a_ident: Identifier = doc_a_id.into();
     let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];
     let mut rest: Vec<StaticEvent<[u8; 32]>> = vec![];
     for event in all_events.into_values() {
         match &event {
-            StaticEvent::Delegated(signed)
-                if signed.issuer == doc_a_ident && signed.payload.proof.is_none() =>
-            {
+            StaticEvent::Delegated(signed) if issued_by(signed, doc_a_ident) => {
                 defining.push(event);
             }
             _ => rest.push(event),
@@ -707,50 +565,42 @@ async fn test_document_delegate_before_defining_event_reified_as_document() -> T
         "expected exactly one root delegation defining Doc A"
     );
 
-    // Fresh peer receives everything except Doc A's defining delegation first.
-    let carol = make_simple_keyhive().await?;
+    // Carol receives everything except Doc A's defining delegation first.
     let pending = carol.ingest_unsorted_static_events(rest).await;
 
-    // Before its defining delegation arrives, Doc A is unknown: the delegation
-    // that references it as a delegate stays pending rather than fabricating a
-    // stand-in for it.
+    // Doc A's genesis key agreement cites its root edge, so without it the
+    // operation waits, and Doc A is not yet known as a document.
     assert!(
         !pending.is_empty(),
-        "the delegation referencing Doc A should remain pending"
+        "Doc A's key agreement waits on its defining delegation"
     );
     assert!(
-        carol.get_agent(doc_a_ident).await.is_none(),
-        "Doc A should be unknown before its defining delegation arrives"
-    );
-    assert!(
-        carol.get_document(doc_a_id).await.is_none(),
-        "Doc A should not yet be registered as a Document"
+        !carol.has_document(doc_a_id).await,
+        "Doc A is not a document before its defining delegation arrives"
     );
 
-    // Deliver Doc A's defining delegation (plus any pending events).
+    // Deliver Doc A's defining delegation; the waiting events go through.
     carol.ingest_unsorted_static_events(defining).await;
-
-    // Doc A must now be reified as a Document, not a Group.
     assert!(
-        matches!(
-            carol.get_agent(doc_a_ident).await,
-            Some(Agent::Document(..))
-        ),
-        "Doc A must be reified as a Document, not a Group, after its defining delegation"
+        carol.has_document(doc_a_id).await,
+        "Doc A is a document once its key agreement is authorized"
     );
     assert!(
-        carol.get_document(doc_a_id).await.is_some(),
-        "Doc A should be registered in the docs map"
+        carol
+            .membered_reachable_by_agent(alice_id)
+            .await?
+            .contains_key(&doc_a_id.into()),
+        "and Keyline answers about it as a document"
     );
 
     Ok(())
 }
 
-/// Companion to the Document case: a Group referenced as a delegate before its
-/// defining delegation arrives must still be reified as a Group. Its defining
-/// delegation carries no content heads, so it must not become a Document.
+/// Companion to the document case: a group that is a member of a document is
+/// known as a group whatever order its events arrive in, and never becomes a
+/// document, since it has no key agreement.
 #[tokio::test]
-async fn test_group_delegate_before_defining_event_reified_as_group() -> TestResult {
+async fn test_group_member_is_known_before_its_defining_delegation() -> TestResult {
     test_utils::init_logging();
 
     let alice = make_simple_keyhive().await?;
@@ -759,22 +609,24 @@ async fn test_group_delegate_before_defining_event_reified_as_group() -> TestRes
     let group_id = alice.generate_group(vec![]).await?;
     let doc_b_id = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
 
-    alice
-        .add_member(group_id, doc_b_id, Access::Read, &[])
-        .await?;
+    alice.add_member(group_id, doc_b_id, Power::Read).await?;
 
     // Split out Group G's defining (root) delegation, issued by G itself.
-    let alice_id = { alice.active().lock().await.id() };
-    let all_events = alice.static_events_for_agent(alice_id).await;
+    // CGKA operations are left out: Carol is not a member of Doc B,
+    // and certificates are what this is about.
+    let alice_id = { alice.active().id() };
+    let all_events = alice.static_events_for_agent(alice_id).await?;
+    let all_events: Vec<_> = all_events
+        .into_values()
+        .filter(|event| !matches!(event, StaticEvent::CgkaOperation(_)))
+        .collect();
 
     let group_ident: Identifier = group_id.into();
     let mut defining: Vec<StaticEvent<[u8; 32]>> = vec![];
     let mut rest: Vec<StaticEvent<[u8; 32]>> = vec![];
-    for event in all_events.into_values() {
+    for event in all_events {
         match &event {
-            StaticEvent::Delegated(signed)
-                if signed.issuer == group_ident && signed.payload.proof.is_none() =>
-            {
+            StaticEvent::Delegated(signed) if issued_by(signed, group_ident) => {
                 defining.push(event);
             }
             _ => rest.push(event),
@@ -789,32 +641,41 @@ async fn test_group_delegate_before_defining_event_reified_as_group() -> TestRes
     let carol = make_simple_keyhive().await?;
     let pending = carol.ingest_unsorted_static_events(rest).await;
 
-    // Before its defining delegation arrives, Group G is unknown: the delegation
-    // that references it as a delegate stays pending rather than fabricating a
-    // stand-in for it.
+    // Certificates never wait: Group G's membership in Doc B is known before
+    // G's own root edge arrives.
     assert!(
-        !pending.is_empty(),
-        "the delegation referencing Group G should remain pending"
+        pending.is_empty(),
+        "nothing waits on Group G's defining delegation"
     );
-    assert!(
-        carol.get_agent(group_ident).await.is_none(),
-        "Group G should be unknown before its defining delegation arrives"
+    assert_eq!(
+        carol.reachable_members(doc_b_id).await?.get(&group_ident),
+        Some(&Power::Read),
+        "Group G reads Doc B"
     );
 
     carol.ingest_unsorted_static_events(defining).await;
 
-    // Group G must be reified as a Group, and must not become a Document.
+    // Group G is a subject in Keyline, and never a DocumentState.
     assert!(
-        matches!(carol.get_agent(group_ident).await, Some(Agent::Group(..))),
-        "Group G must be reified as a Group after its defining delegation"
+        carol
+            .reachable_members(group_id)
+            .await?
+            .contains_key(&alice_id.into()),
+        "Group G's root edge makes Alice its member"
     );
     assert!(
         carol
             .get_document(DocumentId::from(group_ident))
             .await
             .is_none(),
-        "Group G must not be modeled as a Document"
+        "Group G must not be modeled as a DocumentState"
     );
 
     Ok(())
+}
+
+/// Whether `signed` is a delegation `issuer` signed: a root edge, when the
+/// issuer is the subject itself.
+fn issued_by(signed: &Signed<Delegation>, issuer: Identifier) -> bool {
+    signed.issuer() == issuer
 }

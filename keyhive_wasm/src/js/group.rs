@@ -1,82 +1,44 @@
 use super::{
-    agent::JsAgent,
-    capability::Capability,
-    change_id::JsChangeId,
-    event_handler::JsEventHandler,
-    group_id::JsGroupId,
-    identifier::JsIdentifier,
-    membership::{individual_memberships, Membership},
-    peer::JsPeer,
-    signer::JsSigner,
+    capability::Capability, group_id::JsGroupId, identifier::JsIdentifier, keyhive::InnerKeyhive,
+    keyline_storage_error::JsKeylineStorageError, membership::Membership,
+    membership_list::direct_members, principal::JsPrincipal,
 };
-use derive_more::{From, Into};
-use dupe::Dupe;
-use future_form::Local;
-use futures::lock::Mutex;
-use keyhive_core::principal::{
-    agent::Agent,
-    group::{id::GroupId, Group},
-    peer::Peer,
-};
-use std::sync::Arc;
+use keyhive_core::principal::group::Group;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Group)]
-#[derive(Debug, Clone, Dupe, Into, From)]
-pub struct JsGroup {
-    pub(crate) group_id: GroupId,
-    pub(crate) inner: Arc<Mutex<Group<Local, JsSigner, JsChangeId, JsEventHandler>>>,
-}
+#[derive(Debug, Clone)]
+pub struct JsGroup(pub(crate) Group<InnerKeyhive>);
 
 #[wasm_bindgen(js_class = Group)]
 impl JsGroup {
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIdentifier {
-        JsIdentifier(self.group_id.into())
+        JsIdentifier(self.0.id())
     }
 
     #[wasm_bindgen(getter, js_name = groupId)]
     pub fn group_id(&self) -> JsGroupId {
-        JsGroupId(self.group_id)
+        JsGroupId(self.0.group_id())
     }
 
-    /// Everyone who reaches this group, following nested groups all the way
-    /// down, with the access for each one.
+    /// Every individual who reaches this group, following nested groups all
+    /// the way down, with the power for each one.
     #[wasm_bindgen(js_name = transitiveMembers)]
-    pub async fn transitive_members(&self) -> Vec<Membership> {
-        let transitive = { self.inner.lock().await.transitive_members().await };
-        individual_memberships(transitive, self.group_id.into())
+    pub async fn transitive_members(&self) -> Result<Vec<Membership>, JsKeylineStorageError> {
+        let members = self.0.transitive_members().await?;
+        Ok(Membership::individuals(self.0.keyhive(), members).await)
     }
 
+    /// The direct members: each live delegation about this group, at the best
+    /// power it gives per member.
     #[wasm_bindgen]
-    pub async fn members(&self) -> Vec<Capability> {
-        self.inner
-            .lock()
-            .await
-            .members()
-            .values()
-            .map(|dlgs| {
-                let best = dlgs
-                    .iter()
-                    .max_by_key(|dlg| dlg.payload().can())
-                    .expect("should have at least one member");
-
-                Capability {
-                    who: dlgs.iter().next().unwrap().payload().delegate().clone(),
-                    proof: best.clone(),
-                }
-            })
-            .collect()
+    pub async fn members(&self) -> Result<Vec<Capability>, JsKeylineStorageError> {
+        direct_members(self.0.keyhive(), self.0.group_id().into()).await
     }
 
-    #[wasm_bindgen(js_name = toPeer)]
-    pub fn to_peer(&self) -> JsPeer {
-        JsPeer(Peer::Group(self.group_id, self.inner.dupe()))
-    }
-
-    #[wasm_bindgen(js_name = toAgent)]
-    pub fn to_agent(&self) -> JsAgent {
-        tracing::debug!("JsGroup::to_agent");
-        JsAgent(Agent::Group(self.group_id, self.inner.dupe()))
+    #[wasm_bindgen(js_name = toPrincipal)]
+    pub async fn to_principal(&self) -> JsPrincipal {
+        JsPrincipal::new(self.0.keyhive().get_principal(self.0.id())).await
     }
 }

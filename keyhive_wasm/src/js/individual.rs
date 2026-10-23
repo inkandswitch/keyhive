@@ -1,52 +1,35 @@
 use super::{
-    agent::JsAgent, document_id::JsDocumentId, identifier::JsIdentifier,
-    individual_id::JsIndividualId, peer::JsPeer, share_key::JsShareKey,
+    document_id::JsDocumentId, identifier::JsIdentifier, individual_id::JsIndividualId,
+    keyhive::InnerKeyhive, principal::JsPrincipal, share_key::JsShareKey,
 };
-use dupe::Dupe;
-use futures::lock::Mutex;
-use keyhive_core::principal::{
-    agent::Agent,
-    individual::{id::IndividualId, Individual},
-    peer::Peer,
-};
-use std::sync::Arc;
+use keyhive_core::principal::individual::Individual;
 use wasm_bindgen::prelude::*;
 
-#[derive(Debug, Clone, Dupe)]
 #[wasm_bindgen(js_name = Individual)]
-pub struct JsIndividual {
-    pub(crate) id: IndividualId,
-    pub(crate) inner: Arc<Mutex<Individual>>,
-}
+#[derive(Debug, Clone)]
+pub struct JsIndividual(pub(crate) Individual<InnerKeyhive>);
 
 #[wasm_bindgen(js_class = Individual)]
 impl JsIndividual {
-    #[wasm_bindgen(js_name = toPeer)]
-    pub fn to_peer(&self) -> JsPeer {
-        JsPeer(Peer::Individual(self.id, self.inner.dupe()))
-    }
-
-    #[wasm_bindgen(js_name = toAgent)]
-    pub fn to_agent(&self) -> JsAgent {
-        tracing::debug!("JsIndividual::to_agent");
-        JsAgent(Agent::Individual(self.id, self.inner.dupe()))
+    #[wasm_bindgen(js_name = toPrincipal)]
+    pub async fn to_principal(&self) -> JsPrincipal {
+        JsPrincipal::new(self.0.keyhive().get_principal(self.0.id())).await
     }
 
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> JsIdentifier {
-        JsIdentifier(self.id.into())
+        JsIdentifier(self.0.id())
     }
 
     #[wasm_bindgen(getter, js_name = individualId)]
     pub fn individual_id(&self) -> JsIndividualId {
-        JsIndividualId(self.id)
+        JsIndividualId(self.0.individual_id())
     }
 
     /// Pick a prekey for this individual for `doc_id`, or `undefined` if it
     /// has no live prekeys.
     #[wasm_bindgen(js_name = pickPrekey)]
     pub async fn pick_prekey(&self, doc_id: &JsDocumentId) -> Option<JsShareKey> {
-        let locked = self.inner.lock().await;
-        locked.pick_prekey(doc_id.0).copied().map(JsShareKey)
+        self.0.pick_prekey(doc_id.0).await.map(JsShareKey)
     }
 }

@@ -1,16 +1,17 @@
 use crate::{
-    crypto::{digest::Digest, signed_ext::SignedSubjectId},
+    content::heads::ContentHeads,
+    crypto::digest::Digest,
     event::Event,
-    listener::membership::MembershipListener,
     principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
-use future_form::FutureForm;
-use keyhive_crypto::signer::async_signer::AsyncSigner;
+use beekem::operation::CgkaOperation;
+use keyhive_codec::traits::StreamDecode;
+use keyhive_crypto::content::reference::ContentRef;
+use keyline::{delegation::Delegation, revocation::Revocation};
 use std::collections::HashMap;
 
 mod hash;
 pub use hash::Hash;
-use serde::Serialize;
 pub mod terminal;
 
 /// A table of events for debugging purposes.
@@ -51,18 +52,14 @@ pub enum DebugEventDetails {
         subject: Hash,
         can_access: String,
         delegate: Hash,
-        after_revocations_count: usize,
-        after_content_count: usize,
+        reissued: bool,
     },
     Revoked {
-        subject: Hash,
         revoke: Hash,
-        has_proof: bool,
-        after_content_count: usize,
+        retain_count: usize,
     },
 
-    /// A prekey operation whose payload does not decode. It reached the
-    /// event log without being verified, so this is a bug elsewhere.
+    /// A certificate whose payload did not decode.
     Undecodable,
 }
 
@@ -93,13 +90,10 @@ pub enum CgkaOperationDetails {
 
 impl DebugEventTable {
     /// Create a new debug event table from a vector of events.
-    pub fn from_events<F, S, T, L>(events: Vec<Event<F, S, T, L>>, nicknames: Nicknames) -> Self
-    where
-        F: FutureForm,
-        S: AsyncSigner<F>,
-        T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<F, S, T>,
-    {
+    pub fn from_events<T: ContentRef + StreamDecode>(
+        events: Vec<Event<T>>,
+        nicknames: Nicknames,
+    ) -> Self {
         if events.is_empty() {
             return Self {
                 rows: Vec::new(),
@@ -131,6 +125,9 @@ impl DebugEventTable {
 }
 
 impl DebugEventRow {
+    /// Create a new debug event row from an event.
+    /// A row for a certificate whose payload does not decode. The store
+    /// verified it, so this does not happen; a row says so rather than panic.
     fn undecodable(idx: usize, event_type: &str, event_hash: Hash) -> Self {
         Self {
             index: idx,
@@ -141,18 +138,11 @@ impl DebugEventRow {
         }
     }
 
-    /// Create a new debug event row from an event.
-    pub fn from_event<F, S, T, L>(
+    pub fn from_event<T: ContentRef + StreamDecode>(
         idx: usize,
-        event: &Event<F, S, T, L>,
+        event: &Event<T>,
         nicknames: &Nicknames,
-    ) -> Self
-    where
-        F: FutureForm,
-        S: AsyncSigner<F>,
-        T: std::fmt::Debug + Eq + Clone + std::hash::Hash + PartialOrd + Serialize,
-        L: MembershipListener<F, S, T>,
-    {
+    ) -> Self {
         match event {
             Event::PrekeysExpanded(signed) => {
                 let event_hash = Hash::new(signed.digest().as_slice(), nicknames);
@@ -200,7 +190,7 @@ impl DebugEventRow {
                 let doc_id = Hash::new(payload.doc_id().as_bytes(), nicknames);
 
                 let (op_type, op_details) = match payload {
-                    beekem::operation::CgkaOperation::Add {
+                    CgkaOperation::Add {
                         added_id,
                         pk,
                         leaf_index,
@@ -229,7 +219,7 @@ impl DebugEventRow {
                         };
                         ("Add", op_details)
                     }
-                    beekem::operation::CgkaOperation::Remove {
+                    CgkaOperation::Remove {
                         id,
                         leaf_idx,
                         removed_keys,
@@ -250,7 +240,7 @@ impl DebugEventRow {
                         };
                         ("Remove", op_details)
                     }
-                    beekem::operation::CgkaOperation::Update {
+                    CgkaOperation::Update {
                         id,
                         new_path,
                         predecessors,
@@ -293,52 +283,39 @@ impl DebugEventRow {
                 }
             }
             Event::Delegated(signed) => {
-                let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
-                let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
-                let subject = if let Some(proof) = &payload.proof {
-                    Hash::new(proof.subject_id().as_bytes(), nicknames)
-                } else {
-                    Hash::new(signed.issuer().as_bytes(), nicknames)
+                let event_hash = Hash::new(signed.digest().as_slice(), nicknames);
+                let Ok(d) = signed.encoded().decode() else {
+                    return Self::undecodable(idx, "Delegated", event_hash);
                 };
-                let details = DebugEventDetails::Delegated {
-                    subject,
-                    can_access: format!("{:?}", payload.can),
-                    delegate: Hash::new(payload.delegate.id().as_bytes(), nicknames),
-                    after_revocations_count: payload.after_revocations.len(),
-                    after_content_count: payload.after_content.len(),
-                };
-
+                let d: Delegation = d;
                 Self {
                     index: idx,
                     event_type: "Delegated".to_string(),
                     event_hash,
-                    issuer,
-                    details,
+                    issuer: Hash::new(signed.issuer().as_bytes(), nicknames),
+                    details: DebugEventDetails::Delegated {
+                        subject: Hash::new(d.subject.as_bytes(), nicknames),
+                        can_access: format!("{:?}", d.power),
+                        delegate: Hash::new(d.audience.as_bytes(), nicknames),
+                        reissued: d.citation.is_some(),
+                    },
                 }
             }
             Event::Revoked(signed) => {
-                let payload = signed.payload();
-                let event_hash = Hash::new(Digest::hash(signed).raw.as_bytes(), nicknames);
-                let issuer = Hash::new(signed.issuer().as_bytes(), nicknames);
-                let subject = if let Some(proof) = &payload.proof {
-                    Hash::new(proof.subject_id().as_bytes(), nicknames)
-                } else {
-                    Hash::new(signed.issuer().as_bytes(), nicknames)
+                let event_hash = Hash::new(signed.digest().as_slice(), nicknames);
+                let Ok(r) = signed.encoded().decode() else {
+                    return Self::undecodable(idx, "Revoked", event_hash);
                 };
-                let details = DebugEventDetails::Revoked {
-                    subject,
-                    revoke: Hash::new(Digest::hash(&payload.revoke).as_slice(), nicknames),
-                    has_proof: payload.proof.is_some(),
-                    after_content_count: payload.after_content.len(),
-                };
-
+                let r: Revocation<ContentHeads<T>> = r;
                 Self {
                     index: idx,
                     event_type: "Revoked".to_string(),
                     event_hash,
-                    issuer,
-                    details,
+                    issuer: Hash::new(signed.issuer().as_bytes(), nicknames),
+                    details: DebugEventDetails::Revoked {
+                        revoke: Hash::new(r.revoke.as_slice(), nicknames),
+                        retain_count: r.retain.len(),
+                    },
                 }
             }
         }

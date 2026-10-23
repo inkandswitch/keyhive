@@ -1,10 +1,11 @@
-//! Serializable representation of an [`Active`][super::Active] agent.
+//! Serializable representation of an [`Active`][super::Active] individual.
 
-use crate::principal::individual::Individual;
+use crate::principal::individual::IndividualState;
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
+    fmt,
     fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
 };
@@ -13,12 +14,12 @@ use std::{
 pub struct ActiveArchive {
     pub(crate) key_pairs: BTreeMap<ShareKey, ShareSecretKey>,
 
-    /// The [`Individual`] representation (how others see this agent).
-    pub(crate) individual: Individual,
+    /// The [`IndividualState`] representation (how others see it).
+    pub(crate) individual: IndividualState,
 }
 
 impl Debug for ActiveArchive {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         // NOTE this pattern ensures that all fields are used
         let Self {
             key_pairs,

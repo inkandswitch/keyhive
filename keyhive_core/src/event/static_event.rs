@@ -1,12 +1,17 @@
 //! Serializable version of [`Event`][super::Event].
 
-use crate::principal::{
-    group::{delegation::StaticDelegation, revocation::StaticRevocation},
-    individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+use crate::{
+    content::heads::ContentHeads,
+    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
 use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
-use keyhive_crypto::{content::reference::ContentRef, signed::SerdeSigned, verified::Signed};
+use keyhive_crypto::{
+    content::reference::ContentRef,
+    signed::SerdeSigned,
+    verified::{self},
+};
+use keyline::{delegation::Delegation, revocation::Revocation};
 use serde::{Deserialize, Serialize};
 
 /// Serailizable version of [`Event`][super::Event].
@@ -15,21 +20,21 @@ use serde::{Deserialize, Serialize};
 /// However the references contained in `StaticEvent`s may be missing
 /// dependencies, unlike [`Event`][super::Event]s.
 #[derive(Debug, Clone, PartialEq, Eq, From, Hash, TryInto, Serialize, Deserialize)]
-pub enum StaticEvent<T: ContentRef = [u8; 32]> {
+pub enum StaticEvent<T: ContentRef> {
     /// Prekeys were expanded, as received: verified on receipt.
-    PrekeysExpanded(Signed<AddKeyOp>),
+    PrekeysExpanded(verified::Signed<AddKeyOp>),
 
     /// A prekey was rotated, as received: verified on receipt.
-    PrekeyRotated(Signed<RotateKeyOp>),
+    PrekeyRotated(verified::Signed<RotateKeyOp>),
 
     /// A CGKA operation was performed.
     CgkaOperation(Box<SerdeSigned<CgkaOperation>>),
 
-    /// A delegation was created.
-    Delegated(SerdeSigned<StaticDelegation<T>>),
+    /// A Keyline delegation, as received: verified on receipt.
+    Delegated(verified::Signed<Delegation>),
 
-    /// A delegation was revoked.
-    Revoked(SerdeSigned<StaticRevocation<T>>),
+    /// A Keyline revocation, as received: verified on receipt.
+    Revoked(verified::Signed<Revocation<ContentHeads<T>>>),
 }
 
 #[cfg(any(test, feature = "arbitrary"))]
@@ -38,21 +43,22 @@ impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for 
         // Signatures are junk: these exercise encoding, not verification.
         fn junk<'a, V: arbitrary::Arbitrary<'a> + keyhive_codec::traits::Encode>(
             u: &mut arbitrary::Unstructured<'a>,
-        ) -> arbitrary::Result<Signed<V>> {
-            Ok(Signed::new(
+        ) -> arbitrary::Result<verified::Signed<V>> {
+            Ok(verified::Signed::new(
                 u.arbitrary()?,
                 keyhive_codec::traits::Encode::encode(&V::arbitrary(u)?),
                 ed25519_dalek::Signature::from_bytes(&u.arbitrary()?),
             ))
         }
 
-        let variant = u.int_in_range(0..=4)?;
+        let variant = u.int_in_range(0..=3)?;
         match variant {
             0 => Ok(Self::PrekeysExpanded(junk::<AddKeyOp>(u)?)),
             1 => Ok(Self::PrekeyRotated(junk::<RotateKeyOp>(u)?)),
-            2 => Ok(Self::CgkaOperation(Box::new(SerdeSigned::arbitrary(u)?))),
-            3 => Ok(Self::Delegated(SerdeSigned::arbitrary(u)?)),
-            4 => Ok(Self::Revoked(SerdeSigned::arbitrary(u)?)),
+            2 => Ok(Self::CgkaOperation(Box::new(u.arbitrary()?))),
+            // Delegations only: a revocation's watermark type has no
+            // `Arbitrary`.
+            3 => Ok(Self::Delegated(junk::<Delegation>(u)?)),
             _ => unreachable!(),
         }
     }

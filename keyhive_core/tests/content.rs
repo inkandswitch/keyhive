@@ -1,11 +1,9 @@
 //! Which key a piece of content is encrypted under and who can derive it.
 
-use keyhive_core::{
-    access::Access::{Edit, Read},
-    test_utils::{
-        decrypt_with_key, with_a_flipped_bit, TestContext, TestError, TestResult as Result,
-    },
+use keyhive_core::test_utils::{
+    decrypt_with_key, with_a_flipped_bit, TestContext, TestError, TestResult as Result,
 };
+use keyline::power::Power::{Edit, Read};
 
 #[tokio::test]
 async fn a_member_added_before_a_write_can_derive_its_key() -> Result<()> {
@@ -14,7 +12,7 @@ async fn a_member_added_before_a_write_can_derive_its_key() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"hello world").await?;
     ctx.sync_all_unsent().await?;
 
@@ -86,7 +84,7 @@ async fn a_key_rotation_does_not_lock_out_a_current_member() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     alice.force_pcs_update(design_doc).await?;
@@ -149,7 +147,7 @@ async fn the_reader_derives_the_key_the_writer_used() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     let (ct, written_under) = ctx.encrypt_keyed(&alice, design_doc, b"hello").await?;
     ctx.sync_all_unsent().await?;
 
@@ -221,7 +219,7 @@ async fn a_ciphertext_is_refused_if_tampered_with() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     let (ct, key) = ctx.encrypt_keyed(&alice, design_doc, b"authentic").await?;
     ctx.sync_all_unsent().await?;
 
@@ -250,7 +248,7 @@ async fn a_reader_can_read_what_an_editor_wrote() -> Result<()> {
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
 
-    alice.add_member(bob.id(), design_doc, Edit, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Edit).await?;
     let msg = b"Design Doc";
     let (ct, key) = ctx.encrypt_keyed(&alice, design_doc, msg).await?;
     ctx.sync_all_unsent().await?;

@@ -13,9 +13,8 @@ impl JsIndividualId {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: Vec<u8>) -> Result<Self, CannotParseIdentifier> {
         let vec: [u8; 32] = bytes.try_into().map_err(|_| CannotParseIdentifier)?;
-        Ok(Self(IndividualId(
-            Identifier::from_bytes(vec).map_err(|_| CannotParseIdentifier)?,
-        )))
+        let id = Identifier::from_bytes(vec).map_err(|_| CannotParseIdentifier)?;
+        Ok(Self(IndividualId(id)))
     }
 
     #[wasm_bindgen(js_name = toString)]

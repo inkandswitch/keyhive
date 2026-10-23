@@ -16,10 +16,8 @@ impl JsDocumentId {
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: Vec<u8>) -> Result<Self, JsParseDocIdError> {
         let vec: [u8; 32] = bytes.try_into().map_err(|_| JsParseDocIdError)?;
-
-        Ok(JsDocumentId(DocumentId::from(
-            Identifier::from_bytes(vec).map_err(|_| JsParseDocIdError)?,
-        )))
+        let id = Identifier::from_bytes(vec).map_err(|_| JsParseDocIdError)?;
+        Ok(JsDocumentId(DocumentId::from(id)))
     }
 
     #[wasm_bindgen(js_name = toString)]

@@ -1,6 +1,6 @@
 use future_form::Sendable;
 use keyhive_core::{
-    access::Access,
+    content::heads::ContentHeads,
     keyhive::Keyhive,
     listener::no_listener::NoListener,
     principal::individual::{id::IndividualId, op::KeyOp},
@@ -8,7 +8,10 @@ use keyhive_core::{
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
+use keyline::power::Power;
+use keyline_memory::MemoryKeyline;
 use nonempty::nonempty;
+use rand::rngs::OsRng;
 
 pub type BenchKeyhive = Keyhive<
     Sendable,
@@ -17,7 +20,8 @@ pub type BenchKeyhive = Keyhive<
     Vec<u8>,
     MemoryCiphertextStore<[u8; 32], Vec<u8>>,
     NoListener,
-    rand::rngs::OsRng,
+    OsRng,
+    MemoryKeyline<ContentHeads<[u8; 32]>>,
 >;
 pub struct Scenario {
     pub keyhive: BenchKeyhive,
@@ -69,7 +73,7 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
         .unwrap();
     for peer_id in &peers_on_alice {
         alice
-            .add_member(*peer_id, doc1_id, Access::Edit, &[])
+            .add_member(*peer_id, doc1_id, Power::Edit)
             .await
             .unwrap();
     }
@@ -82,7 +86,7 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
     let half = n_peers / 2;
     for peer_id in &peers_on_alice[..half] {
         alice
-            .add_member(*peer_id, doc2_id, Access::Read, &[])
+            .add_member(*peer_id, doc2_id, Power::Read)
             .await
             .unwrap();
     }
@@ -91,12 +95,12 @@ pub async fn setup_scenario(n_peers: usize, prekey_rotations_per_peer: usize) ->
     let group_id = alice.generate_group(vec![]).await.unwrap();
     for peer_id in &peers_on_alice[half..] {
         alice
-            .add_member(*peer_id, group_id, Access::Edit, &[])
+            .add_member(*peer_id, group_id, Power::Edit)
             .await
             .unwrap();
     }
     alice
-        .add_member(group_id, doc2_id, Access::Read, &[])
+        .add_member(group_id, doc2_id, Power::Read)
         .await
         .unwrap();
 

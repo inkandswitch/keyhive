@@ -1,12 +1,9 @@
 //! Thin wrapper around [`beekem::cgka::Cgka`] that converts between
 //! keyhive_core domain IDs ([`IndividualId`] / [`DocumentId`]) and
-//! beekem IDs ([`MemberId`](beekem::id::MemberId) /
-//! [`TreeId`](beekem::id::TreeId)) at the API boundary.
+//! beekem IDs ([`beekem::id::MemberId`] /
+//! [`beekem::id::TreeId`]) at the API boundary.
 
-use crate::{
-    principal::{document::id::DocumentId, individual::id::IndividualId},
-    transact::{fork::Fork, merge::Merge},
-};
+use crate::principal::{document::id::DocumentId, individual::id::IndividualId};
 use beekem::{
     encrypted::EncryptedContent,
     error::CgkaError,
@@ -26,10 +23,10 @@ use keyhive_crypto::{
     symmetric_key::SymmetricKey,
 };
 use nonempty::NonEmpty;
+use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -49,12 +46,6 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Cgka(beekem::cgka::Cgka);
-
-impl Hash for Cgka {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-    }
-}
 
 impl Cgka {
     pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
@@ -92,12 +83,11 @@ impl Cgka {
         &mut self.0.owner_sks
     }
 
-    #[allow(clippy::type_complexity)]
     pub async fn new_app_secret_for<
         F: FutureForm,
         S: AsyncSigner<F>,
         T: ContentRef,
-        R: rand::CryptoRng + rand::RngCore,
+        R: CryptoRng + RngCore,
     >(
         &mut self,
         content_ref: &T,
@@ -158,7 +148,7 @@ impl Cgka {
             .await
     }
 
-    pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
+    pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: CryptoRng + RngCore>(
         &mut self,
         new_pk: ShareKey,
         new_sk: ShareSecretKey,
@@ -198,43 +188,54 @@ impl Cgka {
     ) -> bool {
         self.0.contains_predecessors(preds)
     }
-}
 
-impl Fork for Cgka {
-    type Forked = Self;
-
-    fn fork(&self) -> Self::Forked {
-        self.clone()
+    /// Merge an add of a leaf whose secret `sk` this replica holds: an
+    /// invitation to it. The added member becomes the owner, holding `sk`.
+    pub fn merge_invite(
+        &mut self,
+        op: Arc<SerdeSigned<CgkaOperation>>,
+        sk: &ShareSecretKey,
+    ) -> Result<bool, CgkaError> {
+        let CgkaOperation::Add {
+            added_id,
+            pk,
+            ref predecessors,
+            ..
+        } = op.payload
+        else {
+            return Err(CgkaError::UnexpectedInviteOperation);
+        };
+        if !self.contains_predecessors(&predecessors.iter().cloned().collect()) {
+            return Err(CgkaError::OutOfOrderOperation);
+        }
+        let mut owner_sks = self.owner_sks().clone();
+        owner_sks.insert(pk, *sk);
+        *self = self.with_new_owner(added_id.into(), owner_sks)?;
+        self.merge_concurrent_operation(op)
     }
 }
 
-impl Merge for Cgka {
-    fn merge(&mut self, fork: Self::Forked) {
-        beekem::transact::Merge::merge(&mut self.0, fork.0);
-    }
-}
-
-/// CGKA ops for all agents, with shared storage.
+/// CGKA ops for all principals, with shared storage.
 ///
-/// CGKA ops are stored per document. Each agent has an index pointing to the
-/// documents whose CGKA ops it can reach (via `transitive_members`).
+/// CGKA ops are stored per document. Each principal has an index pointing to the
+/// documents it has standing over in Keyline.
 #[derive(Debug)]
 pub struct AllCgkaOps {
     /// CGKA ops per doc, keyed by doc Identifier.
     pub ops: HashMap<Identifier, Vec<Arc<SerdeSigned<CgkaOperation>>>>,
 
-    /// For each agent: the set of doc identifiers whose ops are reachable.
+    /// For each principal: the set of doc identifiers whose ops are reachable.
     pub index: HashMap<Identifier, HashSet<Identifier>>,
 }
 
 impl AllCgkaOps {
-    /// Returns the set of agent identifiers that have reachable CGKA ops.
+    /// Returns the set of principal identifiers that have reachable CGKA ops.
     pub fn agents(&self) -> impl Iterator<Item = &Identifier> {
         self.index.keys()
     }
 
-    /// Returns an iterator over all reachable CGKA ops for the given agent
-    /// (flattened across all documents), or `None` if the agent is not in the index.
+    /// Returns an iterator over all reachable CGKA ops for the given principal
+    /// (flattened across all documents), or `None` if the principal is not in the index.
     pub fn ops_for_agent(
         &self,
         agent_id: &Identifier,

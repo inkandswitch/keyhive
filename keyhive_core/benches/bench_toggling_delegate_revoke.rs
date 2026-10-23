@@ -2,15 +2,20 @@
 //!
 //! cargo bench --bench bench_toggling_delegate_revoke --features test_utils
 
+use divan::Bencher;
 use future_form::Local;
 use futures::lock::Mutex;
 use keyhive_core::{
-    access::Access, keyhive::Keyhive, listener::no_listener::NoListener,
+    keyhive::Keyhive, listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore, test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
+use keyline::power::Power;
+use keyline_memory::MemoryKeyline;
 use nonempty::nonempty;
+use rand::rngs::OsRng;
 use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 fn main() {
     divan::main();
@@ -21,19 +26,20 @@ fn main() {
     sample_count = 1,
     sample_size = 1,
 )]
-fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+fn toggle_delegate_revoke(bencher: Bencher, prior_toggles: usize) {
+    let rt = Runtime::new().unwrap();
 
     let (kh, doc, member) = rt.block_on(async {
-        let mut csprng = rand::rngs::OsRng;
+        let mut csprng = OsRng;
         let sk = MemorySigner::generate(&mut csprng);
         let store = Arc::new(Mutex::new(MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new()));
 
-        let kh = Keyhive::<Local, _, _, _, _, _, _>::generate(
+        let kh = Keyhive::<Local, _, _, _, _, _, _, _>::generate(
             sk.clone(),
             store.clone(),
             NoListener,
-            rand::rngs::OsRng,
+            MemoryKeyline::new(),
+            OsRng,
         )
         .await
         .expect("keyhive generation should succeed");
@@ -55,7 +61,7 @@ fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
 
         // Build up history of prior toggles
         for _ in 0..prior_toggles {
-            kh.add_member(member, doc, Access::Edit, &[])
+            kh.add_member(member, doc, Power::Edit)
                 .await
                 .expect("add_member should succeed");
             kh.revoke_member(member, true, doc)
@@ -68,7 +74,7 @@ fn toggle_delegate_revoke(bencher: divan::Bencher, prior_toggles: usize) {
 
     bencher.bench_local(|| {
         rt.block_on(async {
-            kh.add_member(member, doc, Access::Edit, &[])
+            kh.add_member(member, doc, Power::Edit)
                 .await
                 .expect("add_member should succeed");
             kh.revoke_member(member, true, doc)

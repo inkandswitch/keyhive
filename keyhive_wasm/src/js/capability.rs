@@ -1,35 +1,33 @@
-use super::{
-    access::JsAccess, agent::JsAgent, change_id::JsChangeId, event_handler::JsEventHandler,
-    signed_delegation::JsSignedDelegation, signer::JsSigner,
-};
+use super::{identifier::JsIdentifier, power::JsPower, signed_delegation::JsSignedDelegation};
 use dupe::Dupe;
-use future_form::Local;
-use keyhive_core::principal::{agent::Agent, group::delegation::Delegation};
-use keyhive_crypto::signed::SerdeSigned;
-use std::sync::Arc;
+use keyhive_crypto::identifier::Identifier;
+use keyline::power::Power;
 use wasm_bindgen::prelude::*;
 
+/// A direct member of a group or document: who, at what power, and the live
+/// delegation that admits them.
 #[wasm_bindgen]
-#[derive(Debug, Clone, Dupe)]
+#[derive(Debug, Clone)]
 pub struct Capability {
-    pub(crate) who: Agent<Local, JsSigner, JsChangeId, JsEventHandler>,
-    pub(crate) proof: Arc<SerdeSigned<Delegation<Local, JsSigner, JsChangeId, JsEventHandler>>>,
+    pub(crate) who: Identifier,
+    pub(crate) can: Power,
+    pub(crate) proof: JsSignedDelegation,
 }
 
 #[wasm_bindgen]
 impl Capability {
     #[wasm_bindgen(getter)]
-    pub fn who(&self) -> JsAgent {
-        JsAgent(self.who.dupe())
+    pub fn who(&self) -> JsIdentifier {
+        JsIdentifier(self.who)
     }
 
     #[wasm_bindgen(getter)]
-    pub fn can(&self) -> JsAccess {
-        JsAccess(self.proof.payload().can())
+    pub fn can(&self) -> JsPower {
+        JsPower(self.can)
     }
 
     #[wasm_bindgen(getter)]
     pub fn proof(&self) -> JsSignedDelegation {
-        self.proof.dupe().into()
+        self.proof.dupe()
     }
 }

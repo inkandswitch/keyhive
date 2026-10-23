@@ -12,7 +12,7 @@ _Would buy._ Narrow revocation with one key (ban in room A, keep in room B). Leg
 
 _Rejected because._ Rotation would re-sign the deny list. A revocation pinned to `Members` does not cover `Members′` after rotation, so every standing revocation must be re-issued after every rotation, forever. Under admin-reach scoping a surviving admin's admin reach grows as they are re-rostered, and their old revocations follow automatically; the griefer's admin reach froze, so theirs do not. The explicit field taxes the honest admin on the routine path (rotation is the recommended hygiene) to buy flexibility on a rare one. It also introduces an inert-by-mistake state (naming a node the target never routes through) that admin-reach scoping cannot produce, and it picks the narrower of the two possible scopes for a revocation, where the design resolves ambiguity toward less authority. Narrow revocation is available today by signing with a capacity key per role administered.
 
-_Reopen if._ Narrow revocation turns out to be common. The compatible extension is `subject: Option<Id>` with `None` meaning the whole admin reach; `None` has one encoding, so the one-encoding invariant ([README, Delegations](README.md#delegations)) carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations-collapsed-into-the-issuer).
+_Reopen if._ Narrow revocation turns out to be common. The compatible extension is `subject: Option<Identifier>` with `None` meaning the whole admin reach; `None` has one encoding, so the one-encoding invariant ([README, Delegations](README.md#delegations)) carries over. Long form: [edge-cases, `via` on revocations](edge-cases.md#via-on-revocations-collapsed-into-the-issuer).
 
 ### A random nonce instead of `citation`
 
@@ -20,7 +20,7 @@ _Proposal._ Replace `citation: Option<Digest<RevocationId>>` with random bytes s
 
 _Would buy._ No silent-collision UX; no dependency on having synced the revocation.
 
-_Rejected because._ It flips the fail direction. Two accidental issuances of one delegation become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering delegation (fails open). With `citation`, identical re-issue collides to one hash (payload and, Ed25519 being deterministic, signature), one revocation covers every copy, and an unaware re-issue silently does not take (fails closed). The collision is detectable: `insert` returns `false` and `revocations_of` reports what named the duplicate. A heal that does mean to re-issue past a revocation names it in `citation`, which makes the heal an accountable act. "Ambiguity resolves toward less authority" decides it.
+_Rejected because._ It flips the fail direction. Two accidental issuances of one delegation become two independently live certificates; revoking one leaves the other; a missed duplicate is a lingering delegation (fails open). With `citation`, identical re-issue collides to one certificate (identity is the digest of the issuer and payload; a second signature by the same issuer over the same payload is the same certificate), one revocation covers every copy, and an unaware re-issue silently does not take (fails closed). The collision is detectable: the certificate is already in the set (`contains` is true), and `revocations_of` reports what named it. A heal that does mean to re-issue past a revocation names it in `citation`, which makes the heal an accountable act. "Ambiguity resolves toward less authority" decides it.
 
 Why `citation` is optional, carries no semantics, and names the revocation rather than the revoked delegation is in [README, The `citation` Field](README.md#the-citation-field).
 
@@ -28,7 +28,7 @@ _Reopen if._ Never on its own merits; only if a use case needs many live copies 
 
 ### A `proof` field on `Delegation`
 
-_Proposal._ Each delegation names the certificate(s) justifying it, as UCAN and today's `keyhive_core::Delegation` do.
+_Proposal._ Each delegation names the certificate(s) justifying it, as UCAN does.
 
 _Would buy._ Certificate-local verification: check a chain without holding the set.
 
@@ -166,13 +166,21 @@ _Reopen if._ Never.
 
 ## Crate
 
-### Async `Keyline` trait
+### Synchronous `Keyline` trait
 
-_Proposal._ `async fn` on the trait via `future_form`, so reads can await.
+_Proposal._ Queries on `&self` and `insert(&mut self, cert) -> bool`, synchronous and infallible, with concurrency left to a wrapper: `keyhive_core` holds the implementation behind a `RwLock`, and readers call `&self` methods in parallel.
 
-_Rejected because._ The evaluator does no I/O; async buys an `F` parameter and `Send`-bound boilerplate for nothing. Concurrency comes from the wrapper: `keyhive_core` holds the implementation behind a `RwLock`, and N readers hold the read guard and call `&self` methods in parallel.
+_Rejected because._ It fits only the in-memory backend. A database answers with I/O and can fail; an incremental engine wants atomic batches; a cache needs to know which version of the set an answer came from. A wrapper's lock cannot add any of those, and adding them later would change every caller. The trait is async in a `FutureForm`, fallible with an associated `Error`, takes atomic batches, and returns a `Version` with every answer ([implementation, The `Keyline` Trait](implementation.md#the-keyline-trait)). The in-memory evaluator stays synchronous, as `keyline_memory::state::State`, for the oracles and tests.
 
-_Reopen if._ A backend needs to page the certificate set in from storage during evaluation (e.g. IndexedDB). Even then, consider making the backend load eagerly and keep the trait synchronous.
+_Reopen if._ Never: an embedded backend's futures are ready on their first poll, so the async shape costs it a box per call and nothing else.
+
+### Views over the store
+
+_Proposal._ A view type: a consistent state of the set that several queries share, as a read guard or a copy-on-write snapshot.
+
+_Rejected because._ Where `keyhive_core` combines queries, it does not need one: positive queries are monotone, closures only grow, and the CGKA diff needs inserts serialized, which a view does not provide. Views as read guards block writers and invite deadlocks (holding a view while inserting, or nesting views behind a queued writer); as copy-on-write snapshots, a write during a live view copies the state. A database backend would have to hold a connection or transaction per view, and an incremental engine would have to keep old outputs alive.
+
+_Reopen if._ A caller needs several answers from exactly one version. Batched queries (`members_many`) or an extension trait with views would add it without changing the base trait.
 
 ### Signature verification inside `insert`
 

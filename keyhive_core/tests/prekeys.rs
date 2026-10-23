@@ -1,9 +1,7 @@
 //! Expanding and rotating prekeys.
 
-use keyhive_core::{
-    access::Access::Read,
-    test_utils::{PrekeyOp, TestContext, TestResult as Result},
-};
+use keyhive_core::test_utils::{PrekeyOp, TestContext, TestResult as Result};
+use keyline::power::Power::Read;
 
 #[tokio::test]
 async fn expanding_prekeys_adds_a_distinct_key() -> Result<()> {
@@ -53,7 +51,7 @@ async fn a_prekey_rotation_reaches_a_peer() -> Result<()> {
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     let old = alice.expand_prekeys().await?.payload().share_key;
@@ -157,6 +155,7 @@ async fn a_member_with_sixteen_prekeys_can_be_added_to_any_document() -> Result<
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
+    // Delivered directly: nothing alice is sent names bob until she adds him.
     while ctx.prekeys_of(&alice, bob.id()).await?.len() < 16 {
         let op = bob.expand_prekeys().await?;
         alice.receive_prekey_op(&KeyOp::Add(op)).await?;
@@ -165,7 +164,7 @@ async fn a_member_with_sixteen_prekeys_can_be_added_to_any_document() -> Result<
 
     for i in 0..24 {
         let doc = ctx.doc(&alice, &format!("doc-{i}")).await?;
-        alice.add_member(bob.id(), doc, Read, &[]).await?;
+        alice.add_member(bob.id(), doc, Read).await?;
     }
     Ok(())
 }
@@ -175,12 +174,12 @@ async fn a_member_with_sixteen_prekeys_can_be_added_to_any_document() -> Result<
 /// CGKA tree.
 #[tokio::test]
 async fn a_member_with_no_live_prekeys_is_delegated_but_not_added_to_cgka_tree() -> Result<()> {
-    use keyhive_core::principal::individual::{
-        id::IndividualId,
-        op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
+    use keyhive_core::principal::individual::op::{
+        add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp,
     };
     use keyhive_crypto::{
-        share_key::ShareSecretKey, signer::memory::MemorySigner, verified::Verified,
+        identifier::Identifier, share_key::ShareSecretKey, signer::memory::MemorySigner,
+        verifiable::Verifiable, verified::Verified,
     };
 
     let mut ctx = TestContext::new().await;
@@ -201,13 +200,13 @@ async fn a_member_with_no_live_prekeys_is_delegated_but_not_added_to_cgka_tree()
     ] {
         alice.receive_prekey_op(&op).await?;
     }
-    let carol_id = IndividualId::from(&carol.0);
-    assert!(ctx.prekeys_of(&alice, carol_id).await?.is_empty());
+    let carol_id = Identifier::try_from(carol.verifying_key())?;
+    assert!(ctx.prekeys_of(&alice, carol_id.into()).await?.is_empty());
 
     let doc = ctx.doc(&alice, "doc").await?;
-    let update = alice.add_member(carol_id, doc, Read, &[]).await?;
+    let update = alice.add_member(carol_id, doc, Read).await?;
     assert_eq!(
-        alice.access_for_doc(carol_id, doc).await,
+        alice.access_for_doc(carol_id, doc).await?,
         Some(Read),
         "the delegation stands"
     );
@@ -217,7 +216,7 @@ async fn a_member_with_no_live_prekeys_is_delegated_but_not_added_to_cgka_tree()
             .cgka_members_for(doc)
             .await?
             .expect("alice holds the tree")
-            .contains(&carol_id),
+            .contains(&carol_id.into()),
         "no live prekeys"
     );
     Ok(())

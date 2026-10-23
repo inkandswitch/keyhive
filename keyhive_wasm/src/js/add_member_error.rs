@@ -1,10 +1,11 @@
 use keyhive_core::principal::document::AddMemberError;
+use std::convert::Infallible;
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsAddMemberError(#[from] pub(crate) AddMemberError);
+pub struct JsAddMemberError(#[from] pub(crate) AddMemberError<Infallible>);
 
 impl From<JsAddMemberError> for JsValue {
     fn from(err: JsAddMemberError) -> Self {

@@ -2,10 +2,6 @@
 
 use beekem::encrypted::EncryptedContent;
 use keyhive_core::{
-    access::{
-        Access,
-        Access::{Admin, Edit, Read},
-    },
     keyhive::Keyhive,
     listener::no_listener::NoListener,
     principal::document::id::DocumentId,
@@ -15,6 +11,8 @@ use keyhive_core::{
     },
 };
 use keyhive_crypto::signer::memory::MemorySigner;
+use keyline::power::Power::{self, Admin, Edit, Read};
+use keyline_memory::MemoryKeyline;
 use rand::rngs::OsRng;
 
 #[tokio::test]
@@ -27,9 +25,9 @@ async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
         .await?;
     let design_doc = ctx.doc(&bob, "design_doc").await?;
 
-    bob.add_member(alice.id(), design_doc, Read, &[]).await?;
+    bob.add_member(alice.id(), design_doc, Read).await?;
 
-    let raw = bob.reachable_members(design_doc).await;
+    let raw = bob.reachable_members(design_doc).await?;
     assert_eq!(
         raw.len(),
         2,
@@ -39,7 +37,7 @@ async fn two_instances_of_one_identity_are_one_member() -> Result<()> {
     let members = ctx.named(raw);
     assert_eq!(members.get("alice"), Some(&Read));
     assert_eq!(
-        bob.access_for_doc(alice_replica.id(), design_doc).await,
+        bob.access_for_doc(alice_replica.id(), design_doc).await?,
         Some(Read),
         "a delegation to one instance is a delegation to the identity"
     );
@@ -59,24 +57,24 @@ async fn either_instance_signs_as_the_identity() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     alice_replica
-        .add_member(carol.id(), design_doc, Admin, &[])
+        .add_member(carol.id(), design_doc, Admin)
         .await?;
 
     assert_eq!(
-        alice_replica.access_for_doc(carol.id(), design_doc).await,
+        alice_replica.access_for_doc(carol.id(), design_doc).await?,
         Some(Admin)
     );
 
     // Instances are separate replicas, so the first one learns of the delegation by sync like
     // anyone else.
     assert_eq!(
-        alice.access_for_doc(carol.id(), design_doc).await,
+        alice.access_for_doc(carol.id(), design_doc).await?,
         None,
         "the first instance doesn't know about the delegation yet"
     );
     ctx.sync_all_unsent().await?;
     assert_eq!(
-        alice.access_for_doc(carol.id(), design_doc).await,
+        alice.access_for_doc(carol.id(), design_doc).await?,
         Some(Admin),
         "the first instance honours what the second signed"
     );
@@ -93,14 +91,13 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
         .await?;
     let design_doc = ctx.doc(&bob, "design_doc").await?;
 
-    bob.add_member(alice.id(), design_doc, Read, &[]).await?;
+    bob.add_member(alice.id(), design_doc, Read).await?;
     let ct = ctx.encrypt(&bob, design_doc, b"invitation content").await?;
     ctx.sync_all_unsent().await?;
 
-    // Both instances know the document and both are members.
-    assert!(alice_replica.has_document(design_doc).await);
+    // Both instances are members.
     assert_eq!(
-        bob.access_for_doc(alice_replica.id(), design_doc).await,
+        bob.access_for_doc(alice_replica.id(), design_doc).await?,
         Some(Read)
     );
 
@@ -116,6 +113,11 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
     } else {
         (&alice_replica, &alice)
     };
+    assert!(invited.has_document(design_doc).await);
+    assert!(
+        !sibling.has_document(design_doc).await,
+        "the sibling cannot open the invitation yet, so it holds no tree"
+    );
 
     let stuck = sibling.stats().await.pending_total();
     assert!(
@@ -141,6 +143,7 @@ async fn a_sibling_needs_the_prekey_secrets_to_open_an_invitation() -> Result<()
         "importing the secrets drained exactly those"
     );
     assert_eq!(sibling.stats().await.pending_total(), 0);
+    assert!(sibling.has_document(design_doc).await);
     assert!(
         sibling.can_decrypt_content(design_doc, &ct).await?,
         "and now the sibling can read it"
@@ -163,12 +166,12 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
 
     // Neither instance knows about the other's document when it makes it.
     let from_alice = ctx.doc(&alice, "notes").await?;
-    alice.add_member(reader.id(), from_alice, Read, &[]).await?;
+    alice.add_member(reader.id(), from_alice, Read).await?;
     alice.force_pcs_update(from_alice).await?;
 
     let replica_doc = ctx.doc(&alice_replica, "design_doc").await?;
     alice_replica
-        .add_member(reader.id(), replica_doc, Read, &[])
+        .add_member(reader.id(), replica_doc, Read)
         .await?;
     alice_replica.force_pcs_update(replica_doc).await?;
 
@@ -230,9 +233,9 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
 
     // When revoking and re-delegating, the second delegation cannot be applied until the
     // revocation has been.
-    alice.add_member(reader.id(), design_doc, Read, &[]).await?;
+    alice.add_member(reader.id(), design_doc, Read).await?;
     alice.revoke_member(reader.id(), true, design_doc).await?;
-    alice.add_member(reader.id(), design_doc, Read, &[]).await?;
+    alice.add_member(reader.id(), design_doc, Read).await?;
     alice.force_pcs_update(design_doc).await?;
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
@@ -243,7 +246,9 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
         "the replica applied the revocation and the delegation that followed it"
     );
     assert_eq!(
-        alice_replica.access_for_doc(reader.id(), design_doc).await,
+        alice_replica
+            .access_for_doc(reader.id(), design_doc)
+            .await?,
         Some(Read),
         "and ended on the re-delegation rather than the revocation"
     );
@@ -259,7 +264,7 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
             .try_decrypt_content(design_doc, &replica_wrote)
             .await?,
         b"after the re-delegation".to_vec(),
-        "the reader is a member again, so it reads what the replica wrote"
+        "the document is public again, so the reader reads what the replica wrote"
     );
     assert_eq!(
         reader.stats().await.pending_total(),
@@ -280,7 +285,7 @@ async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync(&alice, &alice_replica).await?;
 
     let replica_wrote = ctx
@@ -339,18 +344,22 @@ async fn a_keyhive_built_outside_the_context_can_join_the_cast() -> Result<()> {
     // point: a test that needs an instance the context would not produce is not stuck.
     let mut csprng = OsRng;
     let signer = MemorySigner::generate(&mut csprng);
-    let built: Hive =
-        Keyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, csprng).await?;
+    let built: Hive = Keyhive::generate(
+        signer,
+        MemoryCiphertextStore::new(),
+        NoListener,
+        MemoryKeyline::new(),
+        csprng,
+    )
+    .await?;
     let outsider = ctx.adopt(built, "outsider").await?;
 
-    alice
-        .add_member(outsider.id(), design_doc, Read, &[])
-        .await?;
+    alice.add_member(outsider.id(), design_doc, Read).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"for the outsider").await?;
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.access_for_doc(outsider.id(), design_doc).await,
+        alice.access_for_doc(outsider.id(), design_doc).await?,
         Some(Read),
         "alice treats it as a member"
     );
@@ -360,7 +369,7 @@ async fn a_keyhive_built_outside_the_context_can_join_the_cast() -> Result<()> {
         "and it reads what it was given, so it is fully in the sync arrangement"
     );
     assert_eq!(
-        ctx.named(alice.reachable_members(design_doc).await)
+        ctx.named(alice.reachable_members(design_doc).await?)
             .get("outsider"),
         Some(&Read),
         "and it is named in assertions like anyone else"
@@ -396,7 +405,7 @@ async fn the_second_instance_writes_and_a_member_reads_it() -> Result<()> {
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     let ct = ctx
@@ -426,7 +435,7 @@ async fn the_second_instance_writes_to_a_document_owned_through_a_group() -> Res
     let design_doc = ctx
         .doc_with_coparents(&alice, "design_doc", &[owners])
         .await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     let ct = ctx
@@ -453,8 +462,8 @@ async fn a_relay_carries_the_second_instances_write_to_a_reader() -> Result<()> 
     let bob = ctx.individual("bob").await?;
 
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(relay.id(), design_doc, Read, &[]).await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(relay.id(), design_doc, Read).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     alice.force_pcs_update(design_doc).await?;
     ctx.share_prekey_secrets(&alice, &alice_replica).await?;
     ctx.sync(&alice, &alice_replica).await?;
@@ -482,16 +491,16 @@ type Ciphertext = EncryptedContent<Vec<u8>, [u8; 32]>;
 /// A document, a second instance of its owner, and another member whose addition blanks
 /// the path so the next write has to rotate the leaf the two instances share.
 ///
-/// `can` is that other member's access. It only needs to be [`Access::Edit`] where a test
+/// `can` is that other member's access. It only needs to be [`Power::Edit`] where a test
 /// has them write.
 async fn two_instances_of_one_writer(
     ctx: &mut TestContext,
-    can: Access,
+    can: Power,
 ) -> Result<(Instance, Instance, Instance, DocumentId)> {
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, can, &[]).await?;
+    alice.add_member(bob.id(), design_doc, can).await?;
     ctx.sync_all_unsent().await?;
 
     let alice_replica = ctx
@@ -591,7 +600,7 @@ async fn an_instance_adopts_a_leaf_secret_carried_by_an_archive() -> Result<()> 
     ctx.sync_all_unsent().await?;
 
     alice
-        .ingest_archive(alice_replica.into_archive().await)
+        .ingest_archive(alice_replica.into_archive().await?)
         .await?;
 
     assert_eq!(
@@ -641,7 +650,7 @@ async fn a_rotation_keeps_its_leaf_key_out_of_the_published_prekeys() -> Result<
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
     let design_doc = ctx.doc(&alice, "design_doc").await?;
-    alice.add_member(bob.id(), design_doc, Read, &[]).await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
     ctx.sync_all_unsent().await?;
 
     let published_before = ctx.prekeys_of(&alice, alice.id()).await?;

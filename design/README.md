@@ -50,8 +50,7 @@ The capability graph decides _who_ may read or edit; BeeKEM turns that membershi
 | Document                                                | Topic                                                                            |
 |---------------------------------------------------------|----------------------------------------------------------------------------------|
 | [Convergent Capabilities](./convergent_capabilities.md) | Why the capability model is a CRDT, and how it differs from ocap and SPKI        |
-| [Group Membership](./group_membership.md)               | Agents, delegations, revocations, seniority, worked examples                     |
-| [Keyline](./keyline/README.md)                          | The successor authority graph: a state-based CRDT of delegations and revocations |
+| [Keyline](./keyline/README.md)                          | The authority graph: a state-based CRDT of delegations and revocations           |
 | [Causal Encryption](./causal_encryption.md)             | Per-chunk keys that embed their predecessors' keys                               |
 | [BeeKEM](../beekem/README.md)                           | The concurrent TreeKEM variant that supplies group keys                          |
 | [Cipher Suite](./ciphersuite.md)                        | Primitives, domain separation, the synthetic-nonce construction                  |
@@ -83,7 +82,7 @@ For our sync system ([Subduction]), application-level requests are stateless and
 
 The sync system does not require identities. As long as you can invoke a capability, then the other end can calculate what data you should be able to pull or edit. These connections do not in themselves depend on IP addresses, but if you use e.g. an HTTP transport then you will expose your IP address. We are interested in adding a mixnet transport or similar eventually, but this is currently out of scope.
 
-The underlying data and auth layers are CRDTs, so they don't depend on sessions or identities beyond public key crypto. If you are delegated to, and can sign with the related key, your update will be accepted by delegation chain self-certification. We have kept those other questions out of the system so that Keyhive can "do one thing well", and be composable with such systems.
+The underlying data and auth layers are CRDTs, so they don't depend on sessions or identities beyond public key crypto. If you are delegated to, and can sign with the related key, your update will be accepted: authority is self-certifying, rooted in the subject's own key. We have kept those other questions out of the system so that Keyhive can "do one thing well", and be composable with such systems.
 
 <!-- Footnotes -->
 

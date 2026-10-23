@@ -3,12 +3,14 @@
 | Feature            | Algorithm                                                  | Where                                              |
 |--------------------|------------------------------------------------------------|----------------------------------------------------|
 | Hash / KDF         | [BLAKE3] (plain hash, XOF, and `derive_key` modes)         | `keyhive_crypto::digest`, `siv`, `separable`, `beekem::pcs_key` |
-| Signatures         | [Ed25519] (RFC 8032, via `ed25519-dalek`)                  | `keyhive_crypto::signed`                           |
+| Signatures         | [Ed25519] (RFC 8032, via `ed25519-dalek`)                  | `keyhive_crypto::signed`, `verified`, `id`         |
 | Key exchange       | [X25519] (RFC 7748, via `x25519-dalek`)                    | `keyhive_crypto::share_key`, BeeKEM path secrets   |
 | Symmetric AEAD     | [XChaCha20-Poly1305] with a BLAKE3-derived synthetic nonce | `keyhive_crypto::symmetric_key`, `siv`             |
 | Content addressing | BLAKE3, 32-byte output, typed as `Digest<T>`               | `keyhive_crypto::digest`                           |
 
 All identifiers in Keyhive (individuals, groups, documents) are Ed25519 verifying keys. Read access comes from X25519 "share keys" (prekeys and BeeKEM leaf/inner-node keys). Content, BeeKEM node secrets, and the earlier root secrets an update wraps are encrypted with XChaCha20-Poly1305. The key is derived from an X25519 exchange (BeeKEM node secrets), from a BeeKEM root secret (wrapped root secrets), or from a BeeKEM application secret (document content).
+
+Keys read from the canonical codec are validated on decode. An `Identifier` (Ed25519) must be the canonical encoding of a point outside the small-order subgroup. A `ShareKey` (X25519) must be a canonical u-coordinate (below p, top bit clear) of large order, since a Diffie-Hellman exchange with a small-order point gives a shared secret anyone can compute. So one key has one encoding, and neither kind of key can be degenerate. Keys still read through serde are not checked this way.
 
 ## Domain Separation
 
@@ -20,7 +22,7 @@ The byte string `/keyhive/` (`keyhive_crypto::domain_separator::SEPARATOR`) is u
 
 Application secrets additionally use the context `/keyhive/beekem/app_secret/` for their first derivation stage, and the key an update wraps earlier root secrets under uses `/keyhive/beekem/predecessor_secrets/` (see below).
 
-Content-addressing digests (`Digest::hash`) and signing digests (`Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level.
+Content-addressing digests (`Digest::hash`) and signing digests (`signed::Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level. Types migrated to the canonical codec (Keyline certificates and prekey operations so far) instead travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature` and sign and hash the frame without its signature (`keyhive_crypto::signable`); see [Keyline's implementation notes](./keyline/implementation.md#domain-separation).
 
 ## Synthetic Nonce and Key Commitment
 

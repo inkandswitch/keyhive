@@ -7,10 +7,13 @@
 
 We're excited to announce that we're opening the _pre-alpha_ code for the following libraries:
 
+* [`beekem`]: BeeKEM, a concurrent TreeKEM variant for continuous group key agreement
+* [`keyhive_codec`]: The canonical binary encoding traits shared by the other crates
 * [`keyhive_core`]: The core signing, encryption, and delegation system
 * [`keyhive_crypto`]: Shared cryptographic primitives (digests, signatures, key exchange)
-* [`beekem`]: BeeKEM, a concurrent TreeKEM variant for continuous group key agreement
 * [`keyhive_wasm`]: [Wasm] wrapper around `keyhive_core`, plus TypeScript bindings
+* [`keyline`]: The authority graph: delegation and revocation certificates, and the `Keyline` store interface
+* [`keyline_memory`]: The in-memory reference `Keyline` store
 
 Auth-enabled sync over end-to-end encrypted data lives in a separate repository: [Subduction] (the successor to Beelay).
 
@@ -41,6 +44,9 @@ If you have any questions, thoughts, or feedback, please contact the team by fil
 [Wasm]: https://webassembly.org/
 
 [`beekem`]: https://github.com/inkandswitch/keyhive/tree/main/beekem
+[`keyhive_codec`]: https://github.com/inkandswitch/keyhive/tree/main/keyhive_codec
 [`keyhive_core`]: https://github.com/inkandswitch/keyhive/tree/main/keyhive_core
 [`keyhive_crypto`]: https://github.com/inkandswitch/keyhive/tree/main/keyhive_crypto
 [`keyhive_wasm`]: https://github.com/inkandswitch/keyhive/tree/main/keyhive_wasm
+[`keyline`]: https://github.com/inkandswitch/keyhive/tree/main/keyline
+[`keyline_memory`]: https://github.com/inkandswitch/keyhive/tree/main/keyline_memory

@@ -1,5 +1,6 @@
 use derive_more::{Display, From};
 use keyhive_core::principal::document::GenerateDocError;
+use std::convert::Infallible;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -7,7 +8,7 @@ use wasm_bindgen::prelude::*;
 pub enum JsGenerateDocError {
     /// Generating the document failed.
     #[display("{_0}")]
-    GenerateDoc(GenerateDocError),
+    GenerateDoc(GenerateDocError<Infallible>),
 }
 
 impl From<JsGenerateDocError> for JsValue {
