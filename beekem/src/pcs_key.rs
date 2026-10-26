@@ -21,7 +21,7 @@ use tracing::instrument;
 
 /// Derives a block's application key from its PCS key, predecessors and
 /// content ref.
-const APPLICATION_KEY_CONTEXT: &str = "keyhive 2026-10 content application key v1";
+const APPLICATION_KEY_CONTEXT: &str = "/keyhive/content/application-key/v1/2026-10-26";
 const PREDECESSOR_SECRETS_CONTEXT: &str = "/keyhive/beekem/predecessor_secrets/";
 
 /// A block's application key, with the header fields its ciphertext carries.

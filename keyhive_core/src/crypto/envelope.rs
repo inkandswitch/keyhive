@@ -195,11 +195,47 @@ mod tests {
         }
     }
 
+    fn arbitrary_envelope(ancestors: &[([u8; 32], [u8; 32])], payload: &[u8]) -> Env {
+        Envelope {
+            plaintext: payload.to_vec(),
+            ancestors: ancestors
+                .iter()
+                .map(|(content_ref, key)| (*content_ref, SymmetricKey::from(*key)))
+                .collect(),
+        }
+    }
+
     #[test]
-    fn an_envelope_round_trips() {
-        let original = envelope(&[3, 1, 2], b"payload");
-        let bytes = original.serde_encode().expect("encodes");
-        assert_eq!(Env::serde_decode(&bytes).expect("decodes"), original);
+    fn envelopes_round_trip() {
+        bolero::check!()
+            .with_arbitrary::<(Vec<([u8; 32], [u8; 32])>, Vec<u8>)>()
+            .for_each(|(ancestors, payload)| {
+                let original = arbitrary_envelope(ancestors, payload);
+                let bytes = original.serde_encode().expect("encodes");
+                assert_eq!(Env::serde_decode(&bytes).expect("decodes"), original);
+            });
+    }
+
+    /// Mutating a valid encoding (a byte flipped, inserted or removed, or the
+    /// end cut off) either fails to decode or gives an envelope that encodes
+    /// to exactly those bytes.
+    #[test]
+    fn an_envelope_has_exactly_one_encoding() {
+        use keyhive_codec::laws::Mutation;
+
+        bolero::check!()
+            .with_arbitrary::<(Vec<([u8; 32], [u8; 32])>, Vec<u8>, Mutation, Vec<Mutation>)>()
+            .for_each(|(ancestors, payload, first, rest)| {
+                let mut bytes = arbitrary_envelope(ancestors, payload)
+                    .serde_encode()
+                    .expect("encodes");
+                for m in core::iter::once(first).chain(rest) {
+                    m.apply(&mut bytes);
+                }
+                if let Ok(decoded) = Env::serde_decode(&bytes) {
+                    assert_eq!(decoded.serde_encode().expect("encodes"), bytes);
+                }
+            });
     }
 
     /// A `HashMap` iterates in any order; the bytes do not depend on it.

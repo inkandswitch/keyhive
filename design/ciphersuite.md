@@ -20,7 +20,7 @@ The byte string `/keyhive/` (`keyhive_crypto::domain_separator::SEPARATOR`) is u
 - the AEAD associated data when a BeeKEM node secret is encrypted;
 - the `derive_key` context in `Separable::derive_from_bytes`, which turns raw key material into a `SymmetricKey` or `ShareSecretKey`. Every BeeKEM node key (`ShareSecretKey::derive_symmetric_key`) passes through it.
 
-Content has its own BLAKE3 contexts, `"keyhive 2026-10 content <purpose> v1"`, for its application key, its encryption and nonce subkeys, and its header digest ([Content](#content)). The key an update wraps earlier root secrets under uses `/keyhive/beekem/predecessor_secrets/` (see below).
+BLAKE3 `derive_key` contexts take the form `/keyhive/<area>/<purpose>/v<N>/<YYYY-MM-DD>`. The version belongs to the context, and the date is the day that version was introduced, so no redesign or other application reuses one by accident (BLAKE3 asks for contexts that are "hardcoded, globally unique, and application-specific"). Content derives its application key, its encryption and nonce subkeys, and its header digest under `/keyhive/content/<purpose>/v1/2026-10-26` ([Content](#content)), and prekey selection draws from `/keyhive/prekey/selection/v1/2026-10-26`. The key an update wraps earlier root secrets under still uses `/keyhive/beekem/predecessor_secrets/` (see below).
 
 Content-addressing digests (`Digest::hash`) and signing digests (`signed::Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level. Types migrated to the canonical codec (Keyline certificates and prekey operations so far) instead travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature` and sign and hash the frame without its signature (`keyhive_crypto::signable`); see [Keyline's implementation notes](./keyline/implementation.md#domain-separation).
 
@@ -67,10 +67,10 @@ Trade-offs:
 Content is encrypted in chunks of 64 KiB, so a block of any size streams through bounded memory, and any byte range decrypts by reading only the chunks that cover it. Each block's application key derives two subkeys:
 
 ```
-enc_key   = derive_key("keyhive 2026-10 content encryption key v1", app_key)
-nonce_key = derive_key("keyhive 2026-10 content nonce key v1",      app_key)
+enc_key   = derive_key("/keyhive/content/encryption-key/v1/2026-10-26", app_key)
+nonce_key = derive_key("/keyhive/content/nonce-key/v1/2026-10-26",      app_key)
 
-aad_i   = BLAKE3_derive("keyhive 2026-10 content header v1", doc_id ‖ header) ‖ i:u64 ‖ last:u8
+aad_i   = BLAKE3_derive("/keyhive/content/header/v1/2026-10-26", doc_id ‖ header) ‖ i:u64 ‖ last:u8
 nonce_i = BLAKE3_keyed(nonce_key, aad_i ‖ chunk_i)[0..24]
 ct_i    = XChaCha20-Poly1305(enc_key, nonce_i, aad_i, chunk_i)
 ```
@@ -89,7 +89,7 @@ Inner-node secrets are X25519 secret keys sampled independently from the CSPRNG 
 A block's application key is derived from the root secret (the `PcsKey`), its predecessors and its content ref:
 
 ```
-app_key = derive_key("keyhive 2026-10 content application key v1",
+app_key = derive_key("/keyhive/content/application-key/v1/2026-10-26",
                      root_secret ‖ Digest<PredecessorRefs> ‖ content_ref)
 ```
 

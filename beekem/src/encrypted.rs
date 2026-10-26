@@ -57,9 +57,9 @@ pub const CHUNK_OVERHEAD: usize = NONCE_LEN + AEAD_TAG_LEN;
 
 const FULL_CHUNK: usize = CHUNK_LEN + CHUNK_OVERHEAD;
 
-const HEADER_CONTEXT: &str = "keyhive 2026-10 content header v1";
-const ENCRYPTION_KEY_CONTEXT: &str = "keyhive 2026-10 content encryption key v1";
-const NONCE_KEY_CONTEXT: &str = "keyhive 2026-10 content nonce key v1";
+const HEADER_CONTEXT: &str = "/keyhive/content/header/v1/2026-10-26";
+const ENCRYPTION_KEY_CONTEXT: &str = "/keyhive/content/encryption-key/v1/2026-10-26";
+const NONCE_KEY_CONTEXT: &str = "/keyhive/content/nonce-key/v1/2026-10-26";
 
 /// A block of encrypted content, with the public header readers need to find
 /// its key.
@@ -230,6 +230,34 @@ impl<T, Cr: ContentRef> core::hash::Hash for EncryptedContent<T, Cr> {
         self.pcs_key_hash.hash(state);
         self.pcs_update_op_hash.hash(state);
         self.chunks.hash(state);
+    }
+}
+
+/// Encrypts arbitrary bytes, with arbitrary header fields, under an arbitrary
+/// key and document, so the chunks are always well formed. A full chunk may
+/// come before the arbitrary tail, so layouts with a non-final chunk are drawn
+/// too.
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a, T, Cr: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
+    for EncryptedContent<T, Cr>
+{
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let key = SymmetricKey::from(<[u8; 32]>::arbitrary(u)?);
+        let doc_id = TreeId::arbitrary(u)?;
+        let full_chunk_first = bool::arbitrary(u)?;
+        let fill = u8::arbitrary(u)?;
+        let mut plaintext = alloc::vec![fill; if full_chunk_first { CHUNK_LEN } else { 0 }];
+        plaintext.extend(Vec::<u8>::arbitrary(u)?);
+        EncryptedContent::encrypt(
+            &key,
+            doc_id,
+            Cr::arbitrary(u)?,
+            Digest::from(<[u8; 32]>::arbitrary(u)?),
+            Digest::from(<[u8; 32]>::arbitrary(u)?),
+            Digest::from(<[u8; 32]>::arbitrary(u)?),
+            &plaintext,
+        )
+        .map_err(|_| arbitrary::Error::IncorrectFormat)
     }
 }
 
@@ -664,6 +692,15 @@ mod tests {
         }
     }
 
+    /// Any well-formed block decodes to itself, and whatever still decodes
+    /// near a valid encoding (a tag, length or chunk byte changed, bytes cut
+    /// or appended) re-encodes to exactly those bytes.
+    #[test]
+    fn codec_laws() {
+        keyhive_codec::laws::round_trip::<Content>();
+        keyhive_codec::laws::canonical_near::<Content>();
+    }
+
     #[test]
     fn small_content_round_trips_through_its_bytes() {
         bolero::check!()
@@ -692,7 +729,7 @@ mod tests {
         let content = encrypt(b"keyhive");
         assert_eq!(
             blake3::hash(content.encode().as_bytes()).to_hex().as_str(),
-            "d2283d1df14f4ddb779d532b326fe18f65d5381c847e5318906af46e348a9b8f"
+            "f6d0ac06eef9e9c5b9e3a43f48af0d4ac722594b2e2708d02311f4453cbe18e4"
         );
         assert_eq!(
             PredecessorRefs::digest(&[[3u8; 32]]).raw.to_hex().as_str(),
