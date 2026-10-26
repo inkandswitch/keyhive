@@ -726,43 +726,65 @@ where
         // Settle first. A replay evicts the answers cached before it, which
         // would include the next operation's.
         let members = self.cgka_group_members(doc, state).await?;
-        let next = self.next_citations(doc, state).await?;
+        // Every insert through this keyhive takes the insert lock, so the first
+        // operation issued cites everything new and the rest cite nothing. Only
+        // an operation that cites something changes what the next one cites and
+        // whether this replica may sign it, so only then is that recomputed,
+        // before the next operation.
+        let NextCitations {
+            mut cited,
+            readers,
+            mut may_sign,
+        } = self.next_citations(doc, state).await?;
         let triggers_removes = members
             .iter()
-            .any(|member| !next.readers.contains(&Identifier::from(*member)));
-        if !next.may_sign {
+            .any(|member| !readers.contains(&Identifier::from(*member)));
+        if !may_sign {
             return Ok(if triggers_removes {
                 ImpliedCgkaOpsOutcome::RemoveBlocked
             } else {
                 ImpliedCgkaOpsOutcome::Success
             });
         }
+        let mut stale = false;
         if triggers_removes {
+            // The remove may cite this replica's own revocation.
+            stale = !cited.is_empty();
             let remove_op = state
                 .lock()
                 .await
-                .remove_cgka_members_by_citations(next.cited, &signer)
+                .remove_cgka_members_by_citations(std::mem::take(&mut cited), &signer)
                 .await?;
             fresh.push(Arc::new(remove_op));
         }
-        for reader in next.readers.iter().map(|id| IndividualId::from(*id)) {
+        for reader in readers.iter().map(|id| IndividualId::from(*id)) {
             if members.contains(&reader) {
                 continue;
             }
             let Some((prekey, key_proof)) = self.addable_key(reader, doc_id).await else {
                 continue;
             };
-            // The remove above may have cited this replica's own revocation.
-            let NextCitations {
-                cited, may_sign, ..
-            } = self.next_citations(doc, state).await?;
+            if std::mem::take(&mut stale) {
+                NextCitations {
+                    cited,
+                    may_sign,
+                    ..
+                } = self.next_citations(doc, state).await?;
+            }
             if !may_sign {
                 break;
             }
+            stale = !cited.is_empty();
             let made = state
                 .lock()
                 .await
-                .add_cgka_member(reader, prekey, Some(key_proof), cited, &signer)
+                .add_cgka_member(
+                    reader,
+                    prekey,
+                    Some(key_proof),
+                    std::mem::take(&mut cited),
+                    &signer,
+                )
                 .await?;
             fresh.extend(made.into_iter().map(Arc::new));
         }

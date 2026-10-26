@@ -347,6 +347,38 @@ async fn a_reader_removed_and_granted_again_adds_itself_when_it_writes() -> Test
     Ok(())
 }
 
+#[tokio::test]
+async fn a_replica_stops_adding_once_its_add_cites_its_own_revocation() -> TestResult {
+    let (alice, bob, doc) = removed_and_granted_again().await?;
+    let mut readers = Vec::new();
+    for _ in 0..2 {
+        let reader = learn(&bob, &make_simple_keyhive().await?).await;
+        receive(&bob, &issue_grant(&alice, reader, doc, Power::Read).await?).await;
+        readers.push(reader);
+    }
+    let (edit, _) = Keyline::<Sendable>::delegations_to(bob.keyline(), kl(doc), kl(bob.id()))
+        .await?
+        .value
+        .into_iter()
+        .find(|(_, (_, delegation))| delegation.power == Power::Edit)
+        .ok_or("bob's Edit grant")?;
+    let revocation: Revocation<ContentHeads<[u8; 32]>> = Revocation::new(edit);
+    receive(&bob, &alice.sign_certificate(&revocation).await?.into()).await;
+
+    // Bob is not a member, so the write fails. What matters is what it
+    // issues before that.
+    let _ = bob
+        .try_encrypt_content(doc, &[3u8; 32], &vec![], b"revoked again")
+        .await;
+
+    let mut adds = 0;
+    for reader in readers {
+        adds += adds_of(&bob, doc, reader).await?.len();
+    }
+    assert_eq!(adds, 1);
+    Ok(())
+}
+
 /// A signer that signs as many payloads as it is allowed, then refuses, as a
 /// remote or hardware signer can.
 #[derive(Debug, Clone)]
