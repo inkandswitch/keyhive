@@ -75,7 +75,20 @@ pub(crate) type MembersKey = (Digest<CertificateSet>, Identifier);
 
 /// A digest of a [MembershipView] query: the certificate set, resource and CGKA
 /// group members for the query.
-type QueryHash = [u8; 32];
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct QueryHash([u8; 32]);
+
+impl QueryHash {
+    fn new((set, resource): MembersKey, cgka_members: &BTreeSet<MemberId>) -> Self {
+        let mut query = blake3::Hasher::new();
+        query.update(set.as_slice());
+        query.update(resource.as_bytes());
+        for member in cgka_members {
+            query.update(member.as_bytes());
+        }
+        Self(*query.finalize().as_bytes())
+    }
+}
 
 /// How many of Keyline's answers about a resource are kept outside a replay.
 /// Writes and merges ask about sets near the current heads, a few at a time.
@@ -213,14 +226,7 @@ impl CitedCertificates {
         key: MembersKey,
         cgka_members: &BTreeSet<MemberId>,
     ) -> Option<BTreeSet<MemberId>> {
-        let (set, resource) = key;
-        let mut query = blake3::Hasher::new();
-        query.update(set.as_slice());
-        query.update(resource.as_bytes());
-        for member in cgka_members {
-            query.update(member.as_bytes());
-        }
-        let query_hash = *query.finalize().as_bytes();
+        let query_hash = QueryHash::new(key, cgka_members);
         if let Some(non_members) = self.non_members.get(&query_hash) {
             return Some(non_members.clone());
         }
