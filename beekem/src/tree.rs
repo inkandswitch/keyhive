@@ -40,15 +40,22 @@ impl PathChange {
     /// intersecting node for which we have its child's sibling secret. If one
     /// is found, then decrypt back up the path toward the root. If not, or a node
     /// above it has more than one version, then return `None`.
-    pub(crate) fn decrypt_root_secret(&self, sks: &ShareKeyMap) -> Option<ShareSecretKey> {
-        let (intersection_idx, mut secret) = self
-            .path
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(i, (_, node))| node.decrypt_with_sibling_secret(sks).map(|sk| (i, sk)))?;
+    pub(crate) fn decrypt_root_secret(
+        &self,
+        doc_id: TreeId,
+        sks: &ShareKeyMap,
+    ) -> Option<ShareSecretKey> {
+        let (intersection_idx, mut secret) =
+            self.path
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(i, (_, node))| {
+                    node.decrypt_with_sibling_secret(doc_id, sks)
+                        .map(|sk| (i, sk))
+                })?;
         for (_, node) in &self.path[intersection_idx + 1..] {
-            secret = node.decrypt_with_child_secret(&secret)?;
+            secret = node.decrypt_with_child_secret(doc_id, &secret)?;
         }
         Some(secret)
     }
@@ -418,7 +425,8 @@ impl BeeKem {
                 if child_sks.contains_key(&parent_pk) {
                     return Ok(child_sks.get(&parent_pk).cloned());
                 }
-                let secret = parent.decrypt_secret(child_node_key, child_sks, seen_idxs)?;
+                let secret =
+                    parent.decrypt_secret(self.doc_id, child_node_key, child_sks, seen_idxs)?;
                 if secret.share_key() != parent_pk {
                     return Err(CgkaError::PathSecretMismatch);
                 }
@@ -456,7 +464,7 @@ impl BeeKem {
             let paired_sk = ShareSecretKey::generate(csprng);
             let paired_pk = paired_sk.share_key();
             let encrypted_sk = crate::encrypted::encrypt_secret(
-                self.doc_id.as_bytes(),
+                self.doc_id,
                 *new_parent_sk,
                 child_sk,
                 &paired_pk,
@@ -472,7 +480,7 @@ impl BeeKem {
                     NodeKey::ConflictKeys(_) => return Err(CgkaError::UnexpectedKeyConflict),
                 };
                 let encrypted_sk = crate::encrypted::encrypt_secret(
-                    self.doc_id.as_bytes(),
+                    self.doc_id,
                     *new_parent_sk,
                     child_sk,
                     &next_pk,

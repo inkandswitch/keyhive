@@ -2,7 +2,7 @@
 
 use crate::{
     encrypted::EncryptedSecret,
-    id::MemberId,
+    id::{MemberId, TreeId},
     keys::{NodeKey, ShareKeyMap},
     operation::CgkaOperation,
     test_utils::{member, name_for, Group, Member, NO_CITATIONS},
@@ -491,22 +491,29 @@ fn replicas_converge_over_random_concurrent_operations() {
     });
 }
 
-/// Decrypt `encrypted` with a key from `known`.
+/// Decrypt `encrypted`, from tree `doc_id`, with a key from `known`.
 pub(super) fn try_decrypt(
+    doc_id: TreeId,
     known: &ShareKeyMap,
     encrypter_pk: ShareKey,
     encrypted: &EncryptedSecret<ShareSecretKey>,
 ) -> Option<ShareSecretKey> {
     let bytes = match known.get(&encrypter_pk) {
-        Some(encrypter_sk) => encrypted.try_encrypter_decrypt(encrypter_sk).ok()?,
-        None => known.try_decrypt_encryption(encrypter_pk, encrypted).ok()?,
+        Some(encrypter_sk) => encrypted.try_encrypter_decrypt(doc_id, encrypter_sk).ok()?,
+        None => known
+            .try_decrypt_encryption(doc_id, encrypter_pk, encrypted)
+            .ok()?,
     };
     Some(ShareSecretKey::force_from_bytes(bytes.try_into().ok()?))
 }
 
-/// Extend `known` with every node secret it can be used to decrypt from `paths`.
-/// Repeat until nothing else is learned.
-pub(super) fn learn_from(mut known: ShareKeyMap, paths: &[&PathChange]) -> ShareKeyMap {
+/// Extend `known` with every node secret it can be used to decrypt from
+/// `paths`, in tree `doc_id`. Repeat until nothing else is learned.
+pub(super) fn learn_from(
+    doc_id: TreeId,
+    mut known: ShareKeyMap,
+    paths: &[&PathChange],
+) -> ShareKeyMap {
     loop {
         let before = known.len();
         for path in paths {
@@ -515,10 +522,9 @@ pub(super) fn learn_from(mut known: ShareKeyMap, paths: &[&PathChange]) -> Share
                     if known.contains_key(&version.pk) {
                         continue;
                     }
-                    let secret = version
-                        .sk
-                        .values()
-                        .find_map(|encrypted| try_decrypt(&known, version.encrypter_pk, encrypted));
+                    let secret = version.sk.values().find_map(|encrypted| {
+                        try_decrypt(doc_id, &known, version.encrypter_pk, encrypted)
+                    });
                     if let Some(sk) = secret {
                         known.insert(version.pk, sk);
                     }
@@ -568,11 +574,15 @@ fn removed_members_learn_nothing_from_a_rotation_that_excludes_them() {
             for &i in &excluded {
                 pooled.extend(&group.replicas[i].owner_sks);
             }
-            let learned = learn_from(pooled, &paths);
+            let learned = learn_from(group.replicas[0].doc_id, pooled, &paths);
             let recipient =
                 (0..outcome.member_count).find(|&j| j != *author && tree.contains(&group.id(j)));
             if let Some(j) = recipient {
-                let theirs = learn_from(group.replicas[j].owner_sks.clone(), &paths);
+                let theirs = learn_from(
+                    group.replicas[j].doc_id,
+                    group.replicas[j].owner_sks.clone(),
+                    &paths,
+                );
                 assert!(
                     new_path(op).path.iter().any(|(_, node)| node
                         .versions()
@@ -644,9 +654,10 @@ async fn a_removal_beats_a_concurrent_add_of_the_same_member() {
         keys.insert(pk, sk);
         keys
     };
-    let learned_by_d = learn_from(leaf_key(d.pk, d.sk), &paths);
+    let doc_id = group.replicas[0].doc_id;
+    let learned_by_d = learn_from(doc_id, leaf_key(d.pk, d.sk), &paths);
     let c = &group.members[2];
-    let learned_by_c = learn_from(leaf_key(c.pk, c.sk), &paths);
+    let learned_by_c = learn_from(doc_id, leaf_key(c.pk, c.sk), &paths);
     let next_keys: Vec<ShareKey> = new_path(&next)
         .path
         .iter()

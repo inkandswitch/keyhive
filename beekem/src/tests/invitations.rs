@@ -79,13 +79,8 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
             inviter_pk,
             ancestor_secrets: vec![InvitationSecret {
                 update_op_hash: op2_hash,
-                encrypted_root_secret: encrypt_secret(
-                    doc_id.as_bytes(),
-                    secret.0,
-                    &inviter_sk,
-                    &bob_pk,
-                )
-                .unwrap(),
+                encrypted_root_secret: encrypt_secret(doc_id, secret.0, &inviter_sk, &bob_pk)
+                    .unwrap(),
             }],
         })),
         predecessors: Vec::new(),

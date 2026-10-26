@@ -42,7 +42,7 @@ async fn forged_update(
         let incorrect_secret = ShareSecretKey::generate(rng);
         for encrypted in version.sk.values_mut() {
             *encrypted = encrypt_secret(
-                doc_id.as_bytes(),
+                *doc_id,
                 incorrect_secret,
                 &encrypter_sk,
                 &encrypted.paired_pk,

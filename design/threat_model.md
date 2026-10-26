@@ -108,7 +108,8 @@ Two members issue concurrent path updates; an attacker who compromised one fork 
 ### T7. Nonce reuse and key commitment
 
 - Nonces are derived from key, plaintext, and document ID (for content, per chunk, with the chunk's index and the block's header); reuse requires identical inputs.
-- The recipient recomputes the nonce after decryption and rejects a mismatch, which commits the ciphertext to one key. Content and wrapped root secrets are checked; BeeKEM node secrets are not yet ([G5](#g5-beekem-node-secrets-are-decrypted-without-the-nonce-check)). See [`ciphersuite.md`](./ciphersuite.md).
+- The recipient recomputes the nonce after decryption and rejects a mismatch, which commits the ciphertext to one key. Content, wrapped root secrets and BeeKEM node secrets are all checked. See [`ciphersuite.md`](./ciphersuite.md).
+- A BeeKEM node secret's associated data is its tree and both public keys of the exchange it was sealed under, so it opens in no other tree, even where the same share keys appear in several trees.
 - Content's associated data binds every chunk to its block's header, its document, its index, and whether it is the last.
 
 ### T8. Metadata
@@ -142,10 +143,6 @@ A remove must cite a revocation that covers a delegation on the removed member's
 ### G4. Reconciliation follows local writes only
 
 A replica adds and removes readers in its trees after its own membership writes, for the documents it holds. A certificate received from a peer changes Keyline but not the trees, so a reader that a peer revoked is removed from a tree only by the revoker's replica. A reader whose prekeys a replica does not hold is not added there.
-
-### G5. BeeKEM node secrets are decrypted without the nonce check
-
-Content and the root secrets an update wraps recompute their synthetic nonce after decryption (T7). The node secrets in a path update (`EncryptedSecret`) do not, so they are not committed to one key. Their format belongs to the tree, and changes with the tree's codec.
 
 ## Non-Goals
 

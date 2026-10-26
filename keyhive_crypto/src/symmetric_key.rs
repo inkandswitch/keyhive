@@ -1,7 +1,6 @@
 //! Symmetric cipher newtype.
 
 use super::{
-    domain_separator::SEPARATOR,
     separable::Separable,
     siv::{nonces_match, Siv},
 };
@@ -16,20 +15,16 @@ use x25519_dalek::SharedSecret;
 /// # Example
 ///
 /// ```
-/// # use keyhive_crypto::{siv::Siv, symmetric_key::SymmetricKey};
+/// # use keyhive_crypto::symmetric_key::SymmetricKey;
 /// #
-/// let plaintext = b"hello world";
-/// let mut csprng = rand::rngs::OsRng;
-/// let doc_id = b"some-document-id";
+/// let key = SymmetricKey::generate(&mut rand::rngs::OsRng);
+/// let sealed = key.try_seal(b"hello world", b"some-document-id").expect("seals");
 ///
-/// let key = SymmetricKey::generate(&mut csprng);
-/// let nonce = Siv::new(&key, plaintext, doc_id);
-///
-/// let mut roundtrip_buf = plaintext.to_vec();
-/// key.try_encrypt(nonce, &mut roundtrip_buf).unwrap();
-/// key.try_decrypt(nonce, &mut roundtrip_buf).unwrap();
-///
-/// assert_eq!(roundtrip_buf.as_slice(), plaintext);
+/// assert_eq!(
+///     key.try_open(&sealed, b"some-document-id").as_deref(),
+///     Ok(&b"hello world"[..])
+/// );
+/// assert!(key.try_open(&sealed, b"another-document").is_err());
 /// ```
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SymmetricKey([u8; 32]);
@@ -50,28 +45,6 @@ impl SymmetricKey {
     /// Convert into an [`XChaCha20Poly1305`] key.
     pub fn to_xchacha(&self) -> XChaCha20Poly1305 {
         XChaCha20Poly1305::new(&self.0.into())
-    }
-
-    /// Encrypt data with the [`SymmetricKey`].
-    #[instrument(skip(self))]
-    pub fn try_encrypt(
-        &self,
-        nonce: Siv,
-        data: &mut Vec<u8>,
-    ) -> Result<(), chacha20poly1305::Error> {
-        self.to_xchacha()
-            .encrypt_in_place(nonce.as_xnonce(), SEPARATOR, data)
-    }
-
-    /// Decrypt data with the [`SymmetricKey`].
-    #[instrument(skip(self))]
-    pub fn try_decrypt(
-        &self,
-        nonce: Siv,
-        data: &mut Vec<u8>,
-    ) -> Result<(), chacha20poly1305::Error> {
-        self.to_xchacha()
-            .decrypt_in_place(nonce.as_xnonce(), SEPARATOR, data)
     }
 
     /// AEAD-seal `plaintext`, returning a self-contained `nonce(24) || ciphertext`.

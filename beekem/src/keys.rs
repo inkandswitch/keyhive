@@ -3,6 +3,7 @@
 use crate::{
     encrypted::EncryptedSecret,
     error::CgkaError,
+    id::TreeId,
     transact::{Fork, Merge},
 };
 use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
@@ -46,17 +47,16 @@ impl ShareKeyMap {
 
     pub fn try_decrypt_encryption(
         &self,
+        doc_id: TreeId,
         encrypter_pk: ShareKey,
         encrypted: &EncryptedSecret<ShareSecretKey>,
     ) -> Result<Vec<u8>, CgkaError> {
         let sk = self
             .get(&encrypted.paired_pk)
             .ok_or(CgkaError::SecretKeyNotFound)?;
-        let key = sk.derive_symmetric_key(&encrypter_pk);
-        let mut buf = encrypted.ciphertext.clone();
-        key.try_decrypt(encrypted.nonce, &mut buf)
-            .map_err(|e| CgkaError::Decryption(e.to_string()))?;
-        Ok(buf)
+        encrypted
+            .try_paired_decrypt(doc_id, sk, &encrypter_pk)
+            .map_err(|e| CgkaError::Decryption(e.to_string()))
     }
 
     /// The number of share keys in the map.
