@@ -1,4 +1,4 @@
-use beekem::operation::CgkaOperation;
+use beekem::operation::{CgkaChange, CgkaOperation};
 use derive_more::{From, Into};
 use std::fmt;
 use wasm_bindgen::prelude::*;
@@ -11,10 +11,10 @@ pub struct JsCgkaOperation(pub(crate) CgkaOperation);
 impl JsCgkaOperation {
     #[wasm_bindgen(getter)]
     pub fn variant(&self) -> String {
-        match self.0 {
-            CgkaOperation::Add { .. } => JsCgkaOperationVariant::Add,
-            CgkaOperation::Remove { .. } => JsCgkaOperationVariant::Remove,
-            CgkaOperation::Update { .. } => JsCgkaOperationVariant::Update,
+        match self.0.change {
+            CgkaChange::Add { .. } => JsCgkaOperationVariant::Add,
+            CgkaChange::Remove { .. } => JsCgkaOperationVariant::Remove,
+            CgkaChange::Update { .. } => JsCgkaOperationVariant::Update,
         }
         .to_string()
     }

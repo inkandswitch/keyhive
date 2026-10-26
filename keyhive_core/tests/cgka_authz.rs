@@ -1,7 +1,7 @@
 use beekem::{
     error::CgkaError,
     id::{MemberId, TreeId},
-    operation::{CgkaOperation, CitationId, RemovedMember},
+    operation::{CgkaChange, CgkaOperation, CitationId, RemovedMember},
     tree::PathChange,
 };
 use future_form::{FutureForm, Sendable};
@@ -39,7 +39,7 @@ use keyline::{
 use nonempty::nonempty;
 use rand::rngs::OsRng;
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     convert::Infallible,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -49,7 +49,10 @@ use std::{
 use testresult::TestResult;
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
-async fn cgka_heads(observer: &Hive, doc: DocumentId) -> Vec<Digest<SerdeSigned<CgkaOperation>>> {
+async fn cgka_heads(
+    observer: &Hive,
+    doc: DocumentId,
+) -> BTreeSet<Digest<SerdeSigned<CgkaOperation>>> {
     let ops = observer
         .cgka_ops_for_doc(&doc)
         .await
@@ -108,8 +111,8 @@ async fn intercepted_path(who: &Hive) -> Box<PathChange> {
         .await
         .expect("the writer has the document")
         .iter()
-        .find_map(|op| match op.payload() {
-            CgkaOperation::Update { new_path, .. } => Some(new_path.clone()),
+        .find_map(|op| match &op.payload().change {
+            CgkaChange::Update { new_path, .. } => Some(new_path.clone()),
             _ => None,
         })
         .expect("an update op was produced")
@@ -137,8 +140,8 @@ async fn adds_of(
         .await
         .ok_or("the observer holds the document")?
         .into_iter()
-        .filter(|op| match &op.payload {
-            CgkaOperation::Add { added_id, .. } => *added_id == MemberId::from(member),
+        .filter(|op| match &op.payload.change {
+            CgkaChange::Add { added_id, .. } => *added_id == MemberId::from(member),
             _ => false,
         })
         .collect())
@@ -162,11 +165,9 @@ async fn op_where(
 
 /// The causal root of `doc`'s operations, which is its creator's add of themselves.
 async fn creators_own_add(observer: &Hive, doc: DocumentId) -> SerdeSigned<CgkaOperation> {
-    op_where(
-        observer,
-        doc,
-        |op| matches!(op, CgkaOperation::Add { predecessors, .. } if predecessors.is_empty()),
-    )
+    op_where(observer, doc, |op| {
+        matches!(op.change, CgkaChange::Add { .. }) && op.predecessors.is_empty()
+    })
     .await
 }
 
@@ -238,11 +239,8 @@ async fn receive(observer: &Hive, cert: &VerifiedCertificate<ContentHeads<[u8; 3
         .expect("a valid certificate is received");
 }
 
-fn cites(certs: &[&VerifiedCertificate<ContentHeads<[u8; 32]>>]) -> Vec<CitationId> {
-    let mut cited: Vec<CitationId> = certs.iter().map(|c| citation(c)).collect();
-    cited.sort_unstable();
-    cited.dedup();
-    cited
+fn cites(certs: &[&VerifiedCertificate<ContentHeads<[u8; 32]>>]) -> BTreeSet<CitationId> {
+    certs.iter().map(|c| citation(c)).collect()
 }
 
 /// An add of `added` with key `pk` on `doc`, on top of `observer`'s heads.
@@ -251,34 +249,19 @@ async fn add_op(
     doc: DocumentId,
     added: IndividualId,
     (pk, key_proof): (ShareKey, Option<Vec<u8>>),
-    citations: Vec<CitationId>,
+    citations: BTreeSet<CitationId>,
 ) -> CgkaOperation {
-    CgkaOperation::Add {
-        added_id: MemberId::from(added),
-        pk,
-        leaf_index: 0,
-        invitation: None,
-        key_proof,
-        predecessors: cgka_heads(observer, doc).await,
+    CgkaOperation {
         doc_id: TreeId::from(doc),
-        citations,
-    }
-}
-
-/// An update of `id`'s key with `new_path` on `doc`, on top of `observer`'s
-/// heads.
-async fn update_op(
-    observer: &Hive,
-    doc: DocumentId,
-    id: IndividualId,
-    new_path: Box<PathChange>,
-) -> CgkaOperation {
-    CgkaOperation::Update {
-        id: MemberId::from(id),
-        new_path,
-        predecessor_secrets: Vec::new(),
         predecessors: cgka_heads(observer, doc).await,
-        doc_id: TreeId::from(doc),
+        change: CgkaChange::Add {
+            added_id: MemberId::from(added),
+            pk,
+            leaf_index: 0,
+            invitation: None,
+            key_proof,
+            citations,
+        },
     }
 }
 
@@ -288,19 +271,25 @@ async fn proven_add(
     observer: &Hive,
     doc: DocumentId,
     who: &Hive,
-    citations: Vec<CitationId>,
+    citations: BTreeSet<CitationId>,
 ) -> CgkaOperation {
     let (pk, proof) = proven_prekey(who).await;
     add_op(observer, doc, who.id(), (pk, Some(proof)), citations).await
 }
 
 /// A remove that lists no member, on `doc`, on top of `observer`'s heads.
-async fn remove_op(observer: &Hive, doc: DocumentId, citations: Vec<CitationId>) -> CgkaOperation {
-    CgkaOperation::Remove {
-        removed: vec![],
-        predecessors: cgka_heads(observer, doc).await,
+async fn remove_op(
+    observer: &Hive,
+    doc: DocumentId,
+    citations: BTreeSet<CitationId>,
+) -> CgkaOperation {
+    CgkaOperation {
         doc_id: TreeId::from(doc),
-        citations,
+        predecessors: cgka_heads(observer, doc).await,
+        change: CgkaChange::Remove {
+            citations,
+            removed: BTreeSet::new(),
+        },
     }
 }
 
@@ -448,14 +437,16 @@ async fn an_add_whose_key_its_member_did_not_publish_is_denied() -> TestResult {
 async fn a_remove_that_lists_a_specific_member_is_denied() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
-    let op = CgkaOperation::Remove {
-        removed: vec![RemovedMember {
-            id: MemberId::from(bob.id()),
-            leaf_idx: 1,
-        }],
-        predecessors: cgka_heads(&alice, doc_id).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        citations: vec![],
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Remove {
+            citations: BTreeSet::new(),
+            removed: BTreeSet::from([RemovedMember {
+                id: MemberId::from(bob.id()),
+                leaf_idx: 1,
+            }]),
+        },
     };
     let result = alice
         .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
@@ -463,33 +454,6 @@ async fn a_remove_that_lists_a_specific_member_is_denied() -> TestResult {
 
     assert!(is_denied(&result), "{result:?}");
     assert!(cgka_members(&alice, doc_id).await.contains(&bob.id()));
-    Ok(())
-}
-
-#[tokio::test]
-async fn citations_must_be_strictly_ascending() -> TestResult {
-    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
-    let mut grants = Vec::new();
-    for _ in 0..2 {
-        let reader = make_simple_keyhive().await?;
-        let grant = issue_grant(&alice, reader.id(), doc_id, Power::Read).await?;
-        grants.push(citation(&grant));
-    }
-    grants.sort_unstable();
-    let (low, high) = (grants[0], grants[1]);
-
-    for cited in [vec![high, low], vec![low, low]] {
-        let op = remove_op(&alice, doc_id, cited.clone()).await;
-        let result = alice
-            .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
-            .await;
-        assert!(is_denied(&result), "{cited:?}: {result:?}");
-    }
-    let op = remove_op(&alice, doc_id, vec![low, high]).await;
-    let result = alice
-        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
-        .await;
-    assert!(result.is_ok(), "{result:?}");
     Ok(())
 }
 
@@ -560,12 +524,13 @@ async fn an_operation_citing_a_certificate_not_yet_received_waits_for_it() -> Te
 #[tokio::test]
 async fn an_operation_whose_predecessor_is_missing_is_pending() -> TestResult {
     let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
-    let op = CgkaOperation::Update {
-        id: MemberId::from(alice.id()),
-        new_path: intercepted_path(&alice).await,
-        predecessor_secrets: Vec::new(),
-        predecessors: vec![Digest::from([9u8; 32])],
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
+        predecessors: BTreeSet::from([Digest::from([9u8; 32])]),
+        change: CgkaChange::Update {
+            new_path: intercepted_path(&alice).await,
+            predecessor_secrets: Vec::new(),
+        },
     };
     let result = alice
         .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
@@ -592,8 +557,8 @@ async fn an_operation_differing_from_one_in_the_graph_is_still_verified() -> Tes
     let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
     let known = creators_own_add(&alice, doc_id).await;
     let mut payload = known.payload().clone();
-    if let CgkaOperation::Add { citations, .. } = &mut payload {
-        citations.push(CitationId([0; 32]));
+    if let CgkaChange::Add { citations, .. } = &mut payload.change {
+        citations.insert(CitationId([0; 32]));
     }
 
     let result = alice
@@ -628,12 +593,11 @@ async fn only_a_root_edges_audience_can_start_a_documents_history() -> TestResul
         .keys()
         .next()
         .ok_or("bob's grant")?;
-    if let CgkaOperation::Add {
+    if let CgkaChange::Add {
         citations: cited, ..
-    } = &mut reissued
+    } = &mut reissued.change
     {
-        cited.push(CitationId(bobs_grant.into()));
-        cited.sort_unstable();
+        cited.insert(CitationId(bobs_grant.into()));
     }
     let signed = bob.serde_sign_cgka_op(reissued).await?;
     let result = alice.receive_cgka_op(signed.clone()).await;
@@ -669,16 +633,13 @@ async fn root_add_of(
     doc_id: DocumentId,
     signer: &Hive,
 ) -> TestResult<SerdeSigned<CgkaOperation>> {
-    let mut citations = vec![
+    let citations = BTreeSet::from([
         delegation_citation(alice, kl(doc_id), kl(group_id)).await?,
         delegation_citation(alice, kl(group_id), kl(alice.id())).await?,
         delegation_citation(alice, kl(group_id), kl(signer.id())).await?,
-    ];
-    citations.sort_unstable();
+    ]);
     let mut op = proven_add(alice, doc_id, signer, citations).await;
-    if let CgkaOperation::Add { predecessors, .. } = &mut op {
-        predecessors.clear();
-    }
+    op.predecessors.clear();
     Ok(signer.serde_sign_cgka_op(op).await?)
 }
 
@@ -732,8 +693,8 @@ async fn an_add_through_a_group_is_still_applied_to_cgka_graph_after_member_revo
     alice.add_member(bob_id, group_id, Power::Read).await?;
     alice.add_member(group_id, doc_id, Power::Read).await?;
     let add_of_bob = op_where(&alice, doc_id, |op| {
-        matches!(op, CgkaOperation::Add { added_id, .. }
-            if *added_id == MemberId::from(bob.id()))
+        matches!(op.change, CgkaChange::Add { added_id, .. }
+            if added_id == MemberId::from(bob.id()))
     })
     .await;
     alice.revoke_member(bob_id, true, group_id).await?;
@@ -752,34 +713,6 @@ async fn an_add_through_a_group_is_still_applied_to_cgka_graph_after_member_revo
 
     assert!(result.is_ok(), "{result:?}");
     assert!(contains_op(&carol, doc_id, &add_of_bob).await);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_rotation_of_another_members_key_is_denied() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-
-    let mut path = intercepted_path(&alice).await;
-    path.leaf_id = MemberId::from(bob.id());
-    let op = update_op(&alice, doc_id, bob.id(), path).await;
-    let result = alice
-        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
-        .await;
-
-    assert!(is_denied(&result), "{result:?}");
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_rotation_whose_id_differs_from_its_paths_member_is_denied() -> TestResult {
-    let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
-
-    let op = update_op(&alice, doc_id, alice.id(), intercepted_path(&bob).await).await;
-    let result = alice
-        .receive_cgka_op(bob.serde_sign_cgka_op(op).await?)
-        .await;
-
-    assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
 
@@ -825,7 +758,7 @@ async fn a_revoked_writer_adds_no_reader() -> TestResult {
     let ops = bob.cgka_ops_for_doc(&doc_id).await.unwrap_or_default();
     let carol_member = MemberId::from(carol_id);
     assert!(!ops.iter().any(
-        |op| matches!(op.payload, CgkaOperation::Add { added_id, .. } if added_id == carol_member)
+        |op| matches!(op.payload.change, CgkaChange::Add { added_id, .. } if added_id == carol_member)
     ));
     Ok(())
 }
@@ -897,9 +830,9 @@ async fn a_member_added_under_a_key_it_rotated_away_rotates_before_writing() -> 
         .ok_or("carol has the document")?
         .iter()
         .any(|op| {
-            matches!(op.payload(), CgkaOperation::Update { id, new_path, .. }
-                if *id == MemberId::from(carol_id)
-                    && !new_path.leaf_pk.contains_key(&retired))
+            matches!(&op.payload().change, CgkaChange::Update { new_path, .. }
+                if IndividualId::from(*op.issuer()) == carol_id
+                    && new_path.leaf_pk != retired)
         });
     assert!(rotated, "carol still writes under the key she rotated away");
     Ok(())
@@ -958,16 +891,18 @@ async fn an_add_of_a_reader_revoked_before_being_added_is_removed_at_the_next_wr
 async fn an_operation_built_on_a_denied_one_is_denied() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = make_simple_keyhive().await?;
-    let denied = remove_op(&alice, doc_id, vec![]).await;
+    let denied = remove_op(&alice, doc_id, BTreeSet::new()).await;
     let denied = mallory.serde_sign_cgka_op(denied).await?;
     let result = alice.receive_cgka_op(denied.clone()).await;
     assert!(is_denied(&result), "{result:?}");
 
-    let child = CgkaOperation::Remove {
-        removed: vec![],
-        predecessors: vec![Digest::hash(&denied)],
+    let child = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        citations: vec![],
+        predecessors: BTreeSet::from([Digest::hash(&denied)]),
+        change: CgkaChange::Remove {
+            citations: BTreeSet::new(),
+            removed: BTreeSet::new(),
+        },
     };
     let result = alice
         .receive_cgka_op(bob.serde_sign_cgka_op(child).await?)
@@ -983,15 +918,17 @@ async fn a_remove_the_cgka_refuses(
     alice: &Hive,
     doc_id: DocumentId,
 ) -> TestResult<SerdeSigned<CgkaOperation>> {
-    let op = CgkaOperation::Remove {
-        removed: vec![],
-        predecessors: vec![],
+    let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        citations: creators_own_add(alice, doc_id)
-            .await
-            .payload()
-            .citations()
-            .to_vec(),
+        predecessors: BTreeSet::new(),
+        change: CgkaChange::Remove {
+            citations: creators_own_add(alice, doc_id)
+                .await
+                .payload()
+                .citations()
+                .clone(),
+            removed: BTreeSet::new(),
+        },
     };
     Ok(alice.serde_sign_cgka_op(op).await?)
 }
@@ -1017,11 +954,13 @@ async fn an_operation_built_on_one_that_failed_to_merge_is_denied() -> TestResul
     let refused = a_remove_the_cgka_refuses(&alice, doc_id).await?;
     let _ = alice.receive_cgka_op(refused.clone()).await;
 
-    let child = CgkaOperation::Remove {
-        removed: vec![],
-        predecessors: vec![Digest::hash(&refused)],
+    let child = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        citations: vec![],
+        predecessors: BTreeSet::from([Digest::hash(&refused)]),
+        change: CgkaChange::Remove {
+            citations: BTreeSet::new(),
+            removed: BTreeSet::new(),
+        },
     };
     let result = alice
         .receive_cgka_op(bob.serde_sign_cgka_op(child).await?)
@@ -1220,8 +1159,8 @@ async fn an_add_contains_the_prekey_operation_that_published_its_key() -> TestRe
     let proofs: Vec<_> = adds_of(&alice, doc, bob_id)
         .await?
         .iter()
-        .filter_map(|op| match &op.payload {
-            CgkaOperation::Add { key_proof, .. } => key_proof.clone(),
+        .filter_map(|op| match &op.payload.change {
+            CgkaChange::Add { key_proof, .. } => key_proof.clone(),
             _ => None,
         })
         .map(|proof| Signed::<AddKeyOp>::decode(&proof))

@@ -13,7 +13,7 @@ use crate::{
     keyhive::Keyhive, listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore, update::RevokeMemberUpdate,
 };
-use beekem::operation::{CgkaOperation, CitationId};
+use beekem::operation::{CgkaChange, CitationId};
 use keyhive_crypto::{signer::memory::MemorySigner, verified::SignError};
 use rand::rngs::OsRng;
 
@@ -36,7 +36,7 @@ pub fn has_remove_citing_its_revocation(update: &RevokeMemberUpdate<[u8; 32]>) -
         .map(|r| CitationId(r.digest().into()))
         .collect();
     update.cgka_ops().iter().any(|op| {
-        matches!(op.payload(), CgkaOperation::Remove { .. })
+        matches!(op.payload().change, CgkaChange::Remove { .. })
             && op
                 .payload()
                 .citations()

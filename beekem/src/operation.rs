@@ -97,7 +97,7 @@ pub struct InvitationSecret {
     /// [`InvitationSecret::encrypted_root_secret`].
     pub update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
 
-    /// The root secret, encrypted to the `pk` of the [`CgkaOperation::Add`]
+    /// The root secret, encrypted to the `pk` of the [`CgkaChange::Add`]
     /// wrapping this invitation.
     pub encrypted_root_secret: EncryptedSecret<ShareSecretKey>,
 }
@@ -220,8 +220,8 @@ impl StreamDecode for PredecessorSecret {
     }
 }
 
-/// A member optionally listed in a [`CgkaOperation::Remove`].
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+/// A member optionally listed in a [`CgkaChange::Remove`].
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct RemovedMember {
     /// The member removed.
@@ -252,9 +252,26 @@ impl StreamDecode for RemovedMember {
     }
 }
 
+/// A change to a tree, with the tree it applies to and its causal
+/// predecessors.
+///
+/// Who made it is not a field: it is the signer, in the signed envelope. For
+/// an update, the leaf it rotates is the signer's.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub enum CgkaOperation {
+pub struct CgkaOperation {
+    pub doc_id: TreeId,
+
+    /// The zero or more immediate causal predecessors of this operation.
+    pub predecessors: BTreeSet<Digest<SerdeSigned<CgkaOperation>>>,
+
+    pub change: CgkaChange,
+}
+
+/// What a [`CgkaOperation`] changes.
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub enum CgkaChange {
     Add {
         added_id: MemberId,
         pk: ShareKey,
@@ -268,70 +285,198 @@ pub enum CgkaOperation {
         /// prekey operation. BeeKEM does not read it. `None` when the
         /// authorization in use does not require it.
         key_proof: Option<Vec<u8>>,
-        predecessors: Vec<Digest<SerdeSigned<CgkaOperation>>>,
-        doc_id: TreeId,
         /// The membership citations for this add. An operation's citation set
         /// is everything its causal ancestors cited plus these.
-        citations: Vec<CitationId>,
+        citations: BTreeSet<CitationId>,
     },
     Remove {
-        predecessors: Vec<Digest<SerdeSigned<CgkaOperation>>>,
-        doc_id: TreeId,
         /// The membership citations for this remove, as for an add.
-        citations: Vec<CitationId>,
-        /// The members this operation removes from the tree. The list may be
+        citations: BTreeSet<CitationId>,
+        /// The members this operation removes from the tree. The set may be
         /// empty depending on whether the client specifies the members to remove
         /// or infers them from the citations.
-        removed: Vec<RemovedMember>,
+        removed: BTreeSet<RemovedMember>,
     },
     Update {
-        id: MemberId,
         new_path: Box<PathChange>,
         /// The root secrets this update's author could derive for its nearest
         /// update ancestors and for every chainable update whose root secret it
         /// had not yet decrypted from a later update, each encrypted under a key
         /// derived from this update's root secret.
         predecessor_secrets: Vec<PredecessorSecret>,
-        predecessors: Vec<Digest<SerdeSigned<CgkaOperation>>>,
-        doc_id: TreeId,
     },
 }
+
+/// An update cites nothing.
+static NO_CITATIONS: BTreeSet<CitationId> = BTreeSet::new();
 
 impl CgkaOperation {
     /// The zero or more immediate causal predecessors of this operation.
     pub fn predecessors(&self) -> Set<Digest<SerdeSigned<CgkaOperation>>> {
-        Set::from_iter(self.predecessor_list().iter().copied())
-    }
-
-    fn predecessor_list(&self) -> &[Digest<SerdeSigned<CgkaOperation>>] {
-        match self {
-            CgkaOperation::Add { predecessors, .. }
-            | CgkaOperation::Remove { predecessors, .. }
-            | CgkaOperation::Update { predecessors, .. } => predecessors,
-        }
+        Set::from_iter(self.predecessors.iter().copied())
     }
 
     /// The membership citations for this operation. Empty for an update.
-    pub fn citations(&self) -> &[CitationId] {
-        match self {
-            CgkaOperation::Add { citations, .. } | CgkaOperation::Remove { citations, .. } => {
-                citations
-            }
-            CgkaOperation::Update { .. } => &[],
+    pub fn citations(&self) -> &BTreeSet<CitationId> {
+        match &self.change {
+            CgkaChange::Add { citations, .. } | CgkaChange::Remove { citations, .. } => citations,
+            CgkaChange::Update { .. } => &NO_CITATIONS,
         }
     }
 
     /// Whether this is an add or a remove.
     pub(crate) fn is_membership_change(&self) -> bool {
-        matches!(self, Self::Add { .. } | Self::Remove { .. })
+        !self.is_update()
+    }
+
+    /// Whether this is an update.
+    pub fn is_update(&self) -> bool {
+        matches!(self.change, CgkaChange::Update { .. })
     }
 
     /// Document/tree id.
     pub fn doc_id(&self) -> &TreeId {
+        &self.doc_id
+    }
+}
+
+/// `doc_id ‖ predecessors ‖ change`, the predecessors as a count and then
+/// ascending.
+impl Encode for CgkaOperation {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.doc_id.encode_into(out);
+        self.predecessors.encode_into(out);
+        self.change.encode_into(out);
+    }
+}
+
+impl Decode for CgkaOperation {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for CgkaOperation {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (doc_id, rest) = TreeId::decode_next(bytes)?;
+        let (predecessors, rest) = BTreeSet::decode_next(rest)?;
+        let (change, rest) = CgkaChange::decode_next(rest)?;
+        Ok((
+            CgkaOperation {
+                doc_id,
+                predecessors,
+                change,
+            },
+            rest,
+        ))
+    }
+}
+
+/// A tag, `0` add, `1` remove or `2` update, then the variant's fields in
+/// order. Sets are a count and then ascending; an `Option` is tag `0`, or tag
+/// `1` and the value; `key_proof` is length-prefixed.
+impl Encode for CgkaChange {
+    fn encode_into(&self, out: &mut Vec<u8>) {
         match self {
-            CgkaOperation::Add { doc_id, .. } => doc_id,
-            CgkaOperation::Remove { doc_id, .. } => doc_id,
-            CgkaOperation::Update { doc_id, .. } => doc_id,
+            CgkaChange::Add {
+                added_id,
+                pk,
+                leaf_index,
+                invitation,
+                key_proof,
+                citations,
+            } => {
+                out.push(0);
+                added_id.encode_into(out);
+                pk.encode_into(out);
+                leaf_index.encode_into(out);
+                match invitation {
+                    None => out.push(0),
+                    Some(invitation) => {
+                        out.push(1);
+                        invitation.encode_into(out);
+                    }
+                }
+                match key_proof {
+                    None => out.push(0),
+                    Some(key_proof) => {
+                        out.push(1);
+                        encode_bytes(key_proof, out);
+                    }
+                }
+                citations.encode_into(out);
+            }
+            CgkaChange::Remove { citations, removed } => {
+                out.push(1);
+                citations.encode_into(out);
+                removed.encode_into(out);
+            }
+            CgkaChange::Update {
+                new_path,
+                predecessor_secrets,
+            } => {
+                out.push(2);
+                new_path.encode_into(out);
+                encode_list(predecessor_secrets, out);
+            }
+        }
+    }
+}
+
+impl Decode for CgkaChange {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for CgkaChange {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        match bytes.split_first() {
+            None => Err(DecodeError::UnexpectedEnd),
+            Some((0, rest)) => {
+                let (added_id, rest) = MemberId::decode_next(rest)?;
+                let (pk, rest) = ShareKey::decode_next(rest)?;
+                let (leaf_index, rest) = u32::decode_next(rest)?;
+                let (invitation, rest) = Option::<Invitation>::decode_next(rest)?;
+                let (key_proof, rest) = match rest.split_first() {
+                    None => return Err(DecodeError::UnexpectedEnd),
+                    Some((0, rest)) => (None, rest),
+                    Some((1, rest)) => {
+                        let (key_proof, rest) = decode_bytes(rest)?;
+                        (Some(key_proof.to_vec()), rest)
+                    }
+                    Some((&tag, _)) => return Err(DecodeError::InvalidTag(tag)),
+                };
+                let (citations, rest) = BTreeSet::decode_next(rest)?;
+                Ok((
+                    CgkaChange::Add {
+                        added_id,
+                        pk,
+                        leaf_index,
+                        invitation: invitation.map(Box::new),
+                        key_proof,
+                        citations,
+                    },
+                    rest,
+                ))
+            }
+            Some((1, rest)) => {
+                let (citations, rest) = BTreeSet::decode_next(rest)?;
+                let (removed, rest) = BTreeSet::decode_next(rest)?;
+                Ok((CgkaChange::Remove { citations, removed }, rest))
+            }
+            Some((2, rest)) => {
+                let (new_path, rest) = PathChange::decode_next(rest)?;
+                let (predecessor_secrets, rest) = decode_list(rest)?;
+                Ok((
+                    CgkaChange::Update {
+                        new_path: Box::new(new_path),
+                        predecessor_secrets,
+                    },
+                    rest,
+                ))
+            }
+            Some((&tag, _)) => Err(DecodeError::InvalidTag(tag)),
         }
     }
 }
@@ -400,7 +545,7 @@ impl Merge for CgkaOperationGraph {
         let ops = &self.cgka_ops;
         self.cgka_op_heads.retain(|head| {
             !ops.values()
-                .any(|op| op.payload.predecessor_list().contains(head))
+                .any(|op| op.payload.predecessors.contains(head))
         });
         self.depths.extend(fork.depths);
         self.citations.extend(fork.citations);
@@ -432,7 +577,7 @@ impl CgkaOperationGraph {
     pub(crate) fn is_chainable(&self, op_hash: &Digest<SerdeSigned<CgkaOperation>>) -> bool {
         self.cgka_ops
             .get(op_hash)
-            .is_some_and(|op| matches!(op.payload, CgkaOperation::Update { .. }))
+            .is_some_and(|op| op.payload.is_update())
             && !self.latest_updates.contains(op_hash)
     }
 
@@ -444,7 +589,8 @@ impl CgkaOperationGraph {
         &self,
         op_hash: &Digest<SerdeSigned<CgkaOperation>>,
     ) -> Option<ShareKey> {
-        let CgkaOperation::Update { new_path, .. } = &self.cgka_ops.get(op_hash)?.payload else {
+        let CgkaChange::Update { new_path, .. } = &self.cgka_ops.get(op_hash)?.payload.change
+        else {
             return None;
         };
         let (_, root_node) = new_path.path.last()?;
@@ -470,7 +616,7 @@ impl CgkaOperationGraph {
     /// one of its predecessors is not in the graph.
     pub(crate) fn check_can_add(&self, op: &CgkaOperation) -> Result<(), CgkaError> {
         let predecessors = op.predecessors();
-        if predecessors.is_empty() && !matches!(op, CgkaOperation::Add { .. }) {
+        if predecessors.is_empty() && !matches!(op.change, CgkaChange::Add { .. }) {
             return Err(CgkaError::InvalidOperation);
         }
         if !self.contains_predecessors(&predecessors) {
@@ -493,7 +639,7 @@ impl CgkaOperationGraph {
             return Ok(Set::new());
         }
         self.check_can_add(&op.payload)?;
-        let op_predecessors = op.payload.predecessor_list();
+        let op_predecessors = &op.payload.predecessors;
         let mut depth = 0;
         for pred in op_predecessors {
             depth = depth.max(self.depth(pred)? + 1);
@@ -506,7 +652,7 @@ impl CgkaOperationGraph {
         self.depths.insert(op_hash, depth);
         self.citations
             .extend(op.payload.citations().iter().copied());
-        if !matches!(op.payload, CgkaOperation::Update { .. }) {
+        if !op.payload.is_update() {
             return Ok(Set::new());
         }
         let newly_chainable = self
@@ -557,7 +703,7 @@ impl CgkaOperationGraph {
             if op.payload.is_membership_change() {
                 return Ok(true);
             }
-            for pred in op.payload.predecessor_list() {
+            for pred in &op.payload.predecessors {
                 if seen.insert(*pred) {
                     frontier.push((self.depth(pred)?, *pred));
                 }
@@ -566,7 +712,7 @@ impl CgkaOperationGraph {
         Ok(false)
     }
 
-    /// The nearest [`CgkaOperation::Update`] operations at or before the provided
+    /// The nearest [`CgkaChange::Update`] operations at or before the provided
     /// heads, skipping operations of other kinds.
     pub(crate) fn nearest_update_ancestors(
         &self,
@@ -582,7 +728,7 @@ impl CgkaOperationGraph {
             let Some(op) = self.cgka_ops.get(&op_hash) else {
                 continue;
             };
-            if matches!(op.payload, CgkaOperation::Update { .. }) {
+            if op.payload.is_update() {
                 updates.insert(op_hash);
                 continue;
             }
@@ -593,7 +739,7 @@ impl CgkaOperationGraph {
         updates
     }
 
-    /// Whether a [`CgkaOperation::Add`] of `member` is in the
+    /// Whether a [`CgkaChange::Add`] of `member` is in the
     /// causal past of `op_hash`, counting `op_hash` itself.
     pub(crate) fn has_add_before(
         &self,
@@ -610,13 +756,13 @@ impl CgkaOperationGraph {
                 continue;
             };
             if matches!(
-                op.payload,
-                CgkaOperation::Add { added_id, .. }
+                op.payload.change,
+                CgkaChange::Add { added_id, .. }
                     if added_id == member
             ) {
                 return true;
             }
-            frontier.extend(op.payload.predecessor_list().iter().copied());
+            frontier.extend(op.payload.predecessors.iter().copied());
         }
         false
     }
@@ -628,10 +774,10 @@ impl CgkaOperationGraph {
     pub fn predecessors_for(
         &self,
         op_hash: &Digest<SerdeSigned<CgkaOperation>>,
-    ) -> Option<&[Digest<SerdeSigned<CgkaOperation>>]> {
+    ) -> Option<&BTreeSet<Digest<SerdeSigned<CgkaOperation>>>> {
         self.cgka_ops
             .get(op_hash)
-            .map(|op| op.payload.predecessor_list())
+            .map(|op| &op.payload.predecessors)
     }
 
     /// Sort all operations in the graph into batches.
@@ -769,15 +915,17 @@ mod causal_graph_tests {
         leaf_index: u32,
         predecessors: &[&SerdeSigned<CgkaOperation>],
     ) -> SerdeSigned<CgkaOperation> {
-        let op = CgkaOperation::Add {
-            added_id,
-            pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
-            leaf_index,
-            invitation: None,
-            key_proof: None,
-            predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
+        let op = CgkaOperation {
             doc_id,
-            citations: Vec::new(),
+            predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
+            change: CgkaChange::Add {
+                added_id,
+                pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
+                leaf_index,
+                invitation: None,
+                key_proof: None,
+                citations: BTreeSet::new(),
+            },
         };
         async_signer::try_sign_async::<Local, _, _>(signer, op)
             .await
@@ -813,7 +961,7 @@ mod causal_graph_tests {
         );
         assert_eq!(
             trunk.predecessors_for(&on_fork_hash),
-            Some(&[Digest::hash(&root)][..]),
+            Some(&BTreeSet::from([Digest::hash(&root)])),
             "the merged operation lost its predecessors"
         );
         assert_eq!(
@@ -1057,12 +1205,13 @@ mod causal_graph_tests {
         let new_path =
             arbitrary::Arbitrary::arbitrary(&mut arbitrary::Unstructured::new(&[0; 4096]))
                 .expect("4096 bytes are enough for a path");
-        let op = CgkaOperation::Update {
-            id: MemberId::from(&signer.0),
-            new_path,
-            predecessor_secrets: Vec::new(),
-            predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
+        let op = CgkaOperation {
             doc_id,
+            predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
+            change: CgkaChange::Update {
+                new_path,
+                predecessor_secrets: Vec::new(),
+            },
         };
         async_signer::try_sign_async::<Local, _, _>(signer, op)
             .await

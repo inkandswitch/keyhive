@@ -6,7 +6,12 @@ use crate::{
     id::TreeId,
     transact::{Fork, Merge},
 };
-use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::ToString,
+    vec,
+    vec::Vec,
+};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 
@@ -194,7 +199,7 @@ impl NodeKey {
     /// * `removed` — The keys removed as part of a [`PathChange`](crate::tree::PathChange).
     ///               It's possible that `self` will be one of those,
     ///               in which case a new key is substituted.
-    pub fn merge(&self, new_key: &NodeKey, removed: &[ShareKey]) -> Self {
+    pub fn merge(&self, new_key: &NodeKey, removed: &BTreeSet<ShareKey>) -> Self {
         match self {
             NodeKey::ShareKey(key) => {
                 if removed.contains(key) {

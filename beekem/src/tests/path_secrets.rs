@@ -1,7 +1,10 @@
 //! Path secrets contained in an update operation.
 
 use crate::{
-    encrypted::encrypt_secret, error::CgkaError, operation::CgkaOperation, test_utils::Group,
+    encrypted::encrypt_secret,
+    error::CgkaError,
+    operation::{CgkaChange, CgkaOperation},
+    test_utils::Group,
 };
 use alloc::sync::Arc;
 use future_form::Local;
@@ -27,10 +30,8 @@ async fn forged_update(
         .expect("the author can update");
     group.replicas[author].owner_sks.extend(&copy.owner_sks);
     let mut payload = op.payload;
-    let CgkaOperation::Update {
-        new_path, doc_id, ..
-    } = &mut payload
-    else {
+    let doc_id = payload.doc_id;
+    let CgkaChange::Update { new_path, .. } = &mut payload.change else {
         unreachable!("an update")
     };
     for (_, node) in new_path.path.iter_mut() {
@@ -42,7 +43,7 @@ async fn forged_update(
         let incorrect_secret = ShareSecretKey::generate(rng);
         for encrypted in version.sk.values_mut() {
             *encrypted = encrypt_secret(
-                *doc_id,
+                doc_id,
                 incorrect_secret,
                 &encrypter_sk,
                 &encrypted.paired_pk,

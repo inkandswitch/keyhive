@@ -124,7 +124,10 @@ mod tests {
     use crate::{
         principal::individual::id::IndividualId, store::ciphertext::memory::MemoryCiphertextStore,
     };
-    use beekem::id::{MemberId, TreeId};
+    use beekem::{
+        id::{MemberId, TreeId},
+        operation::CgkaChange,
+    };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
     use keyhive_crypto::{
@@ -133,6 +136,7 @@ mod tests {
     };
     use keyline::power::Power;
     use rand::rngs::OsRng;
+    use std::collections::BTreeSet;
     use test_utils::init_logging;
     use testresult::TestResult;
 
@@ -145,33 +149,39 @@ mod tests {
         let doc_id1 = DocumentId::generate(&mut csprng);
         let doc_id2 = DocumentId::generate(&mut csprng);
 
-        let cgka_op_1 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
-            pk: ShareKey::generate(&mut csprng),
-            leaf_index: 42,
-            invitation: None,
-            key_proof: None,
-            predecessors: vec![],
+        let cgka_op_1 = signer.try_sign_sync(CgkaOperation {
             doc_id: TreeId::from(doc_id1),
-            citations: vec![],
+            predecessors: BTreeSet::new(),
+            change: CgkaChange::Add {
+                added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                pk: ShareKey::generate(&mut csprng),
+                leaf_index: 42,
+                invitation: None,
+                key_proof: None,
+                citations: BTreeSet::new(),
+            },
         })?;
 
-        let cgka_op_2 = signer.try_sign_sync(CgkaOperation::Remove {
-            removed: vec![],
-            predecessors: vec![],
+        let cgka_op_2 = signer.try_sign_sync(CgkaOperation {
             doc_id: TreeId::from(doc_id2),
-            citations: vec![],
+            predecessors: BTreeSet::new(),
+            change: CgkaChange::Remove {
+                citations: BTreeSet::new(),
+                removed: BTreeSet::new(),
+            },
         })?;
 
-        let cgka_op_3 = signer.try_sign_sync(CgkaOperation::Add {
-            added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
-            pk: ShareKey::generate(&mut csprng),
-            leaf_index: 11,
-            invitation: None,
-            key_proof: None,
-            predecessors: vec![],
+        let cgka_op_3 = signer.try_sign_sync(CgkaOperation {
             doc_id: TreeId::from(doc_id1),
-            citations: vec![],
+            predecessors: BTreeSet::new(),
+            change: CgkaChange::Add {
+                added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                pk: ShareKey::generate(&mut csprng),
+                leaf_index: 11,
+                invitation: None,
+                key_proof: None,
+                citations: BTreeSet::new(),
+            },
         })?;
 
         let hash1 = Digest::hash(&cgka_op_1);

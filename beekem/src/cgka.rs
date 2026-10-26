@@ -16,8 +16,8 @@ use crate::{
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, NodeKey, ShareKeyMap},
     operation::{
-        CgkaBatch, CgkaOperation, CgkaOperationGraph, CitationId, Invitation, InvitationSecret,
-        PredecessorSecret, RemovedMember,
+        CgkaBatch, CgkaChange, CgkaOperation, CgkaOperationGraph, CitationId, Invitation,
+        InvitationSecret, PredecessorSecret, RemovedMember,
     },
     pcs_key::{ApplicationSecret, PcsKey},
     root_secrets::{RootSecrets, VerifiedRootSecret},
@@ -25,7 +25,7 @@ use crate::{
     tree::BeeKem,
     treemath::InnerNodeIndex,
 };
-use alloc::{boxed::Box, collections::BTreeSet, sync::Arc, vec, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeSet, sync::Arc, vec::Vec};
 use core::{
     fmt::Debug,
     hash::{Hash, Hasher},
@@ -416,16 +416,17 @@ impl Cgka {
             );
         }
         let leaf_index = self.tree.push_leaf(id, pk.into());
-        let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().copied());
-        let op = CgkaOperation::Add {
-            added_id: id,
-            pk,
-            leaf_index,
-            invitation: invitation.map(Box::new),
-            key_proof,
-            predecessors,
+        let op = CgkaOperation {
             doc_id: self.doc_id,
-            citations: citations.into_iter().collect(),
+            predecessors: self.ops_graph.cgka_op_heads.iter().copied().collect(),
+            change: CgkaChange::Add {
+                added_id: id,
+                pk,
+                leaf_index,
+                invitation: invitation.map(Box::new),
+                key_proof,
+                citations: citations.into_iter().collect(),
+            },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
         self.handle_new_removals(&signed_op.payload);
@@ -488,11 +489,11 @@ impl Cgka {
 
     /// Record the root secrets of `op`'s invitation if it is addressed to us.
     pub(crate) fn record_secrets_from_invitation(&mut self, op: &SerdeSigned<CgkaOperation>) {
-        let CgkaOperation::Add {
+        let CgkaChange::Add {
             added_id,
             invitation: Some(invitation),
             ..
-        } = &op.payload
+        } = &op.payload.change
         else {
             return;
         };
@@ -558,8 +559,8 @@ impl Cgka {
             .values()
             .filter(|op| {
                 matches!(
-                    op.payload,
-                    CgkaOperation::Add { added_id, invitation: Some(_), .. }
+                    op.payload.change,
+                    CgkaChange::Add { added_id, invitation: Some(_), .. }
                         if added_id == owner_id
                 )
             })
@@ -605,12 +606,12 @@ impl Cgka {
         }
         let leaf_idx = self.tree.remove_id(id)?;
         let removed = RemovedMember { id, leaf_idx };
-        self.sign_and_complete_remove(vec![removed], citations, signer)
+        self.sign_and_complete_remove(BTreeSet::from([removed]), citations, signer)
             .await
             .map(Some)
     }
 
-    /// Create a [`CgkaOperation::Remove`] without explicitly listing
+    /// Create a [`CgkaChange::Remove`] without explicitly listing
     /// targets. Specific members to be removed are determined by
     /// [`MembershipView`].
     #[instrument(skip_all)]
@@ -620,25 +621,23 @@ impl Cgka {
         signer: &S,
     ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
         self.replay_if_pending()?;
-        self.sign_and_complete_remove(Vec::new(), citations, signer)
+        self.sign_and_complete_remove(BTreeSet::new(), citations, signer)
             .await
     }
 
-    /// Sign and record a `CgkaOperation::Remove`. If a [`MembershipView`]
+    /// Sign and record a [`CgkaChange::Remove`]. If a [`MembershipView`]
     /// is being used to determine which members to remove, make that
     /// determination and remove those members here.
     async fn sign_and_complete_remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
-        removed: Vec<RemovedMember>,
+        removed: BTreeSet<RemovedMember>,
         citations: BTreeSet<CitationId>,
         signer: &S,
     ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
-        let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().copied());
-        let op = CgkaOperation::Remove {
-            removed,
-            predecessors,
+        let op = CgkaOperation {
             doc_id: self.doc_id,
-            citations: citations.into_iter().collect(),
+            predecessors: self.ops_graph.cgka_op_heads.iter().copied().collect(),
+            change: CgkaChange::Remove { citations, removed },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
         self.handle_new_removals(&signed_op.payload);
@@ -672,14 +671,14 @@ impl Cgka {
             self.tree
                 .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
         if let Some((pcs_key, new_path)) = maybe_key_and_path {
-            let predecessors = Vec::from_iter(self.ops_graph.cgka_op_heads.iter().copied());
             let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestors);
-            let op = CgkaOperation::Update {
-                id: self.owner_id,
-                new_path: Box::new(new_path),
-                predecessor_secrets,
-                predecessors,
+            let op = CgkaOperation {
                 doc_id: self.doc_id,
+                predecessors: self.ops_graph.cgka_op_heads.iter().copied().collect(),
+                change: CgkaChange::Update {
+                    new_path: Box::new(new_path),
+                    predecessor_secrets,
+                },
             };
 
             let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
@@ -776,14 +775,14 @@ impl Cgka {
         self.ops_graph.contains_predecessors(preds)
     }
 
-    /// Apply `op`. If it is a [`CgkaOperation::Update`], record the
+    /// Apply `op`. If it is a [`CgkaChange::Update`], record the
     /// corresponding root secret.
     #[instrument(skip_all)]
     pub(crate) fn apply_operation_and_record_root_secret(
         &mut self,
         op: Arc<SerdeSigned<CgkaOperation>>,
     ) -> Result<(), CgkaError> {
-        let is_update = matches!(op.payload, CgkaOperation::Update { .. });
+        let is_update = op.payload.is_update();
         if !self.apply_operation_to_tree(op)? {
             return Ok(());
         }
@@ -808,14 +807,14 @@ impl Cgka {
         if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
             return Ok(false);
         }
-        match op.payload {
-            CgkaOperation::Add { added_id, pk, .. } => {
+        match op.payload.change {
+            CgkaChange::Add { added_id, pk, .. } => {
                 // A concurrent history might have added the same member.
                 if !self.tree.contains_id(&added_id) {
                     self.tree.push_leaf(added_id, pk.into());
                 }
             }
-            CgkaOperation::Remove { ref removed, .. } => {
+            CgkaChange::Remove { ref removed, .. } => {
                 for RemovedMember { id, .. } in removed {
                     // A concurrent history may have removed this member already.
                     if self.tree.contains_id(id) {
@@ -823,8 +822,8 @@ impl Cgka {
                     }
                 }
             }
-            CgkaOperation::Update { ref new_path, .. } => {
-                self.tree.apply_path(new_path);
+            CgkaChange::Update { ref new_path, .. } => {
+                self.tree.apply_path(MemberId::from(op.issuer), new_path);
             }
         }
         self.record_op(&op)?;
@@ -870,11 +869,7 @@ impl Cgka {
         cited: Option<&BTreeSet<CitationId>>,
     ) -> Result<(), CgkaError> {
         // A single operation, or a batch of only updates, is applied in order.
-        if batch.len() == 1
-            || batch
-                .iter()
-                .all(|op| matches!(op.payload, CgkaOperation::Update { .. }))
-        {
+        if batch.len() == 1 || batch.iter().all(|op| op.payload.is_update()) {
             for op in batch.iter() {
                 self.apply_operation_to_tree(op.clone())?;
             }
@@ -890,11 +885,11 @@ impl Cgka {
         let mut added_ids = Set::new();
         let mut removed_ids = Set::new();
         for op in batch.iter() {
-            match op.payload {
-                CgkaOperation::Add { added_id, .. } => {
+            match op.payload.change {
+                CgkaChange::Add { added_id, .. } => {
                     added_ids.insert(added_id);
                 }
-                CgkaOperation::Remove { ref removed, .. } => {
+                CgkaChange::Remove { ref removed, .. } => {
                     removed_ids.extend(removed.iter().map(|r| (r.id, r.leaf_idx)));
                 }
                 _ => {}
@@ -917,8 +912,8 @@ impl Cgka {
         self.tree.blank_nodes_omitting_a_resolution_node(
             batch
                 .iter()
-                .filter_map(|op| match &op.payload {
-                    CgkaOperation::Update { new_path, .. } => Some(new_path),
+                .filter_map(|op| match &op.payload.change {
+                    CgkaChange::Update { new_path, .. } => Some(new_path),
                     _ => None,
                 })
                 .flat_map(|new_path| {
@@ -992,8 +987,11 @@ impl Cgka {
         &mut self,
         op_hash: &Digest<SerdeSigned<CgkaOperation>>,
     ) -> Option<PcsKey> {
-        let Some(CgkaOperation::Update { new_path, .. }) =
-            self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload)
+        let Some(CgkaChange::Update { new_path, .. }) = self
+            .ops_graph
+            .cgka_ops
+            .get(op_hash)
+            .map(|op| &op.payload.change)
         else {
             return None;
         };
@@ -1121,10 +1119,14 @@ impl Cgka {
         pcs_key: &PcsKey,
         should_decrypt: impl Fn(&Digest<SerdeSigned<CgkaOperation>>) -> bool,
     ) -> Vec<(Digest<SerdeSigned<CgkaOperation>>, PcsKey)> {
-        let Some(CgkaOperation::Update {
+        let Some(CgkaChange::Update {
             predecessor_secrets,
             ..
-        }) = self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload)
+        }) = self
+            .ops_graph
+            .cgka_ops
+            .get(op_hash)
+            .map(|op| &op.payload.change)
         else {
             return Vec::new();
         };
@@ -1224,8 +1226,11 @@ impl Cgka {
         &mut self,
         op_hash: &Digest<SerdeSigned<CgkaOperation>>,
     ) -> Result<PcsKey, CgkaError> {
-        let Some(CgkaOperation::Update { .. }) =
-            self.ops_graph.cgka_ops.get(op_hash).map(|op| &op.payload)
+        let Some(CgkaChange::Update { .. }) = self
+            .ops_graph
+            .cgka_ops
+            .get(op_hash)
+            .map(|op| &op.payload.change)
         else {
             return Err(CgkaError::UnknownPcsKey);
         };

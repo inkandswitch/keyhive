@@ -1,8 +1,8 @@
 //! Validating a CGKA update path.
 
 use beekem::{
-    id::{MemberId, TreeId},
-    operation::CgkaOperation,
+    id::TreeId,
+    operation::{CgkaChange, CgkaOperation},
     secret_store::SecretStore,
     tree::PathChange,
 };
@@ -13,7 +13,7 @@ use keyhive_core::{
 };
 use keyhive_crypto::{share_key::ShareKey, signed::SerdeSigned};
 use keyline::power::Power::Read;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use testresult::TestResult;
 
 /// One of `who`'s own prekeys it would use to join `doc`.
@@ -30,7 +30,7 @@ async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
 async fn cgka_heads(
     observer: &Instance,
     doc: DocumentId,
-) -> Vec<Digest<SerdeSigned<CgkaOperation>>> {
+) -> BTreeSet<Digest<SerdeSigned<CgkaOperation>>> {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap();
     let referenced: HashSet<_> = ops
         .iter()
@@ -43,13 +43,13 @@ async fn cgka_heads(
 }
 
 /// The first update `who` produced for `doc`.
-async fn an_update(who: &Instance, doc: DocumentId) -> (MemberId, Box<PathChange>) {
+async fn an_update(who: &Instance, doc: DocumentId) -> Box<PathChange> {
     who.cgka_ops_for_doc(&doc)
         .await
         .unwrap()
         .iter()
-        .find_map(|op| match op.payload() {
-            CgkaOperation::Update { id, new_path, .. } => Some((*id, new_path.clone())),
+        .find_map(|op| match &op.payload().change {
+            CgkaChange::Update { new_path, .. } => Some(new_path.clone()),
             _ => None,
         })
         .expect("an update was produced")
@@ -72,19 +72,20 @@ async fn doc_shared_with_bob(
 async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult {
     let mut ctx = TestContext::new().await;
     let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
-    let (id, mut new_path) = an_update(&alice, design_doc).await;
+    let mut new_path = an_update(&alice, design_doc).await;
 
     let junk = own_prekey(&alice, design_doc).await;
     new_path.path = vec![7u32, 9]
         .into_iter()
         .map(|i| (i, SecretStore::new(junk, junk, BTreeMap::new())))
         .collect();
-    let op = CgkaOperation::Update {
-        id,
-        new_path,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&bob, design_doc).await,
+    let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),
+        predecessors: cgka_heads(&bob, design_doc).await,
+        change: CgkaChange::Update {
+            new_path,
+            predecessor_secrets: Vec::new(),
+        },
     };
 
     // We should ignore the forged path and not panic.

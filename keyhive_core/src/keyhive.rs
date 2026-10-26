@@ -48,7 +48,7 @@ use beekem::{
     error::CgkaError,
     id::MemberId,
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaOperation, CitationId},
+    operation::{CgkaChange, CgkaOperation, CitationId},
     pcs_key::PcsKey,
 };
 use dupe::{Dupe, OptionDupedExt};
@@ -2792,9 +2792,6 @@ where
         };
 
         let cited = op.citations();
-        if !cited.windows(2).all(|pair| pair[0] < pair[1]) {
-            return Ok(Err(Denied));
-        }
         if !self.record_citations(op).await? {
             return Ok(Err(Pending));
         }
@@ -2835,13 +2832,10 @@ where
             }
         }
 
-        match op {
-            CgkaOperation::Update { id, new_path, .. } => {
-                if *id != new_path.leaf_id || new_path.leaf_id.id() != signer {
-                    return Ok(Err(Denied));
-                }
-            }
-            CgkaOperation::Add {
+        match &op.change {
+            // The leaf an update rotates is its signer's.
+            CgkaChange::Update { .. } => {}
+            CgkaChange::Add {
                 added_id,
                 pk,
                 key_proof,
@@ -2859,7 +2853,7 @@ where
                     return Ok(Err(Denied));
                 }
             }
-            CgkaOperation::Remove { removed, .. } => {
+            CgkaChange::Remove { removed, .. } => {
                 // The members to remove are inferred from the cited certificates
                 // and not from an explicit list.
                 if !removed.is_empty() {
@@ -4098,12 +4092,12 @@ fn merge_one<E: core::error::Error + 'static>(
 /// The keys `op` gives `me` in the CGKA group: an invitation's prekey, or
 /// the keys of `me`'s own update. The only secrets merging `op` can need.
 fn own_cgka_keys(op: &SerdeSigned<CgkaOperation>, me: IndividualId) -> Vec<ShareKey> {
-    match &op.payload {
-        CgkaOperation::Add { added_id, pk, .. } if IndividualId::from(*added_id) == me => {
+    match &op.payload.change {
+        CgkaChange::Add { added_id, pk, .. } if IndividualId::from(*added_id) == me => {
             vec![*pk]
         }
-        CgkaOperation::Update { id, new_path, .. } if IndividualId::from(*id) == me => {
-            new_path.leaf_pk.keys()
+        CgkaChange::Update { new_path, .. } if IndividualId::from(op.issuer) == me => {
+            vec![new_path.leaf_pk]
         }
         _ => Vec::new(),
     }
@@ -4111,7 +4105,7 @@ fn own_cgka_keys(op: &SerdeSigned<CgkaOperation>, me: IndividualId) -> Vec<Share
 
 /// Whether `op` invites `me`: an add of `me`.
 fn invites(op: &SerdeSigned<CgkaOperation>, me: IndividualId) -> bool {
-    matches!(op.payload, CgkaOperation::Add { added_id, .. } if IndividualId::from(added_id) == me)
+    matches!(op.payload.change, CgkaChange::Add { added_id, .. } if IndividualId::from(added_id) == me)
 }
 
 /// Merge one operation. An invitation (an add of `me`) is merged with the
@@ -4123,7 +4117,7 @@ fn apply_one<E: core::error::Error + 'static>(
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
 ) -> Result<bool, ReceiveCgkaOpError<E>> {
-    if let CgkaOperation::Add { added_id, pk, .. } = op.payload {
+    if let CgkaChange::Add { added_id, pk, .. } = op.payload.change {
         let added = IndividualId::from(added_id);
         if added == me {
             let sk = secrets
@@ -4230,8 +4224,8 @@ fn referenced_by<W, E: core::error::Error + 'static>(
 /// The individuals a CGKA operation references: its issuer and, for an add, the
 /// added member.
 fn referenced_by_cgka_op(op: &SerdeSigned<CgkaOperation>) -> Vec<Identifier> {
-    match &op.payload {
-        CgkaOperation::Add { added_id, .. } => vec![op.issuer, added_id.id()],
+    match &op.payload.change {
+        CgkaChange::Add { added_id, .. } => vec![op.issuer, added_id.id()],
         _ => vec![op.issuer],
     }
 }
@@ -4667,7 +4661,7 @@ mod tests {
         assert!(!update
             .cgka_ops()
             .iter()
-            .any(|op| matches!(op.payload(), CgkaOperation::Remove { .. })));
+            .any(|op| matches!(op.payload().change, CgkaChange::Remove { .. })));
         Ok(())
     }
 
@@ -5051,7 +5045,7 @@ mod tests {
         let add_of_bob = archive
             .cgka_ops
             .iter()
-            .find(|op| matches!(op.payload, CgkaOperation::Add { added_id, .. } if added_id == bob_member))
+            .find(|op| matches!(op.payload.change, CgkaChange::Add { added_id, .. } if added_id == bob_member))
             .ok_or("bob was added")?;
         let cited: BTreeSet<CitationId> = add_of_bob.payload.citations().iter().copied().collect();
         let update = archive
@@ -5805,15 +5799,17 @@ mod tests {
                 },
                 signer,
             )?;
-            let cgka = signer.try_sign_sync(CgkaOperation::Add {
-                added_id: MemberId::from(&signer.0),
-                pk: share_key(),
-                leaf_index: 0,
-                invitation: None,
-                key_proof: None,
-                predecessors: Vec::new(),
+            let cgka = signer.try_sign_sync(CgkaOperation {
                 doc_id: TreeId::from(doc),
-                citations: Vec::new(),
+                predecessors: BTreeSet::new(),
+                change: CgkaChange::Add {
+                    added_id: MemberId::from(&signer.0),
+                    pk: share_key(),
+                    leaf_index: 0,
+                    invitation: None,
+                    key_proof: None,
+                    citations: BTreeSet::new(),
+                },
             })?;
             let delegation = Delegation::new(
                 Identifier::from(indie.id()),
@@ -6124,18 +6120,16 @@ mod tests {
             .iter()
             .find(|op| invites(op, bob))
             .expect("bob is invited");
-        let CgkaOperation::Add { pk, .. } = invitation.payload else {
+        let CgkaChange::Add { pk, .. } = invitation.payload.change else {
             unreachable!("an invitation is an add")
         };
         assert_eq!(own_cgka_keys(invitation, bob), vec![pk]);
         assert_eq!(own_cgka_keys(invitation, me), Vec::new());
 
-        let CgkaOperation::Update { new_path, .. } = &update.payload else {
+        let CgkaChange::Update { new_path, .. } = &update.payload.change else {
             unreachable!("a PCS update is an update")
         };
-        let keys = new_path.leaf_pk.keys();
-        assert!(!keys.is_empty());
-        assert_eq!(own_cgka_keys(&update, me), keys);
+        assert_eq!(own_cgka_keys(&update, me), vec![new_path.leaf_pk]);
         assert_eq!(own_cgka_keys(&update, bob), Vec::new());
 
         Ok(())

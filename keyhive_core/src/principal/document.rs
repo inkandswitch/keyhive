@@ -168,7 +168,7 @@ impl<T: ContentRef> DocumentState<T> {
         self.cgka.add(id, pk, key_proof, citations, signer).await
     }
 
-    /// Create a [`CgkaOperation::Remove`] without explicitly listing
+    /// Create a [`CgkaChange::Remove`] without explicitly listing
     /// targets. Specific members to be removed are determined by
     /// `citations`.
     #[instrument(skip_all)]

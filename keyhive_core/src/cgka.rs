@@ -14,7 +14,7 @@ use beekem::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, ShareKeyMap},
-    operation::{CgkaBatch, CgkaOperation, CitationId},
+    operation::{CgkaBatch, CgkaChange, CgkaOperation, CitationId},
     pcs_key::{ApplicationSecret, PcsKey},
 };
 use future_form::FutureForm;
@@ -148,7 +148,7 @@ impl Cgka {
         self.0.add_multiple(converted, signer).await
     }
 
-    /// Create a [`CgkaOperation::Remove`] without explicitly listing
+    /// Create a [`CgkaChange::Remove`] without explicitly listing
     /// targets. Specific members to be removed are determined by
     /// `citations`.
     pub async fn remove_by_citations<F: FutureForm, S: AsyncSigner<F>>(
@@ -241,20 +241,14 @@ impl Cgka {
         op: Arc<SerdeSigned<CgkaOperation>>,
         sk: &ShareSecretKey,
     ) -> Result<bool, CgkaError> {
-        let CgkaOperation::Add {
-            added_id,
-            pk,
-            ref predecessors,
-            ..
-        } = op.payload
-        else {
+        let CgkaChange::Add { added_id, pk, .. } = op.payload.change else {
             return Err(CgkaError::UnexpectedInviteOperation);
         };
         // Don't merge an op we already have.
         if self.op(&Digest::hash(op.as_ref())).is_some() {
             return Ok(false);
         }
-        if !self.contains_predecessors(&predecessors.iter().cloned().collect()) {
+        if !self.contains_predecessors(&op.payload.predecessors()) {
             return Err(CgkaError::OutOfOrderOperation);
         }
         // Check if we should replay first, so that a replay lacking a membership answer

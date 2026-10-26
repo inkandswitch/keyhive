@@ -4,7 +4,7 @@ use crate::{
     error::CgkaError,
     id::MemberId,
     keys::ShareKeyMap,
-    operation::{CgkaOperation, CitationId},
+    operation::{CgkaChange, CgkaOperation, CitationId},
     test_utils::{member, Group, Member},
     tree::PathChange,
 };
@@ -339,8 +339,8 @@ fn revoked_members_learn_nothing_of_a_rotation_after_their_removal() {
             .ops_graph
             .cgka_ops
             .iter()
-            .filter_map(|(_, op)| match op.payload() {
-                CgkaOperation::Update { new_path, .. } => Some(&**new_path),
+            .filter_map(|(_, op)| match &op.payload().change {
+                CgkaChange::Update { new_path, .. } => Some(&**new_path),
                 _ => None,
             })
             .collect();

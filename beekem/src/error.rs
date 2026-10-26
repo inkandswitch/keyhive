@@ -74,7 +74,7 @@ pub enum CgkaError {
     #[error("Unexpected key conflict")]
     UnexpectedKeyConflict,
 
-    #[error("Expected CgkaOperation::Add for invite")]
+    #[error("Expected an add for invite")]
     UnexpectedInviteOperation,
 
     #[error("Unknown PCS key")]

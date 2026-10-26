@@ -1,9 +1,8 @@
 //! Two instances of one keyhive identity.
 
 use beekem::{
-    id::{MemberId, TreeId},
-    keys::NodeKey,
-    operation::CgkaOperation,
+    id::TreeId,
+    operation::{CgkaChange, CgkaOperation},
     tree::PathChange,
 };
 use keyhive_core::{
@@ -13,7 +12,7 @@ use keyhive_core::{
 };
 use keyhive_crypto::{share_key::ShareKey, signed::SerdeSigned};
 use keyline::power::Power::Read;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// One of `who`'s own prekeys it would use to join `doc`.
 async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
@@ -29,7 +28,7 @@ async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
 async fn cgka_heads(
     observer: &Instance,
     doc: DocumentId,
-) -> Vec<Digest<SerdeSigned<CgkaOperation>>> {
+) -> BTreeSet<Digest<SerdeSigned<CgkaOperation>>> {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap();
     let referenced: HashSet<_> = ops
         .iter()
@@ -41,13 +40,13 @@ async fn cgka_heads(
         .collect()
 }
 
-async fn an_update(who: &Instance, doc: DocumentId) -> (MemberId, Box<PathChange>) {
+async fn an_update(who: &Instance, doc: DocumentId) -> Box<PathChange> {
     who.cgka_ops_for_doc(&doc)
         .await
         .unwrap()
         .iter()
-        .find_map(|op| match op.payload() {
-            CgkaOperation::Update { id, new_path, .. } => Some((*id, new_path.clone())),
+        .find_map(|op| match &op.payload().change {
+            CgkaChange::Update { new_path, .. } => Some(new_path.clone()),
             _ => None,
         })
         .expect("an update was produced")
@@ -81,18 +80,19 @@ async fn doc_with_a_second_instance(
 async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
-    let (id, mut new_path) = an_update(&alice, design_doc).await;
+    let mut new_path = an_update(&alice, design_doc).await;
 
     // A peer can put whatever it likes in a signed `PathChange`, including a key that
     // does not displace the one already at the leaf.
-    new_path.leaf_pk = NodeKey::ShareKey(own_prekey(&bob, design_doc).await);
-    new_path.removed_keys = vec![];
-    let op = CgkaOperation::Update {
-        id,
-        new_path,
-        predecessor_secrets: Vec::new(),
-        predecessors: cgka_heads(&bob, design_doc).await,
+    new_path.leaf_pk = own_prekey(&bob, design_doc).await;
+    new_path.removed_keys = BTreeSet::new();
+    let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),
+        predecessors: cgka_heads(&bob, design_doc).await,
+        change: CgkaChange::Update {
+            new_path,
+            predecessor_secrets: Vec::new(),
+        },
     };
     let signed = alice
         .serde_sign_cgka_op(op)

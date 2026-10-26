@@ -1,11 +1,11 @@
 use crate::{
     encrypted::encrypt_secret,
     keys::ShareKeyMap,
-    operation::{CgkaOperation, Invitation, InvitationSecret},
+    operation::{CgkaChange, CgkaOperation, Invitation, InvitationSecret},
     pcs_key::PcsKey,
     test_utils::{member, Group},
 };
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeSet, vec, vec::Vec};
 use future_form::Local;
 use keyhive_crypto::{digest::Digest, share_key::ShareSecretKey, signer::async_signer};
 use rand::{rngs::StdRng, SeedableRng};
@@ -69,22 +69,24 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
     // could be selected to be incorrect.
     let inviter_sk = ShareSecretKey::generate(&mut rng);
     let inviter_pk = inviter_sk.share_key();
-    let create_add_with_invitation_wrapping = |secret: PcsKey| CgkaOperation::Add {
-        added_id: bob_id,
-        pk: bob_pk,
-        leaf_index: 1,
-        citations: Vec::new(),
-        key_proof: None,
-        invitation: Some(Box::new(Invitation {
-            inviter_pk,
-            ancestor_secrets: vec![InvitationSecret {
-                update_op_hash: op2_hash,
-                encrypted_root_secret: encrypt_secret(doc_id, secret.0, &inviter_sk, &bob_pk)
-                    .unwrap(),
-            }],
-        })),
-        predecessors: Vec::new(),
+    let create_add_with_invitation_wrapping = |secret: PcsKey| CgkaOperation {
         doc_id,
+        predecessors: BTreeSet::new(),
+        change: CgkaChange::Add {
+            added_id: bob_id,
+            pk: bob_pk,
+            leaf_index: 1,
+            invitation: Some(Box::new(Invitation {
+                inviter_pk,
+                ancestor_secrets: vec![InvitationSecret {
+                    update_op_hash: op2_hash,
+                    encrypted_root_secret: encrypt_secret(doc_id, secret.0, &inviter_sk, &bob_pk)
+                        .unwrap(),
+                }],
+            })),
+            key_proof: None,
+            citations: BTreeSet::new(),
+        },
     };
     let sign = |op| async {
         async_signer::try_sign_async::<Local, _, _>(&alice_signer, op)
@@ -146,7 +148,7 @@ async fn an_invitation_wraps_every_concurrent_update_head() {
 
     let invitee = member(&mut rng);
     let add = group.add(0, invitee.id, invitee.pk).await;
-    let CgkaOperation::Add { invitation, .. } = &add.payload else {
+    let CgkaChange::Add { invitation, .. } = &add.payload.change else {
         panic!("an add should be an Add op")
     };
     let wrapped: Vec<_> = invitation
