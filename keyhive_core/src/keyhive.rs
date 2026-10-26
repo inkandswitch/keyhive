@@ -1404,11 +1404,7 @@ where
         self.active.expand_prekeys(self.csprng.dupe()).await
     }
 
-    /// Sign bytes on behalf of an application, under [`Kind::BYTES`].
-    ///
-    /// Keyhive gives them no meaning, and the signature verifies as nothing
-    /// else this identity signs: not as a certificate, a prekey operation or
-    /// a CGKA operation.
+    /// Sign opaque bytes on behalf of an application, under [`Kind::BYTES`].
     ///
     /// [`Kind::BYTES`]: keyhive_crypto::signable::Kind::BYTES
     #[instrument(skip_all)]
@@ -4457,8 +4453,6 @@ mod tests {
             .collect()
     }
 
-    /// Creating a group or document writes its root edges, and a grant writes
-    /// a delegation, and Keyline's members reflect each.
     /// The active identity signs the bytes as they are, and the frame reads
     /// back and verifies as bytes it issued.
     #[tokio::test]
@@ -4474,6 +4468,8 @@ mod tests {
         Ok(())
     }
 
+    /// Creating a group or document writes its root edges, and a grant writes
+    /// a delegation, and Keyline's members reflect each.
     #[tokio::test]
     async fn writes_produce_certificates() -> TestResult {
         let hive = make_keyhive().await;
