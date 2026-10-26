@@ -7,7 +7,6 @@ use keyhive_core::{
         has_remove_citing_its_revocation, EventKind, Instance, TestContext, TestResult as Result,
     },
 };
-use keyhive_crypto::digest::Digest;
 use keyline::power::Power::{self, Edit, Read};
 use std::collections::BTreeSet;
 
@@ -378,16 +377,16 @@ async fn all_agent_events_agrees_with_the_per_agent_walk() -> Result<()> {
         for key_ops in alice.reachable_prekey_ops_for_agent(who_id).await?.values() {
             for key_op in key_ops.iter() {
                 let event: Ev = Event::from(key_op.as_ref().clone());
-                per_agent.insert(*Digest::hash(&event).raw.as_bytes());
+                per_agent.insert(*event.digest().raw.as_bytes());
             }
         }
         for cgka_op in alice.cgka_ops_reachable_by_agent(who_id).await? {
             let event: Ev = Event::from(cgka_op);
-            per_agent.insert(*Digest::hash(&event).raw.as_bytes());
+            per_agent.insert(*event.digest().raw.as_bytes());
         }
         for cert in alice.certificates_for_agent(who_id.into()).await? {
             let event: Ev = Event::from(cert);
-            per_agent.insert(*Digest::hash(&event).raw.as_bytes());
+            per_agent.insert(*event.digest().raw.as_bytes());
         }
 
         let single: BTreeSet<[u8; 32]> = alice

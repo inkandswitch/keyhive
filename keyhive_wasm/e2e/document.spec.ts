@@ -30,6 +30,33 @@ test("the id generateDocument returns resolves to that document", async ({
   expect(out.fetchedId).toBe(out.docId);
 });
 
+test("the leaf secret forcePcsUpdate returns imports with importPrekeySecrets", async ({
+  page,
+}) => {
+  const out = await page.evaluate(async () => {
+    const { Keyhive, Signer, ChangeId, CiphertextStore } = window.keyhive;
+    const kh = await Keyhive.init(
+      await Signer.generate(),
+      CiphertextStore.newInMemory(),
+      () => {},
+    );
+    const docId = await kh.generateDocument(
+      [],
+      new ChangeId(new Uint8Array([1, 2, 3])),
+      [],
+    );
+    const leafSecret = await kh.forcePcsUpdate(docId);
+    try {
+      await kh.importPrekeySecrets(leafSecret);
+      return { imported: true };
+    } catch (e) {
+      return { imported: false, error: String(e) };
+    }
+  });
+
+  expect(out).toEqual({ imported: true });
+});
+
 test("a document lists its members directly and transitively", async ({
   page,
 }) => {

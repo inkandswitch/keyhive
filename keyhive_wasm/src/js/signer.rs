@@ -3,7 +3,9 @@ use ed25519_dalek::{Signature, SignatureError, SigningKey, VerifyingKey};
 use future_form::Local;
 use futures::future::LocalBoxFuture;
 use keyhive_crypto::{
-    bytes::Bytes, signed::SigningError, signer::async_signer::AsyncSigner, verifiable::Verifiable,
+    bytes::Bytes,
+    signer::{async_signer::AsyncSigner, SigningError},
+    verifiable::Verifiable,
     verified::Verified,
 };
 use thiserror::Error;

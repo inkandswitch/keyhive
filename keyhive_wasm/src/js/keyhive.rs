@@ -9,8 +9,8 @@ use keyline_memory::MemoryKeyline;
 
 use crate::{
     js::{
-        archive::JsSerializationError, document_id::JsDocumentId, event::JsEvent,
-        group_id::JsGroupId, individual::JsIndividual, membership::Membership, stats::JsStats,
+        document_id::JsDocumentId, event::JsEvent, group_id::JsGroupId, individual::JsIndividual,
+        membership::Membership, stats::JsStats,
     },
     macros::init_span,
 };
@@ -51,6 +51,7 @@ use derive_more::{From, Into};
 use dupe::Dupe;
 use from_js_ref::FromJsRef;
 use future_form::Local;
+use keyhive_codec::traits::{Decode, Encode};
 use keyhive_core::{
     all_agent_events::EventDigest,
     crypto::digest::Digest,
@@ -325,9 +326,8 @@ impl JsKeyhive {
             .collect())
     }
 
-    /// Force a PCS key rotation and return the new leaf secret, serialized as a
-    /// one-entry `BTreeMap<ShareKey, ShareSecretKey>` (the exact format
-    /// `importPrekeySecrets` accepts).
+    /// Force a PCS key rotation and return the new leaf secret, encoded as a
+    /// one-entry export (the format `importPrekeySecrets` accepts).
     /// The returned bytes are secret key material: do not log or persist unencrypted.
     #[wasm_bindgen(js_name = forcePcsUpdate)]
     pub async fn force_pcs_update(&self, doc_id: &JsDocumentId) -> Result<Box<[u8]>, JsValue> {
@@ -338,9 +338,10 @@ impl JsKeyhive {
             .await
             .map_err(EncryptContentError::from)
             .map_err(JsEncryptError::from)?;
-        let map = BTreeMap::from([new_key_pair]);
-        let bytes = bincode::serialize(&map).map_err(JsSerializationError::from)?;
-        Ok(bytes.into_boxed_slice())
+        Ok(BTreeMap::from([new_key_pair])
+            .encode()
+            .into_bytes()
+            .into_boxed_slice())
     }
 
     #[wasm_bindgen(js_name = tryPcsKeyHash)]
@@ -428,8 +429,7 @@ impl JsKeyhive {
             .map_err(JsKeylineStorageError::from)?
         {
             let hash = js_sys::Uint8Array::from(digest.as_slice());
-            let bytes = bincode::serialize(&StaticEvent::from(event))
-                .map_err(JsSerializationError::from)?;
+            let bytes = StaticEvent::from(event).encode().into_bytes();
             map.set(
                 &hash.into(),
                 &js_sys::Uint8Array::from(bytes.as_slice()).into(),
@@ -468,8 +468,7 @@ impl JsKeyhive {
 
         let events = js_sys::Map::new();
         for (digest, event) in &all.events {
-            let bytes = bincode::serialize(&StaticEvent::from(event.clone()))
-                .map_err(JsSerializationError::from)?;
+            let bytes = StaticEvent::from(event.clone()).encode().into_bytes();
             events.set(
                 &js_sys::Uint8Array::from(digest.as_slice()).into(),
                 &js_sys::Uint8Array::from(bytes.as_slice()).into(),
@@ -530,7 +529,7 @@ impl JsKeyhive {
         let map = js_sys::Map::new();
         for cert in self.0.certificates_for_agent(agent.inner.id()).await? {
             let event: Event<JsChangeId> = cert.into();
-            let hash = js_sys::Uint8Array::from(Digest::hash(&event).as_slice());
+            let hash = js_sys::Uint8Array::from(event.digest().as_slice());
             map.set(&hash.into(), &JsValue::from(JsEvent::from(event)));
         }
         Ok(map)
@@ -655,8 +654,8 @@ impl JsKeyhive {
         for i in 0..events_bytes_array.length() {
             let js_value = events_bytes_array.get(i);
             let event_bytes = js_sys::Uint8Array::from(js_value).to_vec();
-            let static_event: StaticEvent<JsChangeId> = bincode::deserialize(&event_bytes)?;
-            static_event_hash_to_bytes.insert(Digest::hash(&static_event), event_bytes);
+            let static_event = StaticEvent::<JsChangeId>::decode(&event_bytes)?;
+            static_event_hash_to_bytes.insert(static_event.digest(), event_bytes);
             static_events.push(static_event);
         }
 
@@ -664,14 +663,11 @@ impl JsKeyhive {
         let pending_events_bytes: Vec<Vec<u8>> = pending_events
             .iter()
             .map(|event| {
-                let hash: Digest<StaticEvent<JsChangeId>> = Digest::hash(event.as_ref());
+                let hash: Digest<StaticEvent<JsChangeId>> = event.digest();
                 static_event_hash_to_bytes
                     .get(&hash)
                     .cloned()
-                    .unwrap_or_else(|| {
-                        bincode::serialize(event.as_ref())
-                            .expect("Failed to serialize pending event")
-                    })
+                    .unwrap_or_else(|| event.encode().into_bytes())
             })
             .collect();
 

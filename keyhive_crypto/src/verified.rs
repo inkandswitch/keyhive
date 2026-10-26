@@ -25,8 +25,7 @@ use crate::{
     digest::Digest,
     identifier::{Identifier, InvalidIdentifier},
     signable::{head, message, Kinded, Signable, TAG},
-    signed::SigningError,
-    signer::{async_signer::AsyncSigner, sync_signer::SyncSignerBasic},
+    signer::{async_signer::AsyncSigner, sync_signer::SyncSignerBasic, SigningError},
     verifiable::Verifiable,
 };
 use alloc::{sync::Arc, vec::Vec};

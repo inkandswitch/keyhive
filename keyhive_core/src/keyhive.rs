@@ -62,8 +62,7 @@ use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
     share_key::{ShareKey, ShareSecretKey},
     signable::Signable,
-    signed::SigningError,
-    signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
+    signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner, SigningError},
     symmetric_key::SymmetricKey,
     verifiable::Verifiable,
     verified::{self, SignError, Verified, VerifyError},
@@ -2109,7 +2108,7 @@ where
             .lock()
             .await
             .iter()
-            .map(|event| Digest::hash(event.as_ref()))
+            .map(|event| event.digest())
             .collect()
     }
 
@@ -2124,17 +2123,17 @@ where
 
         for key_op in prekeys.values().flatten() {
             let op = Event::<T>::from(key_op.as_ref().dupe());
-            ops.insert(Digest::hash(&op), op);
+            ops.insert(op.digest(), op);
         }
 
         for cgka_op in cgka_ops {
             let op = Event::<T>::from(cgka_op);
-            ops.insert(Digest::hash(&op), op);
+            ops.insert(op.digest(), op);
         }
 
         for cert in certs {
             let op = Event::from(cert);
-            ops.insert(Digest::hash(&op), op);
+            ops.insert(op.digest(), op);
         }
 
         Ok(ops)
@@ -2504,15 +2503,15 @@ where
 
         for key_op in prekeys.values().flatten() {
             let event: Event<T> = Event::from(key_op.as_ref().clone());
-            digests.insert(Digest::hash(&event));
+            digests.insert(event.digest());
         }
         for cgka_op in cgka_ops {
             let event: Event<T> = Event::from(cgka_op);
-            digests.insert(Digest::hash(&event));
+            digests.insert(event.digest());
         }
         for cert in certs {
             let event: Event<T> = Event::from(cert);
-            digests.insert(Digest::hash(&event));
+            digests.insert(event.digest());
         }
 
         Ok(digests)
@@ -2533,7 +2532,7 @@ where
             let mut digests = Vec::with_capacity(key_ops.len());
             for key_op in key_ops {
                 let event: Event<T> = Event::from(key_op.as_ref().clone());
-                let digest = Digest::hash(&event);
+                let digest = event.digest();
                 digests.push(digest);
                 events.entry(digest).or_insert(event);
             }
@@ -2545,7 +2544,7 @@ where
             let mut digests = Vec::with_capacity(cgka_ops.len());
             for cgka_op in cgka_ops {
                 let event: Event<T> = Event::from(cgka_op);
-                let digest = Digest::hash(&event);
+                let digest = event.digest();
                 digests.push(digest);
                 events.entry(digest).or_insert(event);
             }
@@ -2563,7 +2562,7 @@ where
                 let digests = explained.entry(who).or_default();
                 for cert in certs {
                     let event: Event<T> = Event::from(cert);
-                    let digest = Digest::hash(&event);
+                    let digest = event.digest();
                     digests.insert(digest);
                     events.entry(digest).or_insert(event);
                 }
@@ -2571,7 +2570,7 @@ where
             let mut digests = Vec::with_capacity(view.closure.len());
             for cert in view.closure {
                 let event: Event<T> = Event::from(cert);
-                let digest = Digest::hash(&event);
+                let digest = event.digest();
                 digests.push(digest);
                 events.entry(digest).or_insert(event);
             }
@@ -3495,14 +3494,14 @@ where
         use std::collections::{HashMap, HashSet};
         let mut replayed_pending: HashSet<Digest<StaticEvent<T>>> = HashSet::new();
         for event in self.pending_events.lock().await.iter() {
-            replayed_pending.insert(Digest::hash(event.as_ref()));
+            replayed_pending.insert(event.digest());
             events.push(event.as_ref().clone());
         }
 
         // Deduplicate events by hash
         let mut unique_events: HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> = HashMap::new();
         for event in events {
-            let hash = Digest::hash(&event);
+            let hash = event.digest();
             unique_events.entry(hash).or_insert(event);
         }
         let mut epoch: Vec<StaticEvent<T>> = unique_events.into_values().collect();
@@ -3528,7 +3527,7 @@ where
                 self.pending_events
                     .lock()
                     .await
-                    .retain(|e| !replayed_pending.contains(&Digest::hash(e.as_ref())));
+                    .retain(|e| !replayed_pending.contains(&e.digest()));
                 return Vec::new();
             }
 

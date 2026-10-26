@@ -29,13 +29,7 @@ impl EphemeralSigner {
     /// # Examples
     ///
     /// ```
-    /// use keyhive_crypto::{
-    ///     signed::SerdeSigned,
-    ///     signer::{
-    ///         async_signer::AsyncSigner,
-    ///         ephemeral::EphemeralSigner,
-    ///     }
-    /// };
+    /// use keyhive_crypto::signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner};
     ///
     /// let ((signature, returned_payload), _id) =
     ///     EphemeralSigner::with_signer(&mut rand::rngs::OsRng, |_id, sk| {
@@ -59,13 +53,7 @@ impl EphemeralSigner {
     /// Run an async closure with a randomly generated ephemeral key.
     ///
     /// ```
-    /// use keyhive_crypto::{
-    ///     signed::SerdeSigned,
-    ///     signer::{
-    ///         async_signer::AsyncSigner,
-    ///         ephemeral::EphemeralSigner,
-    ///     }
-    /// };
+    /// use keyhive_crypto::signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner};
     ///
     /// #[tokio::main(flavor = "current_thread")]
     /// async fn main() {

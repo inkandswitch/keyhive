@@ -27,8 +27,7 @@ use keyhive_core::{
 use keyhive_crypto::{
     identifier::Identifier,
     share_key::ShareKey,
-    signed::SigningError,
-    signer::{async_signer::AsyncSigner, memory::MemorySigner},
+    signer::{async_signer::AsyncSigner, memory::MemorySigner, SigningError},
     verifiable::Verifiable,
     verified::{Signed, Verified},
 };

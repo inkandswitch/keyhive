@@ -2,8 +2,8 @@ use super::{
     archive::JsSerializationError, change_id::JsChangeId, identifier::JsIdentifier,
     keyhive::InnerKeyhive,
 };
+use keyhive_codec::traits::Encode;
 use keyhive_core::{
-    crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
     principal::Principal,
 };
@@ -82,9 +82,8 @@ impl JsPrincipal {
         if let Some(individual) = self.inner.as_individual().await {
             for key_op in individual.prekey_ops().await.values() {
                 let event: Event<JsChangeId> = Event::from(key_op.as_ref().clone());
-                let hash = js_sys::Uint8Array::from(Digest::hash(&event).as_slice());
-                let bytes = bincode::serialize(&StaticEvent::from(event))
-                    .map_err(JsSerializationError::from)?;
+                let hash = js_sys::Uint8Array::from(event.digest().as_slice());
+                let bytes = StaticEvent::from(event).encode().into_bytes();
                 map.set(
                     &hash.into(),
                     &js_sys::Uint8Array::from(bytes.as_slice()).into(),
@@ -106,7 +105,7 @@ impl JsPrincipal {
             .values()
             .map(|key_op| {
                 let event: Event<JsChangeId> = Event::from(key_op.as_ref().clone());
-                Digest::hash(&event).as_slice().into()
+                event.digest().as_slice().into()
             })
             .collect()
     }

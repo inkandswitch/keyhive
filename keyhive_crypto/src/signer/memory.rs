@@ -1,18 +1,16 @@
 //! In-memory signer.
 
 use super::sync_signer::SyncSignerBasic;
-use crate::{signed::SigningError, signer::async_signer::AsyncSigner, verifiable::Verifiable};
+use crate::{
+    signer::{async_signer::AsyncSigner, SigningError},
+    verifiable::Verifiable,
+};
 use core::hash::Hash;
+#[cfg(feature = "std")]
+use dupe::Dupe;
 use ed25519_dalek::Signer;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
-#[cfg(feature = "std")]
-use {
-    crate::{identifier::Identifier, signed::SerdeSigned},
-    alloc::vec::Vec,
-    dupe::Dupe,
-    serde::Serialize,
-};
 
 /// An in-memory signer.
 ///
@@ -68,21 +66,6 @@ impl MemorySigner {
         self.0
             .try_sign(payload_bytes)
             .map_err(SigningError::SigningFailed)
-    }
-
-    /// Sign a serializable payload synchronously.
-    ///
-    /// Convenience method for tests. Serializes with [`bincode`],
-    /// signs the bytes, and wraps in [`SerdeSigned`].
-    #[cfg(feature = "std")]
-    pub fn try_sign_sync<T: Serialize + core::fmt::Debug>(
-        &self,
-        payload: T,
-    ) -> Result<SerdeSigned<T>, SigningError> {
-        let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
-        let signature = self.try_sign_bytes_sync(payload_bytes.as_slice())?;
-        let signed = SerdeSigned::new(payload, Identifier::from(&self.0), signature);
-        Ok(signed)
     }
 }
 

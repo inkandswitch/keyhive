@@ -17,6 +17,7 @@ use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_crypto::{
     content::reference::ContentRef,
+    digest::Digest,
     verified::{self, Verified},
 };
 use keyline::{certificate::Certificate, delegation::Delegation, revocation::Revocation};
@@ -46,6 +47,18 @@ pub enum Event<T: ContentRef> {
 }
 
 impl<T: ContentRef> Event<T> {
+    /// The event's identity: the digest of the statement it carries, as
+    /// [`StaticEvent::digest`] gives for its wire form.
+    pub fn digest(&self) -> Digest<Event<T>> {
+        match self {
+            Event::PrekeysExpanded(signed) => signed.digest().coerce(),
+            Event::PrekeyRotated(signed) => signed.digest().coerce(),
+            Event::CgkaOperation(op) => op.digest().coerce(),
+            Event::Delegated(signed) => signed.digest().coerce(),
+            Event::Revoked(signed) => signed.digest().coerce(),
+        }
+    }
+
     #[allow(clippy::type_complexity)]
     #[instrument(level = "debug", skip(ciphertext_store))]
     pub async fn now_decryptable<F: FutureForm, P, C: CiphertextStore<F, T, P>>(

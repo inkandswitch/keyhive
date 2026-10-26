@@ -26,7 +26,6 @@ pub mod identifier;
 pub mod read_capability;
 pub mod share_key;
 pub mod signable;
-pub mod signed;
 pub mod signer;
 pub mod siv;
 pub mod symmetric_key;

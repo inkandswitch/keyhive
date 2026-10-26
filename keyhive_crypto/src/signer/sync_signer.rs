@@ -5,18 +5,12 @@
 //! Every signer also implements
 //! [`AsyncSigner<F>`](crate::signer::async_signer::AsyncSigner), and
 //! [`MemorySigner`](crate::signer::memory::MemorySigner) has synchronous
-//! convenience methods. [`try_sign_basic`] signs a serializable payload.
+//! convenience methods.
 
-use crate::{signed::SigningError, signer::async_signer::AsyncSigner};
+use crate::signer::{async_signer::AsyncSigner, SigningError};
 use ed25519_dalek::Signer;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
-#[cfg(feature = "std")]
-use {
-    crate::{hex::ToHexString, identifier::Identifier, signed::SerdeSigned},
-    serde::Serialize,
-    tracing::info,
-};
 
 /// Implement [`AsyncSigner<F>`] for the raw `ed25519_dalek::SigningKey`.
 ///
@@ -45,13 +39,7 @@ pub trait SyncSignerBasic {
     /// # Examples
     ///
     /// ```
-    /// # use keyhive_crypto::{
-    /// #   signed::SerdeSigned,
-    /// #   signer::{
-    /// #     memory::MemorySigner,
-    /// #     sync_signer::SyncSignerBasic
-    /// #   }
-    /// # };
+    /// # use keyhive_crypto::signer::{memory::MemorySigner, sync_signer::SyncSignerBasic};
     /// #
     /// let signer = MemorySigner::generate(&mut rand::rngs::OsRng);
     /// let sig = signer.try_sign_bytes_sync_basic(b"hello world");
@@ -72,21 +60,4 @@ impl SyncSignerBasic for ed25519_dalek::SigningKey {
         self.try_sign(payload_bytes)
             .map_err(SigningError::SigningFailed)
     }
-}
-
-/// Wrapper to lift the result of a low-level [`SyncSignerBasic`] into [`SerdeSigned`].
-///
-/// Requires the `std` feature (uses [`bincode`] for serialization).
-#[cfg(feature = "std")]
-#[instrument(skip_all, fields(issuer = issuer.to_hex_string()))]
-pub fn try_sign_basic<S: SyncSignerBasic + ?Sized, T: Serialize + core::fmt::Debug>(
-    signer: &S,
-    issuer: ed25519_dalek::VerifyingKey,
-    payload: T,
-) -> Result<SerdeSigned<T>, SigningError> {
-    let bytes = bincode::serialize(&payload)?;
-    let signature = signer.try_sign_bytes_sync_basic(bytes.as_slice())?;
-    info!("signature: {:0x?}", signature.to_bytes());
-    let signed = SerdeSigned::new(payload, Identifier::try_from(issuer)?, signature);
-    Ok(signed)
 }
