@@ -23,6 +23,7 @@ use crate::{
     root_secrets::{RootSecrets, VerifiedRootSecret},
     transact::{Fork, Merge},
     tree::BeeKem,
+    treemath::InnerNodeIndex,
 };
 use alloc::{boxed::Box, collections::BTreeSet, sync::Arc, vec, vec::Vec};
 use core::{
@@ -911,6 +912,23 @@ impl Cgka {
         }
         self.tree
             .sort_leaves_and_blank_paths_for_concurrent_membership_changes(added_ids, removed_ids);
+        // Blank any node written by an update in this batch that a member of
+        // the merged tree cannot decrypt because the node's encryptions omit
+        // a node on that member's path.
+        self.tree.blank_nodes_omitting_a_resolution_node(
+            batch
+                .iter()
+                .filter_map(|op| match &op.payload {
+                    CgkaOperation::Update { new_path, .. } => Some(new_path),
+                    _ => None,
+                })
+                .flat_map(|new_path| {
+                    new_path
+                        .path
+                        .iter()
+                        .map(|(idx, _)| InnerNodeIndex::new(*idx))
+                }),
+        );
         Ok(())
     }
 

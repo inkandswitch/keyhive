@@ -75,6 +75,11 @@ impl SecretStore {
         self.versions.len() > 1
     }
 
+    /// The node's single version. Returns `None` if this is a conflict node.
+    pub(crate) fn non_conflict_version(&self) -> Option<&SecretStoreVersion> {
+        (!self.has_conflict()).then_some(&self.versions.head)
+    }
+
     pub fn node_key(&self) -> NodeKey {
         match self.versions.tail.as_slice() {
             [] => NodeKey::ShareKey(self.versions.head.pk),
