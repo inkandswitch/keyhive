@@ -6,7 +6,7 @@ use crate::{
     certificate::{decode_stored, explanation, root_edges, CertificateError, KeylineStorageError},
     cgka::{
         certificate_sets::{CertificateSets, CitationSet},
-        citations::{citation_of, KeylineView, Members, SharedCitations},
+        citations::{citation_of, KeylineCgkaMembershipView, Members, SharedCitations},
         AllCgkaOps, Cgka,
     },
     contact_card::ContactCard,
@@ -400,7 +400,10 @@ where
     /// set (what it and the batches before it cite) does not entitle to remain in the
     /// CGKA group.
     fn membership_view(&self, doc: Identifier) -> Arc<dyn MembershipView> {
-        Arc::new(KeylineView::new(doc, self.certificates.cited.dupe()))
+        Arc::new(KeylineCgkaMembershipView::new(
+            doc,
+            self.certificates.cited.dupe(),
+        ))
     }
 
     /// `resource`'s members over the certificates of `cited` this replica

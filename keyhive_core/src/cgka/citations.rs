@@ -336,12 +336,12 @@ impl Drop for Replaying {
 /// synchronously so this answers only from verdicts and Keyline answers
 /// already cached in [`CitedCertificates`]. Returns `None` for a set with
 /// neither cached.
-pub(crate) struct KeylineView {
+pub(crate) struct KeylineCgkaMembershipView {
     resource: Identifier,
     citations: SharedCitations,
 }
 
-impl KeylineView {
+impl KeylineCgkaMembershipView {
     pub(crate) fn new(resource: Identifier, citations: SharedCitations) -> Self {
         Self {
             resource,
@@ -350,7 +350,7 @@ impl KeylineView {
     }
 }
 
-impl fmt::Debug for KeylineView {
+impl fmt::Debug for KeylineCgkaMembershipView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KeylineView")
             .field("resource", &self.resource)
@@ -358,7 +358,7 @@ impl fmt::Debug for KeylineView {
     }
 }
 
-impl MembershipView for KeylineView {
+impl MembershipView for KeylineCgkaMembershipView {
     fn non_members(
         &self,
         cited: &BTreeSet<CitationId>,
