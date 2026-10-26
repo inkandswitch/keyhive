@@ -167,7 +167,7 @@ impl DocumentSets {
                     .collect();
                 let mut set = union(&preds);
                 set.extend(op.citations().iter().copied());
-                self.record(next, set, checkpoint_every);
+                self.add_set(next, set, checkpoint_every);
             } else {
                 stack.push((next, true));
                 stack.extend(op.predecessors().into_iter().map(|p| (p, false)));
@@ -177,7 +177,7 @@ impl DocumentSets {
     }
 
     /// Record `set` for `digest`, as a checkpoint if one is due.
-    fn record(&mut self, digest: OpDigest, set: CitationSet, checkpoint_every: u64) {
+    fn add_set(&mut self, digest: OpDigest, set: CitationSet, checkpoint_every: u64) {
         self.built += 1;
         if !self.built.is_multiple_of(checkpoint_every) {
             self.recent.push_back(digest);
@@ -235,7 +235,7 @@ mod tests {
         let digest = |n: u64| OpDigest::from(*blake3::hash(&n.to_le_bytes()).as_bytes());
         let total = CHECKPOINT_EVERY + RECENT_SETS as u64;
         for n in 1..=total {
-            sets.record(digest(n), CitationSet::default(), CHECKPOINT_EVERY);
+            sets.add_set(digest(n), CitationSet::default(), CHECKPOINT_EVERY);
         }
         sets.evict(RECENT_SETS);
         assert!(sets.sets.contains_key(&digest(CHECKPOINT_EVERY)));
