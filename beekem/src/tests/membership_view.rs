@@ -374,3 +374,146 @@ async fn a_view_changes_a_cgka_only_by_scheduling_a_replay_of_its_history() {
         "a view did not schedule a replay of the history"
     );
 }
+
+/// A view in which `revoke` removes `member` unless `regrant` is also cited.
+#[derive(Debug)]
+struct RevokedUnlessRegranted {
+    revoke: CitationId,
+    regrant: CitationId,
+    member: MemberId,
+}
+
+impl MembershipView for RevokedUnlessRegranted {
+    fn non_members(
+        &self,
+        cited: &BTreeSet<CitationId>,
+        leaves: &BTreeSet<MemberId>,
+    ) -> Option<BTreeSet<MemberId>> {
+        let revoked = cited.contains(&self.revoke)
+            && !cited.contains(&self.regrant)
+            && leaves.contains(&self.member);
+        Some(revoked.then_some(self.member).into_iter().collect())
+    }
+}
+
+#[tokio::test]
+async fn a_member_kept_by_a_concurrent_grant_can_read_the_next_update() {
+    let mut rng = StdRng::seed_from_u64(0xd00b_3333);
+    let mut group = Group::new(4, &mut rng).await;
+    let (a, c, d) = (0, 2, 3);
+    let revoke_c = CitationId([1; 32]);
+    let regrant_c = CitationId([2; 32]);
+    group.set_membership_view(Arc::new(RevokedUnlessRegranted {
+        revoke: revoke_c,
+        regrant: regrant_c,
+        member: group.id(c),
+    }));
+    group.settle(a, &mut rng).await;
+
+    // d sees c revoked and rotates with c's leaf blank, while a concurrently
+    // cites a grant that keeps c in.
+    let remove_c = group
+        .remove_by_citations(d, BTreeSet::from([revoke_c]))
+        .await;
+    let rotation_by_d = group.rotate(d, &mut rng).await;
+    let regrant = group
+        .remove_by_citations(a, BTreeSet::from([regrant_c]))
+        .await;
+    for op in [&remove_c, &rotation_by_d] {
+        group.deliver(op, &[0, 1, 2]);
+    }
+    group.deliver(&regrant, &[1, 2, 3]);
+    let heal = group.rotate(a, &mut rng).await;
+    group.broadcast(&heal);
+
+    assert_everyone_kept_and_c_reads_heal_from_a(
+        &mut group,
+        a,
+        c,
+        "after a heal merging a revocation and a concurrent grant",
+    );
+}
+
+/// Revokes `member` when both `r1` and `r2` are cited and `regrant` is not.
+#[derive(Debug)]
+struct RevokedByBoth {
+    r1: CitationId,
+    r2: CitationId,
+    regrant: CitationId,
+    member: MemberId,
+}
+
+impl MembershipView for RevokedByBoth {
+    fn non_members(
+        &self,
+        cited: &BTreeSet<CitationId>,
+        leaves: &BTreeSet<MemberId>,
+    ) -> Option<BTreeSet<MemberId>> {
+        let revoked = cited.contains(&self.r1)
+            && cited.contains(&self.r2)
+            && !cited.contains(&self.regrant)
+            && leaves.contains(&self.member);
+        Some(revoked.then_some(self.member).into_iter().collect())
+    }
+}
+
+#[tokio::test]
+async fn a_member_its_updater_dropped_under_two_concurrent_revocations_can_read_the_next_update() {
+    let mut rng = StdRng::seed_from_u64(0xd00b_3335);
+    let mut group = Group::new(4, &mut rng).await;
+    let (a, b, c, d) = (0, 1, 2, 3);
+    let r1 = CitationId([1; 32]);
+    let r2 = CitationId([2; 32]);
+    let regrant_c = CitationId([3; 32]);
+    group.set_membership_view(Arc::new(RevokedByBoth {
+        r1,
+        r2,
+        regrant: regrant_c,
+        member: group.id(c),
+    }));
+    group.settle(a, &mut rng).await;
+
+    // d merges b's revocation with its own, which drops c, then cites the
+    // grant and rotates. a rotates concurrently with all of it.
+    let by_d = group.remove_by_citations(d, BTreeSet::from([r1])).await;
+    let by_b = group.remove_by_citations(b, BTreeSet::from([r2])).await;
+    let rotation_by_a = group.rotate(a, &mut rng).await;
+    group.deliver(&by_b, &[d]);
+    let regrant = group
+        .remove_by_citations(d, BTreeSet::from([regrant_c]))
+        .await;
+    let rotation_by_d = group.rotate(d, &mut rng).await;
+    group.deliver(&by_d, &[a, b, c]);
+    group.deliver(&by_b, &[a, c]);
+    for op in [&regrant, &rotation_by_d] {
+        group.deliver(op, &[a, b, c]);
+    }
+    group.deliver(&rotation_by_a, &[b, c, d]);
+    let heal = group.rotate(a, &mut rng).await;
+    group.broadcast(&heal);
+
+    assert_everyone_kept_and_c_reads_heal_from_a(
+        &mut group,
+        a,
+        c,
+        "after a heal merging two revocations that together dropped a member",
+    );
+}
+
+/// Checks that the replicas pass [`Group::check`] and keep all four members,
+/// and that `c` derives the root secret of `a`'s last update.
+fn assert_everyone_kept_and_c_reads_heal_from_a(
+    group: &mut Group,
+    a: usize,
+    c: usize,
+    context: &str,
+) {
+    group.check(context);
+    group.assert_members(context, &["a", "b", "c", "d"]);
+    let expected = group.replicas[a].decrypt_tree_root_secret().unwrap();
+    assert_eq!(
+        group.replicas[c].decrypt_tree_root_secret().ok(),
+        Some(expected),
+        "{context}: c is in the tree but cannot derive the root secret"
+    );
+}

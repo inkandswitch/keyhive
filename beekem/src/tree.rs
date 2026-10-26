@@ -569,6 +569,60 @@ impl BeeKem {
         }
     }
 
+    /// Blank each of `nodes` (and its path) that omits a resolution
+    /// node.
+    pub(crate) fn blank_nodes_omitting_a_resolution_node(
+        &mut self,
+        nodes: impl IntoIterator<Item = InnerNodeIndex>,
+    ) {
+        for idx in nodes {
+            if self.omits_a_resolution_node(idx) {
+                self.blank_path(idx);
+            }
+        }
+    }
+
+    /// Whether the node at `idx` has a single version whose encryptions omit a
+    /// node in its non-encrypting child's resolution. A node is omitted if there
+    /// is no entry for it or the entry is not encrypted to its current key.
+    /// If neither child has the node's `encrypter_pk`, its whole resolution is
+    /// omitted. Returns `false` for a blank, conflicted, or out-of-range node,
+    /// since decryption skips such a node.
+    fn omits_a_resolution_node(&self, idx: InnerNodeIndex) -> bool {
+        let Some(version) = self
+            .inner_nodes
+            .get(idx.usize())
+            .and_then(Option::as_ref)
+            .and_then(SecretStore::non_conflict_version)
+        else {
+            return false;
+        };
+        let has_encrypter_key = |child: TreeNodeIndex| {
+            self.node_key_for_index(child)
+                .is_ok_and(|key| key.contains_key(&version.encrypter_pk))
+        };
+        let (l_child, r_child) = (treemath::left(idx), treemath::right(idx));
+        let non_encrypter_child = if has_encrypter_key(l_child) {
+            r_child
+        } else if has_encrypter_key(r_child) {
+            l_child
+        } else {
+            return true;
+        };
+        let mut resolution = Vec::new();
+        self.append_resolution(non_encrypter_child, &mut resolution);
+        // Check whether some node in our non-encrypting child's resolution
+        // is missing an encryption paired with its current share key.
+        resolution.iter().any(|member_idx| {
+            !version.sk.get(member_idx).is_some_and(|encrypted| {
+                match self.node_key_for_index(*member_idx) {
+                    Ok(NodeKey::ShareKey(pk)) => pk == encrypted.paired_pk,
+                    _ => false,
+                }
+            })
+        })
+    }
+
     fn blank_path(&mut self, mut idx: InnerNodeIndex) {
         while !self.is_root(idx.into()) {
             self.blank_inner_node(idx);
@@ -641,9 +695,10 @@ pub struct LeafNode {
 
 #[cfg(any(test, feature = "test_utils"))]
 impl BeeKem {
-    /// Returns one message per disagreement between the tree's fields. It checks
-    /// `leaves` and `inner_nodes` against `tree_size`, and `leaves` against
-    /// `id_to_leaf_idx` and `next_leaf_idx`.
+    /// Returns one message per invariant the tree breaks. It checks `leaves`
+    /// and `inner_nodes` against `tree_size`, `leaves` against `id_to_leaf_idx`
+    /// and `next_leaf_idx`, and each inner node with
+    /// [`Self::omits_a_resolution_node`].
     pub(crate) fn invariant_violations(&self) -> Vec<alloc::string::String> {
         use alloc::format;
 
@@ -702,6 +757,13 @@ impl BeeKem {
                 violations.push(format!(
                     "leaf {i} is occupied but sits at or above next_leaf_idx ({})",
                     self.next_leaf_idx
+                ));
+            }
+        }
+        for i in 0..self.tree_size.inner_node_count() {
+            if self.omits_a_resolution_node(InnerNodeIndex::new(i)) {
+                violations.push(format!(
+                    "inner node {i} omits a node in its non-encrypting child's resolution"
                 ));
             }
         }
@@ -1138,5 +1200,23 @@ mod tests {
         assert_invariant_violation(|tree, [a, ..]| {
             tree.id_to_leaf_idx.remove(&a);
         });
+    }
+
+    #[test]
+    fn a_node_encrypted_to_a_key_its_resolution_no_longer_has_is_caught() {
+        let (mut tree, [.., d], path) = seeded();
+        tree.apply_path(&path);
+        assert!(tree.invariant_violations().is_empty());
+        let d_idx = *tree.leaf_index_for_id(d).expect("d has a leaf");
+        let new_pk = ShareSecretKey::generate(&mut StdRng::seed_from_u64(1)).share_key();
+        tree.leaves[d_idx.usize()]
+            .as_mut()
+            .expect("d's leaf is occupied")
+            .pk = new_pk;
+        let violations = tree.invariant_violations();
+        assert!(
+            violations.iter().any(|v| v.starts_with("inner node 1 ")),
+            "the root, encrypted to d's old key, was not reported: {violations:?}"
+        );
     }
 }
