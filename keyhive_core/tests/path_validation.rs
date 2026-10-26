@@ -11,7 +11,7 @@ use keyhive_core::{
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext},
 };
-use keyhive_crypto::{share_key::ShareKey, signed::SerdeSigned};
+use keyhive_crypto::share_key::ShareKey;
 use keyline::power::Power::Read;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use testresult::TestResult;
@@ -27,17 +27,14 @@ async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
 }
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
-async fn cgka_heads(
-    observer: &Instance,
-    doc: DocumentId,
-) -> BTreeSet<Digest<SerdeSigned<CgkaOperation>>> {
+async fn cgka_heads(observer: &Instance, doc: DocumentId) -> BTreeSet<Digest<CgkaOperation>> {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap();
     let referenced: HashSet<_> = ops
         .iter()
-        .flat_map(|op| op.payload.predecessors())
+        .flat_map(|op| op.payload().predecessors())
         .collect();
     ops.iter()
-        .map(|op| Digest::hash(op.as_ref()))
+        .map(|op| op.digest())
         .filter(|d| !referenced.contains(d))
         .collect()
 }
@@ -89,8 +86,7 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
     };
 
     // We should ignore the forged path and not panic.
-    bob.receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
-        .await?;
+    bob.receive_cgka_op(alice.sign_cgka_op(op).await?).await?;
 
     Ok(())
 }

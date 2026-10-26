@@ -1,17 +1,21 @@
 use super::cgka_operation::JsCgkaOperation;
 use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
-use keyhive_crypto::{signed::SerdeSigned, verifiable::Verifiable};
+use keyhive_codec::traits::Encode;
+use keyhive_crypto::{verifiable::Verifiable, verified::Verified};
 use wasm_bindgen::prelude::*;
 
+/// A CGKA operation and its signature, verified when it was made or
+/// received.
 #[derive(Debug, Clone, From, Into)]
 #[wasm_bindgen(js_name = SignedCgkaOperation)]
-pub struct JsSignedCgkaOperation(pub(crate) SerdeSigned<CgkaOperation>);
+pub struct JsSignedCgkaOperation(pub(crate) Verified<CgkaOperation>);
 
 #[wasm_bindgen(js_class = SignedCgkaOperation)]
 impl JsSignedCgkaOperation {
+    /// Always `true`: an operation is verified before it is handed out.
     pub fn verify(&self) -> bool {
-        self.0.try_verify().is_ok()
+        true
     }
 
     #[wasm_bindgen(getter)]
@@ -26,6 +30,12 @@ impl JsSignedCgkaOperation {
 
     #[wasm_bindgen(getter)]
     pub fn signature(&self) -> Vec<u8> {
-        self.0.signature().to_vec()
+        self.0.signed().signature().to_vec()
+    }
+
+    /// The signed operation as its `KH` frame, as peers exchange it.
+    #[wasm_bindgen(js_name = toBytes)]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.signed().encode().into_bytes()
     }
 }

@@ -10,7 +10,7 @@ use keyhive_core::{
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext, TestResult as Result},
 };
-use keyhive_crypto::{share_key::ShareKey, signed::SerdeSigned};
+use keyhive_crypto::share_key::ShareKey;
 use keyline::power::Power::Read;
 use std::collections::{BTreeSet, HashSet};
 
@@ -25,17 +25,14 @@ async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
 }
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
-async fn cgka_heads(
-    observer: &Instance,
-    doc: DocumentId,
-) -> BTreeSet<Digest<SerdeSigned<CgkaOperation>>> {
+async fn cgka_heads(observer: &Instance, doc: DocumentId) -> BTreeSet<Digest<CgkaOperation>> {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap();
     let referenced: HashSet<_> = ops
         .iter()
-        .flat_map(|op| op.payload.predecessors())
+        .flat_map(|op| op.payload().predecessors())
         .collect();
     ops.iter()
-        .map(|op| Digest::hash(op.as_ref()))
+        .map(|op| op.digest())
         .filter(|d| !referenced.contains(d))
         .collect()
 }
@@ -94,10 +91,7 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
             predecessor_secrets: Vec::new(),
         },
     };
-    let signed = alice
-        .serde_sign_cgka_op(op)
-        .await
-        .map_err(|e| e.to_string())?;
+    let signed = alice.sign_cgka_op(op).await.map_err(|e| e.to_string())?;
     bob.receive_cgka_op(signed)
         .await
         .map_err(|e| e.to_string())?;

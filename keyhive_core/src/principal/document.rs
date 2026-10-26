@@ -31,10 +31,11 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::Identifier,
     share_key::{ShareKey, ShareSecretKey},
-    signed::SerdeSigned,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
-    verified::{self},
+    verified::{
+        Verified, {self},
+    },
 };
 use keyline::{contract::Keyline, delegation::Delegation, power::Power};
 use nonempty::NonEmpty;
@@ -134,7 +135,7 @@ impl<T: ContentRef> DocumentState<T> {
         initial_content_heads: NonEmpty<T>,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(Self, Vec<SerdeSigned<CgkaOperation>>), GenerateDocError<E>> {
+    ) -> Result<(Self, Vec<Verified<CgkaOperation>>), GenerateDocError<E>> {
         let (owner, owner_pk, _, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
@@ -164,7 +165,7 @@ impl<T: ContentRef> DocumentState<T> {
         key_proof: Option<Vec<u8>>,
         citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Verified<CgkaOperation>>, CgkaError> {
         self.cgka.add(id, pk, key_proof, citations, signer).await
     }
 
@@ -176,7 +177,7 @@ impl<T: ContentRef> DocumentState<T> {
         &mut self,
         citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
+    ) -> Result<Verified<CgkaOperation>, CgkaError> {
         self.cgka.remove_by_citations(citations, signer).await
     }
 
@@ -190,7 +191,7 @@ impl<T: ContentRef> DocumentState<T> {
         &mut self,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(SerdeSigned<CgkaOperation>, LeafKeyPair), EncryptError> {
+    ) -> Result<(Verified<CgkaOperation>, LeafKeyPair), EncryptError> {
         let new_share_secret_key = ShareSecretKey::generate(csprng);
         let new_share_key = new_share_secret_key.share_key();
         let (_, op, new_key_pair) = self
@@ -219,7 +220,7 @@ impl<T: ContentRef> DocumentState<T> {
     ) -> Result<
         (
             EncryptedContent<Vec<u8>, T>,
-            Option<(SerdeSigned<CgkaOperation>, LeafKeyPair)>,
+            Option<(Verified<CgkaOperation>, LeafKeyPair)>,
         ),
         EncryptInEnvelopeError<T>,
     >
@@ -267,7 +268,7 @@ impl<T: ContentRef> DocumentState<T> {
         (
             EncryptedContent<Vec<u8>, T>,
             SymmetricKey,
-            Option<(SerdeSigned<CgkaOperation>, LeafKeyPair)>,
+            Option<(Verified<CgkaOperation>, LeafKeyPair)>,
         ),
         EncryptError,
     > {
@@ -605,7 +606,7 @@ impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
-    pub(crate) update_op: Option<SerdeSigned<CgkaOperation>>,
+    pub(crate) update_op: Option<Verified<CgkaOperation>>,
 }
 
 impl<T: ContentRef> EncryptedContentWithUpdate<T> {
@@ -613,7 +614,7 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
         &self.encrypted_content
     }
 
-    pub fn update_op(&self) -> Option<&SerdeSigned<CgkaOperation>> {
+    pub fn update_op(&self) -> Option<&Verified<CgkaOperation>> {
         self.update_op.as_ref()
     }
 }

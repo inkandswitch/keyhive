@@ -4,7 +4,7 @@
 
 use crate::content::heads::ContentHeads;
 use beekem::operation::CgkaOperation;
-use keyhive_crypto::{content::reference::ContentRef, signed::SerdeSigned, verified::Verified};
+use keyhive_crypto::{content::reference::ContentRef, verified::Verified};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ pub struct AddMemberUpdate {
 
     /// The CGKA operations issued for each local document whose readers
     /// this write changed.
-    pub cgka_ops: Vec<SerdeSigned<CgkaOperation>>,
+    pub cgka_ops: Vec<Verified<CgkaOperation>>,
 }
 
 /// What [`Keyhive::revoke_member`](crate::keyhive::Keyhive::revoke_member) produced.
@@ -24,7 +24,7 @@ pub struct AddMemberUpdate {
 pub struct RevokeMemberUpdate<T: ContentRef> {
     pub(crate) revocations: Vec<Arc<Verified<Revocation<ContentHeads<T>>>>>,
     pub(crate) redelegations: Vec<Arc<Verified<Delegation>>>,
-    pub(crate) cgka_ops: Vec<SerdeSigned<CgkaOperation>>,
+    pub(crate) cgka_ops: Vec<Verified<CgkaOperation>>,
 }
 
 impl<T: ContentRef> RevokeMemberUpdate<T> {
@@ -42,7 +42,7 @@ impl<T: ContentRef> RevokeMemberUpdate<T> {
 
     /// The CGKA operations issued for each local document whose readers
     /// this write changed.
-    pub fn cgka_ops(&self) -> &[SerdeSigned<CgkaOperation>] {
+    pub fn cgka_ops(&self) -> &[Verified<CgkaOperation>] {
         &self.cgka_ops
     }
 }

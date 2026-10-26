@@ -11,7 +11,6 @@ use alloc::{collections::BTreeSet, sync::Arc};
 use core::hash::{Hash, Hasher};
 use future_form::{FutureForm, Local};
 use keyhive_crypto::{
-    digest::Digest,
     share_key::ShareSecretKey,
     signed::SigningError,
     signer::{async_signer::AsyncSigner, memory::MemorySigner},
@@ -162,7 +161,7 @@ async fn the_last_operation_issued_is_the_head_and_is_found_by_its_digest() {
         .await
         .expect("adding a new member succeeds")
         .expect("d is not yet a member");
-    let digest = Digest::hash(&add);
+    let digest = add.digest();
     assert_eq!(cgka.heads(), &Set::from_iter([digest]));
     assert_eq!(cgka.op(&digest).map(AsRef::as_ref), Some(&add));
 }
@@ -255,7 +254,7 @@ async fn applying_an_update_records_the_root_secret_it_produced() {
     let mut group = Group::new(2, &mut rng).await;
 
     let op = group.rotate(0, &mut rng).await;
-    let op_hash = Digest::hash(op.as_ref());
+    let op_hash = op.digest();
     let produced = group.replicas[0]
         .root_secrets
         .get(&op_hash)
@@ -274,8 +273,8 @@ async fn applying_an_update_records_the_root_secret_it_produced() {
 fn a_secret_is_accepted_only_for_the_update_that_produced_it() {
     for_each_seed(|mut rng| async move {
         let mut group = Group::new(1, &mut rng).await;
-        let first = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
-        let second = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+        let first = group.rotate(0, &mut rng).await.digest();
+        let second = group.rotate(0, &mut rng).await.digest();
         let cgka = &mut group.replicas[0];
         let current = cgka
             .root_secrets
@@ -303,7 +302,7 @@ fn merging_a_fork_keeps_the_root_secrets_it_recorded() {
     for_each_seed(|mut rng| async move {
         let mut group = Group::new(1, &mut rng).await;
         let mut trunk = group.replicas[0].fork();
-        let op_hash = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+        let op_hash = group.rotate(0, &mut rng).await.digest();
         group.rotate(0, &mut rng).await;
         let secret = group.replicas[0]
             .root_secrets
@@ -326,7 +325,7 @@ fn merging_a_fork_keeps_the_root_secrets_it_recorded() {
 fn an_earlier_secret_that_was_not_recorded_is_found() {
     for_each_seed(|mut rng| async move {
         let mut group = Group::new(1, &mut rng).await;
-        let first = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+        let first = group.rotate(0, &mut rng).await.digest();
         group.rotate(0, &mut rng).await;
         let cgka = &mut group.replicas[0];
         let earlier = cgka

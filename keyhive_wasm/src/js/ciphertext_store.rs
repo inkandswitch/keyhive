@@ -9,7 +9,6 @@ use keyhive_core::{
     crypto::digest::Digest,
     store::ciphertext::{memory::MemoryCiphertextStore, CiphertextStore},
 };
-use keyhive_crypto::signed::SerdeSigned;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
@@ -92,7 +91,7 @@ impl CiphertextStore<Local, JsChangeId, Vec<u8>> for JsCiphertextStore {
 
     fn get_ciphertext_by_pcs_update<'a>(
         &'a self,
-        pcs_update: &'a Digest<SerdeSigned<CgkaOperation>>,
+        pcs_update: &'a Digest<CgkaOperation>,
     ) -> <Local as FutureForm>::Future<
         'a,
         Result<Vec<Arc<EncryptedContent<Vec<u8>, JsChangeId>>>, Self::GetCiphertextError>,

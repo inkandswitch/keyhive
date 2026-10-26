@@ -33,7 +33,6 @@ use keyhive_crypto::{
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
     signable::{Kind, Kinded, TAG},
-    signed::SerdeSigned,
     siv::{nonces_match, synthetic_nonce},
     symmetric_key::SymmetricKey,
 };
@@ -80,7 +79,7 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     pub pcs_key_hash: Digest<PcsKey>,
 
     /// The CGKA update that produced that PCS key.
-    pub pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
+    pub pcs_update_op_hash: Digest<CgkaOperation>,
 
     /// `( nonce_i ‖ ciphertext_i )+`.
     chunks: Vec<u8>,
@@ -98,7 +97,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         content_ref: Cr,
         pred_refs: Digest<PredecessorRefs<Cr>>,
         pcs_key_hash: Digest<PcsKey>,
-        pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
+        pcs_update_op_hash: Digest<CgkaOperation>,
         plaintext: &[u8],
     ) -> Result<Self, chacha20poly1305::Error> {
         let mut content = EncryptedContent {

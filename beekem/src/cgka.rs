@@ -35,9 +35,9 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
-    signed::SerdeSigned,
-    signer::async_signer::{self, AsyncSigner},
+    signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
+    verified::Verified,
 };
 use nonempty::NonEmpty;
 use tracing::{debug, instrument, warn};
@@ -85,7 +85,7 @@ pub struct Cgka {
 
     /// Chainable updates that we have not detected as verified secrets on the
     /// predecessor secrets chain.
-    pub(crate) unchained_updates: Set<Digest<SerdeSigned<CgkaOperation>>>,
+    pub(crate) unchained_updates: Set<Digest<CgkaOperation>>,
 
     /// For determining when members must be removed in light of new
     /// citations from an operation.
@@ -234,15 +234,12 @@ impl Cgka {
 
     /// The operations the next operation created here will have as its
     /// predecessors.
-    pub fn heads(&self) -> &Set<Digest<SerdeSigned<CgkaOperation>>> {
+    pub fn heads(&self) -> &Set<Digest<CgkaOperation>> {
         &self.ops_graph.cgka_op_heads
     }
 
     /// The operation in the CGKA graph with this digest.
-    pub fn op(
-        &self,
-        digest: &Digest<SerdeSigned<CgkaOperation>>,
-    ) -> Option<&Arc<SerdeSigned<CgkaOperation>>> {
+    pub fn op(&self, digest: &Digest<CgkaOperation>) -> Option<&Arc<Verified<CgkaOperation>>> {
         self.ops_graph.cgka_ops.get(digest)
     }
 
@@ -280,7 +277,7 @@ impl Cgka {
     ) -> Result<
         (
             ApplicationSecret<T>,
-            Option<(SerdeSigned<CgkaOperation>, LeafKeyPair)>,
+            Option<(Verified<CgkaOperation>, LeafKeyPair)>,
         ),
         CgkaError,
     > {
@@ -301,7 +298,7 @@ impl Cgka {
             let (pcs_key, update_op, key_pair) = self
                 .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
                 .await?;
-            let op_hash = Digest::hash(&update_op);
+            let op_hash = update_op.digest();
             (pcs_key, op_hash, Some((update_op, key_pair)))
         };
         Ok((
@@ -352,7 +349,7 @@ impl Cgka {
         key_proof: Option<Vec<u8>>,
         citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Verified<CgkaOperation>>, CgkaError> {
         self.replay_if_pending()?;
         let ancestors = if self.inviter_key_pair().is_some() {
             self.reachable_ancestor_secrets()
@@ -369,7 +366,7 @@ impl Cgka {
         &mut self,
         members: NonEmpty<(MemberId, ShareKey, Option<Vec<u8>>, BTreeSet<CitationId>)>,
         signer: &S,
-    ) -> Result<Vec<SerdeSigned<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Verified<CgkaOperation>>, CgkaError> {
         self.replay_if_pending()?;
         let mut ancestors = None;
         let mut ops = Vec::new();
@@ -402,9 +399,9 @@ impl Cgka {
         pk: ShareKey,
         key_proof: Option<Vec<u8>>,
         citations: BTreeSet<CitationId>,
-        ancestor_secrets: &[(Digest<SerdeSigned<CgkaOperation>>, PcsKey)],
+        ancestor_secrets: &[(Digest<CgkaOperation>, PcsKey)],
         signer: &S,
-    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Verified<CgkaOperation>>, CgkaError> {
         if self.tree.contains_id(&id) {
             return Ok(None);
         }
@@ -429,7 +426,7 @@ impl Cgka {
             },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
-        self.handle_new_removals(&signed_op.payload);
+        self.handle_new_removals(signed_op.payload());
         Ok(Some(signed_op))
     }
 
@@ -441,7 +438,7 @@ impl Cgka {
     fn invitation_for(
         &self,
         invitee_pk: ShareKey,
-        ancestor_secrets: &[(Digest<SerdeSigned<CgkaOperation>>, PcsKey)],
+        ancestor_secrets: &[(Digest<CgkaOperation>, PcsKey)],
     ) -> Option<Invitation> {
         let (inviter_pk, inviter_sk) = self.inviter_key_pair()?;
         let key = PairedKey::new(&inviter_sk, &invitee_pk);
@@ -488,12 +485,12 @@ impl Cgka {
     }
 
     /// Record the root secrets of `op`'s invitation if it is addressed to us.
-    pub(crate) fn record_secrets_from_invitation(&mut self, op: &SerdeSigned<CgkaOperation>) {
+    pub(crate) fn record_secrets_from_invitation(&mut self, op: &Verified<CgkaOperation>) {
         let CgkaChange::Add {
             added_id,
             invitation: Some(invitation),
             ..
-        } = &op.payload.change
+        } = &op.payload().change
         else {
             return;
         };
@@ -520,8 +517,8 @@ impl Cgka {
         &mut self,
         op: CgkaOperation,
         signer: &S,
-    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
-        let recorded = match async_signer::try_sign_async::<F, _, _>(signer, op).await {
+    ) -> Result<Verified<CgkaOperation>, CgkaError> {
+        let recorded = match Verified::sign::<F, S>(&op, signer).await {
             Ok(signed_op) => self.record_op(&signed_op).map(|()| signed_op),
             Err(e) => Err(e.into()),
         };
@@ -541,7 +538,7 @@ impl Cgka {
 
     /// Add `op` to the operation graph and, if it includes an invitation for us,
     /// record those root secrets.
-    fn record_op(&mut self, op: &SerdeSigned<CgkaOperation>) -> Result<(), CgkaError> {
+    fn record_op(&mut self, op: &Verified<CgkaOperation>) -> Result<(), CgkaError> {
         self.unchained_updates.extend(self.ops_graph.add_op(op)?);
         self.record_secrets_from_invitation(op);
         Ok(())
@@ -559,7 +556,7 @@ impl Cgka {
             .values()
             .filter(|op| {
                 matches!(
-                    op.payload.change,
+                    op.payload().change,
                     CgkaChange::Add { added_id, invitation: Some(_), .. }
                         if added_id == owner_id
                 )
@@ -597,7 +594,7 @@ impl Cgka {
         id: MemberId,
         citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Verified<CgkaOperation>>, CgkaError> {
         self.replay_if_pending()?;
         // Check after replay since a concurrent add of the same member might
         // have been pending.
@@ -619,7 +616,7 @@ impl Cgka {
         &mut self,
         citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
+    ) -> Result<Verified<CgkaOperation>, CgkaError> {
         self.replay_if_pending()?;
         self.sign_and_complete_remove(BTreeSet::new(), citations, signer)
             .await
@@ -633,14 +630,14 @@ impl Cgka {
         removed: BTreeSet<RemovedMember>,
         citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
+    ) -> Result<Verified<CgkaOperation>, CgkaError> {
         let op = CgkaOperation {
             doc_id: self.doc_id,
             predecessors: self.ops_graph.cgka_op_heads.iter().copied().collect(),
             change: CgkaChange::Remove { citations, removed },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
-        self.handle_new_removals(&signed_op.payload);
+        self.handle_new_removals(signed_op.payload());
         Ok(signed_op)
     }
 
@@ -655,7 +652,7 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, SerdeSigned<CgkaOperation>, LeafKeyPair), CgkaError> {
+    ) -> Result<(PcsKey, Verified<CgkaOperation>, LeafKeyPair), CgkaError> {
         self.replay_if_pending()?;
         if self.group_size() == 0 {
             return Err(CgkaError::NoMembers);
@@ -682,7 +679,7 @@ impl Cgka {
             };
 
             let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
-            self.record_root_secret_for(pcs_key, Digest::hash(&signed_op));
+            self.record_root_secret_for(pcs_key, signed_op.digest());
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
             Err(CgkaError::IdentifierNotFound)
@@ -739,20 +736,20 @@ impl Cgka {
     #[instrument(skip_all)]
     pub fn merge_concurrent_operation(
         &mut self,
-        op: Arc<SerdeSigned<CgkaOperation>>,
+        op: Arc<Verified<CgkaOperation>>,
     ) -> Result<bool, CgkaError> {
-        if *op.payload.doc_id() != self.doc_id {
+        if *op.payload().doc_id() != self.doc_id {
             return Err(CgkaError::WrongDocument);
         }
-        if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
+        if self.ops_graph.contains_op_hash(&op.digest()) {
             return Ok(false);
         }
-        self.ops_graph.check_can_add(&op.payload)?;
-        let predecessors = op.payload.predecessors();
+        self.ops_graph.check_can_add(op.payload())?;
+        let predecessors = op.payload().predecessors();
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
             self.pending_replay = self.pending_replay
-                || op.payload.is_membership_change()
+                || op.payload().is_membership_change()
                 || self.ops_graph.batch_has_membership_change(&predecessors)?;
             if self.pending_replay {
                 self.record_op(&op)?;
@@ -762,7 +759,7 @@ impl Cgka {
         } else {
             self.replay_if_pending()?;
             self.apply_operation_and_record_root_secret(op.clone())?;
-            self.handle_new_removals(&op.payload);
+            self.handle_new_removals(op.payload());
         }
         Ok(true)
     }
@@ -771,7 +768,7 @@ impl Cgka {
         self.ops_graph.batches()
     }
 
-    pub fn contains_predecessors(&self, preds: &Set<Digest<SerdeSigned<CgkaOperation>>>) -> bool {
+    pub fn contains_predecessors(&self, preds: &Set<Digest<CgkaOperation>>) -> bool {
         self.ops_graph.contains_predecessors(preds)
     }
 
@@ -780,9 +777,9 @@ impl Cgka {
     #[instrument(skip_all)]
     pub(crate) fn apply_operation_and_record_root_secret(
         &mut self,
-        op: Arc<SerdeSigned<CgkaOperation>>,
+        op: Arc<Verified<CgkaOperation>>,
     ) -> Result<(), CgkaError> {
-        let is_update = op.payload.is_update();
+        let is_update = op.payload().is_update();
         if !self.apply_operation_to_tree(op)? {
             return Ok(());
         }
@@ -802,12 +799,12 @@ impl Cgka {
     #[instrument(skip_all)]
     fn apply_operation_to_tree(
         &mut self,
-        op: Arc<SerdeSigned<CgkaOperation>>,
+        op: Arc<Verified<CgkaOperation>>,
     ) -> Result<bool, CgkaError> {
-        if self.ops_graph.contains_op_hash(&Digest::hash(&op)) {
+        if self.ops_graph.contains_op_hash(&op.digest()) {
             return Ok(false);
         }
-        match op.payload.change {
+        match op.payload().change {
             CgkaChange::Add { added_id, pk, .. } => {
                 // A concurrent history might have added the same member.
                 if !self.tree.contains_id(&added_id) {
@@ -823,7 +820,7 @@ impl Cgka {
                 }
             }
             CgkaChange::Update { ref new_path, .. } => {
-                self.tree.apply_path(MemberId::from(op.issuer), new_path);
+                self.tree.apply_path(MemberId::from(op.issuer()), new_path);
             }
         }
         self.record_op(&op)?;
@@ -840,8 +837,8 @@ impl Cgka {
         let mut cited = BTreeSet::new();
         let mut sets = Vec::new();
         for batch in &self.ops_graph.batches()? {
-            cited.extend(batch.iter().flat_map(|op| op.payload.citations()));
-            if batch.iter().any(|op| op.payload.is_membership_change()) {
+            cited.extend(batch.iter().flat_map(|op| op.payload().citations()));
+            if batch.iter().any(|op| op.payload().is_membership_change()) {
                 sets.push(cited.clone());
             }
         }
@@ -853,8 +850,8 @@ impl Cgka {
     pub(crate) fn apply_batches(&mut self, batches: &NonEmpty<CgkaBatch>) -> Result<(), CgkaError> {
         let mut cited = BTreeSet::new();
         for batch in batches {
-            cited.extend(batch.iter().flat_map(|op| op.payload.citations()));
-            let changes_membership = batch.iter().any(|op| op.payload.is_membership_change());
+            cited.extend(batch.iter().flat_map(|op| op.payload().citations()));
+            let changes_membership = batch.iter().any(|op| op.payload().is_membership_change());
             self.apply_batch(batch, changes_membership.then_some(&cited))?;
         }
         Ok(())
@@ -869,7 +866,7 @@ impl Cgka {
         cited: Option<&BTreeSet<CitationId>>,
     ) -> Result<(), CgkaError> {
         // A single operation, or a batch of only updates, is applied in order.
-        if batch.len() == 1 || batch.iter().all(|op| op.payload.is_update()) {
+        if batch.len() == 1 || batch.iter().all(|op| op.payload().is_update()) {
             for op in batch.iter() {
                 self.apply_operation_to_tree(op.clone())?;
             }
@@ -885,7 +882,7 @@ impl Cgka {
         let mut added_ids = Set::new();
         let mut removed_ids = Set::new();
         for op in batch.iter() {
-            match op.payload.change {
+            match op.payload().change {
                 CgkaChange::Add { added_id, .. } => {
                     added_ids.insert(added_id);
                 }
@@ -912,7 +909,7 @@ impl Cgka {
         self.tree.blank_nodes_omitting_a_resolution_node(
             batch
                 .iter()
-                .filter_map(|op| match &op.payload.change {
+                .filter_map(|op| match &op.payload().change {
                     CgkaChange::Update { new_path, .. } => Some(new_path),
                     _ => None,
                 })
@@ -943,7 +940,7 @@ impl Cgka {
     pub(crate) fn root_secret_from_hashes(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
-        update_op_hash: &Digest<SerdeSigned<CgkaOperation>>,
+        update_op_hash: &Digest<CgkaOperation>,
     ) -> Result<PcsKey, CgkaError> {
         let pcs_key = self.find_or_derive_root_secret(update_op_hash)?;
         if &pcs_key.digest() != pcs_key_hash {
@@ -956,7 +953,7 @@ impl Cgka {
     /// be derived.
     fn find_or_derive_root_secret(
         &mut self,
-        op_hash: &Digest<SerdeSigned<CgkaOperation>>,
+        op_hash: &Digest<CgkaOperation>,
     ) -> Result<PcsKey, CgkaError> {
         if let Some(pcs_key) = self.root_secrets.get(op_hash) {
             return Ok(pcs_key);
@@ -985,13 +982,13 @@ impl Cgka {
     /// produced.
     pub(crate) fn root_secret_from_update_path(
         &mut self,
-        op_hash: &Digest<SerdeSigned<CgkaOperation>>,
+        op_hash: &Digest<CgkaOperation>,
     ) -> Option<PcsKey> {
         let Some(CgkaChange::Update { new_path, .. }) = self
             .ops_graph
             .cgka_ops
             .get(op_hash)
-            .map(|op| &op.payload.change)
+            .map(|op| &op.payload().change)
         else {
             return None;
         };
@@ -1004,7 +1001,7 @@ impl Cgka {
     /// and of every update in [`Self::unchained_updates`], sorted by
     /// operation hash.
     #[instrument(skip_all)]
-    fn reachable_ancestor_secrets(&mut self) -> Vec<(Digest<SerdeSigned<CgkaOperation>>, PcsKey)> {
+    fn reachable_ancestor_secrets(&mut self) -> Vec<(Digest<CgkaOperation>, PcsKey)> {
         let nearest = self
             .ops_graph
             .nearest_update_ancestors(&self.ops_graph.cgka_op_heads);
@@ -1035,7 +1032,7 @@ impl Cgka {
     fn predecessor_secrets(
         &self,
         pcs_key: &PcsKey,
-        ancestor_secrets: &[(Digest<SerdeSigned<CgkaOperation>>, PcsKey)],
+        ancestor_secrets: &[(Digest<CgkaOperation>, PcsKey)],
     ) -> Vec<PredecessorSecret> {
         let key = pcs_key.derive_predecessor_secrets_key();
         ancestor_secrets
@@ -1060,7 +1057,7 @@ impl Cgka {
     /// tree state or if the heads do not have exactly one nearest update
     /// ancestor.
     #[instrument(skip_all)]
-    fn record_tree_root_secret(&mut self) -> Option<(Digest<SerdeSigned<CgkaOperation>>, PcsKey)> {
+    fn record_tree_root_secret(&mut self) -> Option<(Digest<CgkaOperation>, PcsKey)> {
         if !self.has_tree_root_secret() {
             return None;
         }
@@ -1085,7 +1082,7 @@ impl Cgka {
     ///
     /// `entries` are the decrypted chain entries of an update whose own secret is
     /// verified.
-    fn mark_chained(&mut self, entries: &[(Digest<SerdeSigned<CgkaOperation>>, PcsKey)]) {
+    fn mark_chained(&mut self, entries: &[(Digest<CgkaOperation>, PcsKey)]) {
         for (update, secret) in entries {
             if self.unchained_updates.contains(update)
                 && VerifiedRootSecret::verify(&self.ops_graph, *update, *secret).is_some()
@@ -1115,10 +1112,10 @@ impl Cgka {
     /// The returned secrets are not verified.
     pub(crate) fn decrypt_predecessor_secrets(
         &self,
-        op_hash: &Digest<SerdeSigned<CgkaOperation>>,
+        op_hash: &Digest<CgkaOperation>,
         pcs_key: &PcsKey,
-        should_decrypt: impl Fn(&Digest<SerdeSigned<CgkaOperation>>) -> bool,
-    ) -> Vec<(Digest<SerdeSigned<CgkaOperation>>, PcsKey)> {
+        should_decrypt: impl Fn(&Digest<CgkaOperation>) -> bool,
+    ) -> Vec<(Digest<CgkaOperation>, PcsKey)> {
         let Some(CgkaChange::Update {
             predecessor_secrets,
             ..
@@ -1126,7 +1123,7 @@ impl Cgka {
             .ops_graph
             .cgka_ops
             .get(op_hash)
-            .map(|op| &op.payload.change)
+            .map(|op| &op.payload().change)
         else {
             return Vec::new();
         };
@@ -1157,7 +1154,7 @@ impl Cgka {
     #[instrument(skip_all)]
     pub(crate) fn root_secret_from_chain(
         &mut self,
-        target: &Digest<SerdeSigned<CgkaOperation>>,
+        target: &Digest<CgkaOperation>,
     ) -> Option<PcsKey> {
         if let Some(pcs_key) = self.root_secrets.get(target) {
             return Some(pcs_key);
@@ -1224,13 +1221,13 @@ impl Cgka {
     #[instrument(skip_all)]
     pub(crate) fn rebuild_root_secret(
         &mut self,
-        op_hash: &Digest<SerdeSigned<CgkaOperation>>,
+        op_hash: &Digest<CgkaOperation>,
     ) -> Result<PcsKey, CgkaError> {
         let Some(CgkaChange::Update { .. }) = self
             .ops_graph
             .cgka_ops
             .get(op_hash)
-            .map(|op| &op.payload.change)
+            .map(|op| &op.payload().change)
         else {
             return Err(CgkaError::UnknownPcsKey);
         };
@@ -1256,11 +1253,7 @@ impl Cgka {
     /// Returns whether `pcs_key` is recorded for `op_hash`. Nothing is written if
     /// it is not the secret that update produced.
     #[instrument(skip_all)]
-    fn record_root_secret_for(
-        &mut self,
-        pcs_key: PcsKey,
-        op_hash: Digest<SerdeSigned<CgkaOperation>>,
-    ) -> bool {
+    fn record_root_secret_for(&mut self, pcs_key: PcsKey, op_hash: Digest<CgkaOperation>) -> bool {
         if self.root_secrets.get(&op_hash) == Some(pcs_key) {
             return true;
         }

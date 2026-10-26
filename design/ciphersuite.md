@@ -28,7 +28,7 @@ Every key derivation is BLAKE3 `derive_key` under its own context, and every con
 | `/keyhive/seal/nonce-key/v1/2026-10-31` | A sealed blob's synthetic-nonce key | The key it is sealed under |
 | `/keyhive/share-key/exchange-key/v1/2026-10-31` | The key two share keys' holders share | X25519 output, both public keys |
 
-Content-addressing digests (`Digest::hash`) and signing digests (`signed::Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level. Types migrated to the canonical codec (Keyline certificates and prekey operations so far) instead travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature` and sign and hash the frame without its signature (`keyhive_crypto::signable`); see [Keyline's implementation notes](./keyline/implementation.md#domain-separation).
+Signed statements (Keyline certificates, prekey operations, CGKA operations, and application bytes) travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature`, and sign and hash the frame without its signature (`keyhive_crypto::signable`), so a statement's identity is who signed it and what it says, and two signatures over one statement are one statement; see [Keyline's implementation notes](./keyline/implementation.md#domain-separation). The remaining content-addressing digests (`Digest::hash`, events until they move to the frame) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level.
 
 ## Synthetic Nonce and Key Commitment
 

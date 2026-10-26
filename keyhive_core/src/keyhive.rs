@@ -62,7 +62,7 @@ use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
     share_key::{ShareKey, ShareSecretKey},
     signable::Signable,
-    signed::{SerdeSigned, SigningError, VerificationError},
+    signed::SigningError,
     signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
     symmetric_key::SymmetricKey,
     verifiable::Verifiable,
@@ -574,10 +574,10 @@ where
     async fn cgka_from_ops(
         &self,
         doc_id: DocumentId,
-        mut ops: Vec<Arc<SerdeSigned<CgkaOperation>>>,
+        mut ops: Vec<Arc<Verified<CgkaOperation>>>,
         me: IndividualId,
         secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-    ) -> (Cgka, Vec<Arc<SerdeSigned<CgkaOperation>>>) {
+    ) -> (Cgka, Vec<Arc<Verified<CgkaOperation>>>) {
         let doc = Identifier::from(doc_id);
         let mut cgka = Cgka::new(doc_id, me, ShareKeyMap::new());
         let mut has_progressed = true;
@@ -631,7 +631,7 @@ where
         &self,
         reconciled: &Reconciled<'_>,
         doc_id: DocumentId,
-        fresh: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
+        fresh: &mut Vec<Arc<Verified<CgkaOperation>>>,
     ) -> Result<(), EncryptError> {
         let doc = Identifier::from(doc_id);
         let Some(state) = self.document_state(doc_id).await else {
@@ -725,7 +725,7 @@ where
         doc_id: DocumentId,
         doc: Identifier,
         state: &Arc<Mutex<DocumentState<T>>>,
-        fresh: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
+        fresh: &mut Vec<Arc<Verified<CgkaOperation>>>,
     ) -> Result<ImpliedCgkaOpsOutcome, CgkaSyncError<K::Error>> {
         let signer = self.active.signer.clone();
         // Settle first. A replay evicts the answers cached before it, which
@@ -962,10 +962,7 @@ where
 
     /// Tell the listener about CGKA operations this replica wrote. They are
     /// already in its CGKA graph.
-    async fn record_cgka_ops<I: IntoIterator<Item = Arc<SerdeSigned<CgkaOperation>>>>(
-        &self,
-        ops: I,
-    ) {
+    async fn record_cgka_ops<I: IntoIterator<Item = Arc<Verified<CgkaOperation>>>>(&self, ops: I) {
         for op in ops {
             self.event_listener.on_cgka_op(&op).await;
         }
@@ -998,7 +995,7 @@ where
     async fn insert_and_reconcile<E: From<KeylineStorageError<K::Error>>>(
         &self,
         batch: &[VerifiedCertificate<ContentHeads<T>>],
-    ) -> Result<Vec<SerdeSigned<CgkaOperation>>, E> {
+    ) -> Result<Vec<Verified<CgkaOperation>>, E> {
         let mut fresh = Vec::new();
         let mut ops = Vec::new();
         let result = {
@@ -1027,7 +1024,7 @@ where
         reconciled: &mut Reconciled<'_>,
         batch: &[VerifiedCertificate<ContentHeads<T>>],
         fresh: &mut Vec<VerifiedCertificate<ContentHeads<T>>>,
-        ops: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
+        ops: &mut Vec<Arc<Verified<CgkaOperation>>>,
     ) -> Result<(), E> {
         let docs: Vec<(DocumentId, Identifier, Arc<Mutex<DocumentState<T>>>)> = self
             .documents
@@ -1267,7 +1264,7 @@ where
         roots: &[VerifiedCertificate<ContentHeads<T>>],
         initial_content_heads: NonEmpty<T>,
         fresh: &mut Vec<VerifiedCertificate<ContentHeads<T>>>,
-        ops: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
+        ops: &mut Vec<Arc<Verified<CgkaOperation>>>,
     ) -> Result<(), GenerateDocError<K::Error>> {
         *fresh = self.insert_fresh(reconciled, roots).await?;
 
@@ -1411,20 +1408,18 @@ where
         Verified::sign::<F, S>(&Bytes::from(bytes), &self.active.signer).await
     }
 
-    /// Sign a CGKA operation as this identity, whatever it says: for tests
-    /// that forge or replay operations. Beekem signs the operations this
-    /// replica issues itself.
-    ///
-    /// Named for serde so the serde removal finds it: once CGKA operations
-    /// are on the `KH` frame, tests sign them with [`Verified::sign`].
+    /// Sign a CGKA operation as this identity, whatever it says, in wire
+    /// form: for tests that forge or replay operations. Beekem signs the
+    /// operations this replica issues itself.
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(skip_all)]
-    pub async fn serde_sign_cgka_op(
+    pub async fn sign_cgka_op(
         &self,
         op: CgkaOperation,
-    ) -> Result<SerdeSigned<CgkaOperation>, SigningError> {
+    ) -> Result<verified::Signed<CgkaOperation>, SignError> {
         let signer = self.active.signer.clone();
-        keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(&signer, op).await
+        let verified = Verified::sign::<F, _>(&op, &signer).await?;
+        Ok(verified.signed().as_ref().clone())
     }
 
     #[instrument(skip_all)]
@@ -1735,8 +1730,8 @@ where
     /// Returns the update, for the caller to send.
     async fn record_rotation(
         &self,
-        rotation: Option<(SerdeSigned<CgkaOperation>, LeafKeyPair)>,
-    ) -> Option<SerdeSigned<CgkaOperation>> {
+        rotation: Option<(Verified<CgkaOperation>, LeafKeyPair)>,
+    ) -> Option<Verified<CgkaOperation>> {
         let (op, (pk, sk)) = rotation?;
         self.active.insert_rotated_secret(pk, sk).await;
         self.record_cgka_ops([Arc::new(op.clone())]).await;
@@ -1882,7 +1877,7 @@ where
     pub async fn force_pcs_update(
         &self,
         doc: DocumentId,
-    ) -> Result<(SerdeSigned<CgkaOperation>, LeafKeyPair), EncryptError> {
+    ) -> Result<(Verified<CgkaOperation>, LeafKeyPair), EncryptError> {
         let mut writing = self.prepare_to_write(doc).await?;
         let rotated = self.rotate_own_key(doc).await;
         if let Ok((op, _)) = &rotated {
@@ -1897,7 +1892,7 @@ where
     async fn rotate_own_key(
         &self,
         doc: DocumentId,
-    ) -> Result<(SerdeSigned<CgkaOperation>, LeafKeyPair), EncryptError> {
+    ) -> Result<(Verified<CgkaOperation>, LeafKeyPair), EncryptError> {
         let handle = self.document_by_id(doc).await?;
         let signer = { self.active.signer.clone() };
         let (op, new_key_pair) = {
@@ -2154,7 +2149,7 @@ where
     ) -> Result<
         (
             Vec<Certificate<ContentHeads<T>>>,
-            Vec<Arc<SerdeSigned<CgkaOperation>>>,
+            Vec<Arc<Verified<CgkaOperation>>>,
             KeyOps,
         ),
         KeylineStorageError<K::Error>,
@@ -2174,7 +2169,7 @@ where
         &self,
         who: Identifier,
         certs: &[Certificate<ContentHeads<T>>],
-        cgka_ops: &[Arc<SerdeSigned<CgkaOperation>>],
+        cgka_ops: &[Arc<Verified<CgkaOperation>>],
     ) -> Result<KeyOps, KeylineStorageError<K::Error>> {
         let mut referenced = BTreeSet::from([who]);
         for cert in certs {
@@ -2322,7 +2317,7 @@ where
     pub async fn cgka_ops_reachable_by_agent(
         &self,
         who: impl Into<Identifier>,
-    ) -> Result<Vec<Arc<SerdeSigned<CgkaOperation>>>, KeylineStorageError<K::Error>> {
+    ) -> Result<Vec<Arc<Verified<CgkaOperation>>>, KeylineStorageError<K::Error>> {
         let standing = self.standing_of(who.into()).await?;
         let mut ops = Vec::new();
         for (id, can) in standing {
@@ -2345,7 +2340,7 @@ where
     pub async fn cgka_ops_for_doc(
         &self,
         doc: &DocumentId,
-    ) -> Option<Vec<Arc<SerdeSigned<CgkaOperation>>>> {
+    ) -> Option<Vec<Arc<Verified<CgkaOperation>>>> {
         let state = self.document_state(*doc).await?;
         let ops = cgka_ops_for(state.lock().await.cgka());
         Some(ops)
@@ -2470,7 +2465,7 @@ where
     pub async fn cgka_ops_for_all_agents(
         &self,
     ) -> Result<AllCgkaOps, KeylineStorageError<K::Error>> {
-        let mut ops: HashMap<Identifier, Vec<Arc<SerdeSigned<CgkaOperation>>>> = HashMap::new();
+        let mut ops: HashMap<Identifier, Vec<Arc<Verified<CgkaOperation>>>> = HashMap::new();
         let mut index: HashMap<Identifier, HashSet<Identifier>> = HashMap::new();
 
         let docs: Vec<(DocumentId, Arc<Mutex<DocumentState<T>>>)> = {
@@ -2769,14 +2764,14 @@ where
     /// * An update rotates its signer's own key in the CGKA group.
     async fn cgka_op_is_authorized(
         &self,
-        signed_op: &SerdeSigned<CgkaOperation>,
+        signed_op: &Verified<CgkaOperation>,
         doc_id: DocumentId,
     ) -> Result<Result<(), CgkaUnauthorized>, KeylineStorageError<K::Error>> {
         use CgkaUnauthorized::{Denied, Pending};
 
         let doc = Identifier::from(doc_id);
-        let signer = signed_op.issuer;
-        let op = &signed_op.payload;
+        let signer = signed_op.issuer();
+        let op = signed_op.payload();
 
         let predecessors = op.predecessors();
         // An operation is authorized only if all its predecessors are.
@@ -2875,7 +2870,7 @@ where
     async fn predecessor_set(
         &self,
         doc_id: DocumentId,
-        heads: &Set<Digest<SerdeSigned<CgkaOperation>>>,
+        heads: &Set<Digest<CgkaOperation>>,
     ) -> Option<CitationSet> {
         if heads.is_empty() {
             return Some(CitationSet::default());
@@ -2922,14 +2917,21 @@ where
     #[instrument(skip_all)]
     pub async fn receive_cgka_op(
         &self,
-        signed_op: SerdeSigned<CgkaOperation>,
+        signed_op: verified::Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError<K::Error>> {
-        let doc_id: DocumentId = (*signed_op.payload.doc_id()).into();
-        let digest = Digest::hash(&signed_op);
-        if self.has_cgka_op(doc_id, digest).await {
+        // The digest covers the issuer and the payload, not the signature, so
+        // an operation already in the CGKA graph is skipped before its
+        // signature is checked again.
+        let digest = signed_op.digest();
+        let payload: CgkaOperation = signed_op.encoded().decode().map_err(VerifyError::from)?;
+        if self
+            .has_cgka_op(DocumentId::from(payload.doc_id), digest)
+            .await
+        {
             return Ok(());
         }
-        signed_op.try_verify()?;
+        let signed_op = signed_op.verify()?;
+        let doc_id = DocumentId::from(signed_op.payload().doc_id);
 
         // Authorization reads the certificates and this replica's CGKA graph.
         // This replica need not be a member of the CGKA group.
@@ -2967,10 +2969,7 @@ where
             // and an operation built on it would wait for it forever. Deny
             // those instead.
             Err(ReceiveCgkaOpError::CgkaError(e)) if never_merges(&e) => {
-                self.certificate_sets
-                    .lock()
-                    .await
-                    .deny(Digest::hash(op.as_ref()));
+                self.certificate_sets.lock().await.deny(op.digest());
                 return Err(ReceiveCgkaOpError::CgkaError(e));
             }
             Err(e) => return Err(e),
@@ -2982,11 +2981,7 @@ where
     }
 
     /// Whether the CGKA graph for `doc_id` has the operation `digest`.
-    async fn has_cgka_op(
-        &self,
-        doc_id: DocumentId,
-        digest: Digest<SerdeSigned<CgkaOperation>>,
-    ) -> bool {
+    async fn has_cgka_op(&self, doc_id: DocumentId, digest: Digest<CgkaOperation>) -> bool {
         let has_digest = |cgka: &Cgka| cgka.op(&digest).is_some();
         if let Some(state) = self.document_state(doc_id).await {
             return has_digest(state.lock().await.cgka());
@@ -3006,7 +3001,7 @@ where
     async fn merge_received(
         &self,
         doc_id: DocumentId,
-        op: Arc<SerdeSigned<CgkaOperation>>,
+        op: Arc<Verified<CgkaOperation>>,
         me: IndividualId,
         secrets: &BTreeMap<ShareKey, ShareSecretKey>,
     ) -> Result<bool, ReceiveCgkaOpError<K::Error>> {
@@ -3026,7 +3021,7 @@ where
         // replica's document once the invitation has merged. Starting it
         // on the first operation, not only on the invitation, lets every
         // arriving operation make progress.
-        let can_join = invites(&op, me) || self.reads_ever(doc, me.into()).await?;
+        let can_join = invites(op.payload(), me) || self.reads_ever(doc, me.into()).await?;
         let (merged, joined) = {
             let mut awaiting = self.awaiting_invitation.lock().await;
             let cgka = match awaiting.entry(doc_id) {
@@ -3043,7 +3038,7 @@ where
             let merged = self
                 .require_keyline_answers(doc, cgka, |cgka| merge_one(cgka, op.dupe(), me, secrets))
                 .await??;
-            let joined = if invites(&op, me) {
+            let joined = if invites(op.payload(), me) {
                 awaiting.remove(&doc_id)
             } else {
                 None
@@ -3088,8 +3083,12 @@ where
             return Ok(false);
         };
         let waiting_add = self.pending_events.lock().await.iter().any(|event| {
-            matches!(event.as_ref(), StaticEvent::CgkaOperation(op)
-                if DocumentId::from(*op.payload.doc_id()) == doc_id && invites(op, me))
+            let StaticEvent::CgkaOperation(op) = event.as_ref() else {
+                return false;
+            };
+            op.encoded().decode().is_ok_and(|op: CgkaOperation| {
+                DocumentId::from(op.doc_id) == doc_id && invites(&op, me)
+            })
         });
         if waiting_add {
             return Ok(false);
@@ -3209,18 +3208,22 @@ where
         // still awaiting its invitation, whose operations are no longer
         // pending.
         let mut docs = HashMap::new();
-        let mut cgka_ops: Vec<SerdeSigned<CgkaOperation>> = Vec::new();
+        let mut cgka_ops: Vec<verified::Signed<CgkaOperation>> = Vec::new();
         for (id, doc) in self.documents.lock().await.iter() {
             let locked = doc.lock().await;
             docs.insert(*id, locked.into_archive());
             cgka_ops.extend(
                 cgka_ops_for(locked.cgka())
                     .iter()
-                    .map(|op| op.as_ref().clone()),
+                    .map(|op| op.signed().as_ref().clone()),
             );
         }
         for cgka in self.awaiting_invitation.lock().await.values() {
-            cgka_ops.extend(cgka_ops_for(cgka).iter().map(|op| op.as_ref().clone()));
+            cgka_ops.extend(
+                cgka_ops_for(cgka)
+                    .iter()
+                    .map(|op| op.signed().as_ref().clone()),
+            );
         }
 
         let pending_events = self
@@ -3344,28 +3347,37 @@ where
         // certificates above recorded for its membership view. It becomes a
         // held document if its invitation (or creation) has merged, and
         // otherwise still awaits it.
-        let mut by_doc: HashMap<DocumentId, Vec<Arc<SerdeSigned<CgkaOperation>>>> = HashMap::new();
+        let mut by_doc: HashMap<DocumentId, Vec<Arc<Verified<CgkaOperation>>>> = HashMap::new();
         let mut deferred = HashSet::new();
-        for op in archive.cgka_ops.iter() {
-            if !hive.record_citations(&op.payload).await? {
+        for signed in archive.cgka_ops.iter().cloned() {
+            let op = match signed.verify() {
+                Ok(op) => Arc::new(op),
+                Err(e) => {
+                    tracing::warn!(error = %e, "an archived CGKA operation does not verify");
+                    continue;
+                }
+            };
+            if !hive.record_citations(op.payload()).await? {
                 // Kept, to apply once the certificate arrives.
-                deferred.insert(Digest::hash(op));
+                deferred.insert(op.digest());
                 hive.pending_events
                     .lock()
                     .await
-                    .push(Arc::new(StaticEvent::CgkaOperation(Box::new(op.clone()))));
+                    .push(Arc::new(StaticEvent::CgkaOperation(Box::new(
+                        op.signed().as_ref().clone(),
+                    ))));
                 continue;
             }
-            let doc_id = DocumentId::from(*op.payload.doc_id());
-            by_doc.entry(doc_id).or_default().push(Arc::new(op.clone()));
+            let doc_id = DocumentId::from(op.payload().doc_id);
+            by_doc.entry(doc_id).or_default().push(op);
         }
         let mut documents = HashMap::new();
         let mut awaiting_invitation = HashMap::new();
         for (doc_id, ops) in by_doc {
             let invitations: HashSet<_> = ops
                 .iter()
-                .filter(|op| invites(op, me))
-                .map(|op| Digest::hash(op.as_ref()))
+                .filter(|op| invites(op.payload(), me))
+                .map(|op| op.digest())
                 .collect();
             let (cgka, mut unapplied) = hive.cgka_from_ops(doc_id, ops, me, &secrets).await;
             // Operations that descend from a deferred operation are deferred with it.
@@ -3375,14 +3387,14 @@ where
                 let mut pending = hive.pending_events.lock().await;
                 unapplied.retain(|op| {
                     let should_wait = op
-                        .payload
+                        .payload()
                         .predecessors()
                         .iter()
                         .any(|p| deferred.contains(p));
                     if should_wait {
-                        deferred.insert(Digest::hash(op.as_ref()));
+                        deferred.insert(op.digest());
                         pending.push(Arc::new(StaticEvent::CgkaOperation(Box::new(
-                            op.as_ref().clone(),
+                            op.signed().as_ref().clone(),
                         ))));
                         has_progressed = true;
                     }
@@ -3392,7 +3404,7 @@ where
             for op in &unapplied {
                 tracing::warn!(
                     %doc_id,
-                    op = %Digest::hash(op.as_ref()),
+                    op = %op.digest(),
                     "an archived operation's predecessors are missing or did not apply"
                 );
             }
@@ -3638,7 +3650,7 @@ where
                 }
                 StaticEvent::CgkaOperation(signed) => {
                     pending_cgka_operation += 1;
-                    if IndividualId(signed.issuer) == active_id {
+                    if IndividualId(signed.issuer()) == active_id {
                         pending_cgka_operation_by_active += 1;
                     }
                 }
@@ -4056,7 +4068,7 @@ pub enum GenerateGroupError<E: core::error::Error + 'static> {
 }
 
 /// Every operation in `cgka`'s CGKA graph.
-fn cgka_ops_for(cgka: &Cgka) -> Vec<Arc<SerdeSigned<CgkaOperation>>> {
+fn cgka_ops_for(cgka: &Cgka) -> Vec<Arc<Verified<CgkaOperation>>> {
     cgka.ops()
         .map(|batches| batches.into_iter().flatten().collect())
         .unwrap_or_default()
@@ -4079,7 +4091,7 @@ fn proves_key(proof: Option<&[u8]>, member: &MemberId, pk: &ShareKey) -> bool {
 /// imported ([`adopt_own_cgka_secrets`]).
 fn merge_one<E: core::error::Error + 'static>(
     cgka: &mut Cgka,
-    op: Arc<SerdeSigned<CgkaOperation>>,
+    op: Arc<Verified<CgkaOperation>>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
 ) -> Result<bool, ReceiveCgkaOpError<E>> {
@@ -4091,12 +4103,12 @@ fn merge_one<E: core::error::Error + 'static>(
 
 /// The keys `op` gives `me` in the CGKA group: an invitation's prekey, or
 /// the keys of `me`'s own update. The only secrets merging `op` can need.
-fn own_cgka_keys(op: &SerdeSigned<CgkaOperation>, me: IndividualId) -> Vec<ShareKey> {
-    match &op.payload.change {
+fn own_cgka_keys(op: &Verified<CgkaOperation>, me: IndividualId) -> Vec<ShareKey> {
+    match &op.payload().change {
         CgkaChange::Add { added_id, pk, .. } if IndividualId::from(*added_id) == me => {
             vec![*pk]
         }
-        CgkaChange::Update { new_path, .. } if IndividualId::from(op.issuer) == me => {
+        CgkaChange::Update { new_path, .. } if IndividualId::from(op.issuer()) == me => {
             vec![new_path.leaf_pk]
         }
         _ => Vec::new(),
@@ -4104,8 +4116,8 @@ fn own_cgka_keys(op: &SerdeSigned<CgkaOperation>, me: IndividualId) -> Vec<Share
 }
 
 /// Whether `op` invites `me`: an add of `me`.
-fn invites(op: &SerdeSigned<CgkaOperation>, me: IndividualId) -> bool {
-    matches!(op.payload.change, CgkaChange::Add { added_id, .. } if IndividualId::from(added_id) == me)
+fn invites(op: &CgkaOperation, me: IndividualId) -> bool {
+    matches!(op.change, CgkaChange::Add { added_id, .. } if IndividualId::from(added_id) == me)
 }
 
 /// Merge one operation. An invitation (an add of `me`) is merged with the
@@ -4113,11 +4125,11 @@ fn invites(op: &SerdeSigned<CgkaOperation>, me: IndividualId) -> bool {
 /// have it.
 fn apply_one<E: core::error::Error + 'static>(
     cgka: &mut Cgka,
-    op: Arc<SerdeSigned<CgkaOperation>>,
+    op: Arc<Verified<CgkaOperation>>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
 ) -> Result<bool, ReceiveCgkaOpError<E>> {
-    if let CgkaChange::Add { added_id, pk, .. } = op.payload.change {
+    if let CgkaChange::Add { added_id, pk, .. } = op.payload().change {
         let added = IndividualId::from(added_id);
         if added == me {
             let sk = secrets
@@ -4223,10 +4235,10 @@ fn referenced_by<W, E: core::error::Error + 'static>(
 
 /// The individuals a CGKA operation references: its issuer and, for an add, the
 /// added member.
-fn referenced_by_cgka_op(op: &SerdeSigned<CgkaOperation>) -> Vec<Identifier> {
-    match &op.payload.change {
-        CgkaChange::Add { added_id, .. } => vec![op.issuer, added_id.id()],
-        _ => vec![op.issuer],
+fn referenced_by_cgka_op(op: &Verified<CgkaOperation>) -> Vec<Identifier> {
+    match &op.payload().change {
+        CgkaChange::Add { added_id, .. } => vec![op.issuer(), added_id.id()],
+        _ => vec![op.issuer()],
     }
 }
 
@@ -4236,7 +4248,7 @@ pub enum ReceiveCgkaOpError<E: core::error::Error + 'static> {
     CgkaError(#[from] CgkaError),
 
     #[error(transparent)]
-    VerificationError(#[from] VerificationError),
+    VerificationError(#[from] VerifyError),
 
     #[error("Unknown document recipient for received CGKA op: {0}")]
     UnknownDocument(Box<DocumentId>),
@@ -4309,7 +4321,7 @@ fn never_merges(error: &CgkaError) -> bool {
 /// for the listener once the lock is released.
 struct Writing<'a> {
     reconciled: Reconciled<'a>,
-    fresh: Vec<Arc<SerdeSigned<CgkaOperation>>>,
+    fresh: Vec<Arc<Verified<CgkaOperation>>>,
 }
 
 /// The held insert lock ([`Certificates::reconciled`]). A function that
@@ -4579,7 +4591,7 @@ mod tests {
         let predecessors = cgka
             .op(merge)
             .ok_or("the CGKA graph lacks its head")?
-            .payload
+            .payload()
             .predecessors()
             .into_iter()
             .collect::<Vec<_>>();
@@ -4591,10 +4603,10 @@ mod tests {
             CertificateSets::new().predecessor_set(cgka, [&right]),
             "the branches cite the same certificates"
         );
-        let ops: Vec<Digest<SerdeSigned<CgkaOperation>>> = cgka
+        let ops: Vec<Digest<CgkaOperation>> = cgka
             .ops()?
             .iter()
-            .flat_map(|batch| batch.iter().map(|op| Digest::hash(op.as_ref())))
+            .flat_map(|batch| batch.iter().map(|op| op.digest()))
             .collect();
 
         // Fewer sets kept than either branch has operations.
@@ -5042,22 +5054,22 @@ mod tests {
 
         let mut archive = hive.into_archive().await?;
         let bob_member = beekem::id::MemberId::from(bob_id);
-        let add_of_bob = archive
+        let ops = archive
             .cgka_ops
             .iter()
-            .find(|op| matches!(op.payload.change, CgkaChange::Add { added_id, .. } if added_id == bob_member))
+            .map(|op| op.clone().verify())
+            .collect::<Result<Vec<_>, _>>()?;
+        let add_of_bob = ops
+            .iter()
+            .find(|op| matches!(op.payload().change, CgkaChange::Add { added_id, .. } if added_id == bob_member))
             .ok_or("bob was added")?;
-        let cited: BTreeSet<CitationId> = add_of_bob.payload.citations().iter().copied().collect();
-        let update = archive
-            .cgka_ops
+        let cited: BTreeSet<CitationId> =
+            add_of_bob.payload().citations().iter().copied().collect();
+        let update = ops
             .iter()
-            .find(|op| {
-                op.payload
-                    .predecessors()
-                    .contains(&Digest::hash(add_of_bob))
-            })
+            .find(|op| op.payload().predecessors.contains(&add_of_bob.digest()))
             .ok_or("an update follows the add of bob")?
-            .clone();
+            .digest();
         archive
             .certificates
             .retain(|cert| !cited.contains(&citation_of(cert.id())));
@@ -5076,7 +5088,7 @@ mod tests {
         let pending = loaded.pending_events.lock().await;
         assert!(
             pending.iter().any(
-                |event| matches!(event.as_ref(), StaticEvent::CgkaOperation(op) if **op == update)
+                |event| matches!(event.as_ref(), StaticEvent::CgkaOperation(op) if op.digest() == update)
             ),
             "the update built on the add of bob was discarded"
         );
@@ -5799,18 +5811,21 @@ mod tests {
                 },
                 signer,
             )?;
-            let cgka = signer.try_sign_sync(CgkaOperation {
-                doc_id: TreeId::from(doc),
-                predecessors: BTreeSet::new(),
-                change: CgkaChange::Add {
-                    added_id: MemberId::from(&signer.0),
-                    pk: share_key(),
-                    leaf_index: 0,
-                    invitation: None,
-                    key_proof: None,
-                    citations: BTreeSet::new(),
+            let cgka = Verified::sign_sync(
+                &CgkaOperation {
+                    doc_id: TreeId::from(doc),
+                    predecessors: BTreeSet::new(),
+                    change: CgkaChange::Add {
+                        added_id: MemberId::from(&signer.0),
+                        pk: share_key(),
+                        leaf_index: 0,
+                        invitation: None,
+                        key_proof: None,
+                        citations: BTreeSet::new(),
+                    },
                 },
-            })?;
+                signer,
+            )?;
             let delegation = Delegation::new(
                 Identifier::from(indie.id()),
                 Identifier::from(doc),
@@ -5823,7 +5838,7 @@ mod tests {
             Ok(vec![
                 StaticEvent::PrekeysExpanded(added.signed().as_ref().clone()),
                 StaticEvent::PrekeyRotated(rotated.signed().as_ref().clone()),
-                StaticEvent::CgkaOperation(Box::new(cgka)),
+                StaticEvent::CgkaOperation(Box::new(cgka.signed().as_ref().clone())),
                 StaticEvent::Delegated(delegated.signed().as_ref().clone()),
                 StaticEvent::Revoked(revoked.signed().as_ref().clone()),
             ])
@@ -5878,8 +5893,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_cgka_ops_for_all_agents_matches_per_agent() {
-        use crate::crypto::digest::Digest;
-
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -5952,7 +5965,7 @@ mod tests {
         let all_digests_for = |agent_id: &Identifier| -> Vec<_> {
             let mut digests: Vec<_> = all_results
                 .ops_for_agent(agent_id)
-                .map(|ops| ops.map(|op| Digest::hash(op.as_ref())).collect())
+                .map(|ops| ops.map(|op| op.digest()).collect())
                 .unwrap_or_default();
             digests.sort();
             digests
@@ -5965,7 +5978,7 @@ mod tests {
                     .cgka_ops_reachable_by_agent($agent)
                     .await
                     .expect("selects events");
-                let mut digests: Vec<_> = ops.iter().map(|op| Digest::hash(op.as_ref())).collect();
+                let mut digests: Vec<_> = ops.iter().map(|op| op.digest()).collect();
                 digests.sort();
                 digests
             }};
@@ -6118,15 +6131,15 @@ mod tests {
         let ops = alice.cgka_ops_for_doc(&doc).await.expect("alice holds it");
         let invitation = ops
             .iter()
-            .find(|op| invites(op, bob))
+            .find(|op| invites(op.payload(), bob))
             .expect("bob is invited");
-        let CgkaChange::Add { pk, .. } = invitation.payload.change else {
+        let CgkaChange::Add { pk, .. } = invitation.payload().change else {
             unreachable!("an invitation is an add")
         };
         assert_eq!(own_cgka_keys(invitation, bob), vec![pk]);
         assert_eq!(own_cgka_keys(invitation, me), Vec::new());
 
-        let CgkaChange::Update { new_path, .. } = &update.payload.change else {
+        let CgkaChange::Update { new_path, .. } = &update.payload().change else {
             unreachable!("a PCS update is an update")
         };
         assert_eq!(own_cgka_keys(&update, me), vec![new_path.leaf_pk]);

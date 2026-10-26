@@ -8,13 +8,13 @@ use beekem::{
 };
 use dupe::Dupe;
 use imbl::{ordset::DiffItem, OrdSet};
-use keyhive_crypto::{digest::Digest, signed::SerdeSigned};
+use keyhive_crypto::digest::Digest;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     ops::Deref,
 };
 
-type OpDigest = Digest<SerdeSigned<CgkaOperation>>;
+type OpDigest = Digest<CgkaOperation>;
 
 /// A set of citation ids.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -146,7 +146,7 @@ impl CertificateSets {
         let Some(first) = heads.first() else {
             return Some(CitationSet::default());
         };
-        let doc = *cgka.op(first)?.payload.doc_id();
+        let doc = *cgka.op(first)?.payload().doc_id();
         let doc_sets = self.docs.entry(doc).or_default();
         let sets: Option<Vec<CitationSet>> = heads
             .iter()
@@ -176,7 +176,7 @@ impl DocumentSets {
             if self.sets.contains_key(&next) {
                 continue;
             }
-            let op = &cgka.op(&next)?.payload;
+            let op = &cgka.op(&next)?.payload();
             if predecessors_pushed {
                 let preds: Vec<&CitationSet> = op
                     .predecessors()

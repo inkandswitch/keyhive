@@ -14,11 +14,8 @@ use future_form::Local;
 use keyhive_crypto::{
     digest::Digest,
     share_key::ShareSecretKey,
-    signed::SerdeSigned,
-    signer::{
-        async_signer::{self, AsyncSigner},
-        memory::MemorySigner,
-    },
+    signer::{async_signer::AsyncSigner, memory::MemorySigner},
+    verified::Verified,
 };
 use rand::rngs::StdRng;
 
@@ -26,7 +23,7 @@ async fn rotate<S: AsyncSigner<Local>, R: rand::CryptoRng + rand::RngCore>(
     cgka: &mut Cgka,
     signer: &S,
     csprng: &mut R,
-) -> (PcsKey, SerdeSigned<CgkaOperation>) {
+) -> (PcsKey, Verified<CgkaOperation>) {
     let sk = ShareSecretKey::generate(csprng);
     let (pcs_key, op, _) = cgka
         .update::<Local, _, _>(sk.share_key(), sk, signer, csprng)
@@ -35,21 +32,18 @@ async fn rotate<S: AsyncSigner<Local>, R: rand::CryptoRng + rand::RngCore>(
     (pcs_key, op)
 }
 
-fn predecessor_secrets(op: &SerdeSigned<CgkaOperation>) -> &[PredecessorSecret] {
+fn predecessor_secrets(op: &Verified<CgkaOperation>) -> &[PredecessorSecret] {
     let CgkaChange::Update {
         predecessor_secrets,
         ..
-    } = &op.payload.change
+    } = &op.payload().change
     else {
         panic!("an update should be an Update op")
     };
     predecessor_secrets
 }
 
-fn added_to_chain(
-    op: &SerdeSigned<CgkaOperation>,
-    hash: &Digest<SerdeSigned<CgkaOperation>>,
-) -> bool {
+fn added_to_chain(op: &Verified<CgkaOperation>, hash: &Digest<CgkaOperation>) -> bool {
     predecessor_secrets(op)
         .iter()
         .any(|s| s.update_op_hash == *hash)
@@ -67,23 +61,21 @@ fn view_of(source: &Cgka, member: &Member) -> Cgka {
 /// Re-sign `op` with its predecessor secrets replaced by `entries`.
 async fn with_entries(
     signer: &MemorySigner,
-    op: &SerdeSigned<CgkaOperation>,
+    op: &Verified<CgkaOperation>,
     entries: Vec<PredecessorSecret>,
-) -> SerdeSigned<CgkaOperation> {
-    let CgkaChange::Update { ref new_path, .. } = op.payload.change else {
+) -> Verified<CgkaOperation> {
+    let CgkaChange::Update { ref new_path, .. } = op.payload().change else {
         panic!("an update should be an Update op")
     };
     let rebuilt = CgkaOperation {
-        doc_id: op.payload.doc_id,
-        predecessors: op.payload.predecessors.clone(),
+        doc_id: op.payload().doc_id,
+        predecessors: op.payload().predecessors.clone(),
         change: CgkaChange::Update {
             new_path: new_path.clone(),
             predecessor_secrets: entries,
         },
     };
-    async_signer::try_sign_async::<Local, _, _>(signer, rebuilt)
-        .await
-        .unwrap()
+    Verified::sign::<Local, _>(&rebuilt, signer).await.unwrap()
 }
 
 /// Alice rotates and adds Carol while Bob rotates, and Alice receives Bob's
@@ -94,12 +86,12 @@ async fn carol_updates_without_bobs_secret(
     rng: &mut StdRng,
 ) -> (
     Group,
-    Digest<SerdeSigned<CgkaOperation>>,
-    Digest<SerdeSigned<CgkaOperation>>,
-    SerdeSigned<CgkaOperation>,
+    Digest<CgkaOperation>,
+    Digest<CgkaOperation>,
+    Verified<CgkaOperation>,
 ) {
     let mut group = Group::new(2, rng).await;
-    let alice_op1_hash = Digest::hash(group.rotate(0, rng).await.as_ref());
+    let alice_op1_hash = group.rotate(0, rng).await.digest();
     let carol = member(rng);
     group.add(0, carol.id, carol.pk).await;
     let bob_op = group.rotate(1, rng).await;
@@ -107,12 +99,7 @@ async fn carol_updates_without_bobs_secret(
 
     let mut carol_cgka = view_of(&group.replicas[0], &carol);
     let (_, carol_op) = rotate(&mut carol_cgka, &carol.signer, rng).await;
-    (
-        group,
-        alice_op1_hash,
-        Digest::hash(bob_op.as_ref()),
-        carol_op,
-    )
+    (group, alice_op1_hash, bob_op.digest(), carol_op)
 }
 
 #[test]
@@ -121,7 +108,7 @@ fn an_update_chains_an_ancestor_an_earlier_update_could_not() {
         let (mut group, alice_op1_hash, bob_op_hash, carol_op) =
             carol_updates_without_bobs_secret(&mut rng).await;
         let alice_signer = group.members[0].signer.clone();
-        let carol_op_hash = Digest::hash(&carol_op);
+        let carol_op_hash = carol_op.digest();
         assert!(
             added_to_chain(&carol_op, &alice_op1_hash),
             "Carol should add the ancestor secret her invitation wraps to the chain"
@@ -172,11 +159,11 @@ fn the_traversal_ignores_an_entry_whose_secret_is_not_its_updates() {
         let alice = &mut group.replicas[0];
 
         let (_, op1) = rotate(alice, &alice_signer, &mut rng).await;
-        let op1_hash = Digest::hash(&op1);
+        let op1_hash = op1.digest();
         let (root2, op2) = rotate(alice, &alice_signer, &mut rng).await;
-        let op2_hash = Digest::hash(&op2);
+        let op2_hash = op2.digest();
         let (root3, op3) = rotate(alice, &alice_signer, &mut rng).await;
-        let op3_hash = Digest::hash(&op3);
+        let op3_hash = op3.digest();
 
         // Rebuild the third update with only an entry that wraps root2 labelled
         // with op1, an update that did not produce it.
@@ -194,14 +181,14 @@ fn the_traversal_ignores_an_entry_whose_secret_is_not_its_updates() {
         let mut bob = Cgka::new(doc_id, bob_id, bob_sks);
         for epoch in alice.ops().unwrap() {
             for op in epoch.iter() {
-                if Digest::hash(&**op) == op3_hash {
+                if op.digest() == op3_hash {
                     continue;
                 }
                 bob.apply_operation_and_record_root_secret(op.clone())
                     .unwrap();
             }
         }
-        let tampered_hash = Digest::hash(&tampered_op);
+        let tampered_hash = tampered_op.digest();
         bob.apply_operation_and_record_root_secret(Arc::new(tampered_op))
             .unwrap();
         assert!(
@@ -233,7 +220,7 @@ fn a_forged_entry_does_not_chain_the_update_it_refers_to() {
         // Everyone sees Bob's update, so Mallory's follows it and Alice can derive
         // Mallory's root secret when it arrives.
         let target = group.rotate(1, &mut rng).await;
-        let target_hash = Digest::hash(target.as_ref());
+        let target_hash = target.digest();
         group.broadcast(&target);
 
         // Mallory has her own update's root secret, so she can encrypt anything at
@@ -242,7 +229,7 @@ fn a_forged_entry_does_not_chain_the_update_it_refers_to() {
         let genuine = group.rotate(2, &mut rng).await;
         let mallory_secret = group.replicas[2]
             .root_secrets
-            .get(&Digest::hash(genuine.as_ref()))
+            .get(&genuine.digest())
             .expect("the author records the secret its own update produced");
         let doc_id = group.replicas[0].doc_id;
         let forged = with_entries(
@@ -257,7 +244,7 @@ fn a_forged_entry_does_not_chain_the_update_it_refers_to() {
             }],
         )
         .await;
-        let forged_hash = Digest::hash(&forged);
+        let forged_hash = forged.digest();
         group.replicas[0]
             .merge_concurrent_operation(Arc::new(forged))
             .unwrap();
@@ -279,11 +266,11 @@ fn an_invitation_leaves_out_an_update_already_in_the_chain() {
     for_each_seed(|mut rng| async move {
         let mut group = Group::new(2, &mut rng).await;
         group.rotate(0, &mut rng).await;
-        let op2_hash = Digest::hash(group.rotate(0, &mut rng).await.as_ref());
+        let op2_hash = group.rotate(0, &mut rng).await.digest();
 
         let invitee = member(&mut rng);
         let add = group.add(0, invitee.id, invitee.pk).await;
-        let CgkaChange::Add { invitation, .. } = &add.payload.change else {
+        let CgkaChange::Add { invitation, .. } = &add.payload().change else {
             panic!("an add should be an Add op")
         };
         let wrapped: Vec<_> = invitation
@@ -305,15 +292,11 @@ fn an_invitation_leaves_out_an_update_already_in_the_chain() {
 /// [`Cgka`], and each update with the secret it produced.
 async fn carol_added_after_three_updates(
     rng: &mut StdRng,
-) -> (
-    Member,
-    Cgka,
-    Vec<(Digest<SerdeSigned<CgkaOperation>>, PcsKey)>,
-) {
+) -> (Member, Cgka, Vec<(Digest<CgkaOperation>, PcsKey)>) {
     let mut group = Group::new(1, rng).await;
     let mut updates = Vec::new();
     for _ in 0..3 {
-        let op_hash = Digest::hash(group.rotate(0, rng).await.as_ref());
+        let op_hash = group.rotate(0, rng).await.digest();
         let secret = group.replicas[0]
             .root_secrets
             .get(&op_hash)
@@ -419,14 +402,10 @@ fn a_new_members_first_update_wraps_only_what_is_not_in_the_chain() {
 /// hashes. The second update is the head.
 async fn missing_the_second_secret(
     rng: &mut StdRng,
-) -> (
-    Group,
-    Digest<SerdeSigned<CgkaOperation>>,
-    Digest<SerdeSigned<CgkaOperation>>,
-) {
+) -> (Group, Digest<CgkaOperation>, Digest<CgkaOperation>) {
     let mut group = Group::new(1, rng).await;
-    let first = Digest::hash(group.rotate(0, rng).await.as_ref());
-    let second = Digest::hash(group.rotate(0, rng).await.as_ref());
+    let first = group.rotate(0, rng).await.digest();
+    let second = group.rotate(0, rng).await.digest();
     let cgka = &mut group.replicas[0];
     cgka.root_secrets.remove(&second);
     cgka.unchained_updates.insert(first);

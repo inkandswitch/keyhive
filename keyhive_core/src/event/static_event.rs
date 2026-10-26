@@ -6,11 +6,7 @@ use crate::{
 };
 use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
-use keyhive_crypto::{
-    content::reference::ContentRef,
-    signed::SerdeSigned,
-    verified::{self},
-};
+use keyhive_crypto::{content::reference::ContentRef, verified};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use serde::{Deserialize, Serialize};
 
@@ -27,8 +23,8 @@ pub enum StaticEvent<T: ContentRef> {
     /// A prekey was rotated, as received: verified on receipt.
     PrekeyRotated(verified::Signed<RotateKeyOp>),
 
-    /// A CGKA operation was performed.
-    CgkaOperation(Box<SerdeSigned<CgkaOperation>>),
+    /// A CGKA operation, as received: verified on receipt.
+    CgkaOperation(Box<verified::Signed<CgkaOperation>>),
 
     /// A Keyline delegation, as received: verified on receipt.
     Delegated(verified::Signed<Delegation>),
@@ -55,7 +51,7 @@ impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for 
         match variant {
             0 => Ok(Self::PrekeysExpanded(junk::<AddKeyOp>(u)?)),
             1 => Ok(Self::PrekeyRotated(junk::<RotateKeyOp>(u)?)),
-            2 => Ok(Self::CgkaOperation(Box::new(u.arbitrary()?))),
+            2 => Ok(Self::CgkaOperation(Box::new(junk::<CgkaOperation>(u)?))),
             // Delegations only: a revocation's watermark type has no
             // `Arbitrary`.
             3 => Ok(Self::Delegated(junk::<Delegation>(u)?)),

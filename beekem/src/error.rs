@@ -2,7 +2,7 @@
 
 use crate::operation::CitationId;
 use alloc::collections::BTreeSet;
-use keyhive_crypto::signed::SigningError;
+use keyhive_crypto::verified::SignError;
 
 /// Errors arising from CGKA operations.
 #[derive(Debug, thiserror::Error)]
@@ -84,7 +84,7 @@ pub enum CgkaError {
     WrongDocument,
 
     #[error(transparent)]
-    SigningError(#[from] SigningError),
+    SigningError(#[from] SignError),
 }
 
 impl CgkaError {

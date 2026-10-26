@@ -23,9 +23,9 @@ use keyhive_crypto::{
     digest::Digest,
     identifier::Identifier,
     share_key::{ShareKey, ShareSecretKey},
-    signed::SerdeSigned,
     signer::async_signer::AsyncSigner,
     symmetric_key::SymmetricKey,
+    verified::Verified,
 };
 use nonempty::NonEmpty;
 use rand::{CryptoRng, RngCore};
@@ -100,7 +100,7 @@ impl Cgka {
     ) -> Result<
         (
             ApplicationSecret<T>,
-            Option<(SerdeSigned<CgkaOperation>, LeafKeyPair)>,
+            Option<(Verified<CgkaOperation>, LeafKeyPair)>,
         ),
         CgkaError,
     > {
@@ -126,7 +126,7 @@ impl Cgka {
         key_proof: Option<Vec<u8>>,
         citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<Option<SerdeSigned<CgkaOperation>>, CgkaError> {
+    ) -> Result<Option<Verified<CgkaOperation>>, CgkaError> {
         self.0
             .add(MemberId::from(id), pk, key_proof, citations, signer)
             .await
@@ -142,7 +142,7 @@ impl Cgka {
             BTreeSet<CitationId>,
         )>,
         signer: &S,
-    ) -> Result<Vec<SerdeSigned<CgkaOperation>>, CgkaError> {
+    ) -> Result<Vec<Verified<CgkaOperation>>, CgkaError> {
         let converted =
             members.map(|(id, pk, proof, cited)| (MemberId::from(id), pk, proof, cited));
         self.0.add_multiple(converted, signer).await
@@ -155,7 +155,7 @@ impl Cgka {
         &mut self,
         citations: BTreeSet<CitationId>,
         signer: &S,
-    ) -> Result<SerdeSigned<CgkaOperation>, CgkaError> {
+    ) -> Result<Verified<CgkaOperation>, CgkaError> {
         self.0.remove_by_citations(citations, signer).await
     }
 
@@ -167,15 +167,15 @@ impl Cgka {
 
     /// The operations the next operation created here will have as its
     /// predecessors.
-    pub fn heads(&self) -> &Set<Digest<SerdeSigned<CgkaOperation>>> {
+    pub fn heads(&self) -> &Set<Digest<CgkaOperation>> {
         self.0.heads()
     }
 
     /// The operation in the CGKA graph with this digest.
     pub(crate) fn op(
         &self,
-        digest: &Digest<SerdeSigned<CgkaOperation>>,
-    ) -> Option<&Arc<SerdeSigned<CgkaOperation>>> {
+        digest: &Digest<CgkaOperation>,
+    ) -> Option<&Arc<Verified<CgkaOperation>>> {
         self.0.op(digest)
     }
 
@@ -185,7 +185,7 @@ impl Cgka {
         new_sk: ShareSecretKey,
         signer: &S,
         csprng: &mut R,
-    ) -> Result<(PcsKey, SerdeSigned<CgkaOperation>, LeafKeyPair), CgkaError> {
+    ) -> Result<(PcsKey, Verified<CgkaOperation>, LeafKeyPair), CgkaError> {
         self.0.update(new_pk, new_sk, signer, csprng).await
     }
 
@@ -217,7 +217,7 @@ impl Cgka {
 
     pub fn merge_concurrent_operation(
         &mut self,
-        op: Arc<SerdeSigned<CgkaOperation>>,
+        op: Arc<Verified<CgkaOperation>>,
     ) -> Result<bool, CgkaError> {
         self.0.merge_concurrent_operation(op)
     }
@@ -226,10 +226,7 @@ impl Cgka {
         self.0.ops()
     }
 
-    pub fn contains_predecessors(
-        &self,
-        preds: &HashSet<Digest<SerdeSigned<CgkaOperation>>>,
-    ) -> bool {
+    pub fn contains_predecessors(&self, preds: &HashSet<Digest<CgkaOperation>>) -> bool {
         self.0.contains_predecessors(preds)
     }
 
@@ -238,17 +235,17 @@ impl Cgka {
     /// nothing, if the CGKA graph already has it.
     pub fn merge_invite(
         &mut self,
-        op: Arc<SerdeSigned<CgkaOperation>>,
+        op: Arc<Verified<CgkaOperation>>,
         sk: &ShareSecretKey,
     ) -> Result<bool, CgkaError> {
-        let CgkaChange::Add { added_id, pk, .. } = op.payload.change else {
+        let CgkaChange::Add { added_id, pk, .. } = op.payload().change else {
             return Err(CgkaError::UnexpectedInviteOperation);
         };
         // Don't merge an op we already have.
-        if self.op(&Digest::hash(op.as_ref())).is_some() {
+        if self.op(&op.digest()).is_some() {
             return Ok(false);
         }
-        if !self.contains_predecessors(&op.payload.predecessors()) {
+        if !self.contains_predecessors(&op.payload().predecessors()) {
             return Err(CgkaError::OutOfOrderOperation);
         }
         // Check if we should replay first, so that a replay lacking a membership answer
@@ -268,7 +265,7 @@ impl Cgka {
 #[derive(Debug)]
 pub struct AllCgkaOps {
     /// CGKA ops per doc, keyed by doc Identifier.
-    pub ops: HashMap<Identifier, Vec<Arc<SerdeSigned<CgkaOperation>>>>,
+    pub ops: HashMap<Identifier, Vec<Arc<Verified<CgkaOperation>>>>,
 
     /// For each principal: the set of doc identifiers whose ops are reachable.
     pub index: HashMap<Identifier, HashSet<Identifier>>,
@@ -285,7 +282,7 @@ impl AllCgkaOps {
     pub fn ops_for_agent(
         &self,
         agent_id: &Identifier,
-    ) -> Option<impl Iterator<Item = &Arc<SerdeSigned<CgkaOperation>>>> {
+    ) -> Option<impl Iterator<Item = &Arc<Verified<CgkaOperation>>>> {
         self.index.get(agent_id).map(|doc_ids| {
             doc_ids
                 .iter()

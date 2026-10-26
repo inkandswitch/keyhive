@@ -15,9 +15,7 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
-use keyhive_crypto::{
-    content::reference::ContentRef, signed::SerdeSigned, symmetric_key::SymmetricKey,
-};
+use keyhive_crypto::{content::reference::ContentRef, symmetric_key::SymmetricKey};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -53,7 +51,7 @@ pub trait CiphertextStore<F: FutureForm, Cr: ContentRef, T>: Sized {
 
     fn get_ciphertext_by_pcs_update<'a>(
         &'a self,
-        pcs_update: &'a Digest<SerdeSigned<CgkaOperation>>,
+        pcs_update: &'a Digest<CgkaOperation>,
     ) -> F::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
     fn mark_decrypted<'a>(
@@ -295,7 +293,7 @@ where
 
     fn get_ciphertext_by_pcs_update<'a>(
         &'a self,
-        pcs_update: &'a Digest<SerdeSigned<CgkaOperation>>,
+        pcs_update: &'a Digest<CgkaOperation>,
     ) -> F::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> {
         F::from_future(async move {
             let locked = self.lock().await;
@@ -330,7 +328,7 @@ impl<F: FutureForm, T: Clone + 'static, Cr: ContentRef + 'static> CiphertextStor
 
     fn get_ciphertext_by_pcs_update<'a>(
         &'a self,
-        pcs_update: &'a Digest<SerdeSigned<CgkaOperation>>,
+        pcs_update: &'a Digest<CgkaOperation>,
     ) -> F::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible>> {
         F::from_future(async move { Ok(self.get_by_pcs_update(pcs_update).await) })
     }
@@ -386,7 +384,7 @@ mod tests {
         principal::document::id::DocumentId,
     };
     use beekem::{encrypted::PredecessorRefs, operation::CgkaOperation, pcs_key::PcsKey};
-    use keyhive_crypto::{share_key::ShareSecretKey, signed::SerdeSigned};
+    use keyhive_crypto::share_key::ShareSecretKey;
     use rand::rngs::OsRng;
     use std::marker::PhantomData;
     use testresult::TestResult;
@@ -402,7 +400,7 @@ mod tests {
     fn setup(
         plaintext: String,
         cref: [u8; 32],
-        pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
+        pcs_update_op_hash: Digest<CgkaOperation>,
         ancestors: HashMap<[u8; 32], SymmetricKey>,
         doc_id: DocumentId,
         csprng: &mut OsRng,
@@ -439,7 +437,7 @@ mod tests {
 
         let mut csprng = OsRng;
         let doc_id = DocumentId::generate(&mut csprng);
-        let pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>> = Digest {
+        let pcs_update_op_hash: Digest<CgkaOperation> = Digest {
             raw: blake3::hash(b"PcsOp"),
             _phantom: PhantomData,
         };
@@ -481,7 +479,7 @@ mod tests {
     async fn a_wrong_ancestor_key_in_an_envelope_does_not_decrypt_the_ancestor() -> TestResult {
         let mut csprng = OsRng;
         let doc_id = DocumentId::generate(&mut csprng);
-        let op_hash: Digest<SerdeSigned<CgkaOperation>> = [9u8; 32].into();
+        let op_hash: Digest<CgkaOperation> = [9u8; 32].into();
         let (one_ref, two_ref) = ([0u8; 32], [1u8; 32]);
         let wrong_key = SymmetricKey::generate(&mut csprng);
 

@@ -16,7 +16,7 @@ use alloc::{
 };
 use bolero::{gen, TypeGenerator};
 use future_form::Local;
-use keyhive_crypto::signed::SerdeSigned;
+use keyhive_crypto::verified::Verified;
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use std::sync::Mutex;
 
@@ -187,7 +187,7 @@ const REVOCATIONS: usize = 3;
 /// what is not yet causally ready.
 fn deliver_shuffled(
     group: &mut Group,
-    undelivered: &mut Vec<Arc<SerdeSigned<CgkaOperation>>>,
+    undelivered: &mut Vec<Arc<Verified<CgkaOperation>>>,
     rng: &mut StdRng,
 ) {
     for replica in 0..group.replicas.len() {
@@ -212,7 +212,7 @@ async fn run(
     Group,
     Arc<Revocations>,
     Vec<Member>,
-    Arc<SerdeSigned<CgkaOperation>>,
+    Arc<Verified<CgkaOperation>>,
 ) {
     let mut rng = StdRng::seed_from_u64(seed);
     let member_count = 4;
@@ -278,13 +278,13 @@ fn cited(replica: &Cgka) -> BTreeSet<CitationId> {
         .ops_graph
         .cgka_ops
         .iter()
-        .flat_map(|(_, op)| op.payload.citations().iter().copied())
+        .flat_map(|(_, op)| op.payload().citations().iter().copied())
         .collect()
 }
 
 /// Run `check` over 200 random runs.
 fn for_random_runs(
-    check: impl Fn(Group, Arc<Revocations>, Vec<Member>, Arc<SerdeSigned<CgkaOperation>>)
+    check: impl Fn(Group, Arc<Revocations>, Vec<Member>, Arc<Verified<CgkaOperation>>)
         + core::panic::RefUnwindSafe,
 ) {
     let runtime = tokio::runtime::Builder::new_current_thread()

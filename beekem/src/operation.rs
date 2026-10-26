@@ -29,7 +29,8 @@ use keyhive_codec::{
 use keyhive_crypto::{
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
-    signed::SerdeSigned,
+    signable::{Kind, Kinded},
+    verified::Verified,
 };
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
@@ -64,25 +65,25 @@ impl StreamDecode for CitationId {
 /// An ordered [`NonEmpty`] of [`CgkaOperation`]s that a replay applies
 /// together.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct CgkaBatch(NonEmpty<Arc<SerdeSigned<CgkaOperation>>>);
+pub struct CgkaBatch(NonEmpty<Arc<Verified<CgkaOperation>>>);
 
-impl From<NonEmpty<Arc<SerdeSigned<CgkaOperation>>>> for CgkaBatch {
-    fn from(item: NonEmpty<Arc<SerdeSigned<CgkaOperation>>>) -> Self {
+impl From<NonEmpty<Arc<Verified<CgkaOperation>>>> for CgkaBatch {
+    fn from(item: NonEmpty<Arc<Verified<CgkaOperation>>>) -> Self {
         CgkaBatch(item)
     }
 }
 
 impl Deref for CgkaBatch {
-    type Target = NonEmpty<Arc<SerdeSigned<CgkaOperation>>>;
+    type Target = NonEmpty<Arc<Verified<CgkaOperation>>>;
 
-    fn deref(&self) -> &NonEmpty<Arc<SerdeSigned<CgkaOperation>>> {
+    fn deref(&self) -> &NonEmpty<Arc<Verified<CgkaOperation>>> {
         &self.0
     }
 }
 
 impl IntoIterator for CgkaBatch {
-    type Item = Arc<SerdeSigned<CgkaOperation>>;
-    type IntoIter = <NonEmpty<Arc<SerdeSigned<CgkaOperation>>> as IntoIterator>::IntoIter;
+    type Item = Arc<Verified<CgkaOperation>>;
+    type IntoIter = <NonEmpty<Arc<Verified<CgkaOperation>>> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -95,7 +96,7 @@ impl IntoIterator for CgkaBatch {
 pub struct InvitationSecret {
     /// The update operation that produced the secret in
     /// [`InvitationSecret::encrypted_root_secret`].
-    pub update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
+    pub update_op_hash: Digest<CgkaOperation>,
 
     /// The root secret, encrypted to the `pk` of the [`CgkaChange::Add`]
     /// wrapping this invitation.
@@ -185,7 +186,7 @@ impl StreamDecode for Invitation {
 pub struct PredecessorSecret {
     /// The update operation that produced the secret in
     /// [`PredecessorSecret::encrypted_root_secret`].
-    pub update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
+    pub update_op_hash: Digest<CgkaOperation>,
 
     /// The root secret, encrypted under a key derived from the root secret of the
     /// update that contains this entry.
@@ -263,7 +264,7 @@ pub struct CgkaOperation {
     pub doc_id: TreeId,
 
     /// The zero or more immediate causal predecessors of this operation.
-    pub predecessors: BTreeSet<Digest<SerdeSigned<CgkaOperation>>>,
+    pub predecessors: BTreeSet<Digest<CgkaOperation>>,
 
     pub change: CgkaChange,
 }
@@ -307,12 +308,19 @@ pub enum CgkaChange {
     },
 }
 
+/// Signed as a `KH` frame of kind `C`, and identified by the digest of that
+/// frame without its signature: who signed it and what it changes.
+impl Kinded for CgkaOperation {
+    const KIND: Kind = Kind::CGKA_OPERATION;
+    const VERSION: u8 = 0;
+}
+
 /// An update cites nothing.
 static NO_CITATIONS: BTreeSet<CitationId> = BTreeSet::new();
 
 impl CgkaOperation {
     /// The zero or more immediate causal predecessors of this operation.
-    pub fn predecessors(&self) -> Set<Digest<SerdeSigned<CgkaOperation>>> {
+    pub fn predecessors(&self) -> Set<Digest<CgkaOperation>> {
         Set::from_iter(self.predecessors.iter().copied())
     }
 
@@ -487,18 +495,18 @@ impl StreamDecode for CgkaChange {
 /// for deterministic hashing.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct CgkaOperationGraph {
-    pub cgka_ops: CaMap<SerdeSigned<CgkaOperation>>,
+    pub cgka_ops: CaMap<CgkaOperation>,
 
-    pub cgka_op_heads: Set<Digest<SerdeSigned<CgkaOperation>>>,
+    pub cgka_op_heads: Set<Digest<CgkaOperation>>,
 
     /// The length of the longest chain of predecessors before each operation.
     /// An operation with no predecessors has depth 0.
-    depths: Map<Digest<SerdeSigned<CgkaOperation>>, u64>,
+    depths: Map<Digest<CgkaOperation>, u64>,
 
     /// The latest update on each branch. These are updates that no later update
     /// has as a nearest update ancestor yet. Every other update is chainable,
     /// meaning a later update could have wrapped its root secret.
-    latest_updates: Set<Digest<SerdeSigned<CgkaOperation>>>,
+    latest_updates: Set<Digest<CgkaOperation>>,
 
     /// Every citation cited by an operation in the graph.
     citations: BTreeSet<CitationId>,
@@ -545,7 +553,7 @@ impl Merge for CgkaOperationGraph {
         let ops = &self.cgka_ops;
         self.cgka_op_heads.retain(|head| {
             !ops.values()
-                .any(|op| op.payload.predecessors.contains(head))
+                .any(|op| op.payload().predecessors.contains(head))
         });
         self.depths.extend(fork.depths);
         self.citations.extend(fork.citations);
@@ -568,16 +576,16 @@ impl CgkaOperationGraph {
         &self.citations
     }
 
-    pub fn contains_op_hash(&self, op_hash: &Digest<SerdeSigned<CgkaOperation>>) -> bool {
+    pub fn contains_op_hash(&self, op_hash: &Digest<CgkaOperation>) -> bool {
         self.cgka_ops.contains_key(op_hash)
     }
 
     /// Whether `op_hash` is an update that some later update has as a nearest
     /// update ancestor.
-    pub(crate) fn is_chainable(&self, op_hash: &Digest<SerdeSigned<CgkaOperation>>) -> bool {
+    pub(crate) fn is_chainable(&self, op_hash: &Digest<CgkaOperation>) -> bool {
         self.cgka_ops
             .get(op_hash)
-            .is_some_and(|op| op.payload.is_update())
+            .is_some_and(|op| op.payload().is_update())
             && !self.latest_updates.contains(op_hash)
     }
 
@@ -587,9 +595,9 @@ impl CgkaOperationGraph {
     /// its path does not end in a single share key.
     pub(crate) fn update_root_share_key(
         &self,
-        op_hash: &Digest<SerdeSigned<CgkaOperation>>,
+        op_hash: &Digest<CgkaOperation>,
     ) -> Option<ShareKey> {
-        let CgkaChange::Update { new_path, .. } = &self.cgka_ops.get(op_hash)?.payload.change
+        let CgkaChange::Update { new_path, .. } = &self.cgka_ops.get(op_hash)?.payload().change
         else {
             return None;
         };
@@ -600,7 +608,7 @@ impl CgkaOperationGraph {
         }
     }
 
-    pub fn contains_predecessors(&self, preds: &Set<Digest<SerdeSigned<CgkaOperation>>>) -> bool {
+    pub fn contains_predecessors(&self, preds: &Set<Digest<CgkaOperation>>) -> bool {
         preds.iter().all(|hash| self.cgka_ops.contains_key(hash))
     }
 
@@ -632,14 +640,14 @@ impl CgkaOperationGraph {
     /// error if it cannot be added or a predecessor has no recorded depth.
     pub fn add_op(
         &mut self,
-        op: &SerdeSigned<CgkaOperation>,
-    ) -> Result<Set<Digest<SerdeSigned<CgkaOperation>>>, CgkaError> {
-        let op_hash = Digest::hash(op);
+        op: &Verified<CgkaOperation>,
+    ) -> Result<Set<Digest<CgkaOperation>>, CgkaError> {
+        let op_hash = op.digest();
         if self.cgka_ops.contains_key(&op_hash) {
             return Ok(Set::new());
         }
-        self.check_can_add(&op.payload)?;
-        let op_predecessors = &op.payload.predecessors;
+        self.check_can_add(op.payload())?;
+        let op_predecessors = &op.payload().predecessors;
         let mut depth = 0;
         for pred in op_predecessors {
             depth = depth.max(self.depth(pred)? + 1);
@@ -651,12 +659,12 @@ impl CgkaOperationGraph {
         self.cgka_op_heads.insert(op_hash);
         self.depths.insert(op_hash, depth);
         self.citations
-            .extend(op.payload.citations().iter().copied());
-        if !op.payload.is_update() {
+            .extend(op.payload().citations().iter().copied());
+        if !op.payload().is_update() {
             return Ok(Set::new());
         }
         let newly_chainable = self
-            .nearest_update_ancestors(&op.payload.predecessors())
+            .nearest_update_ancestors(&op.payload().predecessors())
             .into_iter()
             .filter(|update| self.latest_updates.remove(update))
             .collect();
@@ -671,7 +679,7 @@ impl CgkaOperationGraph {
     /// in the graph, and [`CgkaError::DepthNotFound`] if one has no recorded depth.
     pub(crate) fn batch_has_membership_change(
         &self,
-        predecessors: &Set<Digest<SerdeSigned<CgkaOperation>>>,
+        predecessors: &Set<Digest<CgkaOperation>>,
     ) -> Result<bool, CgkaError> {
         if predecessors.is_empty() {
             // A root must itself be an add.
@@ -700,10 +708,10 @@ impl CgkaOperationGraph {
                 .cgka_ops
                 .get(&hash)
                 .ok_or(CgkaError::OperationNotFound)?;
-            if op.payload.is_membership_change() {
+            if op.payload().is_membership_change() {
                 return Ok(true);
             }
-            for pred in &op.payload.predecessors {
+            for pred in &op.payload().predecessors {
                 if seen.insert(*pred) {
                     frontier.push((self.depth(pred)?, *pred));
                 }
@@ -716,8 +724,8 @@ impl CgkaOperationGraph {
     /// heads, skipping operations of other kinds.
     pub(crate) fn nearest_update_ancestors(
         &self,
-        heads: &Set<Digest<SerdeSigned<CgkaOperation>>>,
-    ) -> Set<Digest<SerdeSigned<CgkaOperation>>> {
+        heads: &Set<Digest<CgkaOperation>>,
+    ) -> Set<Digest<CgkaOperation>> {
         let mut updates = Set::new();
         let mut seen = Set::new();
         let mut frontier = Vec::from_iter(heads.iter().copied());
@@ -728,7 +736,7 @@ impl CgkaOperationGraph {
             let Some(op) = self.cgka_ops.get(&op_hash) else {
                 continue;
             };
-            if op.payload.is_update() {
+            if op.payload().is_update() {
                 updates.insert(op_hash);
                 continue;
             }
@@ -741,11 +749,7 @@ impl CgkaOperationGraph {
 
     /// Whether a [`CgkaChange::Add`] of `member` is in the
     /// causal past of `op_hash`, counting `op_hash` itself.
-    pub(crate) fn has_add_before(
-        &self,
-        member: MemberId,
-        op_hash: Digest<SerdeSigned<CgkaOperation>>,
-    ) -> bool {
+    pub(crate) fn has_add_before(&self, member: MemberId, op_hash: Digest<CgkaOperation>) -> bool {
         let mut seen = Set::new();
         let mut frontier = Vec::from_iter([op_hash]);
         while let Some(current) = frontier.pop() {
@@ -756,28 +760,28 @@ impl CgkaOperationGraph {
                 continue;
             };
             if matches!(
-                op.payload.change,
+                op.payload().change,
                 CgkaChange::Add { added_id, .. }
                     if added_id == member
             ) {
                 return true;
             }
-            frontier.extend(op.payload.predecessors.iter().copied());
+            frontier.extend(op.payload().predecessors.iter().copied());
         }
         false
     }
 
-    pub fn heads_contained_in(&self, heads: &Set<Digest<SerdeSigned<CgkaOperation>>>) -> bool {
+    pub fn heads_contained_in(&self, heads: &Set<Digest<CgkaOperation>>) -> bool {
         self.cgka_op_heads.iter().all(|h| heads.contains(h))
     }
 
     pub fn predecessors_for(
         &self,
-        op_hash: &Digest<SerdeSigned<CgkaOperation>>,
-    ) -> Option<&BTreeSet<Digest<SerdeSigned<CgkaOperation>>>> {
+        op_hash: &Digest<CgkaOperation>,
+    ) -> Option<&BTreeSet<Digest<CgkaOperation>>> {
         self.cgka_ops
             .get(op_hash)
-            .map(|op| &op.payload.predecessors)
+            .map(|op| &op.payload().predecessors)
     }
 
     /// Sort all operations in the graph into batches.
@@ -806,9 +810,9 @@ impl CgkaOperationGraph {
     /// if `heads` is empty.
     pub fn batches_for_heads(
         &self,
-        heads: &Set<Digest<SerdeSigned<CgkaOperation>>>,
+        heads: &Set<Digest<CgkaOperation>>,
     ) -> Result<NonEmpty<CgkaBatch>, CgkaError> {
-        let mut deepest_child: Map<Digest<SerdeSigned<CgkaOperation>>, u64> = Map::new();
+        let mut deepest_child: Map<Digest<CgkaOperation>, u64> = Map::new();
         let mut seen = heads.clone();
         let mut frontier = Vec::from_iter(heads.iter().copied());
         let mut ordered = Vec::with_capacity(heads.len());
@@ -876,7 +880,7 @@ impl CgkaOperationGraph {
         NonEmpty::from_vec(batches).ok_or(CgkaError::NotInitialized)
     }
 
-    fn depth(&self, op_hash: &Digest<SerdeSigned<CgkaOperation>>) -> Result<u64, CgkaError> {
+    fn depth(&self, op_hash: &Digest<CgkaOperation>) -> Result<u64, CgkaError> {
         match self.depths.get(op_hash) {
             Some(depth) => Ok(*depth),
             None if self.cgka_ops.contains_key(op_hash) => Err(CgkaError::DepthNotFound),
@@ -891,8 +895,7 @@ mod causal_graph_tests {
     use alloc::{collections::BTreeMap, vec};
     use future_form::Local;
     use keyhive_crypto::{
-        share_key::ShareSecretKey,
-        signer::{async_signer, memory::MemorySigner},
+        share_key::ShareSecretKey, signer::memory::MemorySigner, verified::Verified,
     };
 
     fn member_id() -> MemberId {
@@ -903,8 +906,8 @@ mod causal_graph_tests {
         signer: &MemorySigner,
         doc_id: TreeId,
         leaf_index: u32,
-        predecessors: &[&SerdeSigned<CgkaOperation>],
-    ) -> SerdeSigned<CgkaOperation> {
+        predecessors: &[&Verified<CgkaOperation>],
+    ) -> Verified<CgkaOperation> {
         signed_add_of(signer, doc_id, member_id(), leaf_index, predecessors).await
     }
 
@@ -913,11 +916,11 @@ mod causal_graph_tests {
         doc_id: TreeId,
         added_id: MemberId,
         leaf_index: u32,
-        predecessors: &[&SerdeSigned<CgkaOperation>],
-    ) -> SerdeSigned<CgkaOperation> {
+        predecessors: &[&Verified<CgkaOperation>],
+    ) -> Verified<CgkaOperation> {
         let op = CgkaOperation {
             doc_id,
-            predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
+            predecessors: predecessors.iter().map(|op| op.digest()).collect(),
             change: CgkaChange::Add {
                 added_id,
                 pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
@@ -927,7 +930,7 @@ mod causal_graph_tests {
                 citations: BTreeSet::new(),
             },
         };
-        async_signer::try_sign_async::<Local, _, _>(signer, op)
+        Verified::sign::<Local, _>(&op, signer)
             .await
             .expect("signing succeeds")
     }
@@ -948,7 +951,7 @@ mod causal_graph_tests {
 
         let mut forked = trunk.fork();
         let on_fork = signed_add(&signer, doc_id, 1, &[&root]).await;
-        let on_fork_hash = Digest::hash(&on_fork);
+        let on_fork_hash = on_fork.digest();
         forked
             .add_op(&on_fork)
             .expect("the predecessor is in the graph");
@@ -961,7 +964,7 @@ mod causal_graph_tests {
         );
         assert_eq!(
             trunk.predecessors_for(&on_fork_hash),
-            Some(&BTreeSet::from([Digest::hash(&root)])),
+            Some(&BTreeSet::from([root.digest()])),
             "the merged operation lost its predecessors"
         );
         assert_eq!(
@@ -1031,18 +1034,18 @@ mod causal_graph_tests {
             signed.insert(*name, op);
         }
         let heads = match head {
-            Some(head) => Set::from_iter([Digest::hash(&signed[head])]),
+            Some(head) => Set::from_iter([signed[head].digest()]),
             None => graph.cgka_op_heads.clone(),
         };
         let names: BTreeMap<_, _> = signed
             .into_iter()
-            .map(|(name, op)| (Digest::hash(&op), name))
+            .map(|(name, op)| (op.digest(), name))
             .collect();
         graph
             .batches_for_heads(&heads)
             .expect("the graph sorts")
             .iter()
-            .map(|batch| batch.iter().map(|op| names[&Digest::hash(&**op)]).collect())
+            .map(|batch| batch.iter().map(|op| names[&op.digest()]).collect())
             .collect()
     }
 
@@ -1200,20 +1203,20 @@ mod causal_graph_tests {
     async fn signed_update(
         signer: &MemorySigner,
         doc_id: TreeId,
-        predecessors: &[&SerdeSigned<CgkaOperation>],
-    ) -> SerdeSigned<CgkaOperation> {
+        predecessors: &[&Verified<CgkaOperation>],
+    ) -> Verified<CgkaOperation> {
         let new_path =
             arbitrary::Arbitrary::arbitrary(&mut arbitrary::Unstructured::new(&[0; 4096]))
                 .expect("4096 bytes are enough for a path");
         let op = CgkaOperation {
             doc_id,
-            predecessors: predecessors.iter().map(|op| Digest::hash(*op)).collect(),
+            predecessors: predecessors.iter().map(|op| op.digest()).collect(),
             change: CgkaChange::Update {
                 new_path,
                 predecessor_secrets: Vec::new(),
             },
         };
-        async_signer::try_sign_async::<Local, _, _>(signer, op)
+        Verified::sign::<Local, _>(&op, signer)
             .await
             .expect("signing succeeds")
     }
@@ -1252,7 +1255,7 @@ mod causal_graph_tests {
 
         assert!(
             graph
-                .batch_has_membership_change(&Set::from_iter([Digest::hash(&update)]))
+                .batch_has_membership_change(&Set::from_iter([update.digest()]))
                 .expect("a valid graph"),
             "an operation after the update was not put in a batch with the second root"
         );
@@ -1277,7 +1280,7 @@ mod causal_graph_tests {
         graph.depths.clear();
         assert!(
             matches!(
-                graph.batch_has_membership_change(&Set::from_iter([Digest::hash(&update)])),
+                graph.batch_has_membership_change(&Set::from_iter([update.digest()])),
                 Err(CgkaError::DepthNotFound)
             ),
             "a graph missing a depth was not reported"
@@ -1293,7 +1296,7 @@ mod causal_graph_tests {
 
         assert!(
             matches!(
-                graph.batches_for_heads(&Set::from_iter([Digest::hash(&unknown)])),
+                graph.batches_for_heads(&Set::from_iter([unknown.digest()])),
                 Err(CgkaError::OperationNotFound)
             ),
             "a head missing from the graph was not reported as missing"
@@ -1357,7 +1360,7 @@ mod causal_graph_tests {
 
         // Only u1 has a later update to wrap it. u2 has none yet, and the root is
         // not an update.
-        let chainable = [&root, &u1, &u2].map(|op| graph.is_chainable(&Digest::hash(op)));
+        let chainable = [&root, &u1, &u2].map(|op| graph.is_chainable(&op.digest()));
         assert_eq!(chainable, [false, true, false]);
     }
 
@@ -1376,8 +1379,8 @@ mod causal_graph_tests {
         }
 
         assert_eq!(
-            graph.nearest_update_ancestors(&Set::from_iter([Digest::hash(&later_add)])),
-            Set::from_iter([Digest::hash(&later)]),
+            graph.nearest_update_ancestors(&Set::from_iter([later_add.digest()])),
+            Set::from_iter([later.digest()]),
             "the traversal should skip the adds and stop at the first update"
         );
     }
@@ -1393,7 +1396,7 @@ mod causal_graph_tests {
             graph.add_op(op).expect("predecessors are added first");
         }
 
-        let update_hash = Set::from_iter([Digest::hash(&update)]);
+        let update_hash = Set::from_iter([update.digest()]);
         assert_eq!(graph.nearest_update_ancestors(&update_hash), update_hash);
     }
 
@@ -1409,7 +1412,7 @@ mod causal_graph_tests {
         }
 
         assert_eq!(
-            graph.nearest_update_ancestors(&Set::from_iter([Digest::hash(&add)])),
+            graph.nearest_update_ancestors(&Set::from_iter([add.digest()])),
             Set::new()
         );
     }
@@ -1429,7 +1432,7 @@ mod causal_graph_tests {
             graph.add_op(op).expect("predecessors are added first");
         }
 
-        let all = [&root, &before, &join, &after].map(Digest::hash);
+        let all = [&root, &before, &join, &after].map(|op| op.digest());
         let rebuildable = |member| all.map(|op_hash| graph.has_add_before(member, op_hash));
         assert_eq!(
             rebuildable(joiner),
@@ -1460,8 +1463,8 @@ mod causal_graph_tests {
             for op in [&update, &add] {
                 graph.add_op(op).expect("predecessors are added first");
             }
-            expected.insert(Digest::hash(&update));
-            heads.insert(Digest::hash(&add));
+            expected.insert(update.digest());
+            heads.insert(add.digest());
         }
 
         assert_eq!(graph.nearest_update_ancestors(&heads), expected);

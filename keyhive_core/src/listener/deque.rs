@@ -10,7 +10,6 @@ use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use keyhive_crypto::{
     content::reference::ContentRef,
-    signed::SerdeSigned,
     verified::{self, Verified},
 };
 use keyline::{delegation::Delegation, revocation::Revocation};
@@ -99,7 +98,7 @@ impl<F: FutureForm, T: ContentRef + Send + Sync> MembershipListener<F, T> for De
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm, T: ContentRef + Send + Sync> CgkaListener<F> for Deque<T> {
-    fn on_cgka_op<'a>(&'a self, data: &'a Arc<SerdeSigned<CgkaOperation>>) -> F::Future<'a, ()> {
+    fn on_cgka_op<'a>(&'a self, data: &'a Arc<Verified<CgkaOperation>>) -> F::Future<'a, ()> {
         F::from_future(async move { self.push(Event::CgkaOperation(data.dupe())).await })
     }
 }
