@@ -1,9 +1,9 @@
 use crate::{
-    cgka::Cgka,
+    cgka::{Cgka, MembershipView},
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::ShareKeyMap,
-    operation::{CgkaAuthorization, CgkaOperation},
+    operation::{CgkaOperation, CitationId},
     pcs_key::PcsKey,
     root_secrets::VerifiedRootSecret,
     transact::{Fork, Merge},
@@ -24,9 +24,7 @@ use keyhive_crypto::{
 };
 use rand::rngs::StdRng;
 
-/// Placeholder authorizations. These tests do not build real delegations or revocations.
-pub const ADD_AUTH: CgkaAuthorization = CgkaAuthorization::Delegation([0; 32]);
-pub const REMOVE_AUTH: CgkaAuthorization = CgkaAuthorization::Revocation([0; 32]);
+pub const NO_CITATIONS: BTreeSet<CitationId> = BTreeSet::new();
 
 /// A member of a test group, holding everything needed to act as one.
 pub struct Member {
@@ -57,6 +55,8 @@ pub struct Group {
     /// added part way through can be given a replica of their own.
     log: Vec<Arc<SerdeSigned<CgkaOperation>>>,
     logged: BTreeSet<Digest<SerdeSigned<CgkaOperation>>>,
+    /// The membership view every replica uses, if any.
+    view: Option<Arc<dyn MembershipView>>,
 }
 
 impl Group {
@@ -87,6 +87,7 @@ impl Group {
             doc_id,
             log: Vec::new(),
             logged: BTreeSet::new(),
+            view: None,
         };
         // Every tree starts empty, so member 0 places itself before the rest.
         for i in 0..n {
@@ -94,6 +95,29 @@ impl Group {
             group.broadcast(&op);
         }
         group
+    }
+
+    /// Give every replica, and every replica made later, `view`.
+    pub fn set_membership_view(&mut self, view: Arc<dyn MembershipView>) {
+        for replica in &mut self.replicas {
+            replica.set_membership_view(view.clone());
+        }
+        self.view = Some(view);
+    }
+
+    /// Create a removal, citing `citations`, on `author`'s replica without
+    /// delivering it. Doesn't list specific removal targets.
+    pub async fn remove_by_citations(
+        &mut self,
+        author: usize,
+        citations: BTreeSet<CitationId>,
+    ) -> Arc<SerdeSigned<CgkaOperation>> {
+        let signer = &self.members[author].signer;
+        let op = self.replicas[author]
+            .remove_by_citations::<Local, _>(citations, signer)
+            .await
+            .expect("creating the removal succeeds");
+        Arc::new(op)
     }
 
     /// Create an add on `author`'s replica without delivering it.
@@ -118,7 +142,7 @@ impl Group {
     ) -> Option<Arc<SerdeSigned<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
-            .add::<Local, _>(id, pk, ADD_AUTH, signer)
+            .add::<Local, _>(id, pk, None, NO_CITATIONS, signer)
             .await
             .expect("creating the add succeeds")
             .map(Arc::new)
@@ -144,7 +168,7 @@ impl Group {
     ) -> Option<Arc<SerdeSigned<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
-            .remove::<Local, _>(target, REMOVE_AUTH, signer)
+            .remove::<Local, _>(target, NO_CITATIONS, signer)
             .await
             .expect("creating the removal succeeds")
             .map(Arc::new)
@@ -360,6 +384,9 @@ impl Group {
     /// A replica owned by `id`, applying every operation delivered so far.
     fn replica_for(&self, id: MemberId, sks: ShareKeyMap) -> Cgka {
         let mut replica = Cgka::new(self.doc_id, id, sks);
+        if let Some(view) = &self.view {
+            replica.set_membership_view(view.clone());
+        }
         for op in &self.log {
             replica
                 .merge_concurrent_operation(op.clone())

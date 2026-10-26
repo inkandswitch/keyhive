@@ -1,4 +1,4 @@
-use beekem::operation::CgkaAuthorization;
+use beekem::operation::CitationId;
 use future_form::Sendable;
 use keyhive_core::{
     event::static_event::StaticEvent,
@@ -400,7 +400,8 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
             .add::<Sendable, _>(
                 bob_active_id,
                 bob_pk,
-                CgkaAuthorization::Delegation(bob_founding),
+                None,
+                [CitationId(bob_founding)].into(),
                 &bob_signer,
             )
             .await?

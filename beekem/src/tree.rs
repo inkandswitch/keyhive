@@ -193,15 +193,9 @@ impl BeeKem {
     }
 
     /// Remove data for the provided [`MemberId`] and blank its leaf's
-    /// path to the root.
-    pub fn remove_id(&mut self, id: MemberId) -> Result<(u32, Vec<ShareKey>), CgkaError> {
+    /// path to the root. Returns the index of the leaf it held.
+    pub fn remove_id(&mut self, id: MemberId) -> Result<u32, CgkaError> {
         let l_idx = *self.leaf_index_for_id(id)?;
-        let mut removed_keys = Vec::new();
-        for idx in treemath::direct_path((l_idx).into(), self.tree_size) {
-            if let Some(store) = self.inner_node(idx) {
-                removed_keys.append(&mut store.node_key().keys());
-            }
-        }
         self.blank_leaf_and_path(l_idx);
         self.id_to_leaf_idx.remove(&id);
         // Collect any contiguous "tombstones" at the end of the leaves Vec.
@@ -209,7 +203,7 @@ impl BeeKem {
             self.blank_path(treemath::parent((self.next_leaf_idx - 1).into()));
             self.next_leaf_idx -= 1;
         }
-        Ok((l_idx.u32(), removed_keys))
+        Ok(l_idx.u32())
     }
 
     /// The count of members currently in the tree.
@@ -1078,7 +1072,7 @@ mod tests {
         let mut sks = ShareKeyMap::new();
         let (mut tree, owner) = one_member_tree(&mut rng, &mut sks);
 
-        let (freed, _) = tree.remove_id(owner).expect("removing the last member");
+        let freed = tree.remove_id(owner).expect("removing the last member");
         let (joiner, joiner_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
         assert_eq!(
             tree.push_leaf(joiner, joiner_pk.into()),
