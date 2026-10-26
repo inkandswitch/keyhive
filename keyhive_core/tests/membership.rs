@@ -1015,7 +1015,7 @@ async fn revoking_a_subgroup_takes_its_members_out_of_the_key_group() -> Result<
     let before = alice
         .cgka_members_for(design_doc)
         .await?
-        .expect("the document has a tree");
+        .expect("this replica has joined the document's CGKA group");
     for who in [&dave, &eve] {
         assert!(
             before.contains(&who.id()),
@@ -1029,7 +1029,7 @@ async fn revoking_a_subgroup_takes_its_members_out_of_the_key_group() -> Result<
     let after = alice
         .cgka_members_for(design_doc)
         .await?
-        .expect("the document has a tree");
+        .expect("this replica has joined the document's CGKA group");
     for who in [&dave, &eve] {
         assert!(
             !after.contains(&who.id()),
@@ -1059,7 +1059,7 @@ async fn a_document_has_no_key_for_itself() -> Result<()> {
     let members = alice
         .cgka_members_for(design_doc)
         .await?
-        .expect("the document has a tree");
+        .expect("this replica has joined the document's CGKA group");
     assert_eq!(
         members,
         BTreeSet::from([alice.id(), bob.id()]),

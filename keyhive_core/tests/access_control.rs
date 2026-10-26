@@ -134,8 +134,8 @@ async fn relay_never_permits_decryption() -> Result<()> {
         let ct = ctx.encrypt(&alice, design_doc, b"top secret").await?;
         ctx.sync_all_unsent().await?;
 
-        // Without `Read`, bob is not a member and holds no tree for the
-        // document, so he cannot decrypt either way.
+        // Without `Read`, bob is not a member and has not joined the
+        // document's CGKA group, so he cannot decrypt either way.
         assert_eq!(
             matches!(bob.can_decrypt_content(design_doc, &ct).await, Ok(true)),
             may_read,
@@ -830,7 +830,7 @@ async fn a_relay_member_of_a_document_gets_no_key() -> Result<()> {
         !alice
             .cgka_members_for(design_doc)
             .await?
-            .expect("the document has a tree")
+            .expect("this replica has joined the document's CGKA group")
             .contains(&bob.id()),
         "bob may only relay design_doc, so he should hold no key for it"
     );
@@ -852,7 +852,7 @@ async fn a_relay_member_of_a_group_gets_no_key_for_a_document_it_edits() -> Resu
         !alice
             .cgka_members_for(design_doc)
             .await?
-            .expect("the document has a tree")
+            .expect("this replica has joined the document's CGKA group")
             .contains(&bob.id()),
         "bob only relays engineering, so editing through it should give him no key"
     );
@@ -875,7 +875,7 @@ async fn a_relay_member_added_to_a_group_that_already_holds_a_document_gets_no_k
         !alice
             .cgka_members_for(design_doc)
             .await?
-            .expect("the document has a tree")
+            .expect("this replica has joined the document's CGKA group")
             .contains(&bob.id()),
         "joining an editing group as a relay member should give bob no key"
     );
@@ -897,7 +897,7 @@ async fn promoting_a_relay_member_to_read_within_a_group_grants_a_key() -> Resul
         !alice
             .cgka_members_for(design_doc)
             .await?
-            .expect("the document has a tree")
+            .expect("this replica has joined the document's CGKA group")
             .contains(&bob.id()),
         "bob holds no key while he only relays engineering"
     );
@@ -908,7 +908,7 @@ async fn promoting_a_relay_member_to_read_within_a_group_grants_a_key() -> Resul
         alice
             .cgka_members_for(design_doc)
             .await?
-            .expect("the document has a tree")
+            .expect("this replica has joined the document's CGKA group")
             .contains(&bob.id()),
         "bob reads engineering now, so he should hold a key for design_doc"
     );
@@ -930,7 +930,7 @@ async fn a_reader_in_a_group_that_only_relays_a_document_gets_no_key() -> Result
         !alice
             .cgka_members_for(design_doc)
             .await?
-            .expect("the document has a tree")
+            .expect("this replica has joined the document's CGKA group")
             .contains(&bob.id()),
         "engineering may only relay design_doc, so reading engineering gives bob no key"
     );
@@ -957,7 +957,7 @@ async fn relaying_a_group_relays_its_documents_without_a_key() -> Result<()> {
         !alice
             .cgka_members_for(design_doc)
             .await?
-            .expect("the document has a tree")
+            .expect("this replica has joined the document's CGKA group")
             .contains(&carol.id()),
         "carol cannot read design_doc, so she should hold no key for it"
     );
@@ -981,7 +981,7 @@ async fn revoking_a_group_takes_the_key_from_a_member_who_only_relays_directly()
         alice
             .cgka_members_for(design_doc)
             .await?
-            .expect("the document has a tree")
+            .expect("this replica has joined the document's CGKA group")
             .contains(&bob.id()),
         "bob should hold a key while he reads design_doc through engineering"
     );
@@ -992,7 +992,7 @@ async fn revoking_a_group_takes_the_key_from_a_member_who_only_relays_directly()
         !alice
             .cgka_members_for(design_doc)
             .await?
-            .expect("the document has a tree")
+            .expect("this replica has joined the document's CGKA group")
             .contains(&bob.id()),
         "bob kept his key on a document he may now only relay"
     );

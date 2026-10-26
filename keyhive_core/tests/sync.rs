@@ -294,7 +294,7 @@ async fn withholding_key_agreement_leaves_a_member_who_cannot_read() -> Result<(
 }
 
 #[tokio::test]
-async fn a_member_without_the_key_tree_derives_no_pcs_key() -> Result<()> {
+async fn a_member_without_the_cgka_graph_derives_no_pcs_key() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -308,7 +308,7 @@ async fn a_member_without_the_key_tree_derives_no_pcs_key() -> Result<()> {
 
     assert!(
         bob.try_pcs_key_hash(design_doc).await.is_none(),
-        "bob knows the document but holds no key tree to derive from"
+        "bob knows the document but has no CGKA graph to derive from"
     );
 
     ctx.sync(&alice, &bob).await?;
@@ -419,13 +419,13 @@ async fn all_agent_events_agrees_with_the_per_agent_walk() -> Result<()> {
     Ok(())
 }
 
-/// The individual members in `who`'s CGKA tree for `doc`, sorted.
+/// The individual members in `who`'s CGKA group for `doc`, sorted.
 async fn cgka_members(who: &Instance, doc: DocumentId) -> Vec<IndividualId> {
     let mut ids: Vec<_> = who
         .cgka_members_for(doc)
         .await
         .expect("knows the document")
-        .expect("an initialized tree")
+        .expect("has joined the CGKA group")
         .into_iter()
         .collect();
     ids.sort();
@@ -467,8 +467,8 @@ async fn a_replica_sent_a_concurrent_removal_still_applies_later_ones() -> Resul
 }
 
 #[tokio::test]
-async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_tree() -> Result<()>
-{
+async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_cgka_group(
+) -> Result<()> {
     let mut ctx = TestContext::new().await;
     let dave = ctx.individual("dave").await?;
     let bob = ctx.individual("bob").await?;
@@ -476,8 +476,8 @@ async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_
     let design_doc = ctx.doc(&dave, "design_doc").await?;
     dave.add_member(bob.id(), design_doc, Read).await?;
     let dave_replica = ctx.new_keyhive_instance_for(&dave, "dave-laptop").await?;
-    // The tree adds dave with one of his prekeys. The replica needs that
-    // prekey's secret to merge the add.
+    // Dave is added to the CGKA group with one of his prekeys. The replica
+    // needs that prekey's secret to merge the add.
     ctx.share_prekey_secrets(&dave, &dave_replica).await?;
     ctx.sync_all_unsent().await?;
 
@@ -512,7 +512,7 @@ async fn revoking_a_member_whose_add_is_still_outstanding_removes_them_from_the_
 }
 
 #[tokio::test]
-async fn a_member_is_sent_the_prekeys_of_a_tree_member_no_delegation_it_is_sent_refers_to(
+async fn a_member_is_sent_the_prekeys_of_a_cgka_group_member_no_delegation_it_is_sent_refers_to(
 ) -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
@@ -525,7 +525,7 @@ async fn a_member_is_sent_the_prekeys_of_a_tree_member_no_delegation_it_is_sent_
     alice.add_member(dave.id(), design_doc, Read).await?;
     assert!(
         cgka_members(&alice, design_doc).await.contains(&bob.id()),
-        "bob has a leaf in design_doc's key tree through spec"
+        "bob is in design_doc's CGKA group through spec"
     );
 
     let sent = alice.reachable_prekey_ops_for_agent(dave.id()).await?;

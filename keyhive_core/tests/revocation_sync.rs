@@ -1,5 +1,6 @@
 //! What is synced to each principal after a revocation: a revoked member's
-//! keys go to no one, a live member's to those it may be seated with.
+//! keys go to no one, a live member's to those who may add it to a CGKA
+//! group.
 
 use keyhive_core::test_utils::{Instance, TestContext, TestResult as Result};
 use keyline::power::Power::{Admin, Read};
@@ -55,8 +56,8 @@ async fn a_revoked_members_keys_reach_everyone_sent_its_revocation() -> Result<(
 
     // Both are sent engineering's revocation of bob, and the delegation it
     // revokes names him: erin as a member of the group, dave through the
-    // document's delegation to it. Erin, still a member, may be seated with
-    // either of them.
+    // document's delegation to it. Erin, still a member, may be added to a
+    // CGKA group by either of them.
     for who in [&dave, &erin] {
         let sources = all
             .prekey_index
