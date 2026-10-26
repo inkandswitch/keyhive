@@ -68,6 +68,13 @@ const RECENT_SETS: usize = 64;
 /// one rather than from the document's first operation.
 const CHECKPOINT_EVERY: u64 = 1024;
 
+/// The certificate set of each authorized CGKA operation, by document,
+/// and all CGKA operations that have been denied.
+///
+/// An operation's set is the union of its predecessors' sets plus its own
+/// citations. Only a document's most recent sets and periodic checkpoints
+/// are kept. An evicted set is rebuilt from the nearest ancestors whose
+/// sets are kept.
 #[derive(Debug, Clone)]
 pub(crate) struct CertificateSets {
     /// Each document's certificate sets.

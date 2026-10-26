@@ -2842,6 +2842,8 @@ where
                 }
             }
             CgkaOperation::Remove { removed, .. } => {
+                // The members to remove are inferred from the cited certificates
+                // and not from an explicit list.
                 if !removed.is_empty() {
                     return Ok(Err(Denied));
                 }
