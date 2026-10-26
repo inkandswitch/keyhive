@@ -1,5 +1,5 @@
 use crate::{
-    cgka::{Cgka, MembershipView},
+    cgka::{Cgka, MembershipView, NoMembershipView},
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::ShareKeyMap,
@@ -45,9 +45,9 @@ pub fn member(rng: &mut StdRng) -> Member {
 
 /// One replica of a tree per member, with delivery between them under the
 /// test's control.
-pub struct Group {
+pub struct Group<M> {
     pub members: Vec<Member>,
-    pub replicas: Vec<Cgka>,
+    pub replicas: Vec<Cgka<M>>,
     /// Short names for readable failures.
     pub names: BTreeMap<MemberId, String>,
     doc_id: TreeId,
@@ -55,13 +55,13 @@ pub struct Group {
     /// added part way through can be given a replica of their own.
     log: Vec<Arc<Verified<CgkaOperation>>>,
     logged: BTreeSet<Digest<CgkaOperation>>,
-    /// The membership view every replica uses, if any.
-    view: Option<Arc<dyn MembershipView>>,
+    /// The membership view every replica uses.
+    view: M,
 }
 
-impl Group {
+impl Group<NoMembershipView> {
     /// `n` members, each with a replica that has every add applied.
-    pub async fn new(n: usize, rng: &mut StdRng) -> Group {
+    pub async fn new(n: usize, rng: &mut StdRng) -> Self {
         let doc_signer = MemorySigner::generate(rng);
         let doc_id = TreeId::from(&doc_signer.0);
         let members: Vec<Member> = (0..n).map(|_| member(rng)).collect();
@@ -71,7 +71,7 @@ impl Group {
             .map(|m| {
                 let mut sks = ShareKeyMap::new();
                 sks.insert(m.pk, m.sk);
-                Cgka::new(doc_id, m.id, sks)
+                Cgka::new(doc_id, m.id, sks, NoMembershipView)
             })
             .collect();
 
@@ -87,7 +87,7 @@ impl Group {
             doc_id,
             log: Vec::new(),
             logged: BTreeSet::new(),
-            view: None,
+            view: NoMembershipView,
         };
         // Every tree starts empty, so member 0 places itself before the rest.
         for i in 0..n {
@@ -96,13 +96,33 @@ impl Group {
         }
         group
     }
+}
 
-    /// Give every replica, and every replica made later, `view`.
-    pub fn set_membership_view(&mut self, view: Arc<dyn MembershipView>) {
-        for replica in &mut self.replicas {
-            replica.set_membership_view(view.clone());
+impl<M: MembershipView> Group<M> {
+    /// This group, with `view` given to every replica and every replica made
+    /// later.
+    pub fn with_membership_view<V: MembershipView>(self, view: V) -> Group<V> {
+        let Group {
+            members,
+            replicas,
+            names,
+            doc_id,
+            log,
+            logged,
+            view: _,
+        } = self;
+        Group {
+            members,
+            replicas: replicas
+                .into_iter()
+                .map(|replica| replica.with_membership_view(view.clone()))
+                .collect(),
+            names,
+            doc_id,
+            log,
+            logged,
+            view,
         }
-        self.view = Some(view);
     }
 
     /// Create a removal, citing `citations`, on `author`'s replica without
@@ -378,11 +398,8 @@ impl Group {
     }
 
     /// A replica owned by `id`, applying every operation delivered so far.
-    fn replica_for(&self, id: MemberId, sks: ShareKeyMap) -> Cgka {
-        let mut replica = Cgka::new(self.doc_id, id, sks);
-        if let Some(view) = &self.view {
-            replica.set_membership_view(view.clone());
-        }
+    fn replica_for(&self, id: MemberId, sks: ShareKeyMap) -> Cgka<M> {
+        let mut replica = Cgka::new(self.doc_id, id, sks, self.view.clone());
         for op in &self.log {
             replica
                 .merge_concurrent_operation(op.clone())
@@ -448,7 +465,7 @@ pub(crate) fn for_each_seed<F: core::future::Future<Output = ()>>(
 /// and recorded secrets imply: an update is chainable if a later update has it
 /// as a nearest update ancestor and unchained unless a recorded update's entry
 /// contains its verified root secret.
-pub(crate) fn assert_chain_bookkeeping(cgka: &Cgka, context: &str) {
+pub(crate) fn assert_chain_bookkeeping<M: MembershipView>(cgka: &Cgka<M>, context: &str) {
     let graph = &cgka.ops_graph;
     let updates: BTreeSet<_> = graph
         .cgka_ops

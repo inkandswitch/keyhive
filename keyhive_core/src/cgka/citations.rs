@@ -334,8 +334,9 @@ impl Drop for Replaying {
 /// Given a certificate set, it reports which of the CGKA group's members
 /// lack `Read` or higher standing over `resource` in that set. BeeKEM asks
 /// synchronously so this answers only from verdicts and Keyline answers
-/// already cached in [`CitedCertificates`]. Returns `None` for a set with
+/// already cached in `CitedCertificates`. Returns `None` for a set with
 /// neither cached.
+#[derive(Clone)]
 pub(crate) struct KeylineCgkaMembershipView {
     resource: Identifier,
     citations: SharedCitations,
@@ -352,7 +353,7 @@ impl KeylineCgkaMembershipView {
 
 impl fmt::Debug for KeylineCgkaMembershipView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("KeylineView")
+        f.debug_struct("KeylineCgkaMembershipView")
             .field("resource", &self.resource)
             .finish_non_exhaustive()
     }

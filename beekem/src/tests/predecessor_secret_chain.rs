@@ -1,7 +1,7 @@
 //! The update predecessor secret chain.
 
 use crate::{
-    cgka::Cgka,
+    cgka::{Cgka, NoMembershipView},
     collections::Set,
     keys::ShareKeyMap,
     operation::{CgkaChange, CgkaOperation, PredecessorSecret},
@@ -20,7 +20,7 @@ use keyhive_crypto::{
 use rand::rngs::StdRng;
 
 async fn rotate<S: AsyncSigner<Local>, R: rand::CryptoRng + rand::RngCore>(
-    cgka: &mut Cgka,
+    cgka: &mut Cgka<NoMembershipView>,
     signer: &S,
     csprng: &mut R,
 ) -> (PcsKey, Verified<CgkaOperation>) {
@@ -50,10 +50,10 @@ fn added_to_chain(op: &Verified<CgkaOperation>, hash: &Digest<CgkaOperation>) ->
 }
 
 /// `member`'s [`Cgka`] built by applying every operation in `source`.
-fn view_of(source: &Cgka, member: &Member) -> Cgka {
+fn view_of(source: &Cgka<NoMembershipView>, member: &Member) -> Cgka<NoMembershipView> {
     let mut sks = ShareKeyMap::new();
     sks.insert(member.pk, member.sk);
-    let mut view = Cgka::new(source.doc_id, member.id, sks);
+    let mut view = Cgka::new(source.doc_id, member.id, sks, NoMembershipView);
     view.apply_batches(&source.ops().unwrap()).unwrap();
     view
 }
@@ -85,7 +85,7 @@ async fn with_entries(
 async fn carol_updates_without_bobs_secret(
     rng: &mut StdRng,
 ) -> (
-    Group,
+    Group<NoMembershipView>,
     Digest<CgkaOperation>,
     Digest<CgkaOperation>,
     Verified<CgkaOperation>,
@@ -178,7 +178,7 @@ fn the_traversal_ignores_an_entry_whose_secret_is_not_its_updates() {
 
         let mut bob_sks = ShareKeyMap::new();
         bob_sks.insert(bob_pk, bob_sk);
-        let mut bob = Cgka::new(doc_id, bob_id, bob_sks);
+        let mut bob = Cgka::new(doc_id, bob_id, bob_sks, NoMembershipView);
         for epoch in alice.ops().unwrap() {
             for op in epoch.iter() {
                 if op.digest() == op3_hash {
@@ -292,7 +292,11 @@ fn an_invitation_leaves_out_an_update_already_in_the_chain() {
 /// [`Cgka`], and each update with the secret it produced.
 async fn carol_added_after_three_updates(
     rng: &mut StdRng,
-) -> (Member, Cgka, Vec<(Digest<CgkaOperation>, PcsKey)>) {
+) -> (
+    Member,
+    Cgka<NoMembershipView>,
+    Vec<(Digest<CgkaOperation>, PcsKey)>,
+) {
     let mut group = Group::new(1, rng).await;
     let mut updates = Vec::new();
     for _ in 0..3 {
@@ -402,7 +406,11 @@ fn a_new_members_first_update_wraps_only_what_is_not_in_the_chain() {
 /// hashes. The second update is the head.
 async fn missing_the_second_secret(
     rng: &mut StdRng,
-) -> (Group, Digest<CgkaOperation>, Digest<CgkaOperation>) {
+) -> (
+    Group<NoMembershipView>,
+    Digest<CgkaOperation>,
+    Digest<CgkaOperation>,
+) {
     let mut group = Group::new(1, rng).await;
     let first = group.rotate(0, rng).await.digest();
     let second = group.rotate(0, rng).await.digest();

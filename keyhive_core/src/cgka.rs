@@ -52,14 +52,20 @@ use tracing::instrument;
 /// This is a thin wrapper around [`beekem::cgka::Cgka`] that converts between
 /// keyhive_core domain IDs and beekem IDs at the API boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Cgka(beekem::cgka::Cgka);
+pub struct Cgka<M>(beekem::cgka::Cgka<M>);
 
-impl Cgka {
-    pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
+impl<M: MembershipView> Cgka<M> {
+    pub fn new(
+        doc_id: DocumentId,
+        owner_id: IndividualId,
+        owner_sks: ShareKeyMap,
+        membership: M,
+    ) -> Self {
         Cgka(beekem::cgka::Cgka::new(
             TreeId::from(doc_id),
             MemberId::from(owner_id),
             owner_sks,
+            membership,
         ))
     }
 
@@ -185,10 +191,11 @@ impl Cgka {
         self.0.remove_by_citations(citations, signer).await
     }
 
-    /// Remove members according to `view` from now on. Operations already
-    /// recorded are replayed under it before the CGKA's next use.
-    pub(crate) fn set_membership_view(&mut self, view: Arc<dyn MembershipView>) {
-        self.0.set_membership_view(view);
+    /// This `Cgka`, removing members according to `view` from now on.
+    /// Operations already recorded are replayed under it before the CGKA's
+    /// next use.
+    pub(crate) fn with_membership_view<V: MembershipView>(self, view: V) -> Cgka<V> {
+        Cgka(self.0.with_membership_view(view))
     }
 
     /// The operations the next operation created here will have as its

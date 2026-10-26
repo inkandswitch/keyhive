@@ -5,7 +5,7 @@ use self::archive::DocumentArchive;
 use super::individual::id::IndividualId;
 use crate::{
     certificate::{CertificateError, KeylineStorageError},
-    cgka::Cgka,
+    cgka::{citations::KeylineCgkaMembershipView, Cgka},
     content::heads::ContentHeads,
     error::not_found::NotFound,
     keyhive::Keyhive,
@@ -14,7 +14,6 @@ use crate::{
     update::{AddMemberUpdate, RevokeMemberUpdate},
 };
 use beekem::{
-    cgka::MembershipView,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaBatch, CgkaOperation, CitationId},
@@ -69,7 +68,7 @@ pub struct DocumentState<T: ContentRef> {
     /// This replica's CGKA group. A replica has a document only as a
     /// member whose creation or invitation has merged. A relay has none of
     /// its operations and has no `DocumentState`.
-    cgka: Cgka,
+    cgka: Cgka<KeylineCgkaMembershipView>,
 }
 
 impl<T: ContentRef> DocumentState<T> {
@@ -77,7 +76,7 @@ impl<T: ContentRef> DocumentState<T> {
     /// content heads it knows.
     pub(crate) fn with_cgka(
         id: DocumentId,
-        cgka: Cgka,
+        cgka: Cgka<KeylineCgkaMembershipView>,
         content_heads: HashSet<T>,
         content_state: HashSet<T>,
     ) -> Self {
@@ -98,11 +97,11 @@ impl<T: ContentRef> DocumentState<T> {
         self.id
     }
 
-    pub fn cgka(&self) -> &Cgka {
+    pub(crate) fn cgka(&self) -> &Cgka<KeylineCgkaMembershipView> {
         &self.cgka
     }
 
-    pub fn cgka_mut(&mut self) -> &mut Cgka {
+    pub(crate) fn cgka_mut(&mut self) -> &mut Cgka<KeylineCgkaMembershipView> {
         &mut self.cgka
     }
 
@@ -137,7 +136,7 @@ impl<T: ContentRef> DocumentState<T> {
             BTreeSet<CitationId>,
         )>,
         owner_sk: ShareSecretKey,
-        view: Arc<dyn MembershipView>,
+        view: KeylineCgkaMembershipView,
         initial_content_heads: NonEmpty<T>,
         signer: &S,
         csprng: &mut R,
@@ -145,8 +144,7 @@ impl<T: ContentRef> DocumentState<T> {
         let (owner, owner_pk, _, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
-        let mut cgka = Cgka::new(id, owner, owner_sks);
-        cgka.set_membership_view(view);
+        let mut cgka = Cgka::new(id, owner, owner_sks, view);
         let mut ops = cgka.add_multiple(founders, signer).await?;
         let (_pcs_key, update_op, _new_key_pair) =
             cgka.update(owner_pk, owner_sk, signer, csprng).await?;
