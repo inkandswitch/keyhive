@@ -235,7 +235,8 @@ impl Cgka {
     }
 
     /// Merge an add whose key's secret `sk` this replica has (an invitation
-    /// to it). The added member becomes the owner.
+    /// to it), making the added member the owner. Returns `false`, changing
+    /// nothing, if the CGKA graph already has it.
     pub fn merge_invite(
         &mut self,
         op: Arc<SerdeSigned<CgkaOperation>>,
@@ -250,6 +251,10 @@ impl Cgka {
         else {
             return Err(CgkaError::UnexpectedInviteOperation);
         };
+        // Don't merge an op we already have.
+        if self.op(&Digest::hash(op.as_ref())).is_some() {
+            return Ok(false);
+        }
         if !self.contains_predecessors(&predecessors.iter().cloned().collect()) {
             return Err(CgkaError::OutOfOrderOperation);
         }

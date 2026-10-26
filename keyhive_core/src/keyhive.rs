@@ -2914,9 +2914,12 @@ where
         &self,
         signed_op: SerdeSigned<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError<K::Error>> {
-        signed_op.try_verify()?;
-
         let doc_id: DocumentId = (*signed_op.payload.doc_id()).into();
+        let digest = Digest::hash(&signed_op);
+        if self.has_cgka_op(doc_id, digest).await {
+            return Ok(());
+        }
+        signed_op.try_verify()?;
 
         // Authorization reads the certificates and this replica's CGKA graph.
         // This replica need not be a member of the CGKA group.
@@ -2928,10 +2931,7 @@ where
                 )))
             }
             Err(CgkaUnauthorized::Denied) => {
-                self.certificate_sets
-                    .lock()
-                    .await
-                    .deny(Digest::hash(&signed_op));
+                self.certificate_sets.lock().await.deny(digest);
                 return Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(Box::new(doc_id)));
             }
         }
@@ -2969,6 +2969,23 @@ where
             self.event_listener.on_cgka_op(&op).await;
         }
         Ok(())
+    }
+
+    /// Whether the CGKA graph for `doc_id` has the operation `digest`.
+    async fn has_cgka_op(
+        &self,
+        doc_id: DocumentId,
+        digest: Digest<SerdeSigned<CgkaOperation>>,
+    ) -> bool {
+        let has_digest = |cgka: &Cgka| cgka.op(&digest).is_some();
+        if let Some(state) = self.document_state(doc_id).await {
+            return has_digest(state.lock().await.cgka());
+        }
+        self.awaiting_invitation
+            .lock()
+            .await
+            .get(&doc_id)
+            .is_some_and(has_digest)
     }
 
     /// Merge an authorized operation, whose predecessors the CGKA graph

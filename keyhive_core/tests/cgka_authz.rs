@@ -564,6 +564,30 @@ async fn the_creators_own_add_is_accepted_again_when_it_is_redelivered() -> Test
 }
 
 #[tokio::test]
+async fn an_operation_differing_from_one_in_the_graph_is_still_verified() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let known = creators_own_add(&alice, doc_id).await;
+    let mut payload = known.payload().clone();
+    if let CgkaOperation::Add { citations, .. } = &mut payload {
+        citations.push(CitationId([0; 32]));
+    }
+
+    let result = alice
+        .receive_cgka_op(SerdeSigned::new(
+            payload,
+            *known.issuer(),
+            *known.signature(),
+        ))
+        .await;
+
+    assert!(
+        matches!(result, Err(ReceiveCgkaOpError::VerificationError(_))),
+        "{result:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn only_a_root_edges_audience_can_start_a_documents_history() -> TestResult {
     let alice = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
