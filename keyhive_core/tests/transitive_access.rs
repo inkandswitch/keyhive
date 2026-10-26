@@ -344,7 +344,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
 
     // Cross-register
     let bob_prekey_op = bob.expand_prekeys().await?;
-    let bob_on_alice = IndividualState::new(KeyOp::Add(bob_prekey_op));
+    let bob_on_alice = IndividualState::new(KeyOp::Add(bob_prekey_op.clone()));
     let bob_on_alice_id = bob_on_alice.id();
     assert!(alice.register_individual(bob_on_alice).await);
 
@@ -374,11 +374,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
     // causal root of the operation graph.
     {
         let bob_active_id = bob.active().id();
-        let bob_pk = bob
-            .active()
-            .pick_prekey(doc_id)
-            .await
-            .expect("bob has prekeys");
+        let bob_pk = bob_prekey_op.payload().share_key;
         // Bob's founding delegation: the document's Keyline root edge to him.
         let doc_kl = Identifier::from(doc_id);
         let bob_founding: [u8; 32] = Keyline::<Sendable>::delegations_to(
@@ -400,7 +396,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
             .add::<Sendable, _>(
                 bob_active_id,
                 bob_pk,
-                None,
+                Some(KeyOp::Add(bob_prekey_op.clone()).to_key_proof()),
                 [CitationId(bob_founding)].into(),
                 &bob_signer,
             )
@@ -467,6 +463,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         alice_members, bob_members,
         "both trees hold the same members"
     );
+    assert!(alice_members.contains(&bob.id()), "bob is a member");
     assert_eq!(alice_ops, bob_ops, "both trees hold the same ops");
 
     // Each can read what the other writes, even when they write concurrently.
