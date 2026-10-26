@@ -3,14 +3,19 @@ use beekem::{
     operation::{CgkaOperation, CitationId},
 };
 use future_form::{FutureForm, Sendable};
+use keyhive_codec::traits::Decode;
 use keyhive_core::{
     content::heads::ContentHeads,
     crypto::digest::Digest,
-    keyhive::Keyhive,
+    keyhive::{Keyhive, ReceiveCgkaOpError},
     listener::no_listener::NoListener,
     principal::{
         document::id::DocumentId,
-        individual::{id::IndividualId, op::KeyOp, IndividualState},
+        individual::{
+            id::IndividualId,
+            op::{add_key::AddKeyOp, KeyOp},
+            IndividualState,
+        },
     },
     store::ciphertext::memory::MemoryCiphertextStore,
     test_utils::{make_simple_keyhive, Hive, KeylineStore},
@@ -21,6 +26,7 @@ use keyhive_crypto::{
     signed::{SerdeSigned, SigningError},
     signer::{async_signer::AsyncSigner, memory::MemorySigner},
     verifiable::Verifiable,
+    verified::Signed,
 };
 use keyline::{
     certificate::VerifiedCertificate, contract::Keyline, delegation::Delegation, power::Power,
@@ -87,6 +93,24 @@ async fn cgka_members(observer: &Hive, doc: DocumentId) -> Vec<IndividualId> {
         .expect("observer has joined the CGKA group")
         .into_iter()
         .collect()
+}
+
+/// The adds of `member` in `observer`'s CGKA graph for `doc`.
+async fn adds_of(
+    observer: &Hive,
+    doc: DocumentId,
+    member: IndividualId,
+) -> TestResult<Vec<Arc<SerdeSigned<CgkaOperation>>>> {
+    Ok(observer
+        .cgka_ops_for_doc(&doc)
+        .await
+        .ok_or("the observer holds the document")?
+        .into_iter()
+        .filter(|op| match &op.payload {
+            CgkaOperation::Add { added_id, .. } => *added_id == MemberId::from(member),
+            _ => false,
+        })
+        .collect())
 }
 
 fn kl(id: impl Into<Identifier>) -> Identifier {
@@ -270,8 +294,9 @@ async fn a_reader_whose_prekeys_arrive_after_a_write_is_added_at_the_next_write(
     Ok(())
 }
 
-#[tokio::test]
-async fn a_reader_removed_and_granted_again_can_add_itself_again() -> TestResult {
+/// Alice, her document, and Bob, who added himself to it, was removed when
+/// Alice revoked his `Read`, and was then granted `Edit`.
+async fn removed_and_granted_again() -> TestResult<(Hive, Hive, DocumentId)> {
     let alice = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
@@ -291,7 +316,12 @@ async fn a_reader_removed_and_granted_again_can_add_itself_again() -> TestResult
     issue_grant(&alice, bob.id(), doc_id, Power::Edit).await?;
     send(&alice, &bob).await;
     assert!(!cgka_members(&bob, doc_id).await.contains(&bob.id()));
+    Ok((alice, bob, doc_id))
+}
 
+#[tokio::test]
+async fn a_reader_removed_and_granted_again_can_add_itself_again() -> TestResult {
+    let (alice, bob, doc_id) = removed_and_granted_again().await?;
     assert!(bob.add_self_to(doc_id).await?);
     send(&bob, &alice).await;
     let ct = alice
@@ -303,6 +333,17 @@ async fn a_reader_removed_and_granted_again_can_add_itself_again() -> TestResult
             .await?,
         b"for bob again".to_vec()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reader_removed_and_granted_again_adds_itself_when_it_writes() -> TestResult {
+    let (_alice, bob, doc_id) = removed_and_granted_again().await?;
+
+    bob.try_encrypt_content(doc_id, &[3u8; 32], &vec![], b"back again")
+        .await?;
+
+    assert!(cgka_members(&bob, doc_id).await.contains(&bob.id()));
     Ok(())
 }
 
@@ -393,5 +434,151 @@ async fn a_reader_whose_remove_failed_to_sign_is_removed_at_the_next_write() -> 
         .await?
         .ok_or("alice has not joined the CGKA group")?;
     assert!(!members.contains(&bob_id));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_add_contains_the_prekey_operation_that_published_its_key() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let prekey = bob.expand_prekeys().await?;
+    let published = prekey.signed().as_ref().clone();
+    let bob = IndividualState::new(KeyOp::Add(prekey));
+    let bob_id = bob.id();
+    alice.register_individual(bob).await;
+    let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    alice.add_member(bob_id, doc, Power::Read).await?;
+
+    let proofs: Vec<_> = adds_of(&alice, doc, bob_id)
+        .await?
+        .iter()
+        .filter_map(|op| match &op.payload {
+            CgkaOperation::Add { key_proof, .. } => key_proof.clone(),
+            _ => None,
+        })
+        .map(|proof| Signed::<AddKeyOp>::decode(&proof))
+        .collect::<Result<_, _>>()?;
+    assert_eq!(proofs, vec![published]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_operation_on_a_document_the_replica_cannot_read_is_refused() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let carol = make_simple_keyhive().await?;
+    let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    for cert in Keyline::<Sendable>::closure(alice.keyline(), kl(doc))
+        .await?
+        .value
+    {
+        carol.receive_certificate(cert).await?;
+    }
+    let root = alice
+        .cgka_ops_for_doc(&doc)
+        .await
+        .ok_or("alice holds the document")?
+        .into_iter()
+        .find(|op| op.payload.predecessors().is_empty())
+        .ok_or("the CGKA graph has a root")?;
+
+    let received = carol.receive_cgka_op(root.as_ref().clone()).await;
+    assert!(
+        matches!(received, Err(ReceiveCgkaOpError::UnknownDocument(_))),
+        "{received:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_replica_whose_read_was_revoked_adds_no_new_reader() -> TestResult {
+    let (alice, bob, doc) = doc_with_alice_and_bob().await?;
+    let dave = make_simple_keyhive().await?;
+    send(&alice, &bob).await;
+    let revocation = signed_revocation(&alice, &alice, doc, bob.id()).await?;
+    receive(&alice, &revocation).await;
+    send(&alice, &bob).await;
+    learn(&alice, &dave).await;
+    let dave_id = learn(&bob, &dave).await;
+    let grant = issue_grant(&alice, dave_id, doc, Power::Read).await?;
+    receive(&bob, &grant).await;
+
+    // Bob removes himself first, which his signing set allows. The write then
+    // fails because he is no longer a member.
+    let _ = bob
+        .try_encrypt_content(doc, &[1u8; 32], &vec![], b"after his revocation")
+        .await;
+
+    assert!(adds_of(&bob, doc, dave_id).await?.is_empty());
+    Ok(())
+}
+
+/// Alice, who granted Carol `Read` on `doc` and wrote since, and a replica of
+/// Alice rebuilt from her archive from before the grant, over a Keyline store
+/// that holds the grant.
+async fn restored_from_before_a_grant() -> TestResult<(Hive, Hive, Hive, DocumentId)> {
+    let signer = MemorySigner::generate(&mut OsRng);
+    let alice = Keyhive::generate(
+        signer.clone(),
+        MemoryCiphertextStore::new(),
+        NoListener,
+        KeylineStore::new(),
+        OsRng,
+    )
+    .await?;
+    let carol = make_simple_keyhive().await?;
+    let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    let archive = alice.into_archive().await?;
+    issue_grant(&alice, carol.id(), doc, Power::Read).await?;
+    learn(&alice, &carol).await;
+    alice
+        .try_encrypt_content(doc, &[0u8; 32], &vec![], b"for carol")
+        .await?;
+
+    let store = KeylineStore::new();
+    let certs = Keyline::<Sendable>::closure(alice.keyline(), kl(doc))
+        .await?
+        .value
+        .into_iter()
+        .map(|cert| cert.verify())
+        .collect::<Result<_, _>>()?;
+    Keyline::<Sendable>::insert(&store, certs).await?;
+    let restored = Keyhive::try_from_archive(
+        &archive,
+        signer,
+        MemoryCiphertextStore::new(),
+        NoListener,
+        store,
+        Arc::new(futures::lock::Mutex::new(OsRng)),
+    )
+    .await?;
+    Ok((alice, restored, carol, doc))
+}
+
+#[tokio::test]
+async fn a_rebuilt_replica_merges_an_operation_citing_what_only_its_store_has() -> TestResult {
+    let (alice, restored, carol, doc) = restored_from_before_a_grant().await?;
+    let add_of_carol = adds_of(&alice, doc, carol.id())
+        .await?
+        .pop()
+        .ok_or("alice added carol")?;
+
+    restored
+        .receive_cgka_op(add_of_carol.as_ref().clone())
+        .await?;
+
+    assert!(cgka_members(&restored, doc).await.contains(&carol.id()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_rebuilt_replica_cites_what_only_its_store_has() -> TestResult {
+    let (_alice, restored, carol, doc) = restored_from_before_a_grant().await?;
+    learn(&restored, &carol).await;
+
+    restored
+        .try_encrypt_content(doc, &[1u8; 32], &vec![], b"for carol")
+        .await?;
+
+    assert!(cgka_members(&restored, doc).await.contains(&carol.id()));
     Ok(())
 }

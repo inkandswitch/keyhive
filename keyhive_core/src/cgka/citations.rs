@@ -430,19 +430,19 @@ mod tests {
 
     #[test]
     fn answers_are_kept_while_a_replay_of_their_resource_is_in_progress() {
-        let mut cited = CitedCertificates::default();
+        let cited = SharedCitations::default();
         let (_, resource) = key(1);
-        cited.begin_replay(resource);
-        cited.begin_replay(resource);
+        let first = cited.replaying(resource);
+        let second = cited.replaying(resource);
         for set in 1..=u8::try_from(ANSWERS_PER_RESOURCE + 1).expect("small") {
-            cited.cache(key(set), BTreeMap::new());
+            cited.lock().cache(key(set), BTreeMap::new());
         }
-        cited.end_replay(resource);
+        drop(first);
         assert!(
-            cited.members(&key(1)).is_some(),
+            cited.lock().members(&key(1)).is_some(),
             "a replay is still in progress"
         );
-        cited.end_replay(resource);
-        assert!(cited.members(&key(1)).is_none());
+        drop(second);
+        assert!(cited.lock().members(&key(1)).is_none());
     }
 }

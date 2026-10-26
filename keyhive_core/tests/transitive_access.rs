@@ -463,6 +463,7 @@ async fn own_tree_converges_with_creators_ops(bob_sorts_first: bool) -> TestResu
         alice_members, bob_members,
         "both trees hold the same members"
     );
+    assert!(alice_members.contains(&bob.id()), "bob is a member");
     assert_eq!(alice_ops, bob_ops, "both trees hold the same ops");
 
     // Each can read what the other writes, even when they write concurrently.

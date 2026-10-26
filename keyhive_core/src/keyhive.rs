@@ -529,9 +529,9 @@ where
         Ok(())
     }
 
-    /// [`Self::settle_cgka`] under the lock a write holds, so that an
-    /// operation received after the write's reconciliation is applied before
-    /// it.
+    /// [`Self::settle_cgka`] under the lock a write holds. The write's own adds
+    /// and removes leave a replay pending if the membership answer they need
+    /// was evicted after it was fetched, as a decryption's replay can do.
     async fn settle_for_write(
         &self,
         doc: DocumentId,
@@ -1274,22 +1274,17 @@ where
         }
         let mut founders = Vec::with_capacity(readers.len());
         for reader in readers {
-            let prekey = if reader == owner {
-                owner_pk
+            let (prekey, key_proof) = if reader == owner {
+                let key_proof = self
+                    .key_proof(owner, &owner_pk)
+                    .await
+                    .ok_or(GenerateDocError::OwnerPrekeyUnproven)?;
+                (owner_pk, key_proof)
             } else {
-                let Some(individual) = self.individual_state(reader).await else {
-                    continue;
-                };
-                let Some(prekey) = individual.lock().await.pick_prekey(doc_id).copied() else {
+                let Some(addable) = self.addable_key(reader, doc_id).await else {
                     continue; // no live prekeys to seat them with
                 };
-                prekey
-            };
-            let Some(key_proof) = self.key_proof(reader, &prekey).await else {
-                if reader == owner {
-                    return Err(GenerateDocError::OwnerPrekeyUnproven);
-                }
-                continue;
+                addable
             };
             founders.push((reader, prekey, Some(key_proof), BTreeSet::new()));
         }
@@ -3222,7 +3217,10 @@ where
                 ))),
             );
         }
-        for doc_id in archive.docs.keys().filter(|id| !documents.contains_key(id)) {
+        for doc_id in archive.docs.keys() {
+            if documents.contains_key(doc_id) {
+                continue;
+            }
             tracing::warn!(%doc_id, "the archived CGKA graph does not rebuild from its operations");
         }
         *hive.documents.lock().await = documents;

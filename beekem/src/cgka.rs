@@ -232,9 +232,18 @@ impl Cgka {
         self.ops_graph.cgka_ops.len()
     }
 
-    /// The graph of CGKA operations.
-    pub fn ops_graph(&self) -> &CgkaOperationGraph {
-        &self.ops_graph
+    /// The operations the next operation created here will have as its
+    /// predecessors.
+    pub fn heads(&self) -> &Set<Digest<SerdeSigned<CgkaOperation>>> {
+        &self.ops_graph.cgka_op_heads
+    }
+
+    /// The operation in the CGKA graph with this digest.
+    pub fn op(
+        &self,
+        digest: &Digest<SerdeSigned<CgkaOperation>>,
+    ) -> Option<&Arc<SerdeSigned<CgkaOperation>>> {
+        self.ops_graph.cgka_ops.get(digest)
     }
 
     /// Derive an [`ApplicationSecret`] from our current [`PcsKey`] for new content

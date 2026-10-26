@@ -169,7 +169,7 @@ impl Cgka {
     /// The operations the next operation created here will have as its
     /// predecessors.
     pub fn heads(&self) -> &Set<Digest<SerdeSigned<CgkaOperation>>> {
-        &self.0.ops_graph().cgka_op_heads
+        self.0.heads()
     }
 
     /// The operation in the CGKA graph with this digest.
@@ -177,7 +177,7 @@ impl Cgka {
         &self,
         digest: &Digest<SerdeSigned<CgkaOperation>>,
     ) -> Option<&Arc<SerdeSigned<CgkaOperation>>> {
-        self.0.ops_graph().cgka_ops.get(digest)
+        self.0.op(digest)
     }
 
     pub async fn update<F: FutureForm, S: AsyncSigner<F>, R: CryptoRng + RngCore>(

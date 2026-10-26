@@ -1,5 +1,6 @@
 use crate::{
     cgka::Cgka,
+    collections::Set,
     error::CgkaError,
     id::TreeId,
     keys::ShareKeyMap,
@@ -146,6 +147,24 @@ async fn add_multiple_adds_each_member() {
         members.contains(&d.id) && members.contains(&e.id),
         "add_multiple left out a member"
     );
+}
+
+#[tokio::test]
+async fn the_last_operation_issued_is_the_head_and_is_found_by_its_digest() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_000b);
+    let mut group = Group::new(1, &mut rng).await;
+    let d = member(&mut rng);
+    let signer = group.members[0].signer.clone();
+    let cgka = &mut group.replicas[0];
+
+    let add = cgka
+        .add::<Local, _>(d.id, d.pk, None, NO_CITATIONS, &signer)
+        .await
+        .expect("adding a new member succeeds")
+        .expect("d is not yet a member");
+    let digest = Digest::hash(&add);
+    assert_eq!(cgka.heads(), &Set::from_iter([digest]));
+    assert_eq!(cgka.op(&digest).map(AsRef::as_ref), Some(&add));
 }
 
 fn cgka_with_no_operations(owner: &Member) -> Cgka {
