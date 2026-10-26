@@ -23,7 +23,7 @@ tracing = { workspace = true, features = ["attributes"] }
 
 # std-only dependencies
 dupe = { workspace = true, optional = true }
-thiserror = { workspace = true, optional = true }
+thiserror = { workspace = true }
 
 arbitrary = { workspace = true, optional = true }
 

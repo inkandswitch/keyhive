@@ -270,9 +270,8 @@ pub enum CgkaOperation {
         key_proof: Option<Vec<u8>>,
         predecessors: Vec<Digest<SerdeSigned<CgkaOperation>>>,
         doc_id: TreeId,
-        /// The membership citations for this add, in strictly ascending
-        /// order so that one set has one encoding. An operation's
-        /// citation set is everything its causal ancestors cited plus these.
+        /// The membership citations for this add. An operation's citation set
+        /// is everything its causal ancestors cited plus these.
         citations: Vec<CitationId>,
     },
     Remove {
