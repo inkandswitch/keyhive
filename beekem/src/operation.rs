@@ -279,7 +279,9 @@ pub enum CgkaOperation {
         doc_id: TreeId,
         /// The membership citations for this remove, as for an add.
         citations: Vec<CitationId>,
-        /// The members this operation removes from the tree.
+        /// The members this operation removes from the tree. The list may be
+        /// empty depending on whether the client specifies the members to remove
+        /// or infers them from the citations.
         removed: Vec<RemovedMember>,
     },
     Update {

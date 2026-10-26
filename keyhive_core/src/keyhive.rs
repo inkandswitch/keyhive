@@ -43,8 +43,10 @@ use crate::{
 };
 use beekem::{
     cgka::MembershipView,
+    collections::Set,
     encrypted::EncryptedContent,
     error::CgkaError,
+    id::MemberId,
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaOperation, CitationId},
     pcs_key::PcsKey,
@@ -134,9 +136,9 @@ pub struct KeyhiveState<
     /// invitation merges.
     awaiting_invitation: Mutex<HashMap<DocumentId, Cgka>>,
 
-    /// What each CGKA operation's causal past cites. Used for choosing what
-    /// the next operation this replica issues cites. Locked after a document's
-    /// lock or `awaiting_invitation` when both are held.
+    /// What each CGKA operation's causal past cites. Used for authorizing
+    /// CGKA operations that were generated from these certificates. Locked
+    /// after a document's lock or `awaiting_invitation` when both are held.
     certificate_sets: Mutex<CertificateSets>,
 
     /// [`StaticEvent`]s that are still awaiting dependencies.
@@ -880,8 +882,7 @@ where
         };
         if !unrecorded.is_empty() {
             // The store verified them on insert. Verifying again is the only
-            // way back to a `Verified` delegation, which the signing set is
-            // built from.
+            // way back to a `Verified` delegation, which authorization reads.
             let verified: Vec<_> = unrecorded
                 .into_iter()
                 .filter_map(|cert| cert.verify().ok())
@@ -2726,12 +2727,28 @@ where
         Ok(())
     }
 
-    /// Whether `signed_op` can be merged on this document.
+    /// Whether `signed_op` is authorized on this document, evaluated over that
+    /// op's certificate sets.
     ///
-    /// Pending until every certificate it cites is recorded, so that merging
-    /// it removes the members its certificate set does not entitle. Adds and
-    /// removes are then accepted. An update cites nothing and is checked
-    /// against the leaf it rotates.
+    /// Denied if a predecessor was already denied. Otherwise pending until every
+    /// predecessor is in the CGKA graph, then denied if its citations are not
+    /// in strictly ascending order, and otherwise pending until every cited
+    /// certificate is recorded. After that the verdict depends only on the
+    /// operation and its causal past, so it is final and deterministic.
+    ///
+    /// Conditions:
+    /// * Its signer has `Read` or higher in its signing set (i.e., the predecessor
+    ///   set plus the delegations it cites). The revocations it cites are left
+    ///   out, so a member can cite the revocation of their own access.
+    /// * An operation with no predecessors cites a root certificate of the
+    ///   document whose audience is its signer or a node its signer has
+    ///   `Admin` over in its signing set.
+    /// * An add's `key_proof` is a prekey operation, signed by the added
+    ///   member, whose key is the add's, and the added member has `Read` or
+    ///   higher in the add's certificate set.
+    /// * A remove does not list any specific members. Its effect comes only
+    ///   from the removals implied by its citations.
+    /// * An update rotates its signer's own key in the CGKA group.
     async fn cgka_op_is_authorized(
         &self,
         signed_op: &SerdeSigned<CgkaOperation>,
@@ -2739,26 +2756,127 @@ where
     ) -> Result<Result<(), CgkaUnauthorized>, KeylineStorageError<K::Error>> {
         use CgkaUnauthorized::{Denied, Pending};
 
-        if !self.record_citations(&signed_op.payload).await? {
-            return Ok(Err(Pending));
-        }
-        let CgkaOperation::Update { id, new_path, .. } = &signed_op.payload else {
-            return Ok(Ok(()));
-        };
         let doc = Identifier::from(doc_id);
         let signer = signed_op.issuer;
-        if *id != new_path.leaf_id {
+        let op = &signed_op.payload;
+
+        let predecessors = op.predecessors();
+        // An operation is authorized only if all its predecessors are.
+        let any_denied = {
+            let sets = self.certificate_sets.lock().await;
+            predecessors.iter().any(|p| sets.is_denied(p))
+        };
+        if any_denied {
             return Ok(Err(Denied));
         }
-        // An update must be signed by the owner of the leaf it rotates.
-        if new_path.leaf_id.id() != signer {
+        let Some(predecessor_set) = self.predecessor_set(doc_id, &predecessors).await else {
+            return Ok(Err(Pending));
+        };
+
+        let cited = op.citations();
+        if !cited.windows(2).all(|pair| pair[0] < pair[1]) {
             return Ok(Err(Denied));
         }
-        // Its leaf is checked against the tree on merge. A replica that
-        // is still awaiting its invitation has no complete tree, so the
-        // signer must also read the document in Keyline's positive
-        // graph.
-        Ok(ensure(self.reads_ever(doc, signer).await?, Pending))
+        if !self.record_citations(op).await? {
+            return Ok(Err(Pending));
+        }
+
+        let (signing_set, root_audiences) = {
+            let citations = self.certificates.cited.lock();
+            let mut signing_set = predecessor_set;
+            signing_set.extend(
+                cited
+                    .iter()
+                    .filter(|c| citations.delegation(c).is_some())
+                    .copied(),
+            );
+            let root_audiences: Vec<Identifier> = cited
+                .iter()
+                .filter_map(|c| citations.delegation(c))
+                .filter(|(issuer, d)| *issuer == doc && d.subject == doc)
+                .map(|(_, d)| d.audience)
+                .collect();
+            (signing_set, root_audiences)
+        };
+        if !self.is_reader_over(&signing_set, doc, signer).await? {
+            return Ok(Err(Denied));
+        }
+        if predecessors.is_empty() {
+            let mut is_root_to_signer = root_audiences.contains(&signer);
+            if !is_root_to_signer {
+                for audience in &root_audiences {
+                    let over = self.members_over(&signing_set, *audience).await?;
+                    if over.get(&signer) == Some(&Power::Admin) {
+                        is_root_to_signer = true;
+                        break;
+                    }
+                }
+            }
+            if !is_root_to_signer {
+                return Ok(Err(Denied));
+            }
+        }
+
+        match op {
+            CgkaOperation::Update { id, new_path, .. } => {
+                if *id != new_path.leaf_id || new_path.leaf_id.id() != signer {
+                    return Ok(Err(Denied));
+                }
+            }
+            CgkaOperation::Add {
+                added_id,
+                pk,
+                key_proof,
+                ..
+            } => {
+                if !proves_key(key_proof.as_deref(), added_id, pk) {
+                    return Ok(Err(Denied));
+                }
+                let mut certificate_set = signing_set;
+                certificate_set.extend(cited.iter().copied());
+                if !self
+                    .is_reader_over(&certificate_set, doc, added_id.id())
+                    .await?
+                {
+                    return Ok(Err(Denied));
+                }
+            }
+            CgkaOperation::Remove { removed, .. } => {
+                // The members to remove are inferred from the cited certificates
+                // and not from an explicit list.
+                if !removed.is_empty() {
+                    return Ok(Err(Denied));
+                }
+                // Not a condition. Merging the remove queries which members its
+                // certificate set removes and that answer is cached.
+                let mut certificate_set = signing_set;
+                certificate_set.extend(cited.iter().copied());
+                self.members_over(&certificate_set, doc).await?;
+            }
+        }
+        Ok(Ok(()))
+    }
+
+    /// Everything the operations `heads` and their causal ancestors cite, from
+    /// this replica's CGKA graph for `doc_id`, whether it is a member or
+    /// awaiting its invitation. `None` if that graph lacks any of them.
+    async fn predecessor_set(
+        &self,
+        doc_id: DocumentId,
+        heads: &Set<Digest<SerdeSigned<CgkaOperation>>>,
+    ) -> Option<CitationSet> {
+        if heads.is_empty() {
+            return Some(CitationSet::default());
+        }
+        if let Some(doc) = self.document_state(doc_id).await {
+            let locked = doc.lock().await;
+            let mut sets = self.certificate_sets.lock().await;
+            return sets.predecessor_set(locked.cgka(), heads);
+        }
+        let awaiting = self.awaiting_invitation.lock().await;
+        let cgka = awaiting.get(&doc_id)?;
+        let mut sets = self.certificate_sets.lock().await;
+        sets.predecessor_set(cgka, heads)
     }
 
     /// `audience`'s power over `subject` in Keyline's positive graph, which
@@ -2798,7 +2916,8 @@ where
 
         let doc_id: DocumentId = (*signed_op.payload.doc_id()).into();
 
-        // Authorization reads only Keyline, so it needs no tree.
+        // Authorization reads the certificates and this replica's CGKA graph.
+        // This replica need not be a member of the CGKA group.
         match self.cgka_op_is_authorized(&signed_op, doc_id).await? {
             Ok(()) => {}
             Err(CgkaUnauthorized::Pending) => {
@@ -2807,7 +2926,11 @@ where
                 )))
             }
             Err(CgkaUnauthorized::Denied) => {
-                return Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(Box::new(doc_id)))
+                self.certificate_sets
+                    .lock()
+                    .await
+                    .deny(Digest::hash(&signed_op));
+                return Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(Box::new(doc_id)));
             }
         }
 
@@ -2824,7 +2947,21 @@ where
             // Serialized with writes, which choose an operation's citations
             // from the CGKA graph's heads and then sign it on those same heads.
             let _reconciled = self.certificates.reconciled.lock().await;
-            self.merge_received(doc_id, op.dupe(), me, &secrets).await?
+            self.merge_received(doc_id, op.dupe(), me, &secrets).await
+        };
+        let merged = match merged {
+            Ok(merged) => merged,
+            // `is_final` drops the event, so it never enters the CGKA graph
+            // and an operation built on it would wait for it forever. Deny
+            // those instead.
+            Err(ReceiveCgkaOpError::CgkaError(e)) if never_merges(&e) => {
+                self.certificate_sets
+                    .lock()
+                    .await
+                    .deny(Digest::hash(op.as_ref()));
+                return Err(ReceiveCgkaOpError::CgkaError(e));
+            }
+            Err(e) => return Err(e),
         };
         if merged {
             self.event_listener.on_cgka_op(&op).await;
@@ -3894,6 +4031,13 @@ fn tree_ops(tree: &Cgka) -> Vec<Arc<SerdeSigned<CgkaOperation>>> {
         .unwrap_or_default()
 }
 
+/// Whether `proof` is a prekey operation, signed by `member`, whose key is `pk`.
+fn proves_key(proof: Option<&[u8]>, member: &MemberId, pk: &ShareKey) -> bool {
+    proof.and_then(KeyOp::from_key_proof).is_some_and(|key_op| {
+        key_op.issuer() == Identifier::from(*member) && key_op.new_key() == pk
+    })
+}
+
 /// Merge one operation into `tree`, adopting the secrets `me` holds for the
 /// keys it places at `me`'s leaf. `true` if the tree did not have it.
 ///
@@ -4067,12 +4211,12 @@ pub enum ReceiveCgkaOpError<E: core::error::Error + 'static> {
     #[error("Unknown invite prekey for received CGKA add op: {0}")]
     UnknownInvitePrekey(ShareKey),
 
-    /// No certificate that could arrive later would authorize this op.
-    #[error("CGKA op for {0} is not authorized by this document's membership")]
+    /// No certificate or CGKA op received in the future can authorize this op.
+    #[error("CGKA op for {0} is not authorized by its certificate sets")]
     UnauthorizedCgkaOp(Box<DocumentId>),
 
-    /// The certificate that would authorize this op has not arrived yet.
-    #[error("CGKA op for {0} is not yet authorized by this document's known membership")]
+    /// A predecessor or a certificate this op cites has not arrived yet.
+    #[error("CGKA op for {0} waits for a predecessor or a certificate it cites")]
     PendingCgkaAuthorization(Box<DocumentId>),
 
     #[error(transparent)]
@@ -4155,8 +4299,8 @@ struct NextCitations {
     cited: BTreeSet<CitationId>,
     /// The readers of the document according to its certificate set.
     readers: BTreeSet<Identifier>,
-    /// Whether this replica has `Read` in its signing set. It issues the
-    /// operation only then.
+    /// Whether this replica has `Read` in its signing set, which receivers
+    /// require of its signer.
     may_sign: bool,
 }
 
@@ -4176,20 +4320,11 @@ pub enum CgkaSyncError<E: core::error::Error + 'static> {
 /// Why [`Keyhive::cgka_op_is_authorized`] denies a CGKA op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CgkaUnauthorized {
-    /// A certificate that has not arrived yet could still authorize it.
+    /// A predecessor or a cited certificate has not arrived yet.
     Pending,
 
-    /// Nothing that arrives later can authorize it.
+    /// No certificate or CGKA op received in the future can authorize it.
     Denied,
-}
-
-/// Returns `Ok(())` if `condition` is true and `Err(err)` otherwise.
-fn ensure<E>(condition: bool, err: E) -> Result<(), E> {
-    if condition {
-        Ok(())
-    } else {
-        Err(err)
-    }
 }
 
 #[derive(Debug, Error)]
@@ -4719,8 +4854,9 @@ mod tests {
     }
 
     /// Once a CGKA operation is authorized, no later insert unauthorizes it:
-    /// the rules read only the positive graph, which certificates only grow.
-    /// Revoking the member the operation added changes nothing.
+    /// the rules read only the operation's own certificate sets, which later
+    /// certificates do not change. Revoking the member it added changes
+    /// nothing.
     #[tokio::test]
     async fn cgka_authorization_is_monotone() -> TestResult {
         let alice = make_keyhive().await;

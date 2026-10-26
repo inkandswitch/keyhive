@@ -10,7 +10,7 @@ use dupe::Dupe;
 use imbl::{ordset::DiffItem, OrdSet};
 use keyhive_crypto::{digest::Digest, signed::SerdeSigned};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ops::Deref,
 };
 
@@ -68,10 +68,21 @@ const RECENT_SETS: usize = 64;
 /// one rather than from the document's first operation.
 const CHECKPOINT_EVERY: u64 = 1024;
 
+/// The certificate set of each authorized CGKA operation, by document,
+/// and all CGKA operations that have been denied.
+///
+/// An operation's set is the union of its predecessors' sets plus its own
+/// citations. Only a document's most recent sets and periodic checkpoints
+/// are kept. An evicted set is rebuilt from the nearest ancestors whose
+/// sets are kept.
 #[derive(Debug, Clone)]
 pub(crate) struct CertificateSets {
     /// Each document's certificate sets.
     docs: HashMap<TreeId, DocumentSets>,
+
+    /// Operations recorded as denied. An operation that depends on one
+    /// is denied as well.
+    denied: HashSet<OpDigest>,
 
     /// [`RECENT_SETS`] (fewer in tests).
     recent_sets: usize,
@@ -106,9 +117,20 @@ impl CertificateSets {
     pub(crate) fn retaining(recent_sets: usize, checkpoint_every: u64) -> Self {
         Self {
             docs: HashMap::new(),
+            denied: HashSet::new(),
             recent_sets,
             checkpoint_every,
         }
+    }
+
+    /// Record that the operation `digest` was denied.
+    pub(crate) fn deny(&mut self, digest: OpDigest) {
+        self.denied.insert(digest);
+    }
+
+    /// Whether the operation `digest` was recorded as denied.
+    pub(crate) fn is_denied(&self, digest: &OpDigest) -> bool {
+        self.denied.contains(digest)
     }
 
     /// Every certificate the operations at `heads` and their causal ancestors
