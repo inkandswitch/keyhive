@@ -109,11 +109,15 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
             _plaintext_tag: PhantomData,
         };
         let keys = ChunkKeys::new(key, doc_id, &content.header());
-        let count = plaintext.len().div_ceil(CHUNK_LEN).max(1);
-        for i in 0..count {
-            let chunk = &plaintext
-                [(i * CHUNK_LEN).min(plaintext.len())..((i + 1) * CHUNK_LEN).min(plaintext.len())];
-            let aad = keys.aad(i, i + 1 == count);
+        let mut chunks = (0u64..)
+            .zip(
+                plaintext
+                    .chunks(CHUNK_LEN)
+                    .chain(plaintext.is_empty().then_some(&[][..])),
+            )
+            .peekable();
+        while let Some((i, chunk)) = chunks.next() {
+            let aad = keys.aad(i, chunks.peek().is_none());
             let nonce = keys.nonce(&aad, chunk);
             let mut buf = chunk.to_vec();
             keys.cipher
@@ -135,13 +139,13 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         doc_id: TreeId,
     ) -> Result<Vec<u8>, ContentDecryptError> {
         let keys = ChunkKeys::new(&key, doc_id, &self.header());
-        let count = chunk_count(self.chunks.len()).expect("chunks are well formed");
         let mut plaintext = Vec::with_capacity(self.chunks.len());
-        for (i, chunk) in self.chunks.chunks(FULL_CHUNK).enumerate() {
+        let mut chunks = (0u64..).zip(self.chunks.chunks(FULL_CHUNK)).peekable();
+        while let Some((i, chunk)) = chunks.next() {
             let (nonce, ciphertext) = chunk
                 .split_first_chunk::<NONCE_LEN>()
                 .expect("every chunk holds its nonce and tag");
-            let aad = keys.aad(i, i + 1 == count);
+            let aad = keys.aad(i, chunks.peek().is_none());
             let mut buf = ciphertext.to_vec();
             keys.cipher
                 .decrypt_in_place(&XNonce::from(*nonce), &aad, &mut buf)?;
@@ -315,10 +319,10 @@ impl ChunkKeys {
     }
 
     /// `header_digest ‖ i:u64 ‖ last:u8`.
-    fn aad(&self, i: usize, last: bool) -> [u8; 41] {
+    fn aad(&self, i: u64, last: bool) -> [u8; 41] {
         let mut aad = [0; 41];
         aad[..32].copy_from_slice(&self.header_digest);
-        aad[32..40].copy_from_slice(&(i as u64).to_be_bytes());
+        aad[32..40].copy_from_slice(&i.to_be_bytes());
         aad[40] = u8::from(last);
         aad
     }
