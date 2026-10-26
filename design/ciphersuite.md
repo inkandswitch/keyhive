@@ -14,12 +14,19 @@ Keys read from the canonical codec are validated on decode. An `Identifier` (Ed2
 
 ## Domain Separation
 
-The byte string `/keyhive/` (`keyhive_crypto::domain_separator::SEPARATOR`) is used as:
+Every key derivation is BLAKE3 `derive_key` under its own context, and every context is a constant of `keyhive_crypto::context::Context`. A context is `/keyhive/<area>/<purpose>/v<N>/<YYYY-MM-DD>`: general to specific, with the version belonging to the context and the date the day that version was introduced, so no redesign or other application reuses one by accident (BLAKE3 asks for contexts that are "hardcoded, globally unique, and application-specific"). The shape, and that no two contexts are the same, are checked at compile time, and a `clippy.toml` rule refuses a `derive_key` that does not go through `Context`.
 
-- the first input to `Siv::new`, the synthetic-nonce hash for BeeKEM node secrets and wrapped root secrets (below);
-- the `derive_key` context in `Separable::derive_from_bytes`, which turns raw key material into a `SymmetricKey` or `ShareSecretKey`. Every BeeKEM node key (`ShareSecretKey::derive_symmetric_key`) passes through it.
-
-BLAKE3 `derive_key` contexts take the form `/keyhive/<area>/<purpose>/v<N>/<YYYY-MM-DD>`. The version belongs to the context, and the date is the day that version was introduced, so no redesign or other application reuses one by accident (BLAKE3 asks for contexts that are "hardcoded, globally unique, and application-specific"). Content derives its application key, its encryption and nonce subkeys, and its header digest under `/keyhive/content/<purpose>/v1/2026-10-26` ([Content](#content)), and prekey selection draws from `/keyhive/prekey/selection/v1/2026-10-26`. The key an update wraps earlier root secrets under still uses `/keyhive/beekem/predecessor_secrets/` (see below).
+| Context | Derives | From |
+|---|---|---|
+| `/keyhive/cgka/predecessor-secrets-key/v1/2026-10-26` | The key an update seals earlier root secrets under | Its root secret |
+| `/keyhive/content/application-key/v1/2026-10-26` | A block's application key | Root secret, predecessors, content ref |
+| `/keyhive/content/encryption-key/v1/2026-10-26` | A block's cipher key | Its application key |
+| `/keyhive/content/header/v1/2026-10-26` | The header digest in each chunk's associated data | Tree ID, header |
+| `/keyhive/content/nonce-key/v1/2026-10-26` | A block's synthetic-nonce key | Its application key |
+| `/keyhive/prekey/selection/v1/2026-10-26` | The stream an individual's prekey for a document is drawn from | Individual, document |
+| `/keyhive/seal/encryption-key/v1/2026-10-26` | A sealed blob's cipher key | The key it is sealed under |
+| `/keyhive/seal/nonce-key/v1/2026-10-26` | A sealed blob's synthetic-nonce key | The key it is sealed under |
+| `/keyhive/share-key/exchange-key/v1/2026-10-26` | The key two share keys' holders share | X25519 output, both public keys |
 
 Content-addressing digests (`Digest::hash`) and signing digests (`signed::Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level. Types migrated to the canonical codec (Keyline certificates and prekey operations so far) instead travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature` and sign and hash the frame without its signature (`keyhive_crypto::signable`); see [Keyline's implementation notes](./keyline/implementation.md#domain-separation).
 
@@ -33,34 +40,26 @@ XChaCha20-Poly1305 has a 192-bit nonce, large enough that random nonces do not c
 1. Poly1305 is not key-committing: one ciphertext can decrypt to different valid plaintexts under different keys ([Invisible Salamanders][encryptment]).
 2. The same key encrypts many payloads on many replicas, so nonce generation must not depend on a sound CSPRNG at every replica.
 
-The nonce is therefore derived deterministically, and the recipient recomputes it after decryption. Content uses a keyed construction per chunk ([Content](#content)). BeeKEM node secrets and wrapped root secrets are sealed with `SymmetricKey::try_seal`, which authenticates its associated data `aad` and takes its nonce from `Siv::new(key, plaintext, aad)`:
+The nonce is therefore derived deterministically, and the recipient recomputes it after decryption. Content does this per chunk ([Content](#content)). BeeKEM node secrets and wrapped root secrets are sealed with `SymmetricKey::try_seal`, which authenticates its associated data `aad`. The cipher and the nonce each use their own subkey:
 
 ```
-nonce = BLAKE3( "/keyhive/" ‖ aad ‖ key ‖ plaintext )[0..24]
+enc_key   = derive_key("/keyhive/seal/encryption-key/v1/2026-10-26", key)
+nonce_key = derive_key("/keyhive/seal/nonce-key/v1/2026-10-26",      key)
+
+nonce  = BLAKE3_keyed(nonce_key, aad_len:u64 ‖ aad ‖ plaintext)[0..24]
+sealed = nonce ‖ XChaCha20-Poly1305(enc_key, nonce, aad, plaintext)
 ```
 
-using BLAKE3 in XOF mode and truncating the 32-byte default output to the 24 bytes XChaCha requires.
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          BLAKE3 (XOF, 24 bytes)                      │
-│ ┌──────────────────┬──────────────────┬──────────────┬─────────────┐ │
-│ │ Domain Separator │ Associated Data  │  ChaCha Key  │  Plaintext  │ │
-│ │   "/keyhive/"    │ (starts with the │  (32 bytes)  │  (streamed) │ │
-│ │                  │  BeeKEM tree ID) │              │             │ │
-│ └──────────────────┴──────────────────┴──────────────┴─────────────┘ │
-└──────────────────────────────────────────────────────────────────────┘
-```
+The nonce is BLAKE3 in keyed XOF mode, truncated to the 24 bytes XChaCha takes (`siv::synthetic_nonce`, shared with content). The length prefix keeps where the associated data ends from moving into the plaintext.
 
 Properties:
 
-- _Nonce uniqueness._ A nonce repeats only for an identical (key, plaintext, associated data) triple, in which case the ciphertext is identical too and only equality is revealed. The tree ID in the associated data prevents reuse across documents; the separator prevents reuse across protocols.
-- _Key and message commitment._ The nonce is a hash over key and plaintext. The recipient recomputes it after decryption and rejects a mismatch (`SymmetricKey::try_open`, and per chunk for content), so a ciphertext is committed to one key.
+- _Nonce uniqueness._ A nonce repeats only for an identical (key, associated data, plaintext) triple, in which case the ciphertext is identical too and only equality is revealed. The tree ID in the associated data prevents reuse across documents, and the subkeys' contexts prevent reuse across constructions.
+- _Key and message commitment._ The nonce is a keyed hash of the plaintext under a subkey of the key. The recipient recomputes it after decryption and rejects a mismatch (`SymmetricKey::try_open`, and per chunk for content), so a ciphertext is committed to one key. `try_open` is the only way to open a sealed blob: `SymmetricKey` exposes no cipher of its own.
 
 Trade-offs:
 
 - Commitment is checked after decryption, so a malicious ciphertext costs one decryption before rejection.
-- `Siv::new` feeds the key to the unkeyed BLAKE3 hasher as input rather than through keyed mode (`Hasher::new_keyed`). This relies on BLAKE3 acting as a PRF over a secret prefix. Content uses keyed mode.
 
 ## Content
 
@@ -84,13 +83,15 @@ The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ pcs_ke
 
 ## Key Derivation in BeeKEM
 
-Inner-node secrets are X25519 secret keys sampled independently from the CSPRNG (no ratcheting; see [`beekem/README.md`](../beekem/README.md)). Each secret is sealed for a sibling under a symmetric key derived from the X25519 shared secret (`ShareSecretKey::derive_symmetric_key`):
+Inner-node secrets are X25519 secret keys sampled independently from the CSPRNG (no ratcheting; see [`beekem/README.md`](../beekem/README.md)). Each secret is sealed for a sibling under the key the two share keys' holders share (`ShareSecretKey::derive_symmetric_key`):
 
 ```
+key    = derive_key("/keyhive/share-key/exchange-key/v1/2026-10-26",
+                    X25519(sk, pk) ‖ low_pk ‖ high_pk)
 sealed = try_seal(key, secret, aad = tree_id ‖ encrypter_pk ‖ paired_pk)
 ```
 
-The tree ID binds the secret to its tree: share keys can appear in several trees, since prekeys are shared across documents, and without it a secret sealed in one would open in another. The two public keys bind it to the exchange it was sealed under, as HPKE binds its shared secret to them. Opening checks the synthetic nonce, so a node secret is committed to one key. `EncryptedSecret` travels as `sealed_len ‖ sealed ‖ paired_pk`, and a sealed blob shorter than its nonce and tag does not decode.
+The derivation binds both public keys, as HPKE binds its shared secret to them; they go in byte order, so both sides derive the same key. The tree ID binds the secret to its tree: share keys can appear in several trees, since prekeys are shared across documents, and without it a secret sealed in one would open in another. The public keys in the associated data bind it to who encrypted for whom. Opening checks the synthetic nonce, so a node secret is committed to one key. `EncryptedSecret` travels as `sealed_len ‖ sealed ‖ paired_pk`, and a sealed blob shorter than its nonce and tag does not decode.
 
 A block's application key is derived from the root secret (the `PcsKey`), its predecessors and its content ref:
 
@@ -104,7 +105,7 @@ app_key = derive_key("/keyhive/content/application-key/v1/2026-10-26",
 Each update also encrypts the root secrets of earlier updates under a key derived from its own root secret. The BeeKEM tree ID is the associated data (authenticated, and an input to the nonce), and opening checks the synthetic nonce:
 
 ```
-key = derive_key("/keyhive/", derive_key("/keyhive/beekem/predecessor_secrets/", root_secret))
+key = derive_key("/keyhive/cgka/predecessor-secrets-key/v1/2026-10-26", root_secret)
 ```
 
 ## Sub-Protocols

@@ -2,7 +2,7 @@
 //!
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
-use super::{separable::Separable, symmetric_key::SymmetricKey};
+use super::{context::Context, symmetric_key::SymmetricKey};
 use alloc::vec::Vec;
 use core::fmt;
 #[cfg(feature = "std")]
@@ -115,32 +115,23 @@ impl ShareSecretKey {
         &self.0
     }
 
-    #[instrument]
-    pub fn derive_new_secret_key(&self, other: &ShareKey) -> Self {
-        let bytes: [u8; 32] = x25519_dalek::StaticSecret::from(*self)
-            .diffie_hellman(&other.0)
-            .to_bytes();
-
-        Self::derive_from_bytes(bytes.as_slice())
-    }
-
-    #[instrument]
+    /// The symmetric key this secret's holder and `other`'s holder share:
+    ///
+    /// ```text
+    /// derive_key(SHARE_KEY_EXCHANGE_KEY, X25519(self, other) ‖ low_pk ‖ high_pk)
+    /// ```
+    ///
+    /// The two public keys are bound in, in byte order so both sides derive
+    /// the same key, as HPKE binds its shared secret to them.
+    #[instrument(skip_all)]
     pub fn derive_symmetric_key(&self, other: &ShareKey) -> SymmetricKey {
-        let secret = x25519_dalek::StaticSecret::from(*self)
-            .diffie_hellman(&other.0)
-            .to_bytes();
-
-        Self::derive_from_bytes(secret.as_slice()).0.into()
-    }
-
-    #[instrument]
-    pub fn ratchet_forward(&self) -> Self {
-        let bytes = self.to_bytes();
-        Self::derive_from_bytes(bytes.as_slice())
-    }
-
-    pub fn ratchet_n_forward(&self, n: usize) -> Self {
-        (0..n).fold(*self, |acc, _| acc.ratchet_forward())
+        let shared = x25519_dalek::StaticSecret::from(*self).diffie_hellman(&other.0);
+        let mine = self.share_key();
+        let mut hasher = Context::SHARE_KEY_EXCHANGE_KEY.hasher();
+        hasher.update(shared.as_bytes());
+        hasher.update(mine.as_bytes().min(other.as_bytes()));
+        hasher.update(mine.as_bytes().max(other.as_bytes()));
+        SymmetricKey::from(*hasher.finalize().as_bytes())
     }
 
     pub fn force_from_bytes(bytes: [u8; 32]) -> Self {
@@ -163,12 +154,6 @@ impl From<x25519_dalek::StaticSecret> for ShareSecretKey {
 impl From<&ShareSecretKey> for Vec<u8> {
     fn from(secret: &ShareSecretKey) -> Self {
         secret.0.to_vec()
-    }
-}
-
-impl Separable for ShareSecretKey {
-    fn directly_from_32_bytes(bytes: [u8; 32]) -> Self {
-        ShareSecretKey(bytes)
     }
 }
 
@@ -337,5 +322,51 @@ mod tests {
                 Err(DecodeError::InvalidField("share_key"))
             );
         }
+    }
+
+    #[test]
+    fn both_sides_of_an_exchange_derive_the_same_key() {
+        bolero::check!()
+            .with_arbitrary::<(ShareSecretKey, ShareSecretKey, ShareSecretKey)>()
+            .for_each(|(a, b, c)| {
+                let key = a.derive_symmetric_key(&b.share_key());
+                assert_eq!(key, b.derive_symmetric_key(&a.share_key()));
+                if c.share_key() != b.share_key() {
+                    assert_ne!(key, a.derive_symmetric_key(&c.share_key()));
+                }
+            });
+    }
+
+    /// RFC 7748 §6.1's keys and shared secret `K`, then the derivation,
+    /// checked with `b3sum --derive-key` under `SHARE_KEY_EXCHANGE_KEY` over
+    /// `K ‖ alice_pk ‖ bob_pk` (Alice's key sorts first).
+    #[test]
+    fn known_answer() {
+        let hex = |s: &str| -> [u8; 32] {
+            let bytes: alloc::vec::Vec<u8> = (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+                .collect();
+            bytes.try_into().expect("32 bytes")
+        };
+        let alice = ShareSecretKey::force_from_bytes(hex(
+            "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+        ));
+        let bob = ShareSecretKey::force_from_bytes(hex(
+            "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+        ));
+        assert_eq!(
+            alice.share_key().to_bytes(),
+            hex("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+        );
+        assert_eq!(
+            bob.share_key().to_bytes(),
+            hex("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
+        );
+        let expected = SymmetricKey::from(hex(
+            "ba0e36997570ada139fb2308463a7fbb5ce1612c6f123f1849724f8dff20d5a4",
+        ));
+        assert_eq!(alice.derive_symmetric_key(&bob.share_key()), expected);
+        assert_eq!(bob.derive_symmetric_key(&alice.share_key()), expected);
     }
 }

@@ -1,14 +1,15 @@
 //! Symmetric cipher newtype.
 
 use super::{
-    separable::Separable,
-    siv::{nonces_match, Siv},
+    context::Context,
+    siv::{nonces_match, synthetic_nonce},
 };
 use alloc::vec::Vec;
-use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305};
+use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305, XNonce};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
-use x25519_dalek::SharedSecret;
+
+const NONCE_LEN: usize = 24;
 
 /// Newtype wrapper around ChaCha20 key that's serializable.
 ///
@@ -42,27 +43,29 @@ impl SymmetricKey {
         Self(key)
     }
 
-    /// Convert into an [`XChaCha20Poly1305`] key.
-    pub fn to_xchacha(&self) -> XChaCha20Poly1305 {
-        XChaCha20Poly1305::new(&self.0.into())
-    }
-
-    /// AEAD-seal `plaintext`, returning a self-contained `nonce(24) || ciphertext`.
+    /// AEAD-seal `plaintext`, returning a self-contained `nonce ‖ ciphertext ‖ tag`.
     ///
     /// `associated_data` is authenticated: it is the AEAD's associated data,
     /// and feeds the synthetic nonce. [`Self::try_open`] needs the same bytes.
-    #[instrument(skip(self))]
+    /// The cipher and the nonce each use their own subkey of this key:
+    ///
+    /// ```text
+    /// enc_key   = derive_key(SEAL_ENCRYPTION_KEY, key)
+    /// nonce_key = derive_key(SEAL_NONCE_KEY, key)
+    /// nonce     = BLAKE3_keyed(nonce_key, aad_len:u64 ‖ aad ‖ plaintext)[0..24]
+    /// ```
+    #[instrument(skip_all)]
     pub fn try_seal(
         &self,
         plaintext: &[u8],
         associated_data: &[u8],
     ) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        let nonce = Siv::new(self, plaintext, associated_data);
+        let keys = SealKeys::new(self);
+        let nonce = keys.nonce(associated_data, plaintext);
         let mut buf = plaintext.to_vec();
-        self.to_xchacha()
-            .encrypt_in_place(nonce.as_xnonce(), associated_data, &mut buf)?;
-        let mut out = Vec::with_capacity(nonce.as_bytes().len() + buf.len());
-        out.extend_from_slice(nonce.as_bytes());
+        keys.cipher
+            .encrypt_in_place(&XNonce::from(nonce), associated_data, &mut buf)?;
+        let mut out = nonce.to_vec();
         out.extend_from_slice(&buf);
         Ok(out)
     }
@@ -72,26 +75,45 @@ impl SymmetricKey {
     ///
     /// Also refuses a blob whose nonce is not the synthetic nonce of what it
     /// decrypts to, which commits the blob to this key.
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub fn try_open(
         &self,
         blob: &[u8],
         associated_data: &[u8],
     ) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        let Some((nonce_bytes, ciphertext)) = blob.split_first_chunk::<24>() else {
+        let Some((nonce, ciphertext)) = blob.split_first_chunk::<NONCE_LEN>() else {
             return Err(chacha20poly1305::Error);
         };
-        let nonce = Siv::from(*nonce_bytes);
+        let keys = SealKeys::new(self);
         let mut buf = ciphertext.to_vec();
-        self.to_xchacha()
-            .decrypt_in_place(nonce.as_xnonce(), associated_data, &mut buf)?;
-        if !nonces_match(
-            Siv::new(self, &buf, associated_data).as_bytes(),
-            nonce.as_bytes(),
-        ) {
+        keys.cipher
+            .decrypt_in_place(&XNonce::from(*nonce), associated_data, &mut buf)?;
+        if !nonces_match(&keys.nonce(associated_data, &buf), nonce) {
             return Err(chacha20poly1305::Error);
         }
         Ok(buf)
+    }
+}
+
+/// The subkeys a seal is made with.
+struct SealKeys {
+    cipher: XChaCha20Poly1305,
+    nonce_key: [u8; 32],
+}
+
+impl SealKeys {
+    fn new(key: &SymmetricKey) -> Self {
+        SealKeys {
+            cipher: XChaCha20Poly1305::new(&Context::SEAL_ENCRYPTION_KEY.derive_key(&key.0).into()),
+            nonce_key: Context::SEAL_NONCE_KEY.derive_key(&key.0),
+        }
+    }
+
+    /// Over `aad_len:u64 ‖ aad ‖ plaintext`: the length prefix keeps where the
+    /// associated data ends from moving into the plaintext.
+    fn nonce(&self, aad: &[u8], plaintext: &[u8]) -> [u8; NONCE_LEN] {
+        let aad_len = u64::try_from(aad.len()).expect("a slice's length fits in a u64");
+        synthetic_nonce(&self.nonce_key, &[&aad_len.to_be_bytes(), aad, plaintext])
     }
 }
 
@@ -107,36 +129,17 @@ impl From<SymmetricKey> for [u8; 32] {
     }
 }
 
-impl From<SymmetricKey> for XChaCha20Poly1305 {
-    fn from(key: SymmetricKey) -> Self {
-        key.to_xchacha()
-    }
-}
-
-impl From<SharedSecret> for SymmetricKey {
-    fn from(secret: SharedSecret) -> Self {
-        (*secret.as_bytes()).into()
-    }
-}
-
 impl core::fmt::Debug for SymmetricKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         "<SymmetricKey>".fmt(f)
     }
 }
 
-impl Separable for SymmetricKey {
-    fn directly_from_32_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::SymmetricKey;
+    use super::{SealKeys, SymmetricKey, NONCE_LEN};
     use rand::rngs::OsRng;
 
-    const NONCE_LEN: usize = 24;
     const TAG_LEN: usize = 16;
 
     #[test]
@@ -202,11 +205,28 @@ mod tests {
         let plaintext = b"hello world";
         let nonce = [7u8; NONCE_LEN];
         let mut buf = plaintext.to_vec();
-        key.to_xchacha()
+        SealKeys::new(&key)
+            .cipher
             .encrypt_in_place((&nonce).into(), b"doc-id", &mut buf)
             .unwrap();
         let blob = [&nonce[..], &buf].concat();
         assert!(key.try_open(&blob, b"doc-id").is_err());
+    }
+
+    /// Pins the seal. The nonce, its first 24 bytes, is checked with `b3sum`:
+    /// the nonce key is `b3sum --derive-key` under `SEAL_NONCE_KEY` over the
+    /// key `[1; 32]`, and the nonce `b3sum --keyed --length 24` under it over
+    /// `3:u64 ‖ "aad" ‖ "keyhive"`.
+    #[test]
+    fn known_answer() {
+        let blob = SymmetricKey::from([1; 32])
+            .try_seal(b"keyhive", b"aad")
+            .expect("seals");
+        assert_eq!(
+            crate::hex::bytes_to_hex_string(&blob[..NONCE_LEN]),
+            "0xdcf4b7b820ec7035629d397e665ecac6bc0cf20296805f65"
+        );
+        assert_eq!(crate::hex::bytes_to_hex_string(&blob), "0xdcf4b7b820ec7035629d397e665ecac6bc0cf20296805f65764bb5185b8659e39d77fdc18bbbc1aa957213926a3c94");
     }
 
     #[test]

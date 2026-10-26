@@ -57,8 +57,8 @@ Keyhive's authority model is [Keyline]; its [glossary][keyline glossary] defines
 | _Causal encryption_              | Encrypting each content chunk under its own key and embedding the keys of its causal predecessors, so possession of the current key unlocks the history. See [`causal_encryption.md`](./causal_encryption.md). | `EncryptedContent`, `CiphertextStore` |
 | _Forward secrecy (FS)_           | Compromise of current keys does not reveal past data. Not provided: members keep old BeeKEM secrets so that history stays decryptable.                                                                         |                                       |
 | _Post-compromise security (PCS)_ | Compromise of current keys does not reveal future data after a key rotation. Provided by BeeKEM updates.                                                                                                       |                                       |
-| _SIV_ / _Synthetic nonce_        | The 24-byte XChaCha nonce derived by BLAKE3 from the key, plaintext, and document ID. See [`ciphersuite.md`](./ciphersuite.md).                                                                                | `Siv`                                 |
-| _Domain separator_               | The byte string `/keyhive/`: first input to the synthetic nonce, AEAD associated data, and `derive_key` context for the final stage of every derived key. Not used in content-addressing digests.                               | `domain_separator::SEPARATOR`         |
+| _SIV_ / _Synthetic nonce_        | The 24-byte XChaCha nonce derived by keyed BLAKE3 from a subkey, the associated data, and the plaintext; checked after decryption. See [`ciphersuite.md`](./ciphersuite.md).                                   | `siv::synthetic_nonce`                |
+| _Key-derivation context_         | A BLAKE3 `derive_key` context, `/keyhive/<area>/<purpose>/v<N>/<YYYY-MM-DD>`, one per derivation. See [`ciphersuite.md`](./ciphersuite.md#domain-separation).                                                  | `context::Context`                    |
 
 ## Data and Sync
 

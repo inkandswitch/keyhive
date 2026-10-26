@@ -1,84 +1,24 @@
-//! Nonce-misuse resistant initialization vector.
+//! Synthetic nonces: derived from what a ciphertext authenticates rather than
+//! drawn at random, and checked after decryption.
+//!
+//! A replica that recomputes the nonce from the decrypted plaintext, and finds
+//! the one it was given, knows the ciphertext is committed to this key:
+//! XChaCha20-Poly1305 alone is not key-committing. See
+//! `design/ciphersuite.md`.
 
-use super::{domain_separator::SEPARATOR, symmetric_key::SymmetricKey};
-use alloc::vec::Vec;
-use keyhive_codec::{
-    error::DecodeError,
-    traits::{decode_exact, Decode, Encode, StreamDecode},
-};
-use serde::{Deserialize, Serialize};
-
-/// Nonce-misuse resistant initialization vector.
+/// A synthetic nonce: the first 24 bytes of keyed BLAKE3 under `nonce_key`,
+/// over `parts` in order.
 ///
-/// Note that ChaCha having a very different foundation, this is not the well-known SIV mode from AES.
-///
-/// XChaCha uses a 24-byte nonce which is considered safe to use when
-/// a nonce-collisions could result during random generation.
-/// However, this doesn't commit the key, and is thus left open to [Invisible Salamanders]
-/// and there are some cases where the key could be phished.
-///
-/// > Using random nonces runs the risk of repeating them unless the nonce size is particularly large (e.g. 192-bit extended nonces used by the XChaCha20Poly1305 and XSalsa20Poly1305 constructions.
-/// >
-/// > — [`chacha20poly1305 v0.10` Rust Crate docs][chacha20-docs]
-///
-/// The [`Siv`] here deterministically generates a nonce from the key, content, document ID, and library.
-/// No novel cryptographic techniques are used; this is "merely" a way to ensure a unique key per ciphertext.
-/// Malliciously constructing such a nonce would require prior knowledge of the key and content, at which point
-/// an attacker doesn't need to forge a nonce. Additionally, the nonce can be reconstructed deterministically
-/// to check the integrity of the plaintext and key.
-///
-/// [Invisible Salamanders]: https://eprint.iacr.org/2019/016.pdf
-/// [chacha20-docs]: https://docs.rs/chacha20poly1305/0.10.1/chacha20poly1305/trait.AeadCore.html#method.generate_nonce
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub struct Siv([u8; 24]);
-
-impl Siv {
-    pub fn new(key: &SymmetricKey, plaintext: &[u8], doc_id: &[u8]) -> Siv {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(SEPARATOR);
-        hasher.update(doc_id);
-        hasher.update(key.as_slice());
-        hasher.update(plaintext);
-
-        let mut buf = [0; 24];
-        hasher.finalize_xof().fill(&mut buf);
-
-        Siv(buf)
+/// The parts are concatenated as they are, so together they must be
+/// unambiguous: every part but the last of a fixed or prefixed length.
+pub fn synthetic_nonce(nonce_key: &[u8; 32], parts: &[&[u8]]) -> [u8; 24] {
+    let mut hasher = blake3::Hasher::new_keyed(nonce_key);
+    for part in parts {
+        hasher.update(part);
     }
-
-    /// Convert to a [`chacha20poly1305::XNonce`].
-    pub fn as_xnonce(&self) -> &chacha20poly1305::XNonce {
-        (&self.0).into()
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 24] {
-        &self.0
-    }
-}
-
-impl From<Siv> for [u8; 24] {
-    fn from(siv: Siv) -> Self {
-        siv.0
-    }
-}
-
-impl From<[u8; 24]> for Siv {
-    fn from(arr: [u8; 24]) -> Self {
-        Siv(arr)
-    }
-}
-
-impl From<Siv> for chacha20poly1305::XNonce {
-    fn from(siv: Siv) -> Self {
-        Self::from(siv.0)
-    }
-}
-
-impl From<chacha20poly1305::XNonce> for Siv {
-    fn from(nonce: chacha20poly1305::XNonce) -> Self {
-        Siv(nonce.into())
-    }
+    let mut nonce = [0; 24];
+    hasher.finalize_xof().fill(&mut nonce);
+    nonce
 }
 
 /// Whether two nonces are equal, comparing every byte whatever the first
@@ -93,35 +33,20 @@ pub fn nonces_match(expected: &[u8; 24], received: &[u8; 24]) -> bool {
         == 0
 }
 
-/// A synthetic nonce encodes as its 24 bytes: canonical and prefix-free.
-impl Encode for Siv {
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.0);
-    }
-}
-
-impl Decode for Siv {
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        decode_exact(bytes)
-    }
-}
-
-impl StreamDecode for Siv {
-    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
-        let (raw, rest) = <[u8; 24]>::decode_next(bytes)?;
-        Ok((Siv(raw), rest))
-    }
-}
-
-#[cfg(all(test, feature = "std"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Checked with `b3sum --keyed --length 24`, the key `[1; 32]` on stdin,
+    /// over the file `"key" ‖ "ed"`.
     #[test]
-    fn codec_laws() {
-        keyhive_codec::laws::round_trip::<Siv>();
-        keyhive_codec::laws::canonical_near::<Siv>();
-        keyhive_codec::laws::stream::<Siv>();
+    fn a_synthetic_nonce_is_keyed_blake3_over_its_parts() {
+        let nonce = synthetic_nonce(&[1; 32], &[b"key", b"ed"]);
+        assert_eq!(nonce, synthetic_nonce(&[1; 32], &[b"keyed"]));
+        assert_eq!(
+            crate::hex::bytes_to_hex_string(&nonce),
+            "0x539a3d613a403b3e1b4d883efb6133c0eb92fd6a49103ea1"
+        );
     }
 
     #[test]

@@ -1,0 +1,7 @@
+# Every BLAKE3 key derivation takes its context from
+# `keyhive_crypto::context::Context`, so no two derivations share a context
+# and every context is reviewed in one place.
+disallowed-methods = [
+  { path = "blake3::Hasher::new_derive_key", reason = "take a context from keyhive_crypto::context::Context" },
+  { path = "blake3::derive_key", reason = "take a context from keyhive_crypto::context::Context" },
+]

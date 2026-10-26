@@ -19,12 +19,11 @@ extern crate std;
 
 pub mod bytes;
 pub mod content;
+pub mod context;
 pub mod digest;
-pub mod domain_separator;
 pub mod hex;
 pub mod identifier;
 pub mod read_capability;
-pub mod separable;
 pub mod share_key;
 pub mod signable;
 pub mod signed;
