@@ -32,7 +32,7 @@ arbitrary = { version = "1.4.1", features = ["derive"] }
 # `no_std`; `std` only adds a blocking fallback.
 async-lock = { version = "3.4", default-features = false }
 base64-simd = "0.8.0"
-beekem = { version = "0.5.0", path = "beekem", default-features = false }
+beekem = { version = "0.6.0", path = "beekem", default-features = false }
 bijoux = { version = "0.3", default-features = false, features = ["u32", "u64"] }
 blake3 = { version = "1.5", default-features = false }
 bolero = { version = "0.11.1", features = ["arbitrary"] }
@@ -62,8 +62,8 @@ hex = "0.4.3"
 imbl = "7.0"
 js-sys = "0.3"
 keyhive_codec = { version = "0.1.0", path = "keyhive_codec", default-features = false }
-keyhive_core = { version = "0.7.0", path = "keyhive_core" }
-keyhive_crypto = { version = "0.2.1", path = "keyhive_crypto", default-features = false }
+keyhive_core = { version = "0.8.0", path = "keyhive_core" }
+keyhive_crypto = { version = "0.3.0", path = "keyhive_crypto", default-features = false }
 keyline = { version = "0.1.0", path = "keyline", default-features = false }
 keyline_memory = { version = "0.1.0", path = "keyline_memory", default-features = false }
 lazy_static = "1.5"
