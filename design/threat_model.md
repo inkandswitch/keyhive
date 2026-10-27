@@ -107,7 +107,7 @@ Two members issue concurrent path updates; an attacker who compromised one fork 
 
 ### T7. Nonce reuse and key commitment
 
-- Nonces are derived from key, plaintext, and document ID (for content, per chunk, with the chunk's index and the block's header); reuse requires identical inputs.
+- Nonces are a keyed hash, under a subkey of the encryption key, of the associated data and plaintext (for content, per chunk, with the chunk's index, the block's header and its document); reuse requires identical inputs.
 - The recipient recomputes the nonce after decryption and rejects a mismatch, which commits the ciphertext to one key. Content, wrapped root secrets and BeeKEM node secrets are all checked. See [`ciphersuite.md`](./ciphersuite.md).
 - A BeeKEM node secret's associated data is its tree and both public keys of the exchange it was sealed under, so it opens in no other tree, even where the same share keys appear in several trees.
 - Content's associated data binds every chunk to its block's header, its document, its index, and whether it is the last.

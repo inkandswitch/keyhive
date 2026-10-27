@@ -21,7 +21,7 @@ use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use id::IndividualId;
 use keyhive_crypto::{
-    content::reference::ContentRef, identifier::Identifier, share_key::ShareKey,
+    content::reference::ContentRef, context::Context, identifier::Identifier, share_key::ShareKey,
     signer::async_signer::AsyncSigner, verifiable::Verifiable, verified::VerifyError,
 };
 use keyline::contract::Keyline;
@@ -323,8 +323,6 @@ pub enum ReceivePrekeyOpError {
     Verify(#[from] VerifyError),
 }
 
-const PREKEY_SELECTION_CONTEXT: &str = "/keyhive/prekey/selection/v1/2026-10-26";
-
 /// An index below `len`, uniform and fixed by `seed`; `None` when `len` is 0.
 ///
 /// Rejection sampling over BLAKE3's output stream: a draw at or above the
@@ -333,7 +331,8 @@ const PREKEY_SELECTION_CONTEXT: &str = "/keyhive/prekey/selection/v1/2026-10-26"
 fn uniform_index(seed: &[u8], len: usize) -> Option<usize> {
     let n = u64::try_from(len).ok().filter(|&n| n > 0)?;
     let limit = u64::MAX - u64::MAX % n;
-    let mut stream = blake3::Hasher::new_derive_key(PREKEY_SELECTION_CONTEXT)
+    let mut stream = Context::PREKEY_SELECTION
+        .hasher()
         .update(seed)
         .finalize_xof();
     let mut buf = [0; 8];
@@ -408,6 +407,16 @@ mod tests {
                     Some(i) => assert!(i < len, "{i} < {len}"),
                 }
             });
+    }
+
+    /// The first draw, `b3sum --derive-key` under `PREKEY_SELECTION` over
+    /// `"keyhive"`, its first 8 bytes little-endian, is 13893658724928726325.
+    /// It is below every limit here, so it is reduced, not redrawn.
+    #[test]
+    fn a_uniform_index_is_the_first_draw_reduced() {
+        for (len, index) in [(7, 1), (1_000_003, 594_094), (4_000_000_007, 614_823_600)] {
+            assert_eq!(uniform_index(b"keyhive", len), Some(index), "{len}");
+        }
     }
 
     /// Every count of prekeys, including powers of two, picks one of them.

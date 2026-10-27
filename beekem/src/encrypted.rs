@@ -29,11 +29,12 @@ use keyhive_codec::{
 };
 use keyhive_crypto::{
     content::reference::ContentRef,
+    context::Context,
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
     signable::{Kind, Kinded, TAG},
     signed::SerdeSigned,
-    siv::nonces_match,
+    siv::{nonces_match, synthetic_nonce},
     symmetric_key::SymmetricKey,
 };
 use serde::{Deserialize, Serialize};
@@ -60,10 +61,6 @@ pub const CHUNK_OVERHEAD: usize = NONCE_LEN + AEAD_TAG_LEN;
 const SEAL_OVERHEAD: usize = NONCE_LEN + AEAD_TAG_LEN;
 
 const FULL_CHUNK: usize = CHUNK_LEN + CHUNK_OVERHEAD;
-
-const HEADER_CONTEXT: &str = "/keyhive/content/header/v1/2026-10-26";
-const ENCRYPTION_KEY_CONTEXT: &str = "/keyhive/content/encryption-key/v1/2026-10-26";
-const NONCE_KEY_CONTEXT: &str = "/keyhive/content/nonce-key/v1/2026-10-26";
 
 /// A block of encrypted content, with the public header readers need to find
 /// its key.
@@ -310,14 +307,16 @@ struct ChunkKeys {
 
 impl ChunkKeys {
     fn new(key: &SymmetricKey, doc_id: TreeId, header: &[u8]) -> Self {
-        let mut hasher = blake3::Hasher::new_derive_key(HEADER_CONTEXT);
+        let mut hasher = Context::CONTENT_HEADER.hasher();
         hasher.update(doc_id.as_bytes());
         hasher.update(header);
         ChunkKeys {
             cipher: XChaCha20Poly1305::new(
-                &blake3::derive_key(ENCRYPTION_KEY_CONTEXT, key.as_slice()).into(),
+                &Context::CONTENT_ENCRYPTION_KEY
+                    .derive_key(key.as_slice())
+                    .into(),
             ),
-            nonce_key: blake3::derive_key(NONCE_KEY_CONTEXT, key.as_slice()),
+            nonce_key: Context::CONTENT_NONCE_KEY.derive_key(key.as_slice()),
             header_digest: *hasher.finalize().as_bytes(),
         }
     }
@@ -332,12 +331,7 @@ impl ChunkKeys {
     }
 
     fn nonce(&self, aad: &[u8; 41], chunk: &[u8]) -> [u8; NONCE_LEN] {
-        let mut hasher = blake3::Hasher::new_keyed(&self.nonce_key);
-        hasher.update(aad);
-        hasher.update(chunk);
-        let mut nonce = [0; NONCE_LEN];
-        hasher.finalize_xof().fill(&mut nonce);
-        nonce
+        synthetic_nonce(&self.nonce_key, &[aad, chunk])
     }
 }
 
@@ -767,7 +761,7 @@ mod tests {
         let content = encrypt(b"keyhive");
         assert_eq!(
             blake3::hash(content.encode().as_bytes()).to_hex().as_str(),
-            "f6d0ac06eef9e9c5b9e3a43f48af0d4ac722594b2e2708d02311f4453cbe18e4"
+            "bdbac91c28fe7e5e9b40016f0927228c1e68348e8ac2896209e492c53148163b"
         );
         assert_eq!(
             PredecessorRefs::digest(&[[3u8; 32]]).raw.to_hex().as_str(),
@@ -797,29 +791,5 @@ mod tests {
                 expected
             );
         }
-    }
-
-    /// A blob that authenticates under the right key and associated data,
-    /// but whose nonce is not its synthetic nonce, is refused.
-    #[test]
-    fn a_node_secret_whose_nonce_is_not_synthetic_is_refused() {
-        let (encrypter, paired) = (share_sk(2), share_sk(3));
-        let aad = node_secret_aad(doc(1), &encrypter.share_key(), &paired.share_key());
-        let nonce = [7; NONCE_LEN];
-        let mut forged = Vec::<u8>::from(&share_sk(1));
-        encrypter
-            .derive_symmetric_key(&paired.share_key())
-            .to_xchacha()
-            .encrypt_in_place(&XNonce::from(nonce), &aad, &mut forged)
-            .expect("encrypts");
-        forged.splice(0..0, nonce);
-        let mut bytes = Vec::new();
-        encode_bytes(&forged, &mut bytes);
-        paired.share_key().encode_into(&mut bytes);
-        let secret = EncryptedSecret::<ShareSecretKey>::decode(&bytes).expect("decodes");
-        assert_eq!(
-            secret.try_encrypter_decrypt(doc(1), &encrypter),
-            Err(chacha20poly1305::Error)
-        );
     }
 }

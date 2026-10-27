@@ -9,8 +9,8 @@ use crate::{
 use alloc::vec::Vec;
 use keyhive_crypto::{
     content::reference::ContentRef,
+    context::Context,
     digest::Digest,
-    separable::Separable,
     share_key::ShareSecretKey,
     signable::{Kind, Kinded},
     signed::SerdeSigned,
@@ -18,11 +18,6 @@ use keyhive_crypto::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
-
-/// Derives a block's application key from its PCS key, predecessors and
-/// content ref.
-const APPLICATION_KEY_CONTEXT: &str = "/keyhive/content/application-key/v1/2026-10-26";
-const PREDECESSOR_SECRETS_CONTEXT: &str = "/keyhive/beekem/predecessor_secrets/";
 
 /// A block's application key, with the header fields its ciphertext carries.
 ///
@@ -101,8 +96,9 @@ impl PcsKey {
 
     /// Derive the key for encrypting the root secrets of an update's predecessors.
     pub(crate) fn derive_predecessor_secrets_key(&self) -> SymmetricKey {
-        let bytes = blake3::derive_key(PREDECESSOR_SECRETS_CONTEXT, self.0.as_slice());
-        SymmetricKey::derive_from_bytes(&bytes)
+        Context::CGKA_PREDECESSOR_SECRETS_KEY
+            .derive_key(self.0.as_slice())
+            .into()
     }
 
     /// Derive a block's [`ApplicationSecret`] from this PCS key:
@@ -115,7 +111,7 @@ impl PcsKey {
         pred_refs: &Digest<PredecessorRefs<Cr>>,
         pcs_update_op_hash: &Digest<SerdeSigned<CgkaOperation>>,
     ) -> ApplicationSecret<Cr> {
-        let mut hasher = blake3::Hasher::new_derive_key(APPLICATION_KEY_CONTEXT);
+        let mut hasher = Context::CONTENT_APPLICATION_KEY.hasher();
         hasher.update(self.0.as_slice());
         hasher.update(pred_refs.as_slice());
         hasher.update(content_ref.encode().as_bytes());
@@ -141,8 +137,49 @@ impl From<ShareSecretKey> for PcsKey {
     }
 }
 
-impl From<PcsKey> for SymmetricKey {
-    fn from(pcs_key: PcsKey) -> SymmetricKey {
-        SymmetricKey::derive_from_bytes(pcs_key.0.as_slice())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pcs_key() -> PcsKey {
+        PcsKey::new(ShareSecretKey::force_from_bytes([1; 32]))
+    }
+
+    /// Checked with `b3sum --derive-key` under `CONTENT_APPLICATION_KEY` over
+    /// `[1; 32] ‖ Digest<PredecessorRefs>([[3; 32]]) ‖ [2; 32]`: the root secret,
+    /// the predecessors' digest, then the content ref.
+    #[test]
+    fn the_application_key_is_derived_from_root_predecessors_and_ref() {
+        let secret = pcs_key().derive_application_secret(
+            &[2u8; 32],
+            &PredecessorRefs::digest(&[[3; 32]]),
+            &[5; 32].into(),
+        );
+        assert_eq!(
+            secret.key(),
+            SymmetricKey::from(
+                *blake3::Hash::from_hex(
+                    "4ca5444e220f4c0418ca1cfb49b232e0da4bd02e34ca31bd37b998f321b62165"
+                )
+                .expect("hex")
+                .as_bytes()
+            )
+        );
+    }
+
+    /// Checked with `b3sum --derive-key` under `CGKA_PREDECESSOR_SECRETS_KEY`
+    /// over the root secret `[1; 32]`: one derivation.
+    #[test]
+    fn the_predecessor_secrets_key_is_one_derivation_from_the_root() {
+        assert_eq!(
+            pcs_key().derive_predecessor_secrets_key(),
+            SymmetricKey::from(
+                *blake3::Hash::from_hex(
+                    "bd12f7975b80d7ca658430f18000b51ad68e568c109306adb0ba23b4a7501665"
+                )
+                .expect("hex")
+                .as_bytes()
+            )
+        );
     }
 }
