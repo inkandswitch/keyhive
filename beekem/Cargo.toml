@@ -1,6 +1,6 @@
 [package]
 name = "beekem"
-version = "0.5.0"
+version = "0.6.0"
 description = "BeeKEM: a concurrent variant of TreeKEM for Continuous Group Key Agreement"
 
 authors.workspace = true

@@ -8,6 +8,8 @@ license.workspace = true
 edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# The crate is the Rust source; the JS tooling and e2e suite stay in the repo.
+include = ["/LICENSE", "/README.md", "/src/"]
 
 [lib]
 crate-type = ["cdylib"]
