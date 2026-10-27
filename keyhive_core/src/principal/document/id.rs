@@ -6,10 +6,9 @@ use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
     verifiable::Verifiable,
 };
-use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct DocumentId(pub(crate) Identifier);
 
@@ -94,5 +93,25 @@ impl fmt::Debug for DocumentId {
 impl fmt::Display for DocumentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:#x}", self.0)
+    }
+}
+
+/// Its identifier's 32 bytes.
+impl keyhive_codec::traits::Encode for DocumentId {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
+impl keyhive_codec::traits::Decode for DocumentId {
+    fn decode(bytes: &[u8]) -> Result<Self, keyhive_codec::error::DecodeError> {
+        keyhive_codec::traits::decode_exact(bytes)
+    }
+}
+
+impl keyhive_codec::traits::StreamDecode for DocumentId {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), keyhive_codec::error::DecodeError> {
+        let (id, rest) = Identifier::decode_next(bytes)?;
+        Ok((DocumentId(id), rest))
     }
 }

@@ -34,12 +34,11 @@ use keyhive_crypto::{
     verified::Verified,
 };
 use nonempty::NonEmpty;
-use serde::{Deserialize, Serialize};
 
 /// The identity of a membership citation cited by a [`CgkaOperation`].
 ///
 /// BeeKEM treats it as opaque. Used by [`crate::cgka::MembershipView`].
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Ord, PartialOrd, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Ord, PartialOrd)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct CitationId(pub [u8; 32]);
 
@@ -92,7 +91,7 @@ impl IntoIterator for CgkaBatch {
 }
 
 /// A root secret wrapped by an [`Invitation`].
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct InvitationSecret {
     /// The update operation that produced the secret in
@@ -135,7 +134,7 @@ impl StreamDecode for InvitationSecret {
 /// When a member is added, it can't derive a root secret from the tree until the next
 /// update. An invitation provides it the root secrets the inviter could reach at the
 /// point it was added.
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct Invitation {
     /// The inviter's share key corresponding to the secret key it used to encrypt
@@ -182,7 +181,7 @@ impl StreamDecode for Invitation {
 /// tree, so each update encrypts earlier root secrets under a key derived from its
 /// own. A member who can derive a later update's secret can then work back to the
 /// earlier ones.
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct PredecessorSecret {
     /// The update operation that produced the secret in
@@ -223,7 +222,7 @@ impl StreamDecode for PredecessorSecret {
 }
 
 /// A member optionally listed in a [`CgkaChange::Remove`].
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct RemovedMember {
     /// The member removed.
@@ -259,7 +258,7 @@ impl StreamDecode for RemovedMember {
 ///
 /// Who made it is not a field: it is the signer, in the signed envelope. For
 /// an update, the leaf it rotates is the signer's.
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct CgkaOperation {
     pub doc_id: TreeId,
@@ -271,7 +270,7 @@ pub struct CgkaOperation {
 }
 
 /// What a [`CgkaOperation`] changes.
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum CgkaChange {
     Add {

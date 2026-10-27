@@ -21,9 +21,8 @@ use keyhive_codec::{
 };
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use nonempty::NonEmpty;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SecretStore {
     /// Every encrypted secret key (and hence version) corresponds to a single
     /// public key. There must be at least one.
@@ -202,7 +201,7 @@ impl StreamDecode for SecretStore {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct SecretStoreVersion {
     /// Every encrypted secret key (and hence version) corresponds to a single public

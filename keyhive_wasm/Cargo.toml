@@ -23,15 +23,13 @@ keyhive_crypto = { workspace = true, features = ["std"] }
 wasm_refgen = { workspace = true }
 
 base64-simd = { workspace = true }
-bincode = { workspace = true }
 derive_more = { workspace = true, features = ["std"] }
 dupe = { workspace = true }
 future_form = { workspace = true }
-ed25519-dalek = { workspace = true, features = ["fast", "rand_core", "serde", "std", "zeroize"] }
+ed25519-dalek = { workspace = true, features = ["fast", "rand_core", "std", "zeroize"] }
 futures = { workspace = true, features = ["async-await", "executor", "std"] }
 nonempty = { workspace = true }
 thiserror = { workspace = true }
-serde = { workspace = true, features = ["derive", "rc", "std"] }
 tracing = { workspace = true, features = ["attributes", "std"] }
 wasm-tracing = { workspace = true }
 

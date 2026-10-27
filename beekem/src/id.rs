@@ -13,10 +13,9 @@ use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
     verifiable::Verifiable,
 };
-use serde::{Deserialize, Serialize};
 
 /// A group member: the individual at a leaf of the tree.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MemberId(Identifier);
 
 impl MemberId {
@@ -123,7 +122,7 @@ impl<'a> arbitrary::Arbitrary<'a> for MemberId {
 }
 
 /// A tree's document.
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TreeId(Identifier);
 
 impl TreeId {

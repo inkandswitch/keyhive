@@ -25,8 +25,7 @@ use crate::{
     digest::Digest,
     identifier::{Identifier, InvalidIdentifier},
     signable::{head, message, Kinded, Signable, TAG},
-    signed::SigningError,
-    signer::{async_signer::AsyncSigner, sync_signer::SyncSignerBasic},
+    signer::{async_signer::AsyncSigner, sync_signer::SyncSignerBasic, SigningError},
     verifiable::Verifiable,
 };
 use alloc::{sync::Arc, vec::Vec};
@@ -56,8 +55,6 @@ const HEADER_LEN: usize = 4;
 /// produces a different signature that verifies just as well, and so a
 /// different `Signed<T>` with the same [`Signed::digest`]. Compare digests
 /// when "same statement" is what is meant.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(bound = ""))]
 pub struct Signed<T> {
     issuer: Identifier,
     encoded: Encoded<T>,

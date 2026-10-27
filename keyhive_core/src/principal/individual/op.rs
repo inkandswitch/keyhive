@@ -4,7 +4,7 @@ pub mod add_key;
 pub mod rotate_key;
 
 use self::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
-use crate::util::content_addressed_map::CaMap;
+use crate::util::content_addressed_map::{CaMap, ContentAddressed};
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -13,13 +13,13 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::{
+    digest::Digest,
     identifier::Identifier,
     share_key::ShareKey,
     signable::Kind,
     verifiable::Verifiable,
     verified::{header, Signed, Verified, VerifyError},
 };
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -35,8 +35,7 @@ use std::{
 /// Note that the number of keys only ever increases.
 /// This prevents the case where all keys are removed and the user is unable to be
 /// added to a [`Cgka`][crate::cgka::Cgka].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, From, TryInto, Serialize, Deserialize)]
-#[serde(into = "SignedKeyOp", try_from = "SignedKeyOp")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, From, TryInto)]
 pub enum KeyOp {
     /// Add a new key.
     Add(Verified<AddKeyOp>),
@@ -58,6 +57,14 @@ impl KeyOp {
         match self {
             KeyOp::Add(add) => add.issuer(),
             KeyOp::Rotate(rot) => rot.issuer(),
+        }
+    }
+
+    /// Its statement's digest: who signed it and what it says.
+    pub fn digest(&self) -> Digest<KeyOp> {
+        match self {
+            KeyOp::Add(add) => add.digest().coerce(),
+            KeyOp::Rotate(rot) => rot.digest().coerce(),
         }
     }
 
@@ -98,6 +105,12 @@ impl KeyOp {
 }
 
 /// Cheap: a [`Verified`] shares its signed form.
+impl ContentAddressed for KeyOp {
+    fn content_digest(&self) -> Digest<KeyOp> {
+        self.digest()
+    }
+}
+
 impl Dupe for KeyOp {
     fn dupe(&self) -> Self {
         self.clone()
@@ -128,7 +141,7 @@ impl TryFrom<SignedKeyOp> for KeyOp {
 }
 
 /// A prekey operation as received, not yet verified.
-#[derive(Debug, Clone, PartialEq, Eq, From, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, From)]
 pub enum SignedKeyOp {
     /// Add a new key.
     Add(Signed<AddKeyOp>),
@@ -401,20 +414,22 @@ mod tests {
         );
     }
 
-    /// A key op serializes as its signed form, and deserializing verifies it.
+    /// A key op travels as its signed frame, and becomes a key op again only
+    /// if its signature verifies.
     #[test]
-    fn deserializing_a_key_op_verifies_it() {
+    fn a_key_op_round_trips_through_its_frame_only_if_it_verifies() {
         let (signer, add, _) = fixtures();
         let op = KeyOp::Add(Verified::sign_sync(&add, &signer).expect("signs"));
-        let bytes = bincode::serialize(&op).expect("serializes");
-        assert_eq!(bincode::deserialize::<KeyOp>(&bytes).expect("verifies"), op);
+        let bytes = SignedKeyOp::from(op.clone()).encode();
+        let decoded = SignedKeyOp::decode(bytes.as_bytes()).expect("decodes");
+        assert_eq!(decoded.verify().expect("verifies"), op);
 
         let forged = SignedKeyOp::Add(Signed::new(
             op.issuer(),
             add.encode(),
             Signature::from_bytes(&[0; 64]),
         ));
-        let bytes = bincode::serialize(&forged).expect("serializes");
-        assert!(bincode::deserialize::<KeyOp>(&bytes).is_err());
+        let decoded = SignedKeyOp::decode(forged.encode().as_bytes()).expect("decodes");
+        assert!(decoded.verify().is_err());
     }
 }

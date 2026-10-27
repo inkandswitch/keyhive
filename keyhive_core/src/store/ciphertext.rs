@@ -4,10 +4,7 @@ pub mod memory;
 
 use self::memory::MemoryCiphertextStore;
 use crate::{
-    crypto::{
-        digest::Digest,
-        envelope::{Envelope, EnvelopeDecodeError},
-    },
+    crypto::{digest::Digest, envelope::Envelope},
     principal::document::id::DocumentId,
 };
 use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
@@ -15,8 +12,11 @@ use derive_where::derive_where;
 use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{Decode, Encode},
+};
 use keyhive_crypto::{content::reference::ContentRef, symmetric_key::SymmetricKey};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
@@ -150,8 +150,7 @@ pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<
         to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
     ) -> F::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<F, Cr, T, Self>>>
     where
-        Cr: for<'de> Deserialize<'de>,
-        T: Clone + Serialize + for<'de> Deserialize<'de>;
+        T: Clone + Encode + Decode;
 }
 
 #[future_form(
@@ -172,8 +171,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
         to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
     ) -> F::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<F, Cr, T, Self>>>
     where
-        Cr: for<'de> Deserialize<'de>,
-        T: Clone + Serialize + for<'de> Deserialize<'de>,
+        T: Clone + Encode + Decode,
     {
         F::from_future(async move {
             let mut progress = CausalDecryptionState::new();
@@ -195,7 +193,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                         continue;
                     }
                     Ok(decrypted) => {
-                        let result = Envelope::<Cr, T>::serde_decode(decrypted.as_slice());
+                        let result = Envelope::<Cr, T>::decode(decrypted.as_slice());
                         match result {
                             Err(e) => {
                                 seen.remove(&content_ref);
@@ -367,7 +365,7 @@ pub enum ErrorReason<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr,
     MarkDecryptedError(S::MarkDecryptedError),
 
     #[error(transparent)]
-    DeserializationFailed(#[from] EnvelopeDecodeError),
+    DeserializationFailed(#[from] DecodeError),
 
     #[error("Decryption failed")]
     DecryptionFailed(SymmetricKey),
@@ -413,7 +411,7 @@ mod tests {
             plaintext,
             ancestors,
         };
-        let bytes = envelope.serde_encode().expect("an envelope serializes");
+        let bytes = envelope.encode().into_bytes();
         (
             Arc::new(
                 EncryptedContent::<String, [u8; 32]>::encrypt(

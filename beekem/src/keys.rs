@@ -13,7 +13,6 @@ use alloc::{
     vec::Vec,
 };
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
-use serde::{Deserialize, Serialize};
 
 /// A key pair at a BeeKEM leaf.
 pub type LeafKeyPair = (ShareKey, ShareSecretKey);
@@ -30,7 +29,7 @@ pub(crate) fn share_secret_key_from_decrypted_secret(
 /// A [`ShareKeyMap`] stores the secret keys for all of the public keys
 /// on your path that you have encountered so far (either because you added them
 /// to your path as part of an update or decrypted them when decrypting your path).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ShareKeyMap(BTreeMap<ShareKey, ShareSecretKey>);
 
 impl ShareKeyMap {
@@ -100,7 +99,7 @@ impl core::hash::Hash for ShareKeyMap {
 }
 
 /// A node key can be either a single share key or a set of conflict keys.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub enum NodeKey {
     ShareKey(ShareKey),
@@ -114,7 +113,7 @@ impl From<ShareKey> for NodeKey {
 }
 
 /// Keys that were concurrently added to the same node.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct ConflictKeys {
     pub first: ShareKey,

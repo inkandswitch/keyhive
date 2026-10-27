@@ -2,7 +2,7 @@
 //!
 //! This crate holds only the parts every Keyhive crate needs to agree on: the [`traits::Encode`] and [`traits::Decode`] traits and
 //! the [`encoded::Encoded<T>`] type that carries a value's bytes tagged with the type they
-//! encode. It depends only on `alloc`, `bijoux` and `thiserror` (plus optional `serde`)
+//! encode. It depends only on `alloc`, `bijoux` and `thiserror`
 //! and contains no cryptography; hashing an `Encoded<T>` is `keyhive_crypto`'s job.
 //!
 //! # Laws

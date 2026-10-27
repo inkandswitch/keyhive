@@ -131,7 +131,7 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
         HashMap::new();
     all_events.extend(alice_events_for_bob);
     for evt in worker_log_events {
-        all_events.insert(Digest::hash(&evt), evt);
+        all_events.insert(evt.digest(), evt);
     }
 
     let bob_pending = bob

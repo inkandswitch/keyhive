@@ -36,10 +36,7 @@ use keyhive_crypto::{
 /// Equality is [`Signed`]'s: payload bytes _and_ signature. Compare
 /// [`Certificate::id`] for "same statement".
 ///
-/// The wire form is [`Encode`]/[`Decode`]. The `serde` feature also derives
-/// `Serialize`/`Deserialize`, for a caller that wants a format of its own.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(bound = ""))]
+/// The wire form is [`Encode`]/[`Decode`].
 ///
 /// Each variant shares its [`Signed`] form, so a store hands out certificates
 /// without copying their bytes.

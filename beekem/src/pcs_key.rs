@@ -15,7 +15,6 @@ use keyhive_crypto::{
     signable::{Kind, Kinded},
     symmetric_key::SymmetricKey,
 };
-use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 /// A block's application key, with the header fields its ciphertext carries.
@@ -73,7 +72,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
 }
 
 /// A key used to derive application secrets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PcsKey(pub ShareSecretKey);
 
 impl PcsKey {

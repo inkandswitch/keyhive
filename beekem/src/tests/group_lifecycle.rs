@@ -12,8 +12,7 @@ use core::hash::{Hash, Hasher};
 use future_form::{FutureForm, Local};
 use keyhive_crypto::{
     share_key::ShareSecretKey,
-    signed::SigningError,
-    signer::{async_signer::AsyncSigner, memory::MemorySigner},
+    signer::{async_signer::AsyncSigner, memory::MemorySigner, SigningError},
     verifiable::Verifiable,
 };
 use nonempty::nonempty;

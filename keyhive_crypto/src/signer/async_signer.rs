@@ -2,14 +2,8 @@
 //!
 //! [Ed25519]: https://en.wikipedia.org/wiki/EdDSA#Ed25519
 
-use crate::{signed::SigningError, verifiable::Verifiable};
+use crate::{signer::SigningError, verifiable::Verifiable};
 use future_form::FutureForm;
-#[cfg(feature = "std")]
-use {
-    crate::{identifier::Identifier, signed::SerdeSigned},
-    alloc::vec::Vec,
-    serde::Serialize,
-};
 
 /// Async [Ed25519] signer trait.
 ///
@@ -36,41 +30,4 @@ pub trait AsyncSigner<F: FutureForm>: Verifiable {
         &'a self,
         payload_bytes: &'a [u8],
     ) -> F::Future<'a, Result<ed25519_dalek::Signature, SigningError>>;
-}
-
-/// Sign a serializable payload asynchronously.
-///
-/// Serializes with [`bincode`], signs the resulting bytes, and
-/// wraps the result in [`SerdeSigned`]. This is a free function rather
-/// than a trait method because the `Sendable` form requires
-/// `T: Send` while the `Local` form does not — a constraint that
-/// cannot be expressed on a single trait method signature.
-#[cfg(feature = "std")]
-pub async fn try_sign_async<F: FutureForm, S: AsyncSigner<F>, T: Serialize + core::fmt::Debug>(
-    signer: &S,
-    payload: T,
-) -> Result<SerdeSigned<T>, SigningError> {
-    let payload_bytes: Vec<u8> = bincode::serialize(&payload)?;
-    let signature = signer
-        .try_sign_bytes_async(payload_bytes.as_slice())
-        .await?;
-    let issuer = Identifier::try_from(signer.verifying_key())?;
-    let signed = SerdeSigned::new(payload, issuer, signature);
-    Ok(signed)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::signer::memory::MemorySigner;
-    use future_form::Local;
-
-    #[tokio::test]
-    async fn test_round_trip() {
-        let sk = MemorySigner::generate(&mut rand::thread_rng());
-        let signed = try_sign_async::<Local, _, _>(&sk, alloc::vec![1, 2, 3])
-            .await
-            .unwrap();
-        assert!(signed.try_verify().is_ok());
-    }
 }

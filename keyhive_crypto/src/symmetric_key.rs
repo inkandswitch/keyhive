@@ -6,7 +6,6 @@ use super::{
 };
 use alloc::vec::Vec;
 use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305, XNonce};
-use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 const NONCE_LEN: usize = 24;
@@ -27,7 +26,7 @@ const NONCE_LEN: usize = 24;
 /// );
 /// assert!(key.try_open(&sealed, b"another-document").is_err());
 /// ```
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SymmetricKey([u8; 32]);
 
 impl SymmetricKey {

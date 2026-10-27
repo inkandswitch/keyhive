@@ -1,7 +1,14 @@
 //! Saving an instance to an archive and rebuilding it.
 
 use future_form::Sendable;
-use keyhive_core::test_utils::{CausalDecryptionExt, TestContext, TestError, TestResult as Result};
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{Decode, Encode},
+};
+use keyhive_core::{
+    archive::Archive,
+    test_utils::{CausalDecryptionExt, TestContext, TestError, TestResult as Result},
+};
 use keyline::power::Power::{Admin, Edit, Read};
 
 #[tokio::test]
@@ -151,9 +158,8 @@ async fn after_ingesting_another_identitys_archive_ours_still_loads() -> Result<
     );
     assert!(alice.has_individual(bob.id()).await, "bob is an individual");
 
-    let bytes = bincode::serialize(&alice.into_archive().await?)
-        .map_err(|e| TestError::Other(e.to_string()))?;
-    let archive = bincode::deserialize(&bytes).map_err(|e| TestError::Other(e.to_string()))?;
+    let bytes = alice.into_archive().await?.encode();
+    let archive = Archive::decode(bytes.as_bytes()).map_err(|e| TestError::Other(e.to_string()))?;
     let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
     assert_eq!(restored.id(), alice.id());
     assert!(restored.has_individual(bob.id()).await);
@@ -373,5 +379,51 @@ async fn an_invitation_waiting_for_its_secret_survives_an_archive() -> Result<()
         restored.try_decrypt_content(design_doc, &ct).await?,
         b"for alice".to_vec()
     );
+    Ok(())
+}
+
+/// An archive starts with `"KHIV"` and its format number, and only the
+/// current format decodes: another is refused rather than misread.
+#[tokio::test]
+async fn only_an_archive_in_the_current_format_decodes() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bytes = alice.into_archive().await?.encode().into_bytes();
+    assert_eq!(bytes[..5], *b"KHIV\x03");
+
+    let mut older = bytes.clone();
+    older[4] = 2;
+    assert_eq!(
+        Archive::<[u8; 32]>::decode(&older),
+        Err(DecodeError::UnsupportedVersion {
+            kind: b'I',
+            version: 2
+        })
+    );
+
+    let mut other = bytes;
+    other[..4].copy_from_slice(b"KHEE");
+    assert_eq!(
+        Archive::<[u8; 32]>::decode(&other),
+        Err(DecodeError::NotKeyhive)
+    );
+    Ok(())
+}
+
+/// An archive's bytes are canonical: decoding and encoding again gives the
+/// same bytes.
+#[tokio::test]
+async fn an_archive_re_encodes_to_the_same_bytes() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), design_doc, Read).await?;
+    ctx.encrypt(&alice, design_doc, b"content").await?;
+
+    let bytes = alice.into_archive().await?.encode();
+    let decoded = Archive::<[u8; 32]>::decode(bytes.as_bytes())
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    assert_eq!(decoded.encode().as_bytes(), bytes.as_bytes());
     Ok(())
 }

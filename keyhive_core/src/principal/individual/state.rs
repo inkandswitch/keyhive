@@ -11,7 +11,6 @@ use keyhive_crypto::{
     verified::{SignError, Verified},
 };
 use rand::{CryptoRng, RngCore};
-use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 
 /// Low-level prekey operation store.
@@ -22,7 +21,7 @@ use std::{collections::HashSet, num::NonZeroUsize, sync::Arc};
 /// of having a empty set of rebuildd keys by replacing tombstoning with
 /// rotation. The number of active prekeys can only expand, but the underlying store
 /// is the same size in both cases.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PrekeyState {
     /// The actual operations in the [`PrekeyState`].
     ///

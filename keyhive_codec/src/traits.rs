@@ -95,6 +95,23 @@ impl Decode for alloc::vec::Vec<u8> {
     }
 }
 
+/// Text encodes as its UTF-8 bytes, which is canonical: distinct strings
+/// differ. Like bytes, it fills what it is decoded from, so it is not
+/// [`StreamDecode`]; decoding refuses bytes that are not UTF-8.
+impl Encode for alloc::string::String {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+}
+
+impl Decode for alloc::string::String {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        core::str::from_utf8(bytes)
+            .map(Into::into)
+            .map_err(|_| DecodeError::InvalidField("utf-8"))
+    }
+}
+
 /// A fixed-size array encodes as its bytes. Every value has the same length,
 /// so the encoding is prefix-free.
 impl<const N: usize> Encode for [u8; N] {

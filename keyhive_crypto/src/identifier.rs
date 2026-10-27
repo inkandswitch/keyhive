@@ -149,56 +149,6 @@ impl StreamDecode for Identifier {
     }
 }
 
-impl serde::Serialize for Identifier {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_bytes(&self.0)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Identifier {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_bytes(IdentifierVisitor)
-    }
-}
-
-/// Reads what [`Identifier`]'s `Serialize` writes: a byte string.
-/// Self-describing formats that render bytes as a list (JSON) arrive as a
-/// sequence instead. Both paths check the length and that the bytes are a curve
-/// point.
-struct IdentifierVisitor;
-
-impl<'de> serde::de::Visitor<'de> for IdentifierVisitor {
-    type Value = Identifier;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "the {} bytes of an Ed25519 verifying key",
-            Identifier::LEN
-        )
-    }
-
-    fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Identifier, E> {
-        let bytes: [u8; Identifier::LEN] = v
-            .try_into()
-            .map_err(|_| E::invalid_length(v.len(), &self))?;
-        Identifier::from_bytes(bytes).map_err(E::custom)
-    }
-
-    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Identifier, A::Error> {
-        let mut bytes = [0u8; Identifier::LEN];
-        for (i, byte) in bytes.iter_mut().enumerate() {
-            *byte = seq
-                .next_element()?
-                .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
-        }
-        if seq.next_element::<u8>()?.is_some() {
-            return Err(serde::de::Error::invalid_length(Identifier::LEN + 1, &self));
-        }
-        Identifier::from_bytes(bytes).map_err(serde::de::Error::custom)
-    }
-}
-
 #[cfg(feature = "arbitrary")]
 impl<'a> arbitrary::Arbitrary<'a> for Identifier {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
@@ -226,10 +176,7 @@ pub enum InvalidIdentifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::{
-        format,
-        string::{String, ToString},
-    };
+    use alloc::{format, string::String};
 
     #[test]
     fn lower_hex_is_the_whole_key() {
@@ -315,44 +262,6 @@ mod tests {
         let mut longer = bytes.to_vec();
         longer.push(0);
         assert_eq!(Identifier::decode(&longer), Err(DecodeError::TrailingBytes));
-    }
-
-    /// Through a positional format with no type tags, where a disagreement
-    /// between `Serialize` and `Deserialize` misreads instead of erroring.
-    #[test]
-    fn serde_round_trips_through_postcard() {
-        let id = sample();
-        let bytes = postcard::to_allocvec(&id).expect("serialize");
-        let (decoded, rest) = postcard::take_from_bytes::<Identifier>(&bytes).expect("deserialize");
-        assert_eq!(decoded, id);
-        assert!(rest.is_empty(), "every byte written is read back");
-    }
-
-    /// The sequence path, as a self-describing format like JSON delivers it.
-    #[test]
-    fn serde_accepts_a_byte_sequence_of_exactly_the_right_length() {
-        use serde::{de::value::SeqDeserializer, Deserialize};
-        type Seq<I> = SeqDeserializer<I, serde::de::value::Error>;
-
-        let id = sample();
-        let exact = Seq::new(id.to_bytes().into_iter());
-        assert_eq!(Identifier::deserialize(exact), Ok(id));
-
-        let short = Seq::new(id.to_bytes()[..31].to_vec().into_iter());
-        assert_eq!(
-            Identifier::deserialize(short).map_err(|e| e.to_string()),
-            Err("invalid length 31, expected the 32 bytes of an Ed25519 verifying key".into())
-        );
-
-        let mut extra = id.to_bytes().to_vec();
-        extra.push(0);
-        assert_eq!(
-            Identifier::deserialize(Seq::new(extra.into_iter())).map_err(|e| e.to_string()),
-            Err("invalid length 33, expected the 32 bytes of an Ed25519 verifying key".into())
-        );
-
-        let not_a_point = Seq::new([0x02u8; 32].into_iter());
-        assert!(Identifier::deserialize(not_a_point).is_err());
     }
 
     #[test]

@@ -15,8 +15,8 @@ rust-version.workspace = true
 # Keyhive
 beekem = { workspace = true, features = ["std"] }
 keyhive_codec = { workspace = true, features = ["std"] }
-keyhive_crypto = { workspace = true, features = ["serde", "std"] }
-keyline = { workspace = true, features = ["serde", "std"] }
+keyhive_crypto = { workspace = true, features = ["std"] }
+keyline = { workspace = true, features = ["std"] }
 # The in-memory Keyline store, for the test helpers.
 keyline_memory = { workspace = true, features = ["std"], optional = true }
 
@@ -24,13 +24,11 @@ keyline_memory = { workspace = true, features = ["std"], optional = true }
 aquamarine = { workspace = true, optional = true }
 
 # Encoding
-bincode = { workspace = true }
-serde = { workspace = true, features = ["derive", "rc", "std"] }
 
 # Crypto
 blake3 = { workspace = true, features = ["std"] }
 chacha20poly1305 = { workspace = true }
-ed25519-dalek = { workspace = true, features = ["fast", "rand_core", "serde", "std", "zeroize"] }
+ed25519-dalek = { workspace = true, features = ["fast", "rand_core", "std", "zeroize"] }
 rand = { workspace = true, features = ["std", "std_rng"] }
 signature = { workspace = true }
 x25519-dalek = { workspace = true }
@@ -65,7 +63,7 @@ test-utils = { workspace = true }
 
 arbitrary.workspace = true
 bolero.workspace = true
-keyline = { workspace = true, features = ["arbitrary", "serde", "std", "test_utils"] }
+keyline = { workspace = true, features = ["arbitrary", "std", "test_utils"] }
 keyline_memory = { workspace = true, features = ["std"] }
 lazy_static = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }

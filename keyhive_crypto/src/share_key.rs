@@ -11,11 +11,10 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 /// Newtype around [x25519_dalek::PublicKey].
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ShareKey(x25519_dalek::PublicKey);
 
 #[cfg(any(test, feature = "arbitrary"))]
@@ -91,7 +90,7 @@ impl From<x25519_dalek::PublicKey> for ShareKey {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct ShareSecretKey([u8; 32]);
 

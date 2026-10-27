@@ -113,51 +113,6 @@ impl<T> AsRef<[u8]> for Encoded<T> {
     }
 }
 
-#[cfg(feature = "serde")]
-impl<T> serde::Serialize for Encoded<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_bytes(&self.bytes)
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de, T> serde::Deserialize<'de> for Encoded<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_bytes(EncodedVisitor(PhantomData))
-    }
-}
-
-/// Reads what `Serialize` writes: a byte string. Self-describing formats that
-/// render bytes as a list (JSON) arrive as a sequence instead.
-#[cfg(feature = "serde")]
-struct EncodedVisitor<T>(PhantomData<fn() -> T>);
-
-#[cfg(feature = "serde")]
-impl<'de, T> serde::de::Visitor<'de> for EncodedVisitor<T> {
-    type Value = Encoded<T>;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the encoded bytes of a value")
-    }
-
-    fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
-        Ok(Encoded::from_bytes_unchecked(v.to_vec()))
-    }
-
-    fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
-        Ok(Encoded::from_bytes_unchecked(v))
-    }
-
-    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-        // The size hint comes off the wire, so it only seeds the capacity.
-        let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
-        while let Some(byte) = seq.next_element::<u8>()? {
-            bytes.push(byte);
-        }
-        Ok(Encoded::from_bytes_unchecked(bytes))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -199,49 +154,5 @@ mod tests {
         );
         assert_eq!(sample().partial_cmp(&other()), Some(Ordering::Less));
         assert_eq!(hash(&sample()), hash(&sample()));
-    }
-
-    #[cfg(feature = "serde")]
-    mod serde_impls {
-        use super::*;
-        use alloc::string::ToString;
-        use serde::{
-            de::value::{BoolDeserializer, BytesDeserializer, Error, SeqDeserializer},
-            Deserialize,
-        };
-
-        /// Through a positional format: the `Serialize` side and a full round trip.
-        #[test]
-        fn round_trips_through_postcard() {
-            let bytes = postcard::to_allocvec(&sample()).expect("serialize");
-            let (decoded, rest) =
-                postcard::take_from_bytes::<Encoded<()>>(&bytes).expect("deserialize");
-            assert_eq!(decoded, sample());
-            assert!(rest.is_empty(), "every byte written is read back");
-        }
-
-        /// A byte string, as CBOR and MessagePack deliver what `Serialize` wrote.
-        #[test]
-        fn accepts_a_byte_string() {
-            let encoded = sample();
-            let de = BytesDeserializer::<Error>::new(encoded.as_bytes());
-            assert_eq!(Encoded::<()>::deserialize(de), Ok(sample()));
-        }
-
-        /// A sequence, as JSON delivers bytes.
-        #[test]
-        fn accepts_a_byte_sequence() {
-            let de = SeqDeserializer::<_, Error>::new(sample().into_bytes().into_iter());
-            assert_eq!(Encoded::<()>::deserialize(de), Ok(sample()));
-        }
-
-        #[test]
-        fn rejects_anything_else_by_name() {
-            let de = BoolDeserializer::<Error>::new(true);
-            assert_eq!(
-                Encoded::<()>::deserialize(de).map_err(|e| e.to_string()),
-                Err("invalid type: boolean `true`, expected the encoded bytes of a value".into())
-            );
-        }
     }
 }

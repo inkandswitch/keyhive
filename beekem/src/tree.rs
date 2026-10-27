@@ -20,7 +20,6 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
-use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex, TreeSize};
 
@@ -31,7 +30,7 @@ pub type InnerNode = SecretStore;
 /// been removed as part of this change.
 ///
 /// The leaf is the signer's: whoever signs the update rotates their own leaf.
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct PathChange {
     pub leaf_idx: u32,
@@ -151,7 +150,7 @@ impl PathChange {
 /// [Causal TreeKEM]: https://mattweidner.com/assets/pdf/acs-dissertation.pdf
 /// [MLS]: https://messaginglayersecurity.rocks/
 /// [TreeKEM]: https://inria.hal.science/hal-02425247/file/treekem+(1).pdf
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BeeKem {
     doc_id: TreeId,
     /// The next [`LeafNodeIndex`] available for adding a new member.
@@ -745,7 +744,7 @@ impl BeeKem {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LeafNode {
     pub id: MemberId,
     pub pk: ShareKey,

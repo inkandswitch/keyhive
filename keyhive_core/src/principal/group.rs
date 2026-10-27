@@ -17,13 +17,13 @@ use crate::{
 use beekem::error::CgkaError;
 use future_form::FutureForm;
 use id::GroupId;
+use keyhive_codec::traits::Decode;
 use keyhive_crypto::{
     content::reference::ContentRef, identifier::Identifier, signer::async_signer::AsyncSigner,
     verified::Signed,
 };
 use keyline::{contract::Keyline, delegation::Delegation, power::Power};
 use rand::{CryptoRng, RngCore};
-use serde::Deserialize;
 use std::{collections::BTreeMap, sync::Arc};
 use thiserror::Error;
 
@@ -58,7 +58,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: CryptoRng + RngCore,

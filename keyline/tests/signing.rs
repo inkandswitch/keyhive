@@ -12,8 +12,9 @@ use keyhive_crypto::{
     digest::Digest,
     identifier::{Identifier, InvalidIdentifier},
     signable::{message, Kinded, Signable, TAG},
-    signed::SigningError,
-    signer::{async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSignerBasic},
+    signer::{
+        async_signer::AsyncSigner, memory::MemorySigner, sync_signer::SyncSignerBasic, SigningError,
+    },
     verifiable::Verifiable,
     verified::{SignError, Signed, Verified, VerifyError},
 };

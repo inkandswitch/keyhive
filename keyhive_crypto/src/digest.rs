@@ -15,7 +15,6 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use serde::{Deserialize, Serialize};
 
 /// A [`blake3::Hash`] tagged with which type it is a hash of.
 ///
@@ -26,9 +25,8 @@ use serde::{Deserialize, Serialize};
 /// ```
 /// # use keyhive_crypto::digest::Digest;
 /// #
-/// let string_hash: Digest<String> = Digest::hash(&"hello world".to_string());
-/// let array_hash: Digest<[u8; 3]> = Digest::hash(&[1, 2, 3]);
-/// let bytes_hash: Digest<Vec<u8>> = Digest::hash(&vec![42, 99]);
+/// let digest: Digest<Vec<u8>> = Digest::from(blake3::hash(&[42, 99]));
+/// assert_eq!(digest.as_slice().len(), 32);
 /// ```
 pub struct Digest<T> {
     /// The underlying, unparameterized [`blake3::Hash`].
@@ -73,14 +71,8 @@ impl<T> Digest<T> {
     /// ```
     /// # use keyhive_crypto::digest::Digest;
     /// #
-    /// let digest = Digest::hash(&vec![1u8, 2, 3]);
-    /// assert_eq!(
-    ///     digest.as_slice(),
-    ///     &[0x2A, 0x6D, 0x7F, 0x5B, 0x7F, 0x2A, 0x4A, 0x64,
-    ///       0xA0, 0x14, 0x8F, 0xFC, 0xFA, 0x96, 0x94, 0x46,
-    ///       0xEF, 0xD0, 0x95, 0xBE, 0xFE, 0x79, 0x79, 0x91,
-    ///       0x29, 0xAB, 0x54, 0x8F, 0x8F, 0xC4, 0x42, 0x2B]
-    /// );
+    /// let digest: Digest<()> = Digest::from([7; 32]);
+    /// assert_eq!(digest.as_slice(), &[7; 32]);
     /// ```
     pub fn as_slice(&self) -> &[u8] {
         self.raw.as_bytes()
@@ -93,17 +85,19 @@ impl<T> Digest<T> {
     /// ```
     /// # use keyhive_crypto::digest::Digest;
     /// #
-    /// let hash = Digest::hash(&"hello world!".to_string());
-    /// assert_eq!(hash.trailing_zeros(), 3);
+    /// let mut bytes = [0xFF; 32];
+    /// bytes[31] = 0b1000;
+    /// assert_eq!(Digest::<()>::from(bytes).trailing_zeros(), 3);
     ///
-    /// let another_hash = Digest::hash(&"different!*".to_string());
-    /// assert_eq!(another_hash.trailing_zeros(), 5);
+    /// bytes[31] = 0;
+    /// bytes[30] = 0b10_0000;
+    /// assert_eq!(Digest::<()>::from(bytes).trailing_zeros(), 13);
     /// ```
     pub fn trailing_zeros(&self) -> u8 {
         let mut count = 0;
 
         for byte in self.raw.as_bytes().iter().rev() {
-            let zeros = byte.count_zeros() as u8;
+            let zeros = byte.trailing_zeros() as u8;
             count += zeros;
 
             if zeros != 8 {
@@ -121,8 +115,11 @@ impl<T> Digest<T> {
     /// ```
     /// # use keyhive_crypto::digest::Digest;
     /// #
-    /// let hash = Digest::hash(&"hello world");
-    /// assert_eq!(hash.trailing_zero_bytes(), 0);
+    /// let mut bytes = [0xFF; 32];
+    /// assert_eq!(Digest::<()>::from(bytes).trailing_zero_bytes(), 0);
+    ///
+    /// bytes[30..].fill(0);
+    /// assert_eq!(Digest::<()>::from(bytes).trailing_zero_bytes(), 2);
     /// ```
     pub fn trailing_zero_bytes(&self) -> u8 {
         let mut count = 0;
@@ -150,57 +147,12 @@ impl<T> Digest<T> {
     }
 }
 
-impl<T: Serialize> Digest<T> {
-    /// Digest a value and retain its type as a phantom parameter.
-    ///
-    /// Requires the `std` feature (uses [`bincode`] for serialization).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use keyhive_crypto::digest::Digest;
-    /// #
-    /// let digest = Digest::hash(&vec![1u8, 2, 3]);
-    /// assert_eq!(digest.as_slice().len(), 32);
-    /// ```
-    #[cfg(feature = "std")]
-    pub fn hash(preimage: &T) -> Self {
-        let bytes: Vec<u8> = bincode::serialize(&preimage).expect("unable to serialize to bytes");
-
-        Self {
-            raw: blake3::hash(bytes.as_slice()),
-            _phantom: PhantomData,
-        }
-    }
-}
-
-#[cfg(all(feature = "std", any(test, feature = "arbitrary")))]
-impl<'a, T: arbitrary::Arbitrary<'a> + Serialize> arbitrary::Arbitrary<'a> for Digest<T> {
+/// Arbitrary bytes: a digest names its preimage, but tests need only distinct
+/// names.
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a, T> arbitrary::Arbitrary<'a> for Digest<T> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let preimage = T::arbitrary(u)?;
-        Ok(Digest::hash(&preimage))
-    }
-}
-
-impl<T> Serialize for Digest<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.raw.as_bytes().serialize(serializer)
-    }
-}
-
-impl<'de, T> serde::Deserialize<'de> for Digest<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Digest<T>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let bytes: [u8; 32] = Deserialize::deserialize(deserializer)?;
-        Ok(Digest {
-            raw: blake3::Hash::from(bytes),
-            _phantom: PhantomData,
-        })
+        Ok(Digest::from(<[u8; 32]>::arbitrary(u)?))
     }
 }
 

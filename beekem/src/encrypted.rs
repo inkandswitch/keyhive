@@ -36,7 +36,6 @@ use keyhive_crypto::{
     siv::{nonces_match, synthetic_nonce},
     symmetric_key::SymmetricKey,
 };
-use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 /// The first bytes of encrypted content: Keyhive's tag, then `E`, which the
@@ -383,7 +382,7 @@ impl Sealable for PcsKey {
 /// synthetic nonce ([`SymmetricKey::try_open`]). A ciphertext therefore opens
 /// only as a `T`, only in the tree, and between the two keys, it was sealed
 /// for, and under only one key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EncryptedSecret<T> {
     /// `nonce ‖ ciphertext ‖ tag`, from [`SymmetricKey::try_seal`].
     sealed: Vec<u8>,

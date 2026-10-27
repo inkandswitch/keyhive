@@ -2,7 +2,7 @@
 
 use crate::{
     all_agent_events::{AllAgentEvents, EventDigest},
-    archive::{Archive, ArchiveVersion},
+    archive::Archive,
     certificate::{decode_stored, explanation, root_edges, CertificateError, KeylineStorageError},
     cgka::{
         certificate_sets::{CertificateSets, CitationSet},
@@ -54,7 +54,7 @@ use beekem::{
 use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
 use futures::lock::Mutex;
-use keyhive_codec::traits::Encode;
+use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{
     bytes::Bytes,
     content::reference::ContentRef,
@@ -62,8 +62,7 @@ use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
     share_key::{ShareKey, ShareSecretKey},
     signable::Signable,
-    signed::SigningError,
-    signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner},
+    signer::{async_signer::AsyncSigner, ephemeral::EphemeralSigner, SigningError},
     symmetric_key::SymmetricKey,
     verifiable::Verifiable,
     verified::{self, SignError, Verified, VerifyError},
@@ -76,7 +75,6 @@ use keyline::{
     revocation::Revocation,
 };
 use nonempty::NonEmpty;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::{Debug, Formatter},
@@ -102,7 +100,7 @@ pub struct Keyhive<
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -114,7 +112,7 @@ pub struct KeyhiveState<
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -174,7 +172,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -190,7 +188,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -206,7 +204,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -223,7 +221,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef,
-        P: for<'de> Deserialize<'de>,
+        P: Decode,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore,
@@ -1649,9 +1647,7 @@ where
         pred_refs: &[T],
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EnvelopeError<T>>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
+where {
         let writing = self
             .prepare_to_write(doc)
             .await
@@ -1771,8 +1767,7 @@ where
         entrypoints: &[(Arc<EncryptedContent<P, T>>, SymmetricKey)],
     ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<F, T, P, C>>
     where
-        T: for<'de> Deserialize<'de>,
-        P: Clone + Serialize + for<'de> Deserialize<'de>,
+        P: Clone + Encode + Decode,
     {
         let mut to_walk = entrypoints.to_vec();
         CiphertextStoreExt::<F, T, P>::try_causal_decrypt(&self.ciphertext_store, doc, &mut to_walk)
@@ -1848,8 +1843,7 @@ where
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<CausalDecryptionState<T, P>, CausalDecryptError<F, T, P, C>>
     where
-        T: for<'de> Deserialize<'de>,
-        P: Serialize + Clone,
+        P: Encode + Clone,
     {
         let Some(state) = self.member_document(doc).await? else {
             // Invited, no keys yet.
@@ -2109,7 +2103,7 @@ where
             .lock()
             .await
             .iter()
-            .map(|event| Digest::hash(event.as_ref()))
+            .map(|event| event.digest())
             .collect()
     }
 
@@ -2124,17 +2118,17 @@ where
 
         for key_op in prekeys.values().flatten() {
             let op = Event::<T>::from(key_op.as_ref().dupe());
-            ops.insert(Digest::hash(&op), op);
+            ops.insert(op.digest(), op);
         }
 
         for cgka_op in cgka_ops {
             let op = Event::<T>::from(cgka_op);
-            ops.insert(Digest::hash(&op), op);
+            ops.insert(op.digest(), op);
         }
 
         for cert in certs {
             let op = Event::from(cert);
-            ops.insert(Digest::hash(&op), op);
+            ops.insert(op.digest(), op);
         }
 
         Ok(ops)
@@ -2504,15 +2498,15 @@ where
 
         for key_op in prekeys.values().flatten() {
             let event: Event<T> = Event::from(key_op.as_ref().clone());
-            digests.insert(Digest::hash(&event));
+            digests.insert(event.digest());
         }
         for cgka_op in cgka_ops {
             let event: Event<T> = Event::from(cgka_op);
-            digests.insert(Digest::hash(&event));
+            digests.insert(event.digest());
         }
         for cert in certs {
             let event: Event<T> = Event::from(cert);
-            digests.insert(Digest::hash(&event));
+            digests.insert(event.digest());
         }
 
         Ok(digests)
@@ -2533,7 +2527,7 @@ where
             let mut digests = Vec::with_capacity(key_ops.len());
             for key_op in key_ops {
                 let event: Event<T> = Event::from(key_op.as_ref().clone());
-                let digest = Digest::hash(&event);
+                let digest = event.digest();
                 digests.push(digest);
                 events.entry(digest).or_insert(event);
             }
@@ -2545,7 +2539,7 @@ where
             let mut digests = Vec::with_capacity(cgka_ops.len());
             for cgka_op in cgka_ops {
                 let event: Event<T> = Event::from(cgka_op);
-                let digest = Digest::hash(&event);
+                let digest = event.digest();
                 digests.push(digest);
                 events.entry(digest).or_insert(event);
             }
@@ -2563,7 +2557,7 @@ where
                 let digests = explained.entry(who).or_default();
                 for cert in certs {
                     let event: Event<T> = Event::from(cert);
-                    let digest = Digest::hash(&event);
+                    let digest = event.digest();
                     digests.insert(digest);
                     events.entry(digest).or_insert(event);
                 }
@@ -2571,7 +2565,7 @@ where
             let mut digests = Vec::with_capacity(view.closure.len());
             for cert in view.closure {
                 let event: Event<T> = Event::from(cert);
-                let digest = Digest::hash(&event);
+                let digest = event.digest();
                 digests.push(digest);
                 events.entry(digest).or_insert(event);
             }
@@ -3235,7 +3229,6 @@ where
             .collect();
 
         Archive {
-            version: ArchiveVersion,
             active,
             individuals,
             docs,
@@ -3495,14 +3488,14 @@ where
         use std::collections::{HashMap, HashSet};
         let mut replayed_pending: HashSet<Digest<StaticEvent<T>>> = HashSet::new();
         for event in self.pending_events.lock().await.iter() {
-            replayed_pending.insert(Digest::hash(event.as_ref()));
+            replayed_pending.insert(event.digest());
             events.push(event.as_ref().clone());
         }
 
         // Deduplicate events by hash
         let mut unique_events: HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> = HashMap::new();
         for event in events {
-            let hash = Digest::hash(&event);
+            let hash = event.digest();
             unique_events.entry(hash).or_insert(event);
         }
         let mut epoch: Vec<StaticEvent<T>> = unique_events.into_values().collect();
@@ -3528,7 +3521,7 @@ where
                 self.pending_events
                     .lock()
                     .await
-                    .retain(|e| !replayed_pending.contains(&Digest::hash(e.as_ref())));
+                    .retain(|e| !replayed_pending.contains(&e.digest()));
                 return Vec::new();
             }
 
@@ -3735,7 +3728,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Debug,
-        P: for<'de> Deserialize<'de>,
+        P: Decode,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore,
@@ -3757,7 +3750,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Debug,
-        P: for<'de> Deserialize<'de>,
+        P: Decode,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore,
@@ -3773,7 +3766,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de> + Clone,
+        P: Decode + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
@@ -3824,7 +3817,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de> + Clone,
+        P: Decode + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
@@ -3843,7 +3836,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef,
-        P: for<'de> Deserialize<'de> + Clone,
+        P: Decode + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
@@ -3933,7 +3926,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef,
-        P: for<'de> Deserialize<'de>,
+        P: Decode,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore,
@@ -5557,8 +5550,6 @@ mod tests {
     /// reachable_prekey_ops_for_agent for each agent.
     #[tokio::test]
     async fn test_reachable_prekey_ops_for_all_agents_matches_per_agent() -> TestResult {
-        use crate::crypto::digest::Digest;
-
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -5688,15 +5679,12 @@ mod tests {
             );
 
             // Same flattened ops (compare by content digest)
-            let mut all_digests: Vec<_> = all_ops
-                .unwrap()
-                .map(|op| Digest::hash(op.as_ref()))
-                .collect();
+            let mut all_digests: Vec<_> = all_ops.unwrap().map(|op| op.digest()).collect();
             all_digests.sort();
             let mut per_agent_digests: Vec<_> = per_agent_ops
                 .values()
                 .flat_map(|ops| ops.iter())
-                .map(|op| Digest::hash(op.as_ref()))
+                .map(|op| op.digest())
                 .collect();
             per_agent_digests.sort();
             assert_eq!(

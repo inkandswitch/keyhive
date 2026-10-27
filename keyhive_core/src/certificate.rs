@@ -6,8 +6,7 @@ use future_form::FutureForm;
 use keyhive_codec::{error::DecodeError, traits::Decode};
 use keyhive_crypto::{
     identifier::Identifier,
-    signed::SigningError,
-    signer::sync_signer::SyncSignerBasic,
+    signer::{sync_signer::SyncSignerBasic, SigningError},
     verifiable::Verifiable,
     verified::{SignError, Signed, Verified},
 };

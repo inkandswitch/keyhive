@@ -40,14 +40,6 @@ use keyhive_crypto::{
 /// field. The map is incomplete by construction; see the `retain` section of
 /// `design/keyline/implementation.md`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(
-    feature = "serde",
-    serde(bound(
-        serialize = "W: serde::Serialize",
-        deserialize = "W: serde::Deserialize<'de>"
-    ))
-)]
 pub struct Revocation<W> {
     /// The delegation being revoked, by content address.
     pub revoke: Digest<Delegation>,

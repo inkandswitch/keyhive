@@ -30,8 +30,11 @@ use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{
-    content::reference::ContentRef, identifier::Identifier, share_key::ShareKey,
-    signed::SigningError, signer::memory::MemorySigner, symmetric_key::SymmetricKey,
+    content::reference::ContentRef,
+    identifier::Identifier,
+    share_key::ShareKey,
+    signer::{memory::MemorySigner, SigningError},
+    symmetric_key::SymmetricKey,
 };
 use keyline::{delegation::Delegation, power::Power};
 use keyline_memory::MemoryKeyline;

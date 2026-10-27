@@ -13,18 +13,16 @@ rust-version.workspace = true
 blake3 = { workspace = true }
 chacha20poly1305 = { workspace = true }
 derive_more = { workspace = true }
-ed25519-dalek = { workspace = true, features = ["rand_core", "serde"] }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
 future_form = { workspace = true }
 futures = { workspace = true }
 keyhive_codec = { workspace = true }
 rand = { workspace = true }
-serde = { workspace = true, features = ["alloc", "derive"] }
 signature = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }
 x25519-dalek = { workspace = true }
 
 # std-only dependencies
-bincode = { workspace = true, optional = true }
 dupe = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
@@ -35,13 +33,11 @@ arbitrary = { workspace = true }
 bolero = { workspace = true }
 curve25519-dalek = { workspace = true }
 keyhive_codec = { workspace = true, features = ["laws"] }
-postcard = { workspace = true, features = ["alloc"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 default = ["std"]
 std = [
-  "bincode",
   "blake3/std",
   "derive_more/std",
   "dupe",
@@ -49,13 +45,10 @@ std = [
   "keyhive_codec/std",
   "rand/std",
   "rand/std_rng",
-  "serde/std",
-  "serde/rc",
   "thiserror/std",
   "tracing/std",
 ]
 arbitrary = ["dep:arbitrary", "std"]
-serde = ["keyhive_codec/serde"]
 # `Verified::assume`, which skips signature checks: for test fixtures only.
 unchecked = []
 # Everything the full test suite needs. Also the feature hosted CI and

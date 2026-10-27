@@ -1,10 +1,9 @@
 use crate::principal::{document::id::DocumentId, group::id::GroupId};
 use ed25519_dalek::VerifyingKey;
 use keyhive_crypto::{identifier::Identifier, verifiable::Verifiable};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemberedId {
     GroupId(GroupId),
     DocumentId(DocumentId),

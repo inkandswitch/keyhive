@@ -68,9 +68,6 @@ pub enum CgkaError {
     #[error("SecretKey not found")]
     SecretKeyNotFound,
 
-    #[error("Serialization failed: {0}")]
-    Serialize(alloc::string::String),
-
     #[error("Unexpected key conflict")]
     UnexpectedKeyConflict,
 
