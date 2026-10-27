@@ -14,11 +14,12 @@ pub const TAG: [u8; 2] = *b"KH";
 
 /// A signed type's permanent number in the one registry of kinds.
 ///
-/// One key signs Keyline certificates, CGKA operations and prekey
-/// operations, so their kinds come from one table across the workspace. A
-/// retired number is never reused. Kinds are numbered with ASCII letters by
-/// convention, so a frame reads `KHD…` in a hexdump; any byte may be used
-/// once the letters run out. `I` is reserved: an archive starts with `KHIV`.
+/// One key signs Keyline certificates, CGKA operations, prekey operations and
+/// an application's own bytes, so their kinds come from one table across the
+/// workspace. A retired number is never reused. Kinds are numbered with ASCII
+/// letters by convention, so a frame reads `KHD…` in a hexdump; any byte may
+/// be used once the letters run out. `I` is reserved: an archive starts with
+/// `KHIV`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Kind(u8);
 
@@ -39,13 +40,17 @@ impl Kind {
     /// `R` is taken).
     pub const ROTATE_KEY: Kind = Kind(b'T');
 
+    /// Bytes an application signs, which Keyhive gives no meaning.
+    pub const BYTES: Kind = Kind(b'B');
+
     /// Every kind in the registry.
-    pub const ALL: [Kind; 5] = [
+    pub const ALL: [Kind; 6] = [
         Kind::DELEGATION,
         Kind::REVOCATION,
         Kind::CERTIFICATE_SET,
         Kind::ADD_KEY,
         Kind::ROTATE_KEY,
+        Kind::BYTES,
     ];
 
     /// The registered kind with byte `b`, if any.

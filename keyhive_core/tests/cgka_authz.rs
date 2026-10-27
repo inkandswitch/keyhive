@@ -329,7 +329,9 @@ async fn a_signer_without_read_in_its_signing_set_is_denied() -> TestResult {
     // Everything about the add is valid except who signed it. Mallory's grant
     // to herself is inert, since she has no authority over the document.
     let op = proven_add(&alice, doc_id, &carol, cites(&[&grant, &self_granted])).await;
-    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(mallory.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     assert!(!cgka_members(&alice, doc_id).await.contains(&carol_id));
@@ -345,7 +347,9 @@ async fn an_add_of_someone_whose_route_grants_only_relay_is_denied() -> TestResu
 
     // A member signs, so only the added member's standing is in question.
     let op = proven_add(&alice, doc_id, &carol, cites(&[&relay_grant])).await;
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     assert!(!cgka_members(&alice, doc_id).await.contains(&carol_id));
@@ -376,11 +380,15 @@ async fn an_add_must_cite_the_route_to_its_member_even_when_the_receiver_has_it(
 
     // Alice has both certificates, but the add cites only the first.
     let op = proven_add(&alice, doc_id, &carol, cites(&[&to_group])).await;
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
     assert!(is_denied(&result), "{result:?}");
 
     let op = proven_add(&alice, doc_id, &carol, cites(&[&to_group, &carol_in_group])).await;
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
     assert!(result.is_ok(), "{result:?}");
     Ok(())
 }
@@ -415,7 +423,9 @@ async fn an_add_whose_key_its_member_did_not_publish_is_denied() -> TestResult {
         ),
     ] {
         let op = add_op(&alice, doc_id, carol_id, key, cites(&[&grant])).await;
-        let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+        let result = alice
+            .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+            .await;
         assert!(is_denied(&result), "{case}: {result:?}");
     }
 
@@ -427,7 +437,9 @@ async fn an_add_whose_key_its_member_did_not_publish_is_denied() -> TestResult {
         cites(&[&grant]),
     )
     .await;
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
     assert!(result.is_ok(), "{result:?}");
     Ok(())
 }
@@ -445,7 +457,9 @@ async fn a_remove_that_lists_a_specific_member_is_denied() -> TestResult {
         doc_id: TreeId::from(doc_id),
         citations: vec![],
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     assert!(cgka_members(&alice, doc_id).await.contains(&bob.id()));
@@ -466,11 +480,15 @@ async fn citations_must_be_strictly_ascending() -> TestResult {
 
     for cited in [vec![high, low], vec![low, low]] {
         let op = remove_op(&alice, doc_id, cited.clone()).await;
-        let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+        let result = alice
+            .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+            .await;
         assert!(is_denied(&result), "{cited:?}: {result:?}");
     }
     let op = remove_op(&alice, doc_id, vec![low, high]).await;
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
     assert!(result.is_ok(), "{result:?}");
     Ok(())
 }
@@ -484,7 +502,9 @@ async fn a_member_can_cite_the_revocation_of_their_own_access() -> TestResult {
     let revocation = signed_revocation(&alice, &alice, doc_id, bob.id()).await?;
     receive(&alice, &revocation).await;
     let op = remove_op(&alice, doc_id, cites(&[&revocation])).await;
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(result.is_ok(), "{result:?}");
     assert!(!cgka_members(&alice, doc_id).await.contains(&bob.id()));
@@ -504,7 +524,9 @@ async fn a_remove_citing_a_revocation_that_covers_nothing_removes_no_one() -> Te
     let inert = signed_revocation(&relay, &alice, doc_id, alice.id()).await?;
     receive(&alice, &inert).await;
     let op = remove_op(&alice, doc_id, cites(&[&inert])).await;
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(result.is_ok(), "{result:?}");
     let members = cgka_members(&alice, doc_id).await;
@@ -523,7 +545,7 @@ async fn an_operation_citing_a_certificate_not_yet_received_waits_for_it() -> Te
     )
     .await?;
     let op = proven_add(&alice, doc_id, &carol, cites(&[&grant])).await;
-    let op = alice.try_sign(op).await?;
+    let op = alice.serde_sign_cgka_op(op).await?;
 
     let result = alice.receive_cgka_op(op.clone()).await;
     assert!(is_pending(&result), "{result:?}");
@@ -545,7 +567,9 @@ async fn an_operation_whose_predecessor_is_missing_is_pending() -> TestResult {
         predecessors: vec![Digest::from([9u8; 32])],
         doc_id: TreeId::from(doc_id),
     };
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_pending(&result), "{result:?}");
     Ok(())
@@ -611,7 +635,7 @@ async fn only_a_root_edges_audience_can_start_a_documents_history() -> TestResul
         cited.push(CitationId(bobs_grant.into()));
         cited.sort_unstable();
     }
-    let signed = bob.try_sign(reissued).await?;
+    let signed = bob.serde_sign_cgka_op(reissued).await?;
     let result = alice.receive_cgka_op(signed.clone()).await;
 
     assert!(is_denied(&result), "{result:?}");
@@ -655,7 +679,7 @@ async fn root_add_of(
     if let CgkaOperation::Add { predecessors, .. } = &mut op {
         predecessors.clear();
     }
-    Ok(signer.try_sign(op).await?)
+    Ok(signer.serde_sign_cgka_op(op).await?)
 }
 
 #[tokio::test]
@@ -738,7 +762,9 @@ async fn a_rotation_of_another_members_key_is_denied() -> TestResult {
     let mut path = intercepted_path(&alice).await;
     path.leaf_id = MemberId::from(bob.id());
     let op = update_op(&alice, doc_id, bob.id(), path).await;
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     Ok(())
@@ -749,7 +775,9 @@ async fn a_rotation_whose_id_differs_from_its_paths_member_is_denied() -> TestRe
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
 
     let op = update_op(&alice, doc_id, alice.id(), intercepted_path(&bob).await).await;
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(op).await?)
+        .await;
 
     assert!(is_denied(&result), "{result:?}");
     Ok(())
@@ -851,7 +879,9 @@ async fn a_member_added_under_a_key_it_rotated_away_rotates_before_writing() -> 
         cites(&[&grant]),
     )
     .await;
-    alice.receive_cgka_op(alice.try_sign(add).await?).await?;
+    alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(add).await?)
+        .await?;
     alice
         .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"from alice")
         .await?;
@@ -913,7 +943,9 @@ async fn an_add_of_a_reader_revoked_before_being_added_is_removed_at_the_next_wr
     // only his grant is evaluated over its own certificate set, which grants
     // him Read, so it is accepted. The next write removes him.
     let op = proven_add(&alice, doc_id, &bob, cites(&[&grant])).await;
-    alice.receive_cgka_op(alice.try_sign(op).await?).await?;
+    alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await?;
     assert!(cgka_members(&alice, doc_id).await.contains(&bob.id()));
     alice
         .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"after the add")
@@ -927,7 +959,7 @@ async fn an_operation_built_on_a_denied_one_is_denied() -> TestResult {
     let (alice, bob, doc_id) = doc_with_alice_and_bob().await?;
     let mallory = make_simple_keyhive().await?;
     let denied = remove_op(&alice, doc_id, vec![]).await;
-    let denied = mallory.try_sign(denied).await?;
+    let denied = mallory.serde_sign_cgka_op(denied).await?;
     let result = alice.receive_cgka_op(denied.clone()).await;
     assert!(is_denied(&result), "{result:?}");
 
@@ -937,7 +969,9 @@ async fn an_operation_built_on_a_denied_one_is_denied() -> TestResult {
         doc_id: TreeId::from(doc_id),
         citations: vec![],
     };
-    let result = alice.receive_cgka_op(bob.try_sign(child).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(child).await?)
+        .await;
     assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
@@ -959,7 +993,7 @@ async fn a_remove_the_cgka_refuses(
             .citations()
             .to_vec(),
     };
-    Ok(alice.try_sign(op).await?)
+    Ok(alice.serde_sign_cgka_op(op).await?)
 }
 
 #[tokio::test]
@@ -989,7 +1023,9 @@ async fn an_operation_built_on_one_that_failed_to_merge_is_denied() -> TestResul
         doc_id: TreeId::from(doc_id),
         citations: vec![],
     };
-    let result = alice.receive_cgka_op(bob.try_sign(child).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(child).await?)
+        .await;
     assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
@@ -1235,9 +1271,13 @@ async fn a_revoked_reader_cannot_sign_after_the_remove() -> TestResult {
         .await?;
     let from_alice = issue_grant(&alice, fresh.id(), doc_id, Power::Read).await?;
     let op = proven_add(&alice, doc_id, &fresh, cites(&[&from_alice])).await;
-    let result = alice.receive_cgka_op(bob.try_sign(op.clone()).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(op.clone()).await?)
+        .await;
     assert!(is_denied(&result), "{result:?}");
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
     assert!(result.is_ok(), "{result:?}");
     Ok(())
 }
@@ -1276,7 +1316,9 @@ async fn a_member_cannot_add_a_key_a_revoked_reader_granted_after_the_remove() -
         .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
         .await?;
     let op = proven_add(&alice, doc_id, &fresh, cites(&[&to_fresh])).await;
-    let result = alice.receive_cgka_op(alice.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(alice.serde_sign_cgka_op(op).await?)
+        .await;
     assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
@@ -1285,7 +1327,9 @@ async fn a_member_cannot_add_a_key_a_revoked_reader_granted_after_the_remove() -
 async fn a_key_a_revoked_reader_added_before_the_remove_is_removed_by_it() -> TestResult {
     let (alice, bob, fresh, doc_id, grant, to_fresh) = bob_revoked_with_a_fresh_key().await?;
     let op = proven_add(&alice, doc_id, &fresh, cites(&[&grant, &to_fresh])).await;
-    let result = alice.receive_cgka_op(bob.try_sign(op).await?).await;
+    let result = alice
+        .receive_cgka_op(bob.serde_sign_cgka_op(op).await?)
+        .await;
     assert!(result.is_ok(), "{result:?}");
     assert!(cgka_members(&alice, doc_id).await.contains(&fresh.id()));
     alice

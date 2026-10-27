@@ -17,6 +17,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod bytes;
 pub mod content;
 pub mod digest;
 pub mod domain_separator;

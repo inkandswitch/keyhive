@@ -56,6 +56,7 @@ use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_codec::traits::{Encode, StreamDecode};
 use keyhive_crypto::{
+    bytes::Bytes,
     content::reference::ContentRef,
     digest::Digest,
     identifier::{Identifier, InvalidIdentifier},
@@ -1403,13 +1404,28 @@ where
         self.active.expand_prekeys(self.csprng.dupe()).await
     }
 
+    /// Sign opaque bytes on behalf of an application, under [`Kind::BYTES`].
+    ///
+    /// [`Kind::BYTES`]: keyhive_crypto::signable::Kind::BYTES
     #[instrument(skip_all)]
-    pub async fn try_sign<U: Serialize + Debug>(
+    pub async fn sign_bytes(&self, bytes: Vec<u8>) -> Result<Verified<Bytes>, SignError> {
+        Verified::sign::<F, S>(&Bytes::from(bytes), &self.active.signer).await
+    }
+
+    /// Sign a CGKA operation as this identity, whatever it says: for tests
+    /// that forge or replay operations. Beekem signs the operations this
+    /// replica issues itself.
+    ///
+    /// Named for serde so the serde removal finds it: once CGKA operations
+    /// are on the `KH` frame, tests sign them with [`Verified::sign`].
+    #[cfg(any(test, feature = "test_utils"))]
+    #[instrument(skip_all)]
+    pub async fn serde_sign_cgka_op(
         &self,
-        data: U,
-    ) -> Result<SerdeSigned<U>, SigningError> {
+        op: CgkaOperation,
+    ) -> Result<SerdeSigned<CgkaOperation>, SigningError> {
         let signer = self.active.signer.clone();
-        keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(&signer, data).await
+        keyhive_crypto::signer::async_signer::try_sign_async::<F, _, _>(&signer, op).await
     }
 
     #[instrument(skip_all)]
@@ -4435,6 +4451,21 @@ mod tests {
             .value
             .into_iter()
             .collect()
+    }
+
+    /// The active identity signs the bytes as they are, and the frame reads
+    /// back and verifies as bytes it issued.
+    #[tokio::test]
+    async fn sign_bytes_signs_as_the_active_identity() -> TestResult {
+        let hive = make_keyhive().await;
+        let signed = hive.sign_bytes(b"hello".to_vec()).await?;
+        assert_eq!(signed.payload().as_slice(), b"hello");
+        assert_eq!(signed.issuer(), Identifier::from(hive.id()));
+
+        let frame = signed.signed().encode();
+        let read = verified::Signed::<Bytes>::decode(frame.as_bytes())?.verify()?;
+        assert_eq!(read.payload(), signed.payload());
+        Ok(())
     }
 
     /// Creating a group or document writes its root edges, and a grant writes

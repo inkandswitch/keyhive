@@ -28,13 +28,11 @@ use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::InvalidIdentifier,
     share_key::{ShareKey, ShareSecretKey},
-    signed::{SerdeSigned, SigningError},
-    signer::{async_signer, async_signer::AsyncSigner},
+    signer::async_signer::AsyncSigner,
     verifiable::Verifiable,
     verified::{SignError, Verified},
 };
 use rand::{CryptoRng, RngCore};
-use serde::Serialize;
 use std::{collections::BTreeMap, fmt, marker::PhantomData, sync::Arc};
 
 /// This replica's own individual, which can sign and encrypt.
@@ -257,14 +255,6 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         Ok(op)
     }
 
-    /// Asynchronously sign a payload.
-    pub async fn try_sign_async<U: Serialize + fmt::Debug>(
-        &self,
-        payload: U,
-    ) -> Result<SerdeSigned<U>, SigningError> {
-        async_signer::try_sign_async::<F, _, _>(&self.signer, payload).await
-    }
-
     /// Export prekey secrets as an opaque blob.
     ///
     /// # Security
@@ -390,22 +380,6 @@ mod tests {
     use crate::listener::no_listener::NoListener;
     use future_form::Sendable;
     use keyhive_crypto::signer::memory::MemorySigner;
-
-    #[tokio::test]
-    async fn test_seal() {
-        test_utils::init_logging();
-
-        let csprng = &mut rand::thread_rng();
-        let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let active: Active<Sendable, _, [u8; 32], _> =
-            Active::<Sendable, _, _, _>::generate(signer, NoListener, csprng)
-                .await
-                .unwrap();
-        let message = "hello world".as_bytes();
-        let signed = active.try_sign_async(message).await.unwrap();
-
-        assert!(signed.try_verify().is_ok());
-    }
 
     #[tokio::test]
     async fn test_export_import_prekey_secrets() {
