@@ -2,7 +2,7 @@
 
 use crate::{
     all_agent_events::{AllAgentEvents, EventDigest},
-    archive::{Archive, ArchiveVersion},
+    archive::Archive,
     certificate::{decode_stored, explanation, root_edges, CertificateError, KeylineStorageError},
     cgka::{
         certificate_sets::{CertificateSets, CitationSet},
@@ -3234,7 +3234,6 @@ where
             .collect();
 
         Archive {
-            version: ArchiveVersion,
             active,
             individuals,
             docs,

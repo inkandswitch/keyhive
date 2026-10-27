@@ -6,17 +6,20 @@ use super::{
 };
 use derive_more::{Display, From, Into};
 use futures::lock::Mutex;
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{Decode, Encode},
+};
 use keyhive_core::{
     archive::Archive,
     keyhive::{Keyhive, TryFromArchiveError},
 };
 use keyline_memory::MemoryKeyline;
 use rand::rngs::OsRng;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, From, Into)]
+#[derive(Debug, Clone, PartialEq, Eq, From, Into)]
 #[wasm_bindgen(js_name = Archive)]
 pub struct JsArchive(pub(crate) Archive<JsChangeId>);
 
@@ -24,16 +27,14 @@ pub struct JsArchive(pub(crate) Archive<JsChangeId>);
 impl JsArchive {
     #[wasm_bindgen(constructor)]
     pub fn try_from_bytes(bytes: &[u8]) -> Result<JsArchive, JsSerializationError> {
-        bincode::deserialize(bytes)
+        Archive::decode(bytes)
             .map(JsArchive)
             .map_err(JsSerializationError)
     }
 
     #[wasm_bindgen(js_name = toBytes)]
-    pub fn to_bytes(&self) -> Result<Box<[u8]>, JsSerializationError> {
-        Ok(bincode::serialize(&self.0)
-            .map_err(JsSerializationError)?
-            .into_boxed_slice())
+    pub fn to_bytes(&self) -> Box<[u8]> {
+        self.0.encode().into_bytes().into_boxed_slice()
     }
 
     #[wasm_bindgen(js_name = tryToKeyhive)]
@@ -75,7 +76,7 @@ impl From<JsTryFromArchiveError> for JsValue {
 }
 
 #[derive(Debug, Display, Error)]
-pub struct JsSerializationError(#[from] bincode::Error);
+pub struct JsSerializationError(#[from] DecodeError);
 
 impl From<JsSerializationError> for JsValue {
     fn from(err: JsSerializationError) -> Self {

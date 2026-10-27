@@ -88,6 +88,26 @@ impl Verifiable for IndividualId {
     }
 }
 
+/// Its identifier's 32 bytes.
+impl keyhive_codec::traits::Encode for IndividualId {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
+impl keyhive_codec::traits::Decode for IndividualId {
+    fn decode(bytes: &[u8]) -> Result<Self, keyhive_codec::error::DecodeError> {
+        keyhive_codec::traits::decode_exact(bytes)
+    }
+}
+
+impl keyhive_codec::traits::StreamDecode for IndividualId {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), keyhive_codec::error::DecodeError> {
+        let (id, rest) = Identifier::decode_next(bytes)?;
+        Ok((IndividualId(id), rest))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

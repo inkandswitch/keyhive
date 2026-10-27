@@ -4,7 +4,7 @@ pub mod id;
 pub mod op;
 pub mod state;
 
-use self::op::KeyOp;
+use self::op::{KeyOp, SignedKeyOp};
 use super::document::id::DocumentId;
 use crate::{
     contact_card::ContactCard,
@@ -20,6 +20,11 @@ use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use id::IndividualId;
+use keyhive_codec::{
+    error::DecodeError,
+    prefixed::{decode_list, encode_list},
+    traits::{decode_exact, Decode, Encode, StreamDecode},
+};
 use keyhive_crypto::{
     content::reference::ContentRef, context::Context, identifier::Identifier, share_key::ShareKey,
     signer::async_signer::AsyncSigner, verifiable::Verifiable, verified::VerifyError,
@@ -27,7 +32,10 @@ use keyhive_crypto::{
 use keyline::contract::Keyline;
 use serde::{Deserialize, Serialize};
 use state::PrekeyState;
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 use thiserror::Error;
 use tracing::instrument;
 
@@ -204,6 +212,58 @@ impl Hash for IndividualState {
         for pk in self.prekeys.iter() {
             pk.hash(state);
         }
+    }
+}
+
+/// Its prekey operations' signed frames, as a count and then in ascending
+/// order of digest. Its id is not stored: it is their issuer. Decoding
+/// verifies each operation, and refuses a set that is empty or signed by
+/// more than one individual.
+impl Encode for IndividualState {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let ops: BTreeMap<_, _> = self
+            .prekey_state
+            .ops()
+            .values()
+            .map(|op| (op.digest(), SignedKeyOp::from(op.as_ref().clone())))
+            .collect();
+        encode_list(ops.values(), out);
+    }
+}
+
+impl Decode for IndividualState {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for IndividualState {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (signed, rest) = decode_list::<SignedKeyOp>(bytes)?;
+        let ops = signed
+            .into_iter()
+            .map(|op| {
+                op.verify().map_err(|e| match e {
+                    VerifyError::Decode(e) => e,
+                    VerifyError::BadSignature => DecodeError::InvalidField("prekey operation"),
+                })
+            })
+            .collect::<Result<Vec<KeyOp>, _>>()?;
+        if ops
+            .windows(2)
+            .any(|pair| pair[0].digest() >= pair[1].digest())
+        {
+            return Err(DecodeError::UnsortedKeys);
+        }
+        let mut ops = ops.into_iter();
+        let mut state = PrekeyState::new(
+            ops.next()
+                .ok_or(DecodeError::InvalidField("prekey operations"))?,
+        );
+        state.extend(ops);
+        let individual = IndividualState::try_from(state)
+            .map_err(|_| DecodeError::InvalidField("prekey operations"))?;
+        Ok((individual, rest))
     }
 }
 

@@ -13,6 +13,7 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::{
+    digest::Digest,
     identifier::Identifier,
     share_key::ShareKey,
     signable::Kind,
@@ -58,6 +59,14 @@ impl KeyOp {
         match self {
             KeyOp::Add(add) => add.issuer(),
             KeyOp::Rotate(rot) => rot.issuer(),
+        }
+    }
+
+    /// Its statement's digest: who signed it and what it says.
+    pub fn digest(&self) -> Digest<KeyOp> {
+        match self {
+            KeyOp::Add(add) => add.digest().coerce(),
+            KeyOp::Rotate(rot) => rot.digest().coerce(),
         }
     }
 
