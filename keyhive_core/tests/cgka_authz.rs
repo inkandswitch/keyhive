@@ -6,6 +6,7 @@ use beekem::{
 };
 use future_form::{FutureForm, Sendable};
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_core::{
     content::heads::ContentHeads,
     crypto::digest::Digest,
@@ -21,7 +22,6 @@ use keyhive_core::{
             IndividualState,
         },
     },
-    store::ciphertext::memory::MemoryCiphertextStore,
     test_utils::{make_simple_keyhive, Hive, KeylineStore, TestContext},
 };
 use keyhive_crypto::{

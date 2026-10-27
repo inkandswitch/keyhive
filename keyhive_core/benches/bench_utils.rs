@@ -1,10 +1,10 @@
 use future_form::Sendable;
+use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_core::{
     content::heads::ContentHeads,
     keyhive::Keyhive,
     listener::no_listener::NoListener,
     principal::individual::{id::IndividualId, op::KeyOp},
-    store::ciphertext::memory::MemoryCiphertextStore,
     test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;

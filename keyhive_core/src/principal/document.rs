@@ -7,15 +7,10 @@ use crate::{
     certificate::{CertificateError, KeylineStorageError},
     cgka::Cgka,
     content::heads::ContentHeads,
-    crypto::envelope::Envelope,
     error::not_found::NotFound,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::{group::RevokeMemberError, membered::id::MemberedId},
-    store::ciphertext::{
-        CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
-        ErrorReason,
-    },
     update::{AddMemberUpdate, RevokeMemberUpdate},
 };
 use beekem::{
@@ -27,7 +22,14 @@ use beekem::{
 use future_form::FutureForm;
 use id::DocumentId;
 use keyhive_codec::traits::{Decode, Encode};
-use keyhive_content::encrypted::{ContentDecryptError, EncryptedContent};
+use keyhive_content::{
+    encrypted::{ContentDecryptError, EncryptedContent},
+    envelope::Envelope,
+    store::{
+        CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
+        ErrorReason,
+    },
+};
 use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::Identifier,

@@ -1,9 +1,10 @@
 use future_form::Local;
 use std::collections::HashMap;
 
+use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_core::{
     content::heads::ContentHeads, event::static_event::StaticEvent, keyhive::Keyhive,
-    listener::log::Log, store::ciphertext::memory::MemoryCiphertextStore,
+    listener::log::Log,
 };
 use keyhive_crypto::{digest::Digest, signer::memory::MemorySigner};
 use keyline::power::Power;

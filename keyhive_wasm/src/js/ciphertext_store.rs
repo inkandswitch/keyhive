@@ -4,11 +4,12 @@ use std::sync::Arc;
 use super::{base64::Base64, change_id::JsChangeId};
 use future_form::{FutureForm, Local};
 use keyhive_codec::error::DecodeError;
-use keyhive_content::{application_secret::GroupSecretEpoch, encrypted::EncryptedContent};
-use keyhive_core::{
-    crypto::digest::Digest,
-    store::ciphertext::{memory::MemoryCiphertextStore, CiphertextStore},
+use keyhive_content::{
+    application_secret::GroupSecretEpoch,
+    encrypted::EncryptedContent,
+    store::{memory::MemoryCiphertextStore, CiphertextStore},
 };
+use keyhive_core::crypto::digest::Digest;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 

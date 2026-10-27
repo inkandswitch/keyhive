@@ -1,11 +1,10 @@
 //! Two keyhive instances sharing one identity, its signing key and its secrets.
 
-use keyhive_content::encrypted::EncryptedContent;
+use keyhive_content::{encrypted::EncryptedContent, store::memory::MemoryCiphertextStore};
 use keyhive_core::{
     keyhive::Keyhive,
     listener::no_listener::NoListener,
     principal::document::id::DocumentId,
-    store::ciphertext::memory::MemoryCiphertextStore,
     test_utils::{
         content_ref, EventKind, Hive, Instance, TestContext, TestError, TestResult as Result,
     },

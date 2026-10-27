@@ -20,14 +20,12 @@ use self::{
     individual::{id::IndividualId, Individual},
 };
 use crate::{
-    certificate::KeylineStorageError,
-    content::heads::ContentHeads,
-    keyhive::Keyhive,
+    certificate::KeylineStorageError, content::heads::ContentHeads, keyhive::Keyhive,
     listener::membership::MembershipListener,
-    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
 };
 use future_form::FutureForm;
 use keyhive_codec::traits::Decode;
+use keyhive_content::store::{CiphertextStore, CiphertextStoreExt};
 use keyhive_crypto::{
     content::reference::ContentRef, identifier::Identifier, signer::async_signer::AsyncSigner,
     verified::Signed,

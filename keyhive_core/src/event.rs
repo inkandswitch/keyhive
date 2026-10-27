@@ -9,13 +9,12 @@ use crate::{
         document::id::DocumentId,
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
     },
-    store::ciphertext::CiphertextStore,
 };
 use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use future_form::FutureForm;
-use keyhive_content::encrypted::EncryptedContent;
+use keyhive_content::{encrypted::EncryptedContent, store::CiphertextStore};
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
@@ -126,15 +125,14 @@ impl<T: ContentRef> Dupe for Event<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        principal::individual::id::IndividualId, store::ciphertext::memory::MemoryCiphertextStore,
-    };
+    use crate::principal::individual::id::IndividualId;
     use beekem::{
         id::{MemberId, TreeId},
         operation::CgkaChange,
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
+    use keyhive_content::store::memory::MemoryCiphertextStore;
     use keyhive_crypto::{
         identifier::Identifier, share_key::ShareKey, signer::memory::MemorySigner,
         symmetric_key::SymmetricKey, verifiable::Verifiable, verified::Verified,

@@ -23,7 +23,6 @@ pub mod keyhive;
 pub mod listener;
 pub mod principal;
 pub mod stats;
-pub mod store;
 pub mod transact;
 pub mod update;
 pub mod util;

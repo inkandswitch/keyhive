@@ -11,7 +11,6 @@ use crate::{
     content::heads::ContentHeads,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
-    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
@@ -25,6 +24,7 @@ use keyhive_codec::{
     prefixed::{decode_list, encode_list},
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
+use keyhive_content::store::{CiphertextStore, CiphertextStoreExt};
 use keyhive_crypto::{
     content::reference::ContentRef, context::Context, identifier::Identifier, share_key::ShareKey,
     signer::async_signer::AsyncSigner, verifiable::Verifiable, verified::VerifyError,

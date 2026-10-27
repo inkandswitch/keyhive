@@ -19,9 +19,6 @@ use crate::{
         membered::id::MemberedId,
     },
     stats::Stats,
-    store::ciphertext::{
-        memory::MemoryCiphertextStore, CausalDecryptionError, CausalDecryptionState,
-    },
     update::AddMemberUpdate,
 };
 use beekem::error::CgkaError;
@@ -29,7 +26,10 @@ use dupe::Dupe;
 use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
-use keyhive_content::encrypted::EncryptedContent;
+use keyhive_content::{
+    encrypted::EncryptedContent,
+    store::{memory::MemoryCiphertextStore, CausalDecryptionError, CausalDecryptionState},
+};
 use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::Identifier,
