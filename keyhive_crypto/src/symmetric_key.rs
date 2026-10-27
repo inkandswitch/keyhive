@@ -71,6 +71,9 @@ impl SymmetricKey {
     }
 
     /// AEAD-seal `plaintext`, returning a self-contained `nonce(24) || ciphertext`.
+    ///
+    /// `associated_data` is authenticated: it is the AEAD's associated data,
+    /// and feeds the synthetic nonce. [`Self::try_open`] needs the same bytes.
     #[instrument(skip(self))]
     pub fn try_seal(
         &self,
@@ -79,22 +82,41 @@ impl SymmetricKey {
     ) -> Result<Vec<u8>, chacha20poly1305::Error> {
         let nonce = Siv::new(self, plaintext, associated_data);
         let mut buf = plaintext.to_vec();
-        self.try_encrypt(nonce, &mut buf)?;
+        self.to_xchacha()
+            .encrypt_in_place(nonce.as_xnonce(), associated_data, &mut buf)?;
         let mut out = Vec::with_capacity(nonce.as_bytes().len() + buf.len());
         out.extend_from_slice(nonce.as_bytes());
         out.extend_from_slice(&buf);
         Ok(out)
     }
 
-    /// Inverse of [`Self::try_seal`]. Reads a `nonce(24) || ciphertext` blob.
+    /// Inverse of [`Self::try_seal`]: reads a `nonce(24) || ciphertext` blob
+    /// sealed with the same `associated_data`.
+    ///
+    /// Also refuses a blob whose nonce is not the synthetic nonce of what it
+    /// decrypts to, which commits the blob to this key.
     #[instrument(skip(self))]
-    pub fn try_open(&self, blob: &[u8]) -> Result<Vec<u8>, chacha20poly1305::Error> {
+    pub fn try_open(
+        &self,
+        blob: &[u8],
+        associated_data: &[u8],
+    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
         let Some((nonce_bytes, ciphertext)) = blob.split_first_chunk::<24>() else {
             return Err(chacha20poly1305::Error);
         };
         let nonce = Siv::from(*nonce_bytes);
         let mut buf = ciphertext.to_vec();
-        self.try_decrypt(nonce, &mut buf)?;
+        self.to_xchacha()
+            .decrypt_in_place(nonce.as_xnonce(), associated_data, &mut buf)?;
+        let expected = Siv::new(self, &buf, associated_data);
+        let differ = expected
+            .as_bytes()
+            .iter()
+            .zip(nonce.as_bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+        if differ != 0 {
+            return Err(chacha20poly1305::Error);
+        }
         Ok(buf)
     }
 }
@@ -148,7 +170,10 @@ mod tests {
         let key = SymmetricKey::generate(&mut OsRng);
         let plaintext = b"hello world";
         let blob = key.try_seal(plaintext, b"doc-id").unwrap();
-        assert_eq!(key.try_open(&blob).unwrap().as_slice(), plaintext);
+        assert_eq!(
+            key.try_open(&blob, b"doc-id").unwrap().as_slice(),
+            plaintext
+        );
     }
 
     #[test]
@@ -157,7 +182,7 @@ mod tests {
         let blob = key.try_seal(b"", b"doc-id").unwrap();
         // Nonce plus the Poly1305 tag, with no payload in between.
         assert_eq!(blob.len(), NONCE_LEN + TAG_LEN);
-        assert!(key.try_open(&blob).unwrap().is_empty());
+        assert!(key.try_open(&blob, b"doc-id").unwrap().is_empty());
     }
 
     #[test]
@@ -179,17 +204,35 @@ mod tests {
     }
 
     #[test]
-    fn associated_data_changes_ciphertext_but_open_ignores_it() {
-        // The same plaintext under different associated data yields distinct
-        // ciphertext, yet `try_open` recovers it without knowing the data
-        // because the nonce is carried in the blob.
+    fn a_blob_opens_only_with_the_associated_data_it_was_sealed_with() {
         let key = SymmetricKey::generate(&mut OsRng);
         let plaintext = b"hello world";
         let blob_a = key.try_seal(plaintext, b"context-a").unwrap();
         let blob_b = key.try_seal(plaintext, b"context-b").unwrap();
         assert_ne!(blob_a, blob_b);
-        assert_eq!(key.try_open(&blob_a).unwrap().as_slice(), plaintext);
-        assert_eq!(key.try_open(&blob_b).unwrap().as_slice(), plaintext);
+        assert_eq!(
+            key.try_open(&blob_a, b"context-a").unwrap().as_slice(),
+            plaintext
+        );
+        assert!(key.try_open(&blob_a, b"context-b").is_err());
+        assert!(key.try_open(&blob_b, b"context-a").is_err());
+    }
+
+    /// A blob that authenticates but whose nonce is not its synthetic nonce
+    /// is refused: the check is what commits a blob to one key.
+    #[test]
+    fn a_blob_whose_nonce_is_not_synthetic_is_refused() {
+        use chacha20poly1305::AeadInPlace;
+
+        let key = SymmetricKey::generate(&mut OsRng);
+        let plaintext = b"hello world";
+        let nonce = [7u8; NONCE_LEN];
+        let mut buf = plaintext.to_vec();
+        key.to_xchacha()
+            .encrypt_in_place((&nonce).into(), b"doc-id", &mut buf)
+            .unwrap();
+        let blob = [&nonce[..], &buf].concat();
+        assert!(key.try_open(&blob, b"doc-id").is_err());
     }
 
     #[test]
@@ -197,7 +240,7 @@ mod tests {
         let key = SymmetricKey::generate(&mut OsRng);
         let other = SymmetricKey::generate(&mut OsRng);
         let blob = key.try_seal(b"hello world", b"doc-id").unwrap();
-        assert!(other.try_open(&blob).is_err());
+        assert!(other.try_open(&blob, b"doc-id").is_err());
     }
 
     #[test]
@@ -207,7 +250,7 @@ mod tests {
         // Flip a bit in the ciphertext (past the 24-byte nonce).
         let last = blob.len() - 1;
         blob[last] ^= 0x01;
-        assert!(key.try_open(&blob).is_err());
+        assert!(key.try_open(&blob, b"doc-id").is_err());
     }
 
     #[test]
@@ -215,13 +258,13 @@ mod tests {
         let key = SymmetricKey::generate(&mut OsRng);
         let mut blob = key.try_seal(b"hello world", b"doc-id").unwrap();
         blob[0] ^= 0x01;
-        assert!(key.try_open(&blob).is_err());
+        assert!(key.try_open(&blob, b"doc-id").is_err());
     }
 
     #[test]
     fn try_open_rejects_blob_shorter_than_nonce() {
         let key = SymmetricKey::generate(&mut OsRng);
-        assert!(key.try_open(&[]).is_err());
-        assert!(key.try_open(&[0u8; NONCE_LEN - 1]).is_err());
+        assert!(key.try_open(&[], b"doc-id").is_err());
+        assert!(key.try_open(&[0u8; NONCE_LEN - 1], b"doc-id").is_err());
     }
 }

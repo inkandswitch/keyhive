@@ -128,7 +128,7 @@ mod tests {
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
     use keyhive_crypto::{
-        identifier::Identifier, share_key::ShareKey, signer::memory::MemorySigner, siv::Siv,
+        identifier::Identifier, share_key::ShareKey, signer::memory::MemorySigner,
         symmetric_key::SymmetricKey, verifiable::Verifiable, verified::Verified,
     };
     use keyline::power::Power;
@@ -210,31 +210,25 @@ mod tests {
             Event::Delegated(delegation.signed().dupe()),
         ];
 
-        let ciphertext1 = Arc::new(EncryptedContent::new(
-            Siv::new(
-                &SymmetricKey::generate(&mut csprng),
-                &[4, 5, 6],
-                doc_id1.as_bytes(),
-            ),
-            vec![4, 5, 6],
-            [1u8; 32].into(),
-            hash1,
+        let ciphertext1 = Arc::new(EncryptedContent::encrypt(
+            &SymmetricKey::generate(&mut csprng),
+            doc_id1.into(),
             [1u8; 32],
             [1u8; 32].into(),
-        ));
+            [1u8; 32].into(),
+            hash1,
+            &[4, 5, 6],
+        )?);
 
-        let ciphertext2 = Arc::new(EncryptedContent::new(
-            Siv::new(
-                &SymmetricKey::generate(&mut csprng),
-                &[1, 2, 3],
-                doc_id2.as_bytes(),
-            ),
-            vec![1, 2, 3],
-            [2u8; 32].into(),
-            hash2,
+        let ciphertext2 = Arc::new(EncryptedContent::encrypt(
+            &SymmetricKey::generate(&mut csprng),
+            doc_id2.into(),
             [2u8; 32],
             [2u8; 32].into(),
-        ));
+            [2u8; 32].into(),
+            hash2,
+            &[1, 2, 3],
+        )?);
 
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
         store.insert(ciphertext1.dupe()).await;
@@ -242,18 +236,15 @@ mod tests {
 
         // Should not show up in updates
         store
-            .insert(Arc::new(EncryptedContent::new(
-                Siv::new(
-                    &SymmetricKey::generate(&mut csprng),
-                    &[0],
-                    doc_id1.as_bytes(),
-                ),
-                vec![0],
-                [3u8; 32].into(),
-                hash3,
+            .insert(Arc::new(EncryptedContent::encrypt(
+                &SymmetricKey::generate(&mut csprng),
+                doc_id1.into(),
                 [3u8; 32],
                 [3u8; 32].into(),
-            )))
+                [3u8; 32].into(),
+                hash3,
+                &[0],
+            )?))
             .await;
 
         let decryptable = Event::now_decryptable::<Sendable, _, _>(&events, &store).await?;

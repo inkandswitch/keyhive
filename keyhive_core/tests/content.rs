@@ -195,6 +195,37 @@ async fn a_non_member_is_not_even_sent_the_document() -> Result<()> {
     Ok(())
 }
 
+/// The hash a replica reports for its current PCS key is the one its
+/// ciphertexts carry, so a reader can tell which key a block needs.
+#[tokio::test]
+async fn a_replicas_pcs_key_hash_is_the_one_its_ciphertexts_carry() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    let ct = ctx.encrypt(&alice, design_doc, b"one").await?;
+    assert_eq!(
+        alice.try_pcs_key_hash(design_doc).await,
+        Some(ct.pcs_key_hash)
+    );
+    Ok(())
+}
+
+/// Each block is bound to its document: its key does not open it as part of
+/// another.
+#[tokio::test]
+async fn a_block_does_not_decrypt_for_another_document() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let other_doc = ctx.doc(&alice, "other_doc").await?;
+
+    let (ct, key) = ctx.encrypt_keyed(&alice, design_doc, b"one").await?;
+    assert_eq!(decrypt_with_key(&ct, key, design_doc)?, b"one".to_vec());
+    assert!(decrypt_with_key(&ct, key, other_doc).is_err());
+    Ok(())
+}
+
 #[tokio::test]
 async fn the_wrong_key_does_not_decrypt() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -205,10 +236,16 @@ async fn the_wrong_key_does_not_decrypt() -> Result<()> {
     let (second, second_key) = ctx.encrypt_keyed(&alice, design_doc, b"two").await?;
     assert_ne!(first_key, second_key, "two writes reused one key");
 
-    assert_eq!(decrypt_with_key(&first, first_key)?, b"one".to_vec());
-    assert_eq!(decrypt_with_key(&second, second_key)?, b"two".to_vec());
-    assert!(decrypt_with_key(&first, second_key).is_err());
-    assert!(decrypt_with_key(&second, first_key).is_err());
+    assert_eq!(
+        decrypt_with_key(&first, first_key, design_doc)?,
+        b"one".to_vec()
+    );
+    assert_eq!(
+        decrypt_with_key(&second, second_key, design_doc)?,
+        b"two".to_vec()
+    );
+    assert!(decrypt_with_key(&first, second_key, design_doc).is_err());
+    assert!(decrypt_with_key(&second, first_key, design_doc).is_err());
     Ok(())
 }
 
@@ -225,7 +262,7 @@ async fn a_ciphertext_is_refused_if_tampered_with() -> Result<()> {
 
     let tampered = with_a_flipped_bit(&ct);
     assert!(
-        decrypt_with_key(&tampered, key).is_err(),
+        decrypt_with_key(&tampered, key, design_doc).is_err(),
         "the cipher is authenticated so one flipped bit causes an error"
     );
     match bob
@@ -254,7 +291,7 @@ async fn a_reader_can_read_what_an_editor_wrote() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert!(bob.can_decrypt_content(design_doc, &ct).await?);
-    assert_eq!(decrypt_with_key(&ct, key)?, msg.to_vec());
+    assert_eq!(decrypt_with_key(&ct, key, design_doc)?, msg.to_vec());
     Ok(())
 }
 

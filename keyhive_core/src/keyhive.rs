@@ -54,7 +54,7 @@ use beekem::{
 use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
 use futures::lock::Mutex;
-use keyhive_codec::traits::{Encode, StreamDecode};
+use keyhive_codec::traits::Encode;
 use keyhive_crypto::{
     bytes::Bytes,
     content::reference::ContentRef,
@@ -230,7 +230,6 @@ impl<
         K: Keyline<F, RetentionWatermark = ContentHeads<T>>,
     > Keyhive<F, S, T, P, C, L, R, K>
 where
-    T: Encode + StreamDecode,
     K::Error: Send + Sync + 'static,
 {
     #[instrument(skip_all)]
@@ -1632,7 +1631,7 @@ where
         &self,
         doc: DocumentId,
         content_ref: &T,
-        pred_refs: &Vec<T>,
+        pred_refs: &[T],
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
         Ok(self
@@ -1652,7 +1651,7 @@ where
         &self,
         doc: DocumentId,
         content_ref: &T,
-        pred_refs: &Vec<T>,
+        pred_refs: &[T],
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EnvelopeError<T>>
     where
@@ -1696,7 +1695,7 @@ where
         &self,
         doc: DocumentId,
         content_ref: &T,
-        pred_refs: &Vec<T>,
+        pred_refs: &[T],
         content: &[u8],
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
         let writing = self.prepare_to_write(doc).await?;
@@ -1773,6 +1772,7 @@ where
     #[cfg(any(test, feature = "test_utils"))]
     pub async fn try_causal_decrypt_from(
         &self,
+        doc: DocumentId,
         entrypoints: &[(Arc<EncryptedContent<P, T>>, SymmetricKey)],
     ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<F, T, P, C>>
     where
@@ -1780,7 +1780,7 @@ where
         P: Clone + Serialize + for<'de> Deserialize<'de>,
     {
         let mut to_walk = entrypoints.to_vec();
-        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(&self.ciphertext_store, &mut to_walk)
+        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(&self.ciphertext_store, doc, &mut to_walk)
             .await
     }
 
@@ -3775,7 +3775,6 @@ impl<
     > ForkAsync for Keyhive<F, S, T, P, C, L, R, K>
 where
     Log<T>: MembershipListener<F, T>,
-    T: Encode + StreamDecode,
     K::Error: Send + Sync + 'static,
 {
     type AsyncForked = Keyhive<F, S, T, P, C, Log<T>, R, K>;
@@ -3827,7 +3826,6 @@ impl<
     > MergeAsync for Arc<Mutex<Keyhive<F, S, T, P, C, L, R, K>>>
 where
     Log<T>: MembershipListener<F, T>,
-    T: Encode + StreamDecode,
     K::Error: Send + Sync + 'static,
 {
     async fn merge_async(&self, fork: Self::AsyncForked) {
@@ -3847,7 +3845,6 @@ impl<
     > Keyhive<F, S, T, P, C, L, R, K>
 where
     Log<T>: MembershipListener<F, T>,
-    T: Encode + StreamDecode,
     K::Error: Send + Sync + 'static,
 {
     async fn absorb_fork(&self, fork: Keyhive<F, S, T, P, C, Log<T>, R, K>) {
@@ -6217,7 +6214,7 @@ mod tests {
         assert!(update.cgka_ops.is_empty());
 
         send(&alice, &bob, true).await?;
-        bob.try_encrypt_content(project_id, &[2u8; 32], &vec![[1u8; 32]], b"after joining")
+        bob.try_encrypt_content(project_id, &[2u8; 32], &[[1u8; 32]], b"after joining")
             .await?;
         let members = bob
             .cgka_members_for(project_id)
@@ -6261,7 +6258,7 @@ mod tests {
         // certificates the fork inserted.
         let trunk = trunk.lock().await;
         trunk
-            .try_encrypt_content(doc, &[2u8; 32], &vec![], b"after the fork")
+            .try_encrypt_content(doc, &[2u8; 32], &[], b"after the fork")
             .await?;
         let members = trunk
             .cgka_members_for(doc)

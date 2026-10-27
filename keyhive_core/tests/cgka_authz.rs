@@ -101,7 +101,7 @@ async fn intercepted_path(who: &Hive) -> Box<PathChange> {
         .generate_doc(vec![], nonempty![[7u8; 32]])
         .await
         .expect("a document");
-    who.try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"warm up".as_ref())
+    who.try_encrypt_content(doc_id, &[1u8; 32], &[], b"warm up".as_ref())
         .await
         .expect("content encrypts");
     who.cgka_ops_for_doc(&doc_id)
@@ -807,7 +807,7 @@ async fn a_revoked_writer_adds_no_reader() -> TestResult {
     let revocation = signed_revocation(&alice, &alice, doc_id, bob_id).await?;
     receive(&alice, &revocation).await;
     alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"after")
         .await?;
     for cert in [&grant, &revocation] {
         receive(&bob, cert).await;
@@ -820,7 +820,7 @@ async fn a_revoked_writer_adds_no_reader() -> TestResult {
     // Only Bob has Carol's prekeys, but his revocation is in the history
     // an add of her would build on, so every receiver would deny it.
     let _ = bob
-        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"by bob")
+        .try_encrypt_content(doc_id, &[2u8; 32], &[], b"by bob")
         .await;
     let ops = bob.cgka_ops_for_doc(&doc_id).await.unwrap_or_default();
     let carol_member = MemberId::from(carol_id);
@@ -839,7 +839,7 @@ async fn a_reader_no_writer_can_add_adds_itself() -> TestResult {
     // can add him.
     issue_grant(&alice, bob.id(), doc_id, Power::Read).await?;
     alice
-        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before")
+        .try_encrypt_content(doc_id, &[0u8; 32], &[], b"before")
         .await?;
     assert!(!cgka_members(&alice, doc_id).await.contains(&bob.id()));
 
@@ -849,7 +849,7 @@ async fn a_reader_no_writer_can_add_adds_itself() -> TestResult {
     assert!(cgka_members(&alice, doc_id).await.contains(&bob.id()));
 
     let ct = alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"for bob")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"for bob")
         .await?;
     send(&alice, &bob).await;
     assert_eq!(
@@ -883,12 +883,12 @@ async fn a_member_added_under_a_key_it_rotated_away_rotates_before_writing() -> 
         .receive_cgka_op(alice.serde_sign_cgka_op(add).await?)
         .await?;
     alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"from alice")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"from alice")
         .await?;
     send(&alice, &carol).await;
 
     carol
-        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"from carol")
+        .try_encrypt_content(doc_id, &[2u8; 32], &[], b"from carol")
         .await?;
 
     let rotated = carol
@@ -911,12 +911,12 @@ async fn a_reader_whose_prekeys_arrive_after_a_write_is_added_at_the_next_write(
     let carol = make_simple_keyhive().await?;
     issue_grant(&alice, carol.id(), doc_id, Power::Read).await?;
     alice
-        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before her prekeys")
+        .try_encrypt_content(doc_id, &[0u8; 32], &[], b"before her prekeys")
         .await?;
 
     learn(&alice, &carol).await;
     alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after her prekeys")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"after her prekeys")
         .await?;
 
     assert!(cgka_members(&alice, doc_id).await.contains(&carol.id()));
@@ -931,12 +931,12 @@ async fn an_add_of_a_reader_revoked_before_being_added_is_removed_at_the_next_wr
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     let grant = issue_grant(&alice, bob.id(), doc_id, Power::Read).await?;
     alice
-        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before")
+        .try_encrypt_content(doc_id, &[0u8; 32], &[], b"before")
         .await?;
     let revocation = signed_revocation(&alice, &alice, doc_id, bob.id()).await?;
     receive(&alice, &revocation).await;
     alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"after")
         .await?;
 
     // Bob was never added, so no remove cited the revocation. An add citing
@@ -948,7 +948,7 @@ async fn an_add_of_a_reader_revoked_before_being_added_is_removed_at_the_next_wr
         .await?;
     assert!(cgka_members(&alice, doc_id).await.contains(&bob.id()));
     alice
-        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"after the add")
+        .try_encrypt_content(doc_id, &[2u8; 32], &[], b"after the add")
         .await?;
     assert!(!cgka_members(&alice, doc_id).await.contains(&bob.id()));
     Ok(())
@@ -1038,7 +1038,7 @@ async fn removed_and_granted_again() -> TestResult<(Hive, Hive, DocumentId)> {
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     issue_grant(&alice, bob.id(), doc_id, Power::Read).await?;
     alice
-        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before")
+        .try_encrypt_content(doc_id, &[0u8; 32], &[], b"before")
         .await?;
     send(&alice, &bob).await;
     assert!(bob.add_self_to(doc_id).await?);
@@ -1047,7 +1047,7 @@ async fn removed_and_granted_again() -> TestResult<(Hive, Hive, DocumentId)> {
     let revocation = signed_revocation(&alice, &alice, doc_id, bob.id()).await?;
     receive(&alice, &revocation).await;
     alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"revoked")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"revoked")
         .await?;
     issue_grant(&alice, bob.id(), doc_id, Power::Edit).await?;
     send(&alice, &bob).await;
@@ -1061,7 +1061,7 @@ async fn a_reader_removed_and_granted_again_can_add_itself_again() -> TestResult
     assert!(bob.add_self_to(doc_id).await?);
     send(&bob, &alice).await;
     let ct = alice
-        .try_encrypt_content(doc_id, &[2u8; 32], &vec![], b"for bob again")
+        .try_encrypt_content(doc_id, &[2u8; 32], &[], b"for bob again")
         .await?;
     send(&alice, &bob).await;
     assert_eq!(
@@ -1076,7 +1076,7 @@ async fn a_reader_removed_and_granted_again_can_add_itself_again() -> TestResult
 async fn a_reader_removed_and_granted_again_adds_itself_when_it_writes() -> TestResult {
     let (_alice, bob, doc_id) = removed_and_granted_again().await?;
 
-    bob.try_encrypt_content(doc_id, &[3u8; 32], &vec![], b"back again")
+    bob.try_encrypt_content(doc_id, &[3u8; 32], &[], b"back again")
         .await?;
 
     assert!(cgka_members(&bob, doc_id).await.contains(&bob.id()));
@@ -1104,7 +1104,7 @@ async fn a_replica_stops_adding_once_its_add_cites_its_own_revocation() -> TestR
     // Bob is not a member, so the write fails. What matters is what it
     // issues before that.
     let _ = bob
-        .try_encrypt_content(doc, &[3u8; 32], &vec![], b"revoked again")
+        .try_encrypt_content(doc, &[3u8; 32], &[], b"revoked again")
         .await;
 
     let mut adds = 0;
@@ -1195,7 +1195,7 @@ async fn a_reader_whose_remove_failed_to_sign_is_removed_at_the_next_write() -> 
 
     signer.allow(usize::MAX);
     alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after the revocation")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"after the revocation")
         .await?;
     let members = alice
         .cgka_members_for(doc_id)
@@ -1249,7 +1249,7 @@ async fn bob_revoked_with_a_fresh_key() -> TestResult<(
     let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
     let grant = issue_grant(&alice, bob_id, doc_id, Power::Read).await?;
     alice
-        .try_encrypt_content(doc_id, &[0u8; 32], &vec![], b"before")
+        .try_encrypt_content(doc_id, &[0u8; 32], &[], b"before")
         .await?;
     assert!(cgka_members(&alice, doc_id).await.contains(&bob_id));
     let revocation = signed_revocation(&alice, &alice, doc_id, bob_id).await?;
@@ -1267,7 +1267,7 @@ async fn bob_revoked_with_a_fresh_key() -> TestResult<(
 async fn a_revoked_reader_cannot_sign_after_the_remove() -> TestResult {
     let (alice, bob, fresh, doc_id, _, _) = bob_revoked_with_a_fresh_key().await?;
     alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"after")
         .await?;
     let from_alice = issue_grant(&alice, fresh.id(), doc_id, Power::Read).await?;
     let op = proven_add(&alice, doc_id, &fresh, cites(&[&from_alice])).await;
@@ -1313,7 +1313,7 @@ async fn an_operation_on_a_document_the_replica_cannot_read_is_refused() -> Test
 async fn a_member_cannot_add_a_key_a_revoked_reader_granted_after_the_remove() -> TestResult {
     let (alice, _bob, fresh, doc_id, _, to_fresh) = bob_revoked_with_a_fresh_key().await?;
     alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"after")
         .await?;
     let op = proven_add(&alice, doc_id, &fresh, cites(&[&to_fresh])).await;
     let result = alice
@@ -1333,7 +1333,7 @@ async fn a_key_a_revoked_reader_added_before_the_remove_is_removed_by_it() -> Te
     assert!(result.is_ok(), "{result:?}");
     assert!(cgka_members(&alice, doc_id).await.contains(&fresh.id()));
     alice
-        .try_encrypt_content(doc_id, &[1u8; 32], &vec![], b"after")
+        .try_encrypt_content(doc_id, &[1u8; 32], &[], b"after")
         .await?;
     let members = cgka_members(&alice, doc_id).await;
     assert!(
@@ -1359,7 +1359,7 @@ async fn a_replica_whose_read_was_revoked_adds_no_new_reader() -> TestResult {
     // Bob removes himself first, which his signing set allows. The write then
     // fails because he is no longer a member.
     let _ = bob
-        .try_encrypt_content(doc, &[1u8; 32], &vec![], b"after his revocation")
+        .try_encrypt_content(doc, &[1u8; 32], &[], b"after his revocation")
         .await;
 
     assert!(adds_of(&bob, doc, dave_id).await?.is_empty());
@@ -1385,7 +1385,7 @@ async fn restored_from_before_a_grant() -> TestResult<(Hive, Hive, Hive, Documen
     issue_grant(&alice, carol.id(), doc, Power::Read).await?;
     learn(&alice, &carol).await;
     alice
-        .try_encrypt_content(doc, &[0u8; 32], &vec![], b"for carol")
+        .try_encrypt_content(doc, &[0u8; 32], &[], b"for carol")
         .await?;
 
     let store = KeylineStore::new();
@@ -1454,7 +1454,7 @@ async fn a_rebuilt_replica_cites_what_only_its_store_has() -> TestResult {
     learn(&restored, &carol).await;
 
     restored
-        .try_encrypt_content(doc, &[1u8; 32], &vec![], b"for carol")
+        .try_encrypt_content(doc, &[1u8; 32], &[], b"for carol")
         .await?;
 
     assert!(cgka_members(&restored, doc).await.contains(&carol.id()));

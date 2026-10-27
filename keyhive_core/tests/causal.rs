@@ -181,7 +181,7 @@ async fn an_ancestor_that_is_not_present_is_reported_rather_than_failing() -> Re
         .key_for_missing(&genesis)
         .ok_or("the traversal did not say which content is outstanding")?;
     assert!(
-        decrypt_with_key(&genesis, key).is_ok(),
+        decrypt_with_key(&genesis, key, design_doc).is_ok(),
         "and the key it reported for it is the one that opens it, so fetching is enough"
     );
 
@@ -247,7 +247,7 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
             .ok_or("the reader cannot derive the key for an entrypoint")?;
         heads.push((Arc::new(head.clone()), key));
     }
-    let walked = bob.try_causal_decrypt_from(&heads).await?;
+    let walked = bob.try_causal_decrypt_from(design_doc, &heads).await?;
 
     assert_eq!(
         walked.recovered(),
@@ -272,7 +272,7 @@ async fn a_walk_from_two_heads_reads_their_shared_ancestor_once() -> Result<()> 
         .key_for_recovered(&first_root)
         .ok_or("the walk did not report the key it read the shared root under")?;
     assert!(
-        decrypt_with_key(&first_root, key).is_ok(),
+        decrypt_with_key(&first_root, key, design_doc).is_ok(),
         "and that key is the one that opens it"
     );
     assert!(
@@ -363,9 +363,9 @@ async fn two_missing_ancestors_are_each_reported_with_their_own_key() -> Result<
         first_key, second_key,
         "each outstanding root has its own key, not one key reported twice"
     );
-    assert!(decrypt_with_key(&first_root, first_key).is_ok());
+    assert!(decrypt_with_key(&first_root, first_key, design_doc).is_ok());
     assert!(
-        decrypt_with_key(&second_root, second_key).is_ok(),
+        decrypt_with_key(&second_root, second_key, design_doc).is_ok(),
         "and each key opens the content it was reported for"
     );
 

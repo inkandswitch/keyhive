@@ -20,7 +20,6 @@ use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use id::IndividualId;
-use keyhive_codec::traits::{Encode, StreamDecode};
 use keyhive_crypto::{
     content::reference::ContentRef, identifier::Identifier, share_key::ShareKey,
     signer::async_signer::AsyncSigner, verifiable::Verifiable, verified::VerifyError,
@@ -278,7 +277,7 @@ impl<F, S, T, P, C, L, R, K> Individual<Keyhive<F, S, T, P, C, L, R, K>>
 where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
-    T: ContentRef + Encode + StreamDecode,
+    T: ContentRef,
     P: for<'de> Deserialize<'de>,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
@@ -324,6 +323,8 @@ pub enum ReceivePrekeyOpError {
     Verify(#[from] VerifyError),
 }
 
+const PREKEY_SELECTION_CONTEXT: &str = "/keyhive/prekey/selection/v1/2026-10-26";
+
 /// An index below `len`, uniform and fixed by `seed`; `None` when `len` is 0.
 ///
 /// Rejection sampling over BLAKE3's output stream: a draw at or above the
@@ -332,7 +333,7 @@ pub enum ReceivePrekeyOpError {
 fn uniform_index(seed: &[u8], len: usize) -> Option<usize> {
     let n = u64::try_from(len).ok().filter(|&n| n > 0)?;
     let limit = u64::MAX - u64::MAX % n;
-    let mut stream = blake3::Hasher::new_derive_key("keyhive prekey selection v1")
+    let mut stream = blake3::Hasher::new_derive_key(PREKEY_SELECTION_CONTEXT)
         .update(seed)
         .finalize_xof();
     let mut buf = [0; 8];

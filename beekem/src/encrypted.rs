@@ -1,17 +1,37 @@
-//! Ciphertext with public metadata.
+//! Encrypted content and secrets, with their public metadata.
+//!
+//! Content is encrypted in chunks, so a block of any size streams through
+//! bounded memory and any byte range decrypts on its own:
+//!
+//! ```text
+//! "KHE" ‖ version ‖ content_ref ‖ pred_refs:32 ‖ pcs_key_hash:32 ‖ pcs_update_op:32
+//!       ‖ ( nonce_i:24 ‖ ciphertext_i )+                          to the end
+//!
+//! aad_i   = BLAKE3(doc_id ‖ header) ‖ i:u64 ‖ last:u8
+//! nonce_i = keyed BLAKE3(nonce_key, aad_i ‖ chunk_i)[..24]
+//! ```
+//!
+//! Every chunk but the last holds [`CHUNK_LEN`] plaintext bytes; the last holds
+//! fewer, and is empty only when the whole plaintext is. The nonce is
+//! synthetic: decryption recomputes it from the plaintext and rejects a
+//! mismatch, which commits each chunk to one key. Without that, one
+//! ciphertext could decrypt under two keys to two plaintexts, and a causal
+//! envelope naming the second key would show its readers a different history.
 
-use crate::{error::CgkaError, operation::CgkaOperation, pcs_key::PcsKey};
+use crate::{error::CgkaError, id::TreeId, operation::CgkaOperation, pcs_key::PcsKey};
 use alloc::vec::Vec;
-use core::marker::PhantomData;
+use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305, XNonce};
+use core::{convert::Infallible, marker::PhantomData};
 use keyhive_codec::{
     error::DecodeError,
-    prefixed::{decode_bytes, encode_bytes},
+    prefixed::{decode_bytes, encode_bytes, encode_list},
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
+    signable::{Kind, Kinded, TAG},
     signed::SerdeSigned,
     siv::Siv,
     symmetric_key::SymmetricKey,
@@ -19,56 +39,326 @@ use keyhive_crypto::{
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-/// The public information for an encrypted content ciphertext.
+/// The first bytes of encrypted content: Keyhive's tag, then `E`, which the
+/// kind registry reserves for it.
+pub const CONTENT_TAG: [u8; 3] = [TAG[0], TAG[1], b'E'];
+
+/// The version of the content format.
+pub const CONTENT_VERSION: u8 = 0;
+
+/// Plaintext bytes in every chunk but the last.
+pub const CHUNK_LEN: usize = 64 * 1024;
+
+const NONCE_LEN: usize = 24;
+const AEAD_TAG_LEN: usize = 16;
+
+/// Bytes a chunk adds to its plaintext: its nonce and its AEAD tag.
+pub const CHUNK_OVERHEAD: usize = NONCE_LEN + AEAD_TAG_LEN;
+
+const FULL_CHUNK: usize = CHUNK_LEN + CHUNK_OVERHEAD;
+
+const HEADER_CONTEXT: &str = "/keyhive/content/header/v1/2026-10-26";
+const ENCRYPTION_KEY_CONTEXT: &str = "/keyhive/content/encryption-key/v1/2026-10-26";
+const NONCE_KEY_CONTEXT: &str = "/keyhive/content/nonce-key/v1/2026-10-26";
+
+/// A block of encrypted content, with the public header readers need to find
+/// its key.
 ///
-/// This wraps a ciphertext that includes the [`Siv`] and the type of the data
-/// that was encrypted (or that the plaintext is _expected_ to be).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// `T` is the type the plaintext is expected to be. The chunks are always
+/// well formed (see the [module docs](self)): construction and decoding check
+/// their lengths.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EncryptedContent<T, Cr: ContentRef> {
-    /// The nonce used to encrypt the data.
-    pub nonce: Siv,
-    /// The encrypted data.
-    pub ciphertext: Vec<u8>,
-    /// Hash of the PCS key used to derive the application secret for encrypting.
-    pub pcs_key_hash: Digest<PcsKey>,
-    /// Hash of the PCS update operation corresponding to the PCS key.
-    pub pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
-    /// The content ref hash used to derive the application secret for encrypting.
+    /// The content ref the block's key is derived for.
     pub content_ref: Cr,
-    /// The predecessor content ref hashes used to derive the application secret
-    /// for encrypting.
-    pub pred_refs: Digest<Vec<Cr>>,
-    /// The type of the data that was encrypted.
+
+    /// The block's predecessors, also in its key.
+    pub pred_refs: Digest<PredecessorRefs<Cr>>,
+
+    /// The PCS key the block's key is derived from.
+    pub pcs_key_hash: Digest<PcsKey>,
+
+    /// The CGKA update that produced that PCS key.
+    pub pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
+
+    /// `( nonce_i ‖ ciphertext_i )+`.
+    chunks: Vec<u8>,
+
     _plaintext_tag: PhantomData<T>,
 }
 
 impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
-    /// Associate a nonce with a ciphertext and assert the plaintext type.
-    pub fn new(
-        nonce: Siv,
-        ciphertext: Vec<u8>,
+    /// Encrypt `plaintext` for the document `doc_id`, under a block's
+    /// application key.
+    #[instrument(skip_all)]
+    pub fn encrypt(
+        key: &SymmetricKey,
+        doc_id: TreeId,
+        content_ref: Cr,
+        pred_refs: Digest<PredecessorRefs<Cr>>,
         pcs_key_hash: Digest<PcsKey>,
         pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
-        content_ref: Cr,
-        pred_refs: Digest<Vec<Cr>>,
-    ) -> EncryptedContent<T, Cr> {
-        EncryptedContent {
-            nonce,
-            ciphertext,
-            pcs_key_hash,
-            pcs_update_op_hash,
+        plaintext: &[u8],
+    ) -> Result<Self, chacha20poly1305::Error> {
+        let mut content = EncryptedContent {
             content_ref,
             pred_refs,
+            pcs_key_hash,
+            pcs_update_op_hash,
+            chunks: Vec::with_capacity(
+                plaintext.len() + plaintext.len().div_ceil(CHUNK_LEN).max(1) * CHUNK_OVERHEAD,
+            ),
             _plaintext_tag: PhantomData,
+        };
+        let keys = ChunkKeys::new(key, doc_id, &content.header());
+        let count = plaintext.len().div_ceil(CHUNK_LEN).max(1);
+        for i in 0..count {
+            let chunk = &plaintext
+                [(i * CHUNK_LEN).min(plaintext.len())..((i + 1) * CHUNK_LEN).min(plaintext.len())];
+            let aad = keys.aad(i, i + 1 == count);
+            let nonce = keys.nonce(&aad, chunk);
+            let mut buf = chunk.to_vec();
+            keys.cipher.encrypt_in_place(&nonce, &aad, &mut buf)?;
+            content.chunks.extend_from_slice(&nonce);
+            content.chunks.extend_from_slice(&buf);
+        }
+        Ok(content)
+    }
+
+    /// Decrypt with the block's application key, for the document `doc_id`.
+    ///
+    /// Each chunk must authenticate, and its nonce must be the synthetic nonce
+    /// of what it decrypts to.
+    #[instrument(skip_all)]
+    pub fn try_decrypt(
+        &self,
+        key: SymmetricKey,
+        doc_id: TreeId,
+    ) -> Result<Vec<u8>, ContentDecryptError> {
+        let keys = ChunkKeys::new(&key, doc_id, &self.header());
+        let count = chunk_count(self.chunks.len()).expect("chunks are well formed");
+        let mut plaintext = Vec::with_capacity(self.chunks.len() - count * CHUNK_OVERHEAD);
+        for (i, chunk) in self.chunks.chunks(FULL_CHUNK).enumerate() {
+            let (nonce, ciphertext) = chunk.split_at(NONCE_LEN);
+            let aad = keys.aad(i, i + 1 == count);
+            let mut buf = ciphertext.to_vec();
+            keys.cipher
+                .decrypt_in_place(XNonce::from_slice(nonce), &aad, &mut buf)?;
+            if !same_nonce(&keys.nonce(&aad, &buf), nonce) {
+                return Err(ContentDecryptError::NonceMismatch);
+            }
+            plaintext.extend_from_slice(&buf);
+        }
+        Ok(plaintext)
+    }
+
+    /// The chunks: `( nonce_i ‖ ciphertext_i )+`.
+    pub fn chunks(&self) -> &[u8] {
+        &self.chunks
+    }
+
+    /// BLAKE3 of the encoding, which starts with `KHE`. Identifies these bytes,
+    /// not the content: the same plaintext under another key differs.
+    pub fn digest(&self) -> Digest<Self> {
+        Digest::from(blake3::hash(self.encode().as_bytes()))
+    }
+
+    /// `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ pcs_key_hash ‖ pcs_update_op`.
+    fn header(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.encode_header(&mut out);
+        out
+    }
+
+    fn encode_header(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&CONTENT_TAG);
+        out.push(CONTENT_VERSION);
+        self.content_ref.encode_into(out);
+        self.pred_refs.encode_into(out);
+        self.pcs_key_hash.encode_into(out);
+        self.pcs_update_op_hash.encode_into(out);
+    }
+}
+
+/// The header, then the chunks to the end. Not self-delimiting: a container
+/// holding several frames each with its length.
+impl<T, Cr: ContentRef> Encode for EncryptedContent<T, Cr> {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.encode_header(out);
+        out.extend_from_slice(&self.chunks);
+    }
+}
+
+impl<T, Cr: ContentRef> Decode for EncryptedContent<T, Cr> {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let (tag, rest) = bytes
+            .split_first_chunk::<3>()
+            .ok_or(DecodeError::UnexpectedEnd)?;
+        if tag[..2] != TAG {
+            return Err(DecodeError::NotKeyhive);
+        }
+        if tag[2] != CONTENT_TAG[2] {
+            return Err(DecodeError::UnexpectedKind(tag[2]));
+        }
+        let (&version, rest) = rest.split_first().ok_or(DecodeError::UnexpectedEnd)?;
+        if version != CONTENT_VERSION {
+            return Err(DecodeError::UnsupportedVersion {
+                kind: CONTENT_TAG[2],
+                version,
+            });
+        }
+        let (content_ref, rest) = Cr::decode_next(rest)?;
+        let (pred_refs, rest) = Digest::decode_next(rest)?;
+        let (pcs_key_hash, rest) = Digest::decode_next(rest)?;
+        let (pcs_update_op_hash, chunks) = Digest::decode_next(rest)?;
+        chunk_count(chunks.len()).ok_or(DecodeError::InvalidField("chunks"))?;
+        Ok(EncryptedContent {
+            content_ref,
+            pred_refs,
+            pcs_key_hash,
+            pcs_update_op_hash,
+            chunks: chunks.to_vec(),
+            _plaintext_tag: PhantomData,
+        })
+    }
+}
+
+impl<T, Cr: ContentRef> core::hash::Hash for EncryptedContent<T, Cr> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.content_ref.hash(state);
+        self.pred_refs.hash(state);
+        self.pcs_key_hash.hash(state);
+        self.pcs_update_op_hash.hash(state);
+        self.chunks.hash(state);
+    }
+}
+
+/// Encrypts arbitrary bytes, with arbitrary header fields, under an arbitrary
+/// key and document, so the chunks are always well formed. A full chunk may
+/// come before the arbitrary tail, so layouts with a non-final chunk are drawn
+/// too.
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a, T, Cr: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
+    for EncryptedContent<T, Cr>
+{
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let key = SymmetricKey::from(<[u8; 32]>::arbitrary(u)?);
+        let doc_id = TreeId::arbitrary(u)?;
+        let full_chunk_first = bool::arbitrary(u)?;
+        let fill = u8::arbitrary(u)?;
+        let mut plaintext = alloc::vec![fill; if full_chunk_first { CHUNK_LEN } else { 0 }];
+        plaintext.extend(Vec::<u8>::arbitrary(u)?);
+        EncryptedContent::encrypt(
+            &key,
+            doc_id,
+            Cr::arbitrary(u)?,
+            Digest::from(<[u8; 32]>::arbitrary(u)?),
+            Digest::from(<[u8; 32]>::arbitrary(u)?),
+            Digest::from(<[u8; 32]>::arbitrary(u)?),
+            &plaintext,
+        )
+        .map_err(|_| arbitrary::Error::IncorrectFormat)
+    }
+}
+
+/// The content refs a block names as its predecessors. Only their digest is
+/// used, hashed into the block's key, so the type is never built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PredecessorRefs<Cr>(Infallible, PhantomData<Cr>);
+
+impl<Cr: ContentRef> PredecessorRefs<Cr> {
+    /// The digest of `refs`, in the order given: `count ‖ ref*`.
+    pub fn digest(refs: &[Cr]) -> Digest<PredecessorRefs<Cr>> {
+        let mut bytes = Vec::new();
+        encode_list(refs, &mut bytes);
+        Digest::of_bytes(&bytes)
+    }
+}
+
+impl<Cr> Kinded for PredecessorRefs<Cr> {
+    const KIND: Kind = Kind::PREDECESSOR_REFS;
+    const VERSION: u8 = 0;
+}
+
+/// Why content did not decrypt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ContentDecryptError {
+    /// A chunk does not authenticate: the wrong key or document, or the
+    /// ciphertext was changed.
+    #[error("content does not decrypt: wrong key or document, or altered")]
+    Decryption,
+
+    /// A chunk authenticates, but its nonce is not the synthetic nonce of what
+    /// it decrypts to, so it may have been built to decrypt under another key.
+    #[error("a chunk's nonce does not match its plaintext")]
+    NonceMismatch,
+}
+
+/// `chacha20poly1305::Error` carries nothing, and is an `Error` only with
+/// `std`, so it is not kept as a source.
+impl From<chacha20poly1305::Error> for ContentDecryptError {
+    fn from(_: chacha20poly1305::Error) -> Self {
+        ContentDecryptError::Decryption
+    }
+}
+
+/// The keys and header digest every chunk of one block uses.
+struct ChunkKeys {
+    cipher: XChaCha20Poly1305,
+    nonce_key: [u8; 32],
+    header_digest: [u8; 32],
+}
+
+impl ChunkKeys {
+    fn new(key: &SymmetricKey, doc_id: TreeId, header: &[u8]) -> Self {
+        let mut hasher = blake3::Hasher::new_derive_key(HEADER_CONTEXT);
+        hasher.update(doc_id.as_bytes());
+        hasher.update(header);
+        ChunkKeys {
+            cipher: XChaCha20Poly1305::new(
+                &blake3::derive_key(ENCRYPTION_KEY_CONTEXT, key.as_slice()).into(),
+            ),
+            nonce_key: blake3::derive_key(NONCE_KEY_CONTEXT, key.as_slice()),
+            header_digest: *hasher.finalize().as_bytes(),
         }
     }
 
-    /// Decrypt the ciphertext using the provided symmetric key.
-    pub fn try_decrypt(&self, key: SymmetricKey) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        let mut buf: Vec<u8> = self.ciphertext.clone();
-        key.try_decrypt(self.nonce, &mut buf)?;
-        Ok(buf)
+    /// `header_digest ‖ i:u64 ‖ last:u8`.
+    fn aad(&self, i: usize, last: bool) -> [u8; 41] {
+        let mut aad = [0; 41];
+        aad[..32].copy_from_slice(&self.header_digest);
+        aad[32..40].copy_from_slice(&(i as u64).to_be_bytes());
+        aad[40] = u8::from(last);
+        aad
     }
+
+    fn nonce(&self, aad: &[u8; 41], chunk: &[u8]) -> XNonce {
+        let mut hasher = blake3::Hasher::new_keyed(&self.nonce_key);
+        hasher.update(aad);
+        hasher.update(chunk);
+        let mut nonce = XNonce::default();
+        hasher.finalize_xof().fill(&mut nonce);
+        nonce
+    }
+}
+
+/// The number of chunks in `len` bytes of them, if they are well formed: at
+/// least one, every one but the last full, and the last non-empty unless it
+/// is the only one. Each plaintext has exactly one chunking.
+fn chunk_count(len: usize) -> Option<usize> {
+    let count = len.div_ceil(FULL_CHUNK).max(1);
+    let last = len.checked_sub((count - 1) * FULL_CHUNK)?;
+    let well_formed = last >= CHUNK_OVERHEAD && (count == 1 || last > CHUNK_OVERHEAD);
+    well_formed.then_some(count)
+}
+
+/// Compares every byte, whatever the first difference.
+fn same_nonce(expected: &XNonce, received: &[u8]) -> bool {
+    expected
+        .iter()
+        .zip(received)
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
 }
 
 /// The public information for an encrypted secret ciphertext.
@@ -112,27 +402,6 @@ impl<T> EncryptedSecret<T> {
         let key = encrypter_secret_key.derive_symmetric_key(&self.paired_pk);
         key.try_decrypt(self.nonce, &mut buf)?;
         Ok(buf)
-    }
-}
-
-impl<T: core::hash::Hash, Cr: ContentRef> core::hash::Hash for EncryptedContent<T, Cr> {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        let EncryptedContent {
-            nonce,
-            ciphertext,
-            pcs_key_hash,
-            pcs_update_op_hash,
-            content_ref,
-            pred_refs,
-            _plaintext_tag,
-        } = self;
-
-        nonce.hash(state);
-        ciphertext.hash(state);
-        pcs_key_hash.hash(state);
-        pcs_update_op_hash.hash(state);
-        content_ref.hash(state);
-        pred_refs.hash(state);
     }
 }
 
@@ -202,4 +471,269 @@ pub fn encrypt_secret_with(
     key.try_encrypt(nonce, &mut ciphertext)
         .map_err(CgkaError::Encryption)?;
     Ok(EncryptedSecret::new(nonce, ciphertext, *paired_pk))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+    use ed25519_dalek::SigningKey;
+
+    type Content = EncryptedContent<Vec<u8>, [u8; 32]>;
+
+    fn doc(n: u8) -> TreeId {
+        TreeId::from(&SigningKey::from_bytes(&[n; 32]))
+    }
+
+    fn key(n: u8) -> SymmetricKey {
+        SymmetricKey::from([n; 32])
+    }
+
+    fn encrypt(plaintext: &[u8]) -> Content {
+        EncryptedContent::encrypt(
+            &key(1),
+            doc(1),
+            [2; 32],
+            PredecessorRefs::digest(&[[3; 32]]),
+            [4; 32].into(),
+            [5; 32].into(),
+            plaintext,
+        )
+        .expect("a fresh key encrypts")
+    }
+
+    fn reencoded(content: &Content, edit: impl FnOnce(&mut Vec<u8>)) -> Content {
+        let mut bytes = content.encode().into_bytes();
+        edit(&mut bytes);
+        Content::decode(&bytes).expect("the edit keeps the chunk lengths well formed")
+    }
+
+    /// The header: tag, version, content ref and three digests.
+    const HEADER_LEN: usize = 3 + 1 + 32 + 3 * 32;
+
+    const SIZES: [usize; 8] = [
+        0,
+        1,
+        CHUNK_LEN - 1,
+        CHUNK_LEN,
+        CHUNK_LEN + 1,
+        2 * CHUNK_LEN,
+        2 * CHUNK_LEN + 1,
+        3 * CHUNK_LEN - 7,
+    ];
+
+    #[test]
+    fn content_round_trips_at_sizes_around_chunk_boundaries() {
+        for len in SIZES {
+            let plaintext: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let content = encrypt(&plaintext);
+            let chunks = len.div_ceil(CHUNK_LEN).max(1);
+            assert_eq!(
+                content.chunks().len(),
+                len + chunks * CHUNK_OVERHEAD,
+                "{len} bytes take {chunks} chunks"
+            );
+            assert_eq!(
+                Content::decode(content.encode().as_bytes()).as_ref(),
+                Ok(&content),
+                "{len} bytes decode to what encoded them"
+            );
+            assert_eq!(
+                content.try_decrypt(key(1), doc(1)),
+                Ok(plaintext),
+                "{len} bytes decrypt"
+            );
+        }
+    }
+
+    #[test]
+    fn the_encoding_starts_with_the_header() {
+        let bytes = encrypt(b"hi").encode().into_bytes();
+        assert_eq!(&bytes[..4], b"KHE\x00");
+        assert_eq!(bytes.len(), HEADER_LEN + 2 + CHUNK_OVERHEAD);
+    }
+
+    #[test]
+    fn the_wrong_key_or_document_does_not_decrypt() {
+        let content = encrypt(b"secret");
+        assert_eq!(
+            content.try_decrypt(key(9), doc(1)),
+            Err(ContentDecryptError::Decryption)
+        );
+        assert_eq!(
+            content.try_decrypt(key(1), doc(9)),
+            Err(ContentDecryptError::Decryption)
+        );
+    }
+
+    /// Every header field is in every chunk's associated data.
+    #[test]
+    fn an_edited_header_does_not_decrypt() {
+        let content = encrypt(b"secret");
+        let fields = [
+            ("content_ref", 4),
+            ("pred_refs", 36),
+            ("pcs_key_hash", 68),
+            ("pcs_update_op", 100),
+        ];
+        for (field, at) in fields {
+            let edited = reencoded(&content, |b| b[at] ^= 1);
+            assert_eq!(
+                edited.try_decrypt(key(1), doc(1)),
+                Err(ContentDecryptError::Decryption),
+                "{field} edited"
+            );
+        }
+    }
+
+    #[test]
+    fn a_flipped_bit_in_any_chunk_does_not_decrypt() {
+        let content = encrypt(&vec![7; 2 * CHUNK_LEN + 3]);
+        for at in [
+            HEADER_LEN,
+            HEADER_LEN + FULL_CHUNK + 30,
+            HEADER_LEN + 2 * FULL_CHUNK + 1,
+        ] {
+            let edited = reencoded(&content, |b| b[at] ^= 1);
+            assert!(edited.try_decrypt(key(1), doc(1)).is_err(), "byte {at}");
+        }
+    }
+
+    /// Truncation at a chunk boundary, reordering and appending all leave
+    /// well-formed lengths, and are caught by each chunk's index and final flag.
+    #[test]
+    fn dropped_reordered_or_appended_chunks_do_not_decrypt() {
+        let content = encrypt(&vec![7; 3 * CHUNK_LEN]);
+        let chunk = |i: usize| HEADER_LEN + i * FULL_CHUNK..HEADER_LEN + (i + 1) * FULL_CHUNK;
+
+        let truncated = reencoded(&content, |b| b.truncate(chunk(2).start));
+        let reordered = reencoded(&content, |b| {
+            let first = b[chunk(0)].to_vec();
+            let second = b[chunk(1)].to_vec();
+            b[chunk(0)].copy_from_slice(&second);
+            b[chunk(1)].copy_from_slice(&first);
+        });
+        let appended = reencoded(&content, |b| {
+            let last = b[chunk(2)].to_vec();
+            b.extend_from_slice(&last);
+        });
+        for (what, edited) in [
+            ("truncated", truncated),
+            ("reordered", reordered),
+            ("appended", appended),
+        ] {
+            assert_eq!(
+                edited.try_decrypt(key(1), doc(1)),
+                Err(ContentDecryptError::Decryption),
+                "{what}"
+            );
+        }
+    }
+
+    /// A chunk that authenticates under the right key, but whose nonce is not
+    /// its synthetic nonce, is refused: the check after decryption is what
+    /// commits a chunk to one key.
+    #[test]
+    fn a_chunk_whose_nonce_is_not_synthetic_is_refused() {
+        let content = encrypt(b"genuine");
+        let keys = ChunkKeys::new(&key(1), doc(1), &content.header());
+        let nonce = XNonce::from([9; NONCE_LEN]);
+        let mut buf = b"forged".to_vec();
+        keys.cipher
+            .encrypt_in_place(&nonce, &keys.aad(0, true), &mut buf)
+            .expect("encrypts");
+        let forged = reencoded(&content, |b| {
+            b.truncate(HEADER_LEN);
+            b.extend_from_slice(&nonce);
+            b.extend_from_slice(&buf);
+        });
+        assert_eq!(
+            forged.try_decrypt(key(1), doc(1)),
+            Err(ContentDecryptError::NonceMismatch)
+        );
+    }
+
+    #[test]
+    fn decoding_refuses_another_format() {
+        let bytes = encrypt(b"hi").encode().into_bytes();
+        let with = |at: usize, byte: u8| {
+            let mut b = bytes.clone();
+            b[at] = byte;
+            Content::decode(&b)
+        };
+        assert_eq!(with(0, b'X'), Err(DecodeError::NotKeyhive));
+        assert_eq!(with(2, b'D'), Err(DecodeError::UnexpectedKind(b'D')));
+        assert_eq!(
+            with(3, 1),
+            Err(DecodeError::UnsupportedVersion {
+                kind: b'E',
+                version: 1
+            })
+        );
+    }
+
+    /// Lengths that no chunking produces: none, too short for a nonce and tag,
+    /// a final chunk too short, and an empty final chunk after a full one.
+    #[test]
+    fn decoding_refuses_malformed_chunks() {
+        let header = encrypt(b"").encode().into_bytes()[..HEADER_LEN].to_vec();
+        for len in [
+            0,
+            CHUNK_OVERHEAD - 1,
+            FULL_CHUNK + 10,
+            FULL_CHUNK + CHUNK_OVERHEAD,
+        ] {
+            let bytes = [header.clone(), vec![0; len]].concat();
+            assert_eq!(
+                Content::decode(&bytes),
+                Err(DecodeError::InvalidField("chunks")),
+                "{len} bytes of chunks"
+            );
+        }
+    }
+
+    /// Any well-formed block decodes to itself, and whatever still decodes
+    /// near a valid encoding (a tag, length or chunk byte changed, bytes cut
+    /// or appended) re-encodes to exactly those bytes.
+    #[test]
+    fn codec_laws() {
+        keyhive_codec::laws::round_trip::<Content>();
+        keyhive_codec::laws::canonical_near::<Content>();
+    }
+
+    #[test]
+    fn small_content_round_trips_through_its_bytes() {
+        bolero::check!()
+            .with_arbitrary::<(Vec<u8>, [u8; 32], [u8; 32])>()
+            .for_each(|(plaintext, content_ref, doc_seed)| {
+                let doc = TreeId::from(&SigningKey::from_bytes(doc_seed));
+                let content: Content = EncryptedContent::encrypt(
+                    &key(1),
+                    doc,
+                    *content_ref,
+                    PredecessorRefs::digest(&[]),
+                    [4; 32].into(),
+                    [5; 32].into(),
+                    plaintext,
+                )
+                .expect("encrypts");
+                let read = Content::decode(content.encode().as_bytes()).expect("decodes");
+                assert_eq!(read.try_decrypt(key(1), doc).as_ref(), Ok(plaintext));
+            });
+    }
+
+    /// Pins the v1 derivations: a change here changes every ciphertext. The
+    /// predecessor digest is BLAKE3 over `"KH" ‖ 'H' ‖ 0x00 ‖ count ‖ refs`.
+    #[test]
+    fn known_answer() {
+        let content = encrypt(b"keyhive");
+        assert_eq!(
+            blake3::hash(content.encode().as_bytes()).to_hex().as_str(),
+            "f6d0ac06eef9e9c5b9e3a43f48af0d4ac722594b2e2708d02311f4453cbe18e4"
+        );
+        assert_eq!(
+            PredecessorRefs::digest(&[[3u8; 32]]).raw.to_hex().as_str(),
+            "55450d263093c72d5367b8002c03f45eabcb4096e3e3344b3d628df936039a4e"
+        );
+    }
 }

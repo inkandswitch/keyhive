@@ -3,7 +3,13 @@
 pub mod memory;
 
 use self::memory::MemoryCiphertextStore;
-use crate::crypto::{digest::Digest, envelope::Envelope};
+use crate::{
+    crypto::{
+        digest::Digest,
+        envelope::{Envelope, EnvelopeDecodeError},
+    },
+    principal::document::id::DocumentId,
+};
 use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use derive_where::derive_where;
 use dupe::Dupe;
@@ -142,6 +148,7 @@ pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<
     /// ciphertext. There is no reason to decrypt it again if you already have the plaintext.
     fn try_causal_decrypt<'a>(
         &'a self,
+        doc_id: DocumentId,
         to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
     ) -> F::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<F, Cr, T, Self>>>
     where
@@ -163,6 +170,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
 {
     fn try_causal_decrypt<'a>(
         &'a self,
+        doc_id: DocumentId,
         to_decrypt: &'a mut Vec<(Arc<EncryptedContent<T, Cr>>, SymmetricKey)>,
     ) -> F::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<F, Cr, T, Self>>>
     where
@@ -182,15 +190,14 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                 progress.keys.insert(ciphertext.content_ref.clone(), key);
                 let content_ref = ciphertext.content_ref.clone();
 
-                match ciphertext.try_decrypt(key) {
+                match ciphertext.try_decrypt(key, doc_id.into()) {
                     Err(_) => {
                         seen.remove(&content_ref);
                         cannot.insert(content_ref.clone(), ErrorReason::DecryptionFailed(key));
                         continue;
                     }
                     Ok(decrypted) => {
-                        let result: Result<Envelope<Cr, T>, _> =
-                            bincode::deserialize(decrypted.as_slice());
+                        let result = Envelope::<Cr, T>::serde_decode(decrypted.as_slice());
                         match result {
                             Err(e) => {
                                 seen.remove(&content_ref);
@@ -362,7 +369,7 @@ pub enum ErrorReason<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr,
     MarkDecryptedError(S::MarkDecryptedError),
 
     #[error(transparent)]
-    DeserializationFailed(#[from] bincode::Error),
+    DeserializationFailed(#[from] EnvelopeDecodeError),
 
     #[error("Decryption failed")]
     DecryptionFailed(SymmetricKey),
@@ -378,8 +385,8 @@ mod tests {
         crypto::{digest::Digest, envelope::Envelope},
         principal::document::id::DocumentId,
     };
-    use beekem::{operation::CgkaOperation, pcs_key::PcsKey};
-    use keyhive_crypto::{share_key::ShareSecretKey, signed::SerdeSigned, siv::Siv};
+    use beekem::{encrypted::PredecessorRefs, operation::CgkaOperation, pcs_key::PcsKey};
+    use keyhive_crypto::{share_key::ShareSecretKey, signed::SerdeSigned};
     use rand::rngs::OsRng;
     use std::marker::PhantomData;
     use testresult::TestResult;
@@ -401,28 +408,27 @@ mod tests {
         csprng: &mut OsRng,
     ) -> (Arc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
         let pcs_key: PcsKey = ShareSecretKey::generate(csprng).into();
-        let pcs_key_hash = Digest::hash(&pcs_key);
+        let pcs_key_hash = pcs_key.digest();
 
         let key = SymmetricKey::generate(csprng);
         let envelope = Envelope {
             plaintext,
             ancestors,
         };
-        let mut bytes = bincode::serialize(&envelope).unwrap();
-        let nonce = Siv::new(&key, bytes.as_slice(), doc_id.as_bytes());
-        key.try_encrypt(nonce, &mut bytes).unwrap();
-
+        let bytes = envelope.serde_encode().expect("an envelope serializes");
         (
-            Arc::new(EncryptedContent::<String, [u8; 32]>::new(
-                nonce,
-                bytes,
-                //
-                pcs_key_hash,
-                pcs_update_op_hash,
-                //
-                cref,
-                Digest::hash(&vec![]),
-            )),
+            Arc::new(
+                EncryptedContent::<String, [u8; 32]>::encrypt(
+                    &key,
+                    doc_id.into(),
+                    cref,
+                    PredecessorRefs::digest(&[]),
+                    pcs_key_hash,
+                    pcs_update_op_hash,
+                    &bytes,
+                )
+                .expect("a fresh key encrypts"),
+            ),
             key,
         )
     }
@@ -466,6 +472,54 @@ mod tests {
         assert_eq!(get_ct(&store, &one_ref).await, Ok(Some(one)));
         assert_eq!(get_ct(&store, &two_ref).await, Ok(Some(two)));
 
+        Ok(())
+    }
+
+    /// An envelope that names the wrong key for an ancestor does not open it:
+    /// the walk reports the ancestor rather than trusting the key.
+    #[tokio::test]
+    async fn a_wrong_ancestor_key_in_an_envelope_does_not_decrypt_the_ancestor() -> TestResult {
+        let mut csprng = OsRng;
+        let doc_id = DocumentId::generate(&mut csprng);
+        let op_hash: Digest<SerdeSigned<CgkaOperation>> = [9u8; 32].into();
+        let (one_ref, two_ref) = ([0u8; 32], [1u8; 32]);
+        let wrong_key = SymmetricKey::generate(&mut csprng);
+
+        let (one, _one_key) = setup(
+            "one".to_string(),
+            one_ref,
+            op_hash,
+            HashMap::new(),
+            doc_id,
+            &mut csprng,
+        );
+        let (two, two_key) = setup(
+            "two".to_string(),
+            two_ref,
+            op_hash,
+            HashMap::from_iter([(one_ref, wrong_key)]),
+            doc_id,
+            &mut csprng,
+        );
+        let store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(one).await;
+        store.insert(two.dupe()).await;
+
+        let mut to_decrypt = vec![(two, two_key)];
+        let Err(err) = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt(
+            &store,
+            doc_id,
+            &mut to_decrypt,
+        )
+        .await
+        else {
+            panic!("the ancestor decrypted under the wrong key");
+        };
+        assert!(matches!(
+            err.cannot.get(&one_ref),
+            Some(ErrorReason::DecryptionFailed(key)) if *key == wrong_key
+        ));
+        assert_eq!(err.progress.complete, vec![(two_ref, "two".to_string())]);
         Ok(())
     }
 }

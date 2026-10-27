@@ -1,29 +1,40 @@
 //! PCS keys and application secrets for content encryption.
 
 use crate::{
-    encrypted::EncryptedContent, keys::share_secret_key_from_decrypted_secret,
+    encrypted::{EncryptedContent, PredecessorRefs},
+    id::TreeId,
+    keys::share_secret_key_from_decrypted_secret,
     operation::CgkaOperation,
 };
-use alloc::{format, vec::Vec};
+use alloc::vec::Vec;
 use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, separable::Separable,
-    share_key::ShareSecretKey, signed::SerdeSigned, siv::Siv, symmetric_key::SymmetricKey,
+    content::reference::ContentRef,
+    digest::Digest,
+    separable::Separable,
+    share_key::ShareSecretKey,
+    signable::{Kind, Kinded},
+    signed::SerdeSigned,
+    symmetric_key::SymmetricKey,
 };
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-const STATIC_CONTEXT: &str = "/keyhive/beekem/app_secret/";
+/// Derives a block's application key from its PCS key, predecessors and
+/// content ref.
+const APPLICATION_KEY_CONTEXT: &str = "/keyhive/content/application-key/v1/2026-10-26";
 const PREDECESSOR_SECRETS_CONTEXT: &str = "/keyhive/beekem/predecessor_secrets/";
 
-/// A [`SymmetricKey`] plus metadata needed for causal encryption.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// A block's application key, with the header fields its ciphertext carries.
+///
+/// The key is what a causal envelope hands to a successor's readers: holding
+/// it decrypts this one block.
+#[derive(Debug, Clone)]
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
     pcs_key_hash: Digest<PcsKey>,
     pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
-    nonce: Siv,
     content_ref: Cr,
-    pred_refs: Digest<Vec<Cr>>,
+    pred_refs: Digest<PredecessorRefs<Cr>>,
 }
 
 impl<Cr: ContentRef> ApplicationSecret<Cr> {
@@ -32,15 +43,13 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         key: SymmetricKey,
         pcs_key_hash: Digest<PcsKey>,
         pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
-        nonce: Siv,
         content_ref: Cr,
-        pred_refs: Digest<Vec<Cr>>,
+        pred_refs: Digest<PredecessorRefs<Cr>>,
     ) -> Self {
         Self {
             key,
             pcs_key_hash,
             pcs_update_op_hash,
-            nonce,
             content_ref,
             pred_refs,
         }
@@ -51,21 +60,21 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         self.key
     }
 
-    /// Encrypt some plaintext.
+    /// Encrypt `plaintext` for the document `doc_id`.
     pub fn try_encrypt<T>(
         &self,
+        doc_id: TreeId,
         plaintext: &[u8],
     ) -> Result<EncryptedContent<T, Cr>, chacha20poly1305::Error> {
-        let mut ciphertext = plaintext.to_vec();
-        self.key.try_encrypt(self.nonce, &mut ciphertext)?;
-        Ok(EncryptedContent::new(
-            self.nonce,
-            ciphertext,
-            self.pcs_key_hash,
-            self.pcs_update_op_hash,
+        EncryptedContent::encrypt(
+            &self.key,
+            doc_id,
             self.content_ref.clone(),
             self.pred_refs,
-        ))
+            self.pcs_key_hash,
+            self.pcs_update_op_hash,
+            plaintext,
+        )
     }
 }
 
@@ -85,38 +94,45 @@ impl PcsKey {
         share_secret_key_from_decrypted_secret(decrypted_secret).map(Self::new)
     }
 
+    /// The digest that names this key in a ciphertext's header.
+    pub fn digest(&self) -> Digest<PcsKey> {
+        Digest::of_bytes(self.0.as_slice())
+    }
+
     /// Derive the key for encrypting the root secrets of an update's predecessors.
     pub(crate) fn derive_predecessor_secrets_key(&self) -> SymmetricKey {
         let bytes = blake3::derive_key(PREDECESSOR_SECRETS_CONTEXT, self.0.as_slice());
         SymmetricKey::derive_from_bytes(&bytes)
     }
 
-    /// Derive an [`ApplicationSecret`] from this PCS key.
-    #[instrument]
+    /// Derive a block's [`ApplicationSecret`] from this PCS key:
+    /// `pcs_key ‖ pred_refs ‖ content_ref`, under its own BLAKE3 context. The
+    /// content ref is self-delimiting and comes last.
+    #[instrument(skip(self))]
     pub fn derive_application_secret<Cr: ContentRef>(
         &self,
-        nonce: &Siv,
         content_ref: &Cr,
-        pred_refs: &Digest<Vec<Cr>>,
+        pred_refs: &Digest<PredecessorRefs<Cr>>,
         pcs_update_op_hash: &Digest<SerdeSigned<CgkaOperation>>,
     ) -> ApplicationSecret<Cr> {
-        let pcs_hash = Digest::hash(&self.0);
-        let display_ref = Digest::hash(&content_ref);
-        let mut app_secret_context =
-            format!("epoch:{pcs_hash}/pred:{pred_refs}/content:{display_ref}").into_bytes();
-        let mut key_material = self.0.clone().as_slice().to_vec();
-        key_material.append(&mut app_secret_context);
-        let app_secret_bytes = blake3::derive_key(STATIC_CONTEXT, key_material.as_slice());
-        let symmetric_key = SymmetricKey::derive_from_bytes(&app_secret_bytes);
+        let mut hasher = blake3::Hasher::new_derive_key(APPLICATION_KEY_CONTEXT);
+        hasher.update(self.0.as_slice());
+        hasher.update(pred_refs.as_slice());
+        hasher.update(content_ref.encode().as_bytes());
         ApplicationSecret::new(
-            symmetric_key,
-            Digest::hash(self),
+            SymmetricKey::from(*hasher.finalize().as_bytes()),
+            self.digest(),
             *pcs_update_op_hash,
-            *nonce,
             content_ref.clone(),
             *pred_refs,
         )
     }
+}
+
+/// Hashed to name the key a block was encrypted under; never signed or sent.
+impl Kinded for PcsKey {
+    const KIND: Kind = Kind::PCS_KEY;
+    const VERSION: u8 = 0;
 }
 
 impl From<ShareSecretKey> for PcsKey {

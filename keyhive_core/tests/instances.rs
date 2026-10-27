@@ -514,7 +514,7 @@ async fn two_instances_of_one_writer(
 /// Write, asserting that it had to rotate its key in the CGKA group.
 async fn write_rotating(who: &Instance, doc: DocumentId, content: &[u8]) -> Result<Ciphertext> {
     let out = who
-        .try_encrypt_content(doc, &content_ref(content), &vec![], content)
+        .try_encrypt_content(doc, &content_ref(content), &[], content)
         .await?;
     assert!(
         out.update_op().is_some(),
@@ -570,7 +570,7 @@ async fn an_instance_reads_what_its_replica_forced_a_pcs_update_for() -> Result<
     alice_replica.force_pcs_update(design_doc).await?;
     let content = b"after a forced update";
     let written = alice_replica
-        .try_encrypt_content(design_doc, &content_ref(content), &vec![], content)
+        .try_encrypt_content(design_doc, &content_ref(content), &[], content)
         .await?;
     assert!(
         written.update_op().is_none(),
@@ -656,7 +656,7 @@ async fn a_rotation_keeps_its_leaf_key_out_of_the_published_prekeys() -> Result<
     let published_before = ctx.prekeys_of(&alice, alice.id()).await?;
     let content = b"forces a rotation";
     let written = alice
-        .try_encrypt_content(design_doc, &content_ref(content), &vec![], content)
+        .try_encrypt_content(design_doc, &content_ref(content), &[], content)
         .await?;
     assert!(
         written.update_op().is_some(),
