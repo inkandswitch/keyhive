@@ -15,7 +15,7 @@ use crate::{
     event::{static_event::StaticEvent, Event},
     listener::{log::Log, membership::MembershipListener},
     principal::{
-        active::Active,
+        active::{Active, ImportPrekeySecretsError},
         document::{
             id::DocumentId, AddMemberError, DecryptError, DocCausalDecryptionError, Document,
             DocumentState, EncryptError, EncryptInEnvelopeError, EncryptedContentWithUpdate,
@@ -3169,7 +3169,7 @@ where
     ///
     /// The returned bytes contain unencrypted secret key material.
     /// Callers are responsible for protecting this data at rest and in transit.
-    pub async fn export_prekey_secrets(&self) -> Result<Vec<u8>, bincode::Error> {
+    pub async fn export_prekey_secrets(&self) -> Vec<u8> {
         self.active.export_prekey_secrets().await
     }
 
@@ -3180,7 +3180,7 @@ where
     pub async fn import_prekey_secrets(
         &self,
         bytes: &[u8],
-    ) -> Result<Vec<Arc<StaticEvent<T>>>, bincode::Error> {
+    ) -> Result<Vec<Arc<StaticEvent<T>>>, ImportPrekeySecretsError> {
         self.active.import_prekey_secrets(bytes).await?;
         self.adopt_all_cgka_secrets().await;
         Ok(self.ingest_unsorted_static_events(vec![]).await)

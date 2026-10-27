@@ -6,17 +6,14 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => !!window.keyhive);
 });
 
-// A rotation signed by the Ed25519 key with secret bytes [7; 32]; `encoded`
-// is `old ‖ new`, the two share keys.
-const testContactCard = {
-  Rotate: {
-    issuer: [234,74,108,99,226,156,82,10,190,245,80,123,19,46,197,249,149,71,118,174,190,190,123,146,66,30,234,105,20,70,210,44],
-    encoded: [65,72,98,244,93,220,223,84,102,12,226,149,30,120,221,84,15,181,6,15,254,54,104,135,40,99,37,27,176,207,119,88,84,127,25,212,176,19,41,32,72,136,105,120,233,7,111,204,55,87,25,251,66,71,167,254,158,220,219,86,10,38,186,104],
-    signature: [139,75,216,43,101,202,118,100,70,50,115,75,239,211,175,199,24,1,208,203,124,29,221,64,231,113,90,162,203,128,148,206,9,105,158,217,214,150,20,220,90,234,106,184,150,62,147,194,177,42,111,96,176,110,214,254,225,173,132,221,17,34,66,9],
-  },
-};
+// A rotation signed by the Ed25519 key with secret bytes [7; 32], as its KH
+// frame: "KH" ‖ 'T' ‖ version ‖ issuer ‖ payload length ‖ old ‖ new ‖ signature.
+const issuer = [234,74,108,99,226,156,82,10,190,245,80,123,19,46,197,249,149,71,118,174,190,190,123,146,66,30,234,105,20,70,210,44];
+const oldAndNew = [65,72,98,244,93,220,223,84,102,12,226,149,30,120,221,84,15,181,6,15,254,54,104,135,40,99,37,27,176,207,119,88,84,127,25,212,176,19,41,32,72,136,105,120,233,7,111,204,55,87,25,251,66,71,167,254,158,220,219,86,10,38,186,104];
+const signature = [139,75,216,43,101,202,118,100,70,50,115,75,239,211,175,199,24,1,208,203,124,29,221,64,231,113,90,162,203,128,148,206,9,105,158,217,214,150,20,220,90,234,106,184,150,62,147,194,177,42,111,96,176,110,214,254,225,173,132,221,17,34,66,9];
+const testContactCard = [0x4b, 0x48, 0x54, 0x00, ...issuer, oldAndNew.length, ...oldAndNew, ...signature];
 
-const getTestContactCard = () => JSON.stringify(testContactCard);
+const getTestContactCard = () => testContactCard;
 
 test.describe("Keyhive", async () => {
   test("constructor", async ({ page }) => {
@@ -111,7 +108,7 @@ test.describe("Keyhive", async () => {
   test("an archive serializes to bytes and round trips back to a keyhive", async ({
     page,
   }) => {
-    const out = await page.evaluate(async (contactCardJson) => {
+    const out = await page.evaluate(async (contactCardBytes) => {
       const {
         Keyhive,
         Signer,
@@ -122,7 +119,7 @@ test.describe("Keyhive", async () => {
         ContactCard,
         MemberedId,
       } = window.keyhive;
-      const testContactCard = ContactCard.fromJson(contactCardJson);
+      const testContactCard = ContactCard.fromBytes(new Uint8Array(contactCardBytes));
 
       const signer = await Signer.generate();
       const ciphertextStore = CiphertextStore.newInMemory();
@@ -168,25 +165,25 @@ test.describe("Keyhive", async () => {
   });
 
   test("a contact card whose signature does not verify is refused", async ({ page }) => {
-    const forged = structuredClone(testContactCard);
-    forged.Rotate.signature[0] ^= 1;
-    const out = await page.evaluate(async (json) => {
+    const forged = [...testContactCard];
+    forged[forged.length - signature.length] ^= 1;
+    const out = await page.evaluate(async (bytes) => {
       const { ContactCard } = window.keyhive;
       try {
-        ContactCard.fromJson(json);
+        ContactCard.fromBytes(new Uint8Array(bytes));
         return { error: null };
       } catch (e) {
         return { error: String(e) };
       }
-    }, JSON.stringify(forged));
+    }, forged);
 
     expect(out.error).toContain("signature does not verify");
   });
 
   test("receiveContactCard returns the id for the card", async ({ page }) => {
-    const out = await page.evaluate(async (contactCardJson) => {
+    const out = await page.evaluate(async (contactCardBytes) => {
       const { Keyhive, Signer, CiphertextStore, ContactCard } = window.keyhive;
-      const card = ContactCard.fromJson(contactCardJson);
+      const card = ContactCard.fromBytes(new Uint8Array(contactCardBytes));
       const kh = await Keyhive.init(
         await Signer.generate(),
         CiphertextStore.newInMemory(),
@@ -205,7 +202,7 @@ test.describe("Keyhive", async () => {
   test("addMember returns the delegation and revokeMember its revocation", async ({
     page,
   }) => {
-    const out = await page.evaluate(async (contactCardJson) => {
+    const out = await page.evaluate(async (contactCardBytes) => {
       const { Keyhive, Signer, CiphertextStore, ContactCard, MemberedId, Power } =
         window.keyhive;
       const kh = await Keyhive.init(
@@ -215,7 +212,7 @@ test.describe("Keyhive", async () => {
       );
       const groupId = await kh.generateGroup([]);
       const member = (
-        await kh.receiveContactCard(ContactCard.fromJson(contactCardJson))
+        await kh.receiveContactCard(ContactCard.fromBytes(new Uint8Array(contactCardBytes)))
       ).toIdentifier();
 
       const dlg = await kh.addMember(
@@ -249,7 +246,7 @@ test.describe("Keyhive", async () => {
   test("a listener sees a membership change as a signed delegation", async ({
     page,
   }) => {
-    const out = await page.evaluate(async (contactCardJson) => {
+    const out = await page.evaluate(async (contactCardBytes) => {
       const { Keyhive, Signer, CiphertextStore, ContactCard, MemberedId, Power } =
         window.keyhive;
       const delegations = [];
@@ -265,7 +262,7 @@ test.describe("Keyhive", async () => {
       );
       const groupId = await kh.generateGroup([]);
       const member = (
-        await kh.receiveContactCard(ContactCard.fromJson(contactCardJson))
+        await kh.receiveContactCard(ContactCard.fromBytes(new Uint8Array(contactCardBytes)))
       ).toIdentifier();
       await kh.addMember(
         member,
@@ -278,7 +275,7 @@ test.describe("Keyhive", async () => {
   });
 
   test("a revocation retains the heads the application set", async ({ page }) => {
-    const out = await page.evaluate(async (contactCardJson) => {
+    const out = await page.evaluate(async (contactCardBytes) => {
       const { ChangeId, Keyhive, Signer, CiphertextStore, ContactCard, MemberedId, Power } =
         window.keyhive;
       const kh = await Keyhive.init(
@@ -293,7 +290,7 @@ test.describe("Keyhive", async () => {
       );
       const otherId = await kh.generateDocument([], new ChangeId(new Uint8Array(32).fill(8)), []);
       const member = (
-        await kh.receiveContactCard(ContactCard.fromJson(contactCardJson))
+        await kh.receiveContactCard(ContactCard.fromBytes(new Uint8Array(contactCardBytes)))
       ).toIdentifier();
 
       const latest = new Uint8Array(32).fill(9);
@@ -439,8 +436,8 @@ test.describe("Keyhive", async () => {
     });
 
     test("can load archive after revoking a delegation", async ({ page }) => {
-      const testContactCardJson = getTestContactCard();
-      const out = await page.evaluate(async (contactCardJson) => {
+      const testContactCardBytes = getTestContactCard();
+      const out = await page.evaluate(async (contactCardBytes) => {
         const {
           Keyhive,
           Signer,
@@ -452,7 +449,7 @@ test.describe("Keyhive", async () => {
           MemberedId,
         } = window.keyhive;
 
-        const testContactCard = ContactCard.fromJson(contactCardJson);
+        const testContactCard = ContactCard.fromBytes(new Uint8Array(contactCardBytes));
 
         const signer = await Signer.generate();
         const store = CiphertextStore.newInMemory();
@@ -494,7 +491,7 @@ test.describe("Keyhive", async () => {
           loadSuccess,
           loadError,
         };
-      }, testContactCardJson);
+      }, testContactCardBytes);
 
       if (!out.loadSuccess) {
         console.log(
