@@ -364,7 +364,7 @@ mod tests {
             hex("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
         );
         let expected = SymmetricKey::from(hex(
-            "ba0e36997570ada139fb2308463a7fbb5ce1612c6f123f1849724f8dff20d5a4",
+            "8d7ebcf51160e75874632614e3564e4b73375d6e1b0cc722e0471b32996e4258",
         ));
         assert_eq!(alice.derive_symmetric_key(&bob.share_key()), expected);
         assert_eq!(bob.derive_symmetric_key(&alice.share_key()), expected);

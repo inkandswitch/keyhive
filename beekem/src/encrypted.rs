@@ -761,7 +761,7 @@ mod tests {
         let content = encrypt(b"keyhive");
         assert_eq!(
             blake3::hash(content.encode().as_bytes()).to_hex().as_str(),
-            "f6d0ac06eef9e9c5b9e3a43f48af0d4ac722594b2e2708d02311f4453cbe18e4"
+            "bdbac91c28fe7e5e9b40016f0927228c1e68348e8ac2896209e492c53148163b"
         );
         assert_eq!(
             PredecessorRefs::digest(&[[3u8; 32]]).raw.to_hex().as_str(),

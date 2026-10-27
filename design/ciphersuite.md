@@ -18,15 +18,15 @@ Every key derivation is BLAKE3 `derive_key` under its own context, and every con
 
 | Context | Derives | From |
 |---|---|---|
-| `/keyhive/cgka/predecessor-secrets-key/v1/2026-10-26` | The key an update seals earlier root secrets under | Its root secret |
-| `/keyhive/content/application-key/v1/2026-10-26` | A block's application key | Root secret, predecessors, content ref |
-| `/keyhive/content/encryption-key/v1/2026-10-26` | A block's cipher key | Its application key |
-| `/keyhive/content/header/v1/2026-10-26` | The header digest in each chunk's associated data | Tree ID, header |
-| `/keyhive/content/nonce-key/v1/2026-10-26` | A block's synthetic-nonce key | Its application key |
-| `/keyhive/prekey/selection/v1/2026-10-26` | The stream an individual's prekey for a document is drawn from | Individual, document |
-| `/keyhive/seal/encryption-key/v1/2026-10-26` | A sealed blob's cipher key | The key it is sealed under |
-| `/keyhive/seal/nonce-key/v1/2026-10-26` | A sealed blob's synthetic-nonce key | The key it is sealed under |
-| `/keyhive/share-key/exchange-key/v1/2026-10-26` | The key two share keys' holders share | X25519 output, both public keys |
+| `/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31` | The key an update seals earlier root secrets under | Its root secret |
+| `/keyhive/content/application-key/v1/2026-10-31` | A block's application key | Root secret, predecessors, content ref |
+| `/keyhive/content/encryption-key/v1/2026-10-31` | A block's cipher key | Its application key |
+| `/keyhive/content/header/v1/2026-10-31` | The header digest in each chunk's associated data | Tree ID, header |
+| `/keyhive/content/nonce-key/v1/2026-10-31` | A block's synthetic-nonce key | Its application key |
+| `/keyhive/prekey/selection/v1/2026-10-31` | The stream an individual's prekey for a document is drawn from | Individual, document |
+| `/keyhive/seal/encryption-key/v1/2026-10-31` | A sealed blob's cipher key | The key it is sealed under |
+| `/keyhive/seal/nonce-key/v1/2026-10-31` | A sealed blob's synthetic-nonce key | The key it is sealed under |
+| `/keyhive/share-key/exchange-key/v1/2026-10-31` | The key two share keys' holders share | X25519 output, both public keys |
 
 Content-addressing digests (`Digest::hash`) and signing digests (`signed::Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level. Types migrated to the canonical codec (Keyline certificates and prekey operations so far) instead travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature` and sign and hash the frame without its signature (`keyhive_crypto::signable`); see [Keyline's implementation notes](./keyline/implementation.md#domain-separation).
 
@@ -43,8 +43,8 @@ XChaCha20-Poly1305 has a 192-bit nonce, large enough that random nonces do not c
 The nonce is therefore derived deterministically, and the recipient recomputes it after decryption. Content does this per chunk ([Content](#content)). BeeKEM node secrets and wrapped root secrets are sealed with `SymmetricKey::try_seal`, which authenticates its associated data `aad`. The cipher and the nonce each use their own subkey:
 
 ```
-enc_key   = derive_key("/keyhive/seal/encryption-key/v1/2026-10-26", key)
-nonce_key = derive_key("/keyhive/seal/nonce-key/v1/2026-10-26",      key)
+enc_key   = derive_key("/keyhive/seal/encryption-key/v1/2026-10-31", key)
+nonce_key = derive_key("/keyhive/seal/nonce-key/v1/2026-10-31",      key)
 
 nonce  = BLAKE3_keyed(nonce_key, aad_len:u64 ‖ aad ‖ plaintext)[0..24]
 sealed = nonce ‖ XChaCha20-Poly1305(enc_key, nonce, aad, plaintext)
@@ -66,10 +66,10 @@ Trade-offs:
 Content is encrypted in chunks of 64 KiB, so a block of any size streams through bounded memory, and any byte range decrypts by reading only the chunks that cover it. Each block's application key derives two subkeys:
 
 ```
-enc_key   = derive_key("/keyhive/content/encryption-key/v1/2026-10-26", app_key)
-nonce_key = derive_key("/keyhive/content/nonce-key/v1/2026-10-26",      app_key)
+enc_key   = derive_key("/keyhive/content/encryption-key/v1/2026-10-31", app_key)
+nonce_key = derive_key("/keyhive/content/nonce-key/v1/2026-10-31",      app_key)
 
-aad_i   = BLAKE3_derive("/keyhive/content/header/v1/2026-10-26", doc_id ‖ header) ‖ i:u64 ‖ last:u8
+aad_i   = BLAKE3_derive("/keyhive/content/header/v1/2026-10-31", doc_id ‖ header) ‖ i:u64 ‖ last:u8
 nonce_i = BLAKE3_keyed(nonce_key, aad_i ‖ chunk_i)[0..24]
 ct_i    = XChaCha20-Poly1305(enc_key, nonce_i, aad_i, chunk_i)
 ```
@@ -86,7 +86,7 @@ The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ pcs_ke
 Inner-node secrets are X25519 secret keys sampled independently from the CSPRNG (no ratcheting; see [`beekem/README.md`](../beekem/README.md)). Each secret is sealed for a sibling under the key the two share keys' holders share (`ShareSecretKey::derive_symmetric_key`):
 
 ```
-key    = derive_key("/keyhive/share-key/exchange-key/v1/2026-10-26",
+key    = derive_key("/keyhive/share-key/exchange-key/v1/2026-10-31",
                     X25519(sk, pk) ‖ low_pk ‖ high_pk)
 sealed = try_seal(key, secret, aad = tree_id ‖ encrypter_pk ‖ paired_pk)
 ```
@@ -96,7 +96,7 @@ The derivation binds both public keys, as HPKE binds its shared secret to them; 
 A block's application key is derived from the root secret (the `PcsKey`), its predecessors and its content ref:
 
 ```
-app_key = derive_key("/keyhive/content/application-key/v1/2026-10-26",
+app_key = derive_key("/keyhive/content/application-key/v1/2026-10-31",
                      root_secret ‖ Digest<PredecessorRefs> ‖ content_ref)
 ```
 
@@ -105,7 +105,7 @@ app_key = derive_key("/keyhive/content/application-key/v1/2026-10-26",
 Each update also encrypts the root secrets of earlier updates under a key derived from its own root secret. The BeeKEM tree ID is the associated data (authenticated, and an input to the nonce), and opening checks the synthetic nonce:
 
 ```
-key = derive_key("/keyhive/cgka/predecessor-secrets-key/v1/2026-10-26", root_secret)
+key = derive_key("/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31", root_secret)
 ```
 
 ## Sub-Protocols

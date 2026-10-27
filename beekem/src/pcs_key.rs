@@ -159,7 +159,7 @@ mod tests {
             secret.key(),
             SymmetricKey::from(
                 *blake3::Hash::from_hex(
-                    "dd2d9641b2973027ad27c821ea2ca7283f5b707712f6419da887e16dbb7081ad"
+                    "4ca5444e220f4c0418ca1cfb49b232e0da4bd02e34ca31bd37b998f321b62165"
                 )
                 .expect("hex")
                 .as_bytes()
@@ -175,7 +175,7 @@ mod tests {
             pcs_key().derive_predecessor_secrets_key(),
             SymmetricKey::from(
                 *blake3::Hash::from_hex(
-                    "0491bcaba53e979ab1be8da063c1befca58ec651c09d2db8e650f2e59a3a344a"
+                    "bd12f7975b80d7ca658430f18000b51ad68e568c109306adb0ba23b4a7501665"
                 )
                 .expect("hex")
                 .as_bytes()

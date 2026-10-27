@@ -224,9 +224,9 @@ mod tests {
             .expect("seals");
         assert_eq!(
             crate::hex::bytes_to_hex_string(&blob[..NONCE_LEN]),
-            "0xdcf4b7b820ec7035629d397e665ecac6bc0cf20296805f65"
+            "0x705d5af07b5d86eb860f8ed48f39ba6269e73eb598aa0972"
         );
-        assert_eq!(crate::hex::bytes_to_hex_string(&blob), "0xdcf4b7b820ec7035629d397e665ecac6bc0cf20296805f65764bb5185b8659e39d77fdc18bbbc1aa957213926a3c94");
+        assert_eq!(crate::hex::bytes_to_hex_string(&blob), "0x705d5af07b5d86eb860f8ed48f39ba6269e73eb598aa0972891bd57da405d87af8b12ab1bfbc7d5fcff41f430ed387");
     }
 
     #[test]

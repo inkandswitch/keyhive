@@ -17,7 +17,7 @@
 ///
 /// assert_eq!(
 ///     Context::CONTENT_NONCE_KEY.as_str(),
-///     "/keyhive/content/nonce-key/v1/2026-10-26"
+///     "/keyhive/content/nonce-key/v1/2026-10-31"
 /// );
 /// assert_ne!(
 ///     Context::CONTENT_NONCE_KEY.derive_key(&[0; 32]),
@@ -31,57 +31,57 @@ impl Context {
     /// The key an update seals its predecessors' root secrets under, from its
     /// own root secret.
     pub const CGKA_PREDECESSOR_SECRETS_KEY: Self =
-        Self::new("/keyhive/cgka/predecessor-secrets-key/v1/2026-10-26");
+        Self::new("/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31");
 
     /// A block's application key, from its root secret, predecessors and
     /// content ref.
     pub const CONTENT_APPLICATION_KEY: Self =
-        Self::new("/keyhive/content/application-key/v1/2026-10-26");
+        Self::new("/keyhive/content/application-key/v1/2026-10-31");
 
     /// A block's cipher key, from its application key.
     pub const CONTENT_ENCRYPTION_KEY: Self =
-        Self::new("/keyhive/content/encryption-key/v1/2026-10-26");
+        Self::new("/keyhive/content/encryption-key/v1/2026-10-31");
 
     /// The digest of a block's document and header, in each chunk's associated
     /// data.
-    pub const CONTENT_HEADER: Self = Self::new("/keyhive/content/header/v1/2026-10-26");
+    pub const CONTENT_HEADER: Self = Self::new("/keyhive/content/header/v1/2026-10-31");
 
     /// A block's synthetic-nonce key, from its application key.
-    pub const CONTENT_NONCE_KEY: Self = Self::new("/keyhive/content/nonce-key/v1/2026-10-26");
+    pub const CONTENT_NONCE_KEY: Self = Self::new("/keyhive/content/nonce-key/v1/2026-10-31");
 
     /// The stream an individual's prekey for a document is drawn from.
-    pub const PREKEY_SELECTION: Self = Self::new("/keyhive/prekey/selection/v1/2026-10-26");
+    pub const PREKEY_SELECTION: Self = Self::new("/keyhive/prekey/selection/v1/2026-10-31");
 
     /// A sealed blob's cipher key, from the key it is sealed under.
-    pub const SEAL_ENCRYPTION_KEY: Self = Self::new("/keyhive/seal/encryption-key/v1/2026-10-26");
+    pub const SEAL_ENCRYPTION_KEY: Self = Self::new("/keyhive/seal/encryption-key/v1/2026-10-31");
 
     /// A sealed blob's synthetic-nonce key, from the key it is sealed under.
-    pub const SEAL_NONCE_KEY: Self = Self::new("/keyhive/seal/nonce-key/v1/2026-10-26");
+    pub const SEAL_NONCE_KEY: Self = Self::new("/keyhive/seal/nonce-key/v1/2026-10-31");
 
     /// The symmetric key two share keys' holders derive from their X25519
     /// exchange.
     pub const SHARE_KEY_EXCHANGE_KEY: Self =
-        Self::new("/keyhive/share-key/exchange-key/v1/2026-10-26");
+        Self::new("/keyhive/share-key/exchange-key/v1/2026-10-31");
 
-    /// Every context. A new one must be added here, so the check that they
-    /// differ covers it.
-    const ALL: [Self; 9] = [
-        Self::CGKA_PREDECESSOR_SECRETS_KEY,
-        Self::CONTENT_APPLICATION_KEY,
-        Self::CONTENT_ENCRYPTION_KEY,
-        Self::CONTENT_HEADER,
-        Self::CONTENT_NONCE_KEY,
-        Self::PREKEY_SELECTION,
-        Self::SEAL_ENCRYPTION_KEY,
-        Self::SEAL_NONCE_KEY,
-        Self::SHARE_KEY_EXCHANGE_KEY,
+    /// Every context. [`Context::new`], the only way to make one, refuses a
+    /// string that is not here, so the checks over this list (each well
+    /// formed, no two the same) cover every context in use.
+    const ALL: [&'static str; 9] = [
+        "/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31",
+        "/keyhive/content/application-key/v1/2026-10-31",
+        "/keyhive/content/encryption-key/v1/2026-10-31",
+        "/keyhive/content/header/v1/2026-10-31",
+        "/keyhive/content/nonce-key/v1/2026-10-31",
+        "/keyhive/prekey/selection/v1/2026-10-31",
+        "/keyhive/seal/encryption-key/v1/2026-10-31",
+        "/keyhive/seal/nonce-key/v1/2026-10-31",
+        "/keyhive/share-key/exchange-key/v1/2026-10-31",
     ];
 
+    /// A context must be listed in [`Context::ALL`]: a constant that is not
+    /// fails to compile.
     const fn new(context: &'static str) -> Self {
-        assert!(
-            well_formed(context.as_bytes()),
-            "a context is /keyhive/<area>/<purpose>/v<N>/<YYYY-MM-DD>"
-        );
+        assert!(listed(context), "a context must be listed in Context::ALL");
         Self(context)
     }
 
@@ -104,7 +104,29 @@ impl Context {
     }
 }
 
-const _: () = assert!(all_distinct(&Context::ALL), "two contexts are the same");
+const _: () = {
+    let mut i = 0;
+    while i < Context::ALL.len() {
+        assert!(
+            well_formed(Context::ALL[i].as_bytes()),
+            "a context is /keyhive/<area>/<purpose>/v<N>/<YYYY-MM-DD>"
+        );
+        i += 1;
+    }
+    assert!(all_distinct(&Context::ALL), "two contexts are the same");
+};
+
+/// Whether `context` is one of [`Context::ALL`].
+const fn listed(context: &str) -> bool {
+    let mut i = 0;
+    while i < Context::ALL.len() {
+        if same(Context::ALL[i].as_bytes(), context.as_bytes()) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
 
 /// `/keyhive/<area>/<purpose>/v<N>/<YYYY-MM-DD>`, where the area and purpose
 /// are lowercase ASCII letters, digits and inner hyphens, `N` has no leading
@@ -171,12 +193,12 @@ const fn is_date(date: &[u8]) -> bool {
     1 <= month && month <= 12 && 1 <= day && day <= 31
 }
 
-const fn all_distinct(contexts: &[Context]) -> bool {
+const fn all_distinct(contexts: &[&str]) -> bool {
     let mut i = 0;
     while i < contexts.len() {
         let mut j = i + 1;
         while j < contexts.len() {
-            if same(contexts[i].0.as_bytes(), contexts[j].0.as_bytes()) {
+            if same(contexts[i].as_bytes(), contexts[j].as_bytes()) {
                 return false;
             }
             j += 1;
@@ -206,7 +228,15 @@ mod tests {
 
     #[test]
     fn every_context_is_well_formed() {
-        assert!(Context::ALL.iter().all(|c| well_formed(c.0.as_bytes())));
+        assert!(Context::ALL.iter().all(|c| well_formed(c.as_bytes())));
+    }
+
+    /// A well-formed context that is not in [`Context::ALL`] cannot be made.
+    #[test]
+    fn only_a_listed_context_can_be_made() {
+        assert!(listed(Context::SEAL_NONCE_KEY.as_str()));
+        assert!(!listed("/keyhive/seal/nonce-key/v2/2026-10-27"));
+        assert!(!listed(""));
     }
 
     #[test]
@@ -214,24 +244,24 @@ mod tests {
         for context in [
             "",
             "/keyhive/",
-            "/keyhive/content/nonce-key/v1/2026-10-26/",
-            "/keyhive/content/nonce-key/2026-10-26",
+            "/keyhive/content/nonce-key/v1/2026-10-31/",
+            "/keyhive/content/nonce-key/2026-10-31",
             "/keyhive/content/nonce-key/v1",
-            "/keyhive/content/v1/2026-10-26",
-            "/keyhive/content/nonce-key/extra/v1/2026-10-26",
-            "keyhive/content/nonce-key/v1/2026-10-26",
-            "/keyhive2/content/nonce-key/v1/2026-10-26",
-            "/keyhive/Content/nonce-key/v1/2026-10-26",
-            "/keyhive/content/nonce_key/v1/2026-10-26",
-            "/keyhive/content/nonce key/v1/2026-10-26",
-            "/keyhive/-content/nonce-key/v1/2026-10-26",
-            "/keyhive/content/nonce-key-/v1/2026-10-26",
-            "/keyhive//nonce-key/v1/2026-10-26",
-            "/keyhive/content/nonce-key/v/2026-10-26",
-            "/keyhive/content/nonce-key/v0/2026-10-26",
-            "/keyhive/content/nonce-key/v01/2026-10-26",
-            "/keyhive/content/nonce-key/V1/2026-10-26",
-            "/keyhive/content/nonce-key/v1a/2026-10-26",
+            "/keyhive/content/v1/2026-10-31",
+            "/keyhive/content/nonce-key/extra/v1/2026-10-31",
+            "keyhive/content/nonce-key/v1/2026-10-31",
+            "/keyhive2/content/nonce-key/v1/2026-10-31",
+            "/keyhive/Content/nonce-key/v1/2026-10-31",
+            "/keyhive/content/nonce_key/v1/2026-10-31",
+            "/keyhive/content/nonce key/v1/2026-10-31",
+            "/keyhive/-content/nonce-key/v1/2026-10-31",
+            "/keyhive/content/nonce-key-/v1/2026-10-31",
+            "/keyhive//nonce-key/v1/2026-10-31",
+            "/keyhive/content/nonce-key/v/2026-10-31",
+            "/keyhive/content/nonce-key/v0/2026-10-31",
+            "/keyhive/content/nonce-key/v01/2026-10-31",
+            "/keyhive/content/nonce-key/V1/2026-10-31",
+            "/keyhive/content/nonce-key/v1a/2026-10-31",
             "/keyhive/content/nonce-key/v1/2026-13-01",
             "/keyhive/content/nonce-key/v1/2026-00-01",
             "/keyhive/content/nonce-key/v1/2026-10-00",
@@ -239,7 +269,7 @@ mod tests {
             "/keyhive/content/nonce-key/v1/2026-1-26",
             "/keyhive/content/nonce-key/v1/2026/10/26",
             "/keyhive/content/nonce-key/v1/26-10-2026",
-            "/keyhive/content/nonce-key/v1/2026-10-26x",
+            "/keyhive/content/nonce-key/v1/2026-10-31x",
         ] {
             assert!(!well_formed(context.as_bytes()), "{context:?}");
         }

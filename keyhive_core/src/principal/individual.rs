@@ -410,11 +410,11 @@ mod tests {
     }
 
     /// The first draw, `b3sum --derive-key` under `PREKEY_SELECTION` over
-    /// `"keyhive"`, its first 8 bytes little-endian, is 14742683520533240410.
+    /// `"keyhive"`, its first 8 bytes little-endian, is 13893658724928726325.
     /// It is below every limit here, so it is reduced, not redrawn.
     #[test]
     fn a_uniform_index_is_the_first_draw_reduced() {
-        for (len, index) in [(7, 5), (1_000_003, 362_565), (4_000_000_007, 2_733_544_299)] {
+        for (len, index) in [(7, 1), (1_000_003, 594_094), (4_000_000_007, 614_823_600)] {
             assert_eq!(uniform_index(b"keyhive", len), Some(index), "{len}");
         }
     }
