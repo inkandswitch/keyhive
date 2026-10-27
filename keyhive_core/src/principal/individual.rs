@@ -15,7 +15,6 @@ use crate::{
     transact::{fork::Fork, merge::Merge},
     util::content_addressed_map::CaMap,
 };
-use derivative::Derivative;
 use derive_more::Debug;
 use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
@@ -58,8 +57,7 @@ use std::{
 /// Serialized as its prekey operations alone: the id and the live prekeys
 /// follow from them, and deserializing checks that every operation verifies
 /// and has the same issuer.
-#[derive(Debug, Clone, Derivative)]
-#[derivative(PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndividualState {
     /// The public key identifier.
     pub(crate) id: IndividualId,
