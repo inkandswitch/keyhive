@@ -55,8 +55,6 @@ const HEADER_LEN: usize = 4;
 /// produces a different signature that verifies just as well, and so a
 /// different `Signed<T>` with the same [`Signed::digest`]. Compare digests
 /// when "same statement" is what is meant.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(bound = ""))]
 pub struct Signed<T> {
     issuer: Identifier,
     encoded: Encoded<T>,

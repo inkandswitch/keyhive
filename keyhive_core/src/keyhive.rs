@@ -54,7 +54,7 @@ use beekem::{
 use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
 use futures::lock::Mutex;
-use keyhive_codec::traits::Encode;
+use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{
     bytes::Bytes,
     content::reference::ContentRef,
@@ -75,7 +75,6 @@ use keyline::{
     revocation::Revocation,
 };
 use nonempty::NonEmpty;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::{Debug, Formatter},
@@ -101,7 +100,7 @@ pub struct Keyhive<
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -113,7 +112,7 @@ pub struct KeyhiveState<
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -173,7 +172,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -189,7 +188,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -205,7 +204,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: rand::CryptoRng,
@@ -222,7 +221,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef,
-        P: for<'de> Deserialize<'de>,
+        P: Decode,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore,
@@ -1648,9 +1647,7 @@ where
         pred_refs: &[T],
         content: &[u8],
     ) -> Result<EncryptedContentWithUpdate<T>, EnvelopeError<T>>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
+where {
         let writing = self
             .prepare_to_write(doc)
             .await
@@ -1770,8 +1767,7 @@ where
         entrypoints: &[(Arc<EncryptedContent<P, T>>, SymmetricKey)],
     ) -> Result<CausalDecryptionState<T, P>, CausalDecryptionError<F, T, P, C>>
     where
-        T: for<'de> Deserialize<'de>,
-        P: Clone + Serialize + for<'de> Deserialize<'de>,
+        P: Clone + Encode + Decode,
     {
         let mut to_walk = entrypoints.to_vec();
         CiphertextStoreExt::<F, T, P>::try_causal_decrypt(&self.ciphertext_store, doc, &mut to_walk)
@@ -1847,8 +1843,7 @@ where
         encrypted: &EncryptedContent<P, T>,
     ) -> Result<CausalDecryptionState<T, P>, CausalDecryptError<F, T, P, C>>
     where
-        T: for<'de> Deserialize<'de>,
-        P: Serialize + Clone,
+        P: Encode + Clone,
     {
         let Some(state) = self.member_document(doc).await? else {
             // Invited, no keys yet.
@@ -3733,7 +3728,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Debug,
-        P: for<'de> Deserialize<'de>,
+        P: Decode,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore,
@@ -3755,7 +3750,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Debug,
-        P: for<'de> Deserialize<'de>,
+        P: Decode,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore,
@@ -3771,7 +3766,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de> + Clone,
+        P: Decode + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
@@ -3822,7 +3817,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef + Clone,
-        P: for<'de> Deserialize<'de> + Clone,
+        P: Decode + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
@@ -3841,7 +3836,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef,
-        P: for<'de> Deserialize<'de> + Clone,
+        P: Decode + Clone,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore + Clone,
@@ -3931,7 +3926,7 @@ impl<
         F: FutureForm,
         S: AsyncSigner<F> + Clone,
         T: ContentRef,
-        P: for<'de> Deserialize<'de>,
+        P: Decode,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
         L: MembershipListener<F, T>,
         R: rand::CryptoRng + rand::RngCore,
@@ -5555,8 +5550,6 @@ mod tests {
     /// reachable_prekey_ops_for_agent for each agent.
     #[tokio::test]
     async fn test_reachable_prekey_ops_for_all_agents_matches_per_agent() -> TestResult {
-        use crate::crypto::digest::Digest;
-
         test_utils::init_logging();
 
         let alice = make_keyhive().await;
@@ -5686,15 +5679,12 @@ mod tests {
             );
 
             // Same flattened ops (compare by content digest)
-            let mut all_digests: Vec<_> = all_ops
-                .unwrap()
-                .map(|op| Digest::hash(op.as_ref()))
-                .collect();
+            let mut all_digests: Vec<_> = all_ops.unwrap().map(|op| op.digest()).collect();
             all_digests.sort();
             let mut per_agent_digests: Vec<_> = per_agent_ops
                 .values()
                 .flat_map(|ops| ops.iter())
-                .map(|op| Digest::hash(op.as_ref()))
+                .map(|op| op.digest())
                 .collect();
             per_agent_digests.sort();
             assert_eq!(

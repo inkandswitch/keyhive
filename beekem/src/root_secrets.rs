@@ -5,7 +5,6 @@ use crate::{
 };
 use alloc::vec::Vec;
 use keyhive_crypto::digest::Digest;
-use serde::{Deserialize, Serialize};
 
 /// A root secret checked against the update that produced it.
 #[derive(Debug)]
@@ -36,8 +35,7 @@ impl VerifiedRootSecret {
 /// [`VerifiedRootSecret`], or copied from another [`RootSecrets`] by
 /// [`RootSecrets::merge_from`], ensuring every entry was checked against
 /// its update.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RootSecrets(Map<Digest<CgkaOperation>, PcsKey>);
 
 impl RootSecrets {

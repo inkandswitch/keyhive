@@ -30,7 +30,6 @@ use keyhive_crypto::{
     signer::async_signer::AsyncSigner, verifiable::Verifiable, verified::VerifyError,
 };
 use keyline::contract::Keyline;
-use serde::{Deserialize, Serialize};
 use state::PrekeyState;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -59,9 +58,8 @@ use std::{
 /// Serialized as its prekey operations alone: the id and the live prekeys
 /// follow from them, and deserializing checks that every operation verifies
 /// and has the same issuer.
-#[derive(Debug, Clone, Serialize, Deserialize, Derivative)]
+#[derive(Debug, Clone, Derivative)]
 #[derivative(PartialEq, Eq)]
-#[serde(into = "PrekeyState", try_from = "PrekeyState")]
 pub struct IndividualState {
     /// The public key identifier.
     pub(crate) id: IndividualId,
@@ -338,7 +336,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: CryptoRng + RngCore,

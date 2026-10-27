@@ -1,10 +1,9 @@
 use keyhive_core::stats::Stats;
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use wasm_bindgen::prelude::wasm_bindgen;
 
 #[wasm_bindgen(js_name = Stats)]
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct JsStats(pub(crate) Stats);
 
 impl fmt::Display for JsStats {

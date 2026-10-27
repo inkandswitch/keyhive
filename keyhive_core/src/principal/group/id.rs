@@ -4,11 +4,10 @@ use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
     verifiable::Verifiable,
 };
-use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// A group identifier.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GroupId(pub(crate) Identifier);
 
 impl GroupId {

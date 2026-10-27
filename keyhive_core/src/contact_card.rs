@@ -15,13 +15,12 @@ use keyhive_crypto::{
     verifiable::Verifiable,
     verified::VerifyError,
 };
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
 
 /// An individual's introduction: one of its prekey operations, verified.
 /// Deserializing one checks its signature.
-#[derive(Debug, Clone, PartialEq, Eq, From, Into, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, From, Into, Hash)]
 pub struct ContactCard(pub(crate) KeyOp);
 
 impl ContactCard {

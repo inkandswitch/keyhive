@@ -36,7 +36,6 @@ use keyhive_crypto::{
 /// delegation, any of them serves. For why it names a revocation, and why not
 /// a random nonce, see `design/keyline/alternatives.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Delegation {
     /// The key the delegation is issued to.
     pub audience: Identifier,

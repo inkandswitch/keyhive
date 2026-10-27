@@ -21,7 +21,6 @@ use keyhive_crypto::{
     verified::{self, Verified},
 };
 use keyline::{certificate::Certificate, delegation::Delegation, revocation::Revocation};
-use serde::{Serialize, Serializer};
 use std::{collections::HashMap, sync::Arc};
 use tracing::instrument;
 
@@ -114,12 +113,6 @@ impl<T: ContentRef> From<Event<T>> for StaticEvent<T> {
             Event::PrekeyRotated(pkr) => StaticEvent::PrekeyRotated(Arc::unwrap_or_clone(pkr)),
             Event::PrekeysExpanded(pke) => StaticEvent::PrekeysExpanded(Arc::unwrap_or_clone(pke)),
         }
-    }
-}
-
-impl<T: ContentRef> Serialize for Event<T> {
-    fn serialize<Z: Serializer>(&self, serializer: Z) -> Result<Z::Ok, Z::Error> {
-        StaticEvent::from(self.clone()).serialize(serializer)
     }
 }
 

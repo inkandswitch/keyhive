@@ -6,7 +6,7 @@
 //! # `no_std` support
 //!
 //! This crate is `no_std`-compatible. The `std` feature (enabled by default) gates
-//! functionality that depends on `bincode`, `dupe`, and `thiserror`. In `no_std` mode
+//! functionality that depends on `dupe` and `thiserror`. In `no_std` mode
 //! the crate requires `alloc`.
 
 #![no_std]

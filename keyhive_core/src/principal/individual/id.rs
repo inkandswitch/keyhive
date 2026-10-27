@@ -5,10 +5,9 @@ use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
     verifiable::Verifiable,
 };
-use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct IndividualId(pub Identifier);
 

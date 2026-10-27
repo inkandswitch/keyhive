@@ -27,6 +27,7 @@ use beekem::{
 };
 use future_form::FutureForm;
 use id::DocumentId;
+use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::Identifier,
@@ -40,7 +41,6 @@ use keyhive_crypto::{
 use keyline::{contract::Keyline, delegation::Delegation, power::Power};
 use nonempty::NonEmpty;
 use rand::{CryptoRng, RngCore};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::Arc,
@@ -224,9 +224,7 @@ impl<T: ContentRef> DocumentState<T> {
         ),
         EncryptInEnvelopeError<T>,
     >
-    where
-        T: for<'de> Deserialize<'de>,
-    {
+where {
         let mut ancestors = HashMap::with_capacity(pred_refs.len());
         for pred in pred_refs {
             let key = self
@@ -241,7 +239,7 @@ impl<T: ContentRef> DocumentState<T> {
             plaintext: content.to_vec(),
             ancestors,
         };
-        let bytes = envelope.serde_encode()?;
+        let bytes = envelope.encode().into_bytes();
 
         let (encrypted, _key, rotation) = self
             .try_encrypt_content_keyed::<F, S, R>(content_ref, &bytes, pred_refs, signer, csprng)
@@ -290,7 +288,7 @@ impl<T: ContentRef> DocumentState<T> {
     }
 
     #[instrument(skip_all)]
-    pub fn try_decrypt_content<P: for<'de> Deserialize<'de>>(
+    pub fn try_decrypt_content<P: Decode>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
     ) -> Result<Vec<u8>, DecryptError> {
@@ -300,7 +298,7 @@ impl<T: ContentRef> DocumentState<T> {
 
     /// Decrypt content and return the application secret that was used.
     #[instrument(skip_all)]
-    pub fn try_decrypt_content_keyed<P: for<'de> Deserialize<'de>>(
+    pub fn try_decrypt_content_keyed<P: Decode>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
     ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
@@ -313,7 +311,7 @@ impl<T: ContentRef> DocumentState<T> {
 
     /// Decrypt content with `decrypt_key`, its key from this document's CGKA
     /// group, and return that key.
-    pub(crate) fn try_decrypt_content_with<P: for<'de> Deserialize<'de>>(
+    pub(crate) fn try_decrypt_content_with<P: Decode>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
         decrypt_key: SymmetricKey,
@@ -332,25 +330,23 @@ impl<T: ContentRef> DocumentState<T> {
     pub async fn try_causal_decrypt_content<
         F: FutureForm,
         C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P>,
-        P: for<'de> Deserialize<'de> + Serialize + Clone,
+        P: Decode + Encode + Clone,
     >(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
         store: C,
     ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<F, T, P, C>>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
+where {
         let raw_entrypoint = self.try_decrypt_content(encrypted_content)?;
 
-        let entrypoint_envelope = Envelope::<T, Vec<u8>>::serde_decode(raw_entrypoint.as_slice())
+        let entrypoint_envelope = Envelope::<T, Vec<u8>>::decode(raw_entrypoint.as_slice())
             .map_err(|e| CausalDecryptionError::<F, T, P, C> {
-            progress: Box::new(CausalDecryptionState::new()),
-            cannot: HashMap::from_iter([(
-                encrypted_content.content_ref.clone(),
-                ErrorReason::DeserializationFailed(e),
-            )]),
-        })?;
+                progress: Box::new(CausalDecryptionState::new()),
+                cannot: HashMap::from_iter([(
+                    encrypted_content.content_ref.clone(),
+                    ErrorReason::DeserializationFailed(e),
+                )]),
+            })?;
 
         let mut to_decrypt: Vec<(Arc<EncryptedContent<P, T>>, SymmetricKey)> = vec![];
         let mut not_served = HashMap::new();
@@ -420,7 +416,7 @@ where
     F: FutureForm,
     S: AsyncSigner<F> + Clone,
     T: ContentRef,
-    P: for<'de> Deserialize<'de>,
+    P: Decode,
     C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
     L: MembershipListener<F, T>,
     R: CryptoRng + RngCore,
@@ -550,9 +546,6 @@ pub enum EncryptError {
 pub enum EncryptInEnvelopeError<T: ContentRef> {
     #[error("no key for ancestor {0:?}")]
     NoKeyForAncestor(T),
-
-    #[error(transparent)]
-    Serialization(#[from] bincode::Error),
 
     #[error(transparent)]
     Encrypt(#[from] EncryptError),

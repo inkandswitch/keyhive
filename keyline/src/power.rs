@@ -23,7 +23,6 @@ use keyhive_codec::{
 /// order from the tag: `A` is the top of the lattice and the lowest byte of the
 /// four.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[repr(u8)]
 pub enum Power {

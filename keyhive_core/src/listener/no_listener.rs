@@ -14,13 +14,12 @@ use keyhive_crypto::{
     verified::{self, Verified},
 };
 use keyline::{delegation::Delegation, revocation::Revocation};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// Stub out listener functionality.
 ///
 /// This is the default listener. Generally you don't need to manually specify this as an option.
-#[derive(Debug, Default, Clone, Dupe, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Dupe, Copy, PartialEq, Eq)]
 pub struct NoListener;
 
 #[future_form(Sendable, Local)]

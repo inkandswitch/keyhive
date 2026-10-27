@@ -17,14 +17,13 @@ use keyhive_crypto::{
     verified::{self, header},
 };
 use keyline::{delegation::Delegation, revocation::Revocation};
-use serde::{Deserialize, Serialize};
 
 /// Serailizable version of [`Event`][super::Event].
 ///
 /// This is useful for sending over a network or storing to disk.
 /// However the references contained in `StaticEvent`s may be missing
 /// dependencies, unlike [`Event`][super::Event]s.
-#[derive(Debug, Clone, PartialEq, Eq, From, Hash, TryInto, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, From, Hash, TryInto)]
 pub enum StaticEvent<T: ContentRef> {
     /// Prekeys were expanded, as received: verified on receipt.
     PrekeysExpanded(verified::Signed<AddKeyOp>),

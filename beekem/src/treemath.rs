@@ -27,10 +27,9 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use serde::{Deserialize, Serialize};
 
 /// LeafNodeIndex references a leaf node in a tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LeafNodeIndex(u32);
 
 impl core::fmt::Display for LeafNodeIndex {
@@ -96,7 +95,7 @@ impl SubAssign<u32> for LeafNodeIndex {
 }
 
 /// InnerNodeIndex references a parent node in a tree.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InnerNodeIndex(u32);
 
 impl InnerNodeIndex {
@@ -168,7 +167,7 @@ impl From<InnerNodeIndex> for TreeNodeIndex {
 }
 
 /// TreeNodeIndex references a node in a tree.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum TreeNodeIndex {
     Leaf(LeafNodeIndex),
     Inner(InnerNodeIndex),
@@ -234,7 +233,7 @@ impl PartialOrd for TreeNodeIndex {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct TreeSize(u32);
 
 impl TreeSize {

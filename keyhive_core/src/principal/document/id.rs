@@ -6,10 +6,9 @@ use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
     verifiable::Verifiable,
 };
-use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct DocumentId(pub(crate) Identifier);
 
