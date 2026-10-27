@@ -2,7 +2,7 @@
 //!
 //! This crate provides the core CGKA (Continuous Group Key Agreement) state machine
 //! used by Keyhive. It manages encryption group membership, key rotation, and
-//! derivation of per-content application secrets.
+//! the group secrets that per-content application secrets are derived from.
 //!
 //! # `no_std` support
 //!

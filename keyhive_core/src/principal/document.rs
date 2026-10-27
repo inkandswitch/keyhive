@@ -20,7 +20,6 @@ use crate::{
 };
 use beekem::{
     cgka::MembershipView,
-    encrypted::{ContentDecryptError, EncryptedContent},
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaBatch, CgkaOperation, CitationId},
@@ -28,6 +27,7 @@ use beekem::{
 use future_form::FutureForm;
 use id::DocumentId;
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_content::encrypted::{ContentDecryptError, EncryptedContent};
 use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::Identifier,
@@ -366,7 +366,7 @@ where {
         // was given. The entrypoint's own go in the same report, with their
         // keys, so the reader knows what to fetch and can open it.
         let mut walked = store
-            .try_causal_decrypt(self.doc_id(), &mut to_decrypt)
+            .try_causal_decrypt(self.doc_id().into(), &mut to_decrypt)
             .await;
         match &mut walked {
             Ok(state) => state.next.extend(not_served),

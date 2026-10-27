@@ -22,13 +22,14 @@ ignore = [
   # change; a no_std serializer (minicbor / postcard) is the planned replacement.
   { id = "RUSTSEC-2025-0141", reason = "chosen wire encoding; migration tracked separately" },
 
-  # derivative: unmaintained proc-macro used in keyhive_core. Compile-time
+  # derivative: unmaintained proc-macro used in keyhive_core and
+  # keyhive_content (the causal envelope). Compile-time
   # only — no runtime attack surface. beekem/keyhive_crypto already
   # replaced it with manual impls; keyhive_core migration is pending.
   { id = "RUSTSEC-2024-0388", reason = "compile-time only; migration pending" },
 
-  # proc-macro-error2: transitive via `aquamarine` (`mermaid_docs`
-  # feature, rustdoc only). Compile-time only.
+  # proc-macro-error2: transitive via `aquamarine` (keyhive_content's
+  # `mermaid_docs` feature, rustdoc only). Compile-time only.
   { id = "RUSTSEC-2026-0173", reason = "transitive compile-time dep of aquamarine (docs feature)" },
 ]
 

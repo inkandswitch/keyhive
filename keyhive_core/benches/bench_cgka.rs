@@ -201,7 +201,7 @@ fn follow_100_updates(writer: &mut Writer, reader: &mut Cgka) {
             .merge_concurrent_operation(Arc::new(op))
             .expect("the update follows the reader's tree");
         reader
-            .decrypt_tree_root_secret()
+            .decrypt_current_group_secret()
             .expect("the reader can decrypt the root");
     }
 }

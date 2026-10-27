@@ -1,6 +1,6 @@
 //! Two keyhive instances sharing one identity, its signing key and its secrets.
 
-use beekem::encrypted::EncryptedContent;
+use keyhive_content::encrypted::EncryptedContent;
 use keyhive_core::{
     keyhive::Keyhive,
     listener::no_listener::NoListener,

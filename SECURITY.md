@@ -12,7 +12,7 @@ There is no formal disclosure process, response-time commitment, or bug bounty w
 
 ## Scope
 
-In scope: `keyhive_core`, `keyhive_crypto`, `beekem`, `keyhive_wasm`, and the design documents under [`design/`](./design). Issues in the sync layer belong to [Subduction](https://github.com/inkandswitch/subduction/security).
+In scope: `keyhive_core`, `keyhive_content`, `keyhive_crypto`, `beekem`, `keyhive_wasm`, and the design documents under [`design/`](./design). Issues in the sync layer belong to [Subduction](https://github.com/inkandswitch/subduction/security).
 
 ## Dependency Advisories
 

@@ -1,75 +1,15 @@
-//! PCS keys and application secrets for content encryption.
+//! The root secrets of a BeeKEM tree, which are the CGKA
+//! group secrets.
 
-use crate::{
-    encrypted::{EncryptedContent, PredecessorRefs},
-    id::TreeId,
-    keys::share_secret_key_from_decrypted_secret,
-    operation::CgkaOperation,
-};
+use crate::keys::share_secret_key_from_decrypted_secret;
 use alloc::vec::Vec;
 use keyhive_crypto::{
-    content::reference::ContentRef,
     context::Context,
     digest::Digest,
     share_key::ShareSecretKey,
     signable::{Kind, Kinded},
     symmetric_key::SymmetricKey,
 };
-use tracing::instrument;
-
-/// A block's application key, with the header fields its ciphertext carries.
-///
-/// The key is what a causal envelope hands to a successor's readers: holding
-/// it decrypts this one block.
-#[derive(Debug, Clone)]
-pub struct ApplicationSecret<Cr: ContentRef> {
-    key: SymmetricKey,
-    pcs_key_hash: Digest<PcsKey>,
-    pcs_update_op_hash: Digest<CgkaOperation>,
-    content_ref: Cr,
-    pred_refs: Digest<PredecessorRefs<Cr>>,
-}
-
-impl<Cr: ContentRef> ApplicationSecret<Cr> {
-    /// Construct a new [`ApplicationSecret`].
-    pub fn new(
-        key: SymmetricKey,
-        pcs_key_hash: Digest<PcsKey>,
-        pcs_update_op_hash: Digest<CgkaOperation>,
-        content_ref: Cr,
-        pred_refs: Digest<PredecessorRefs<Cr>>,
-    ) -> Self {
-        Self {
-            key,
-            pcs_key_hash,
-            pcs_update_op_hash,
-            content_ref,
-            pred_refs,
-        }
-    }
-
-    /// Getter for the underlying symmetric key.
-    pub fn key(&self) -> SymmetricKey {
-        self.key
-    }
-
-    /// Encrypt `plaintext` for the document `doc_id`.
-    pub fn try_encrypt<T>(
-        &self,
-        doc_id: TreeId,
-        plaintext: &[u8],
-    ) -> Result<EncryptedContent<T, Cr>, chacha20poly1305::Error> {
-        EncryptedContent::encrypt(
-            &self.key,
-            doc_id,
-            self.content_ref.clone(),
-            self.pred_refs,
-            self.pcs_key_hash,
-            self.pcs_update_op_hash,
-            plaintext,
-        )
-    }
-}
 
 /// A key used to derive application secrets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -87,7 +27,7 @@ impl PcsKey {
         share_secret_key_from_decrypted_secret(decrypted_secret).map(Self::new)
     }
 
-    /// The digest that names this key in a ciphertext's header.
+    /// The digest of this key.
     pub fn digest(&self) -> Digest<PcsKey> {
         Digest::of_bytes(self.0.as_slice())
     }
@@ -98,32 +38,11 @@ impl PcsKey {
             .derive_key(self.0.as_slice())
             .into()
     }
-
-    /// Derive a block's [`ApplicationSecret`] from this PCS key:
-    /// `pcs_key ‖ pred_refs ‖ content_ref`, under its own BLAKE3 context. The
-    /// content ref is self-delimiting and comes last.
-    #[instrument(skip(self))]
-    pub fn derive_application_secret<Cr: ContentRef>(
-        &self,
-        content_ref: &Cr,
-        pred_refs: &Digest<PredecessorRefs<Cr>>,
-        pcs_update_op_hash: &Digest<CgkaOperation>,
-    ) -> ApplicationSecret<Cr> {
-        let mut hasher = Context::CONTENT_APPLICATION_KEY.hasher();
-        hasher.update(self.0.as_slice());
-        hasher.update(pred_refs.as_slice());
-        hasher.update(content_ref.encode().as_bytes());
-        ApplicationSecret::new(
-            SymmetricKey::from(*hasher.finalize().as_bytes()),
-            self.digest(),
-            *pcs_update_op_hash,
-            content_ref.clone(),
-            *pred_refs,
-        )
-    }
 }
 
-/// Hashed to name the key a block was encrypted under; never signed or sent.
+/// A PCS key is never signed or sent, only hashed. The digest is included
+/// in each block's header so a reader can find the key that block's key came
+/// from.
 impl Kinded for PcsKey {
     const KIND: Kind = Kind::PCS_KEY;
     const VERSION: u8 = 0;
@@ -141,28 +60,6 @@ mod tests {
 
     fn pcs_key() -> PcsKey {
         PcsKey::new(ShareSecretKey::force_from_bytes([1; 32]))
-    }
-
-    /// Checked with `b3sum --derive-key` under `CONTENT_APPLICATION_KEY` over
-    /// `[1; 32] ‖ Digest<PredecessorRefs>([[3; 32]]) ‖ [2; 32]`: the root secret,
-    /// the predecessors' digest, then the content ref.
-    #[test]
-    fn the_application_key_is_derived_from_root_predecessors_and_ref() {
-        let secret = pcs_key().derive_application_secret(
-            &[2u8; 32],
-            &PredecessorRefs::digest(&[[3; 32]]),
-            &[5; 32].into(),
-        );
-        assert_eq!(
-            secret.key(),
-            SymmetricKey::from(
-                *blake3::Hash::from_hex(
-                    "4ca5444e220f4c0418ca1cfb49b232e0da4bd02e34ca31bd37b998f321b62165"
-                )
-                .expect("hex")
-                .as_bytes()
-            )
-        );
     }
 
     /// Checked with `b3sum --derive-key` under `CGKA_PREDECESSOR_SECRETS_KEY`

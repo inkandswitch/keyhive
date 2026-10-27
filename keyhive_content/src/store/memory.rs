@@ -1,11 +1,12 @@
-use crate::crypto::digest::Digest;
-use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
+use crate::{application_secret::GroupSecretEpoch, encrypted::EncryptedContent};
 use dupe::Dupe;
 use futures::lock::Mutex;
-use keyhive_crypto::content::reference::ContentRef;
+use keyhive_crypto::{content::reference::ContentRef, digest::Digest};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    vec,
+    vec::Vec,
 };
 use tracing::instrument;
 
@@ -25,7 +26,7 @@ where
 
 #[derive(Debug, Clone)]
 pub struct MemoryCiphertextStoreInner<Cr: ContentRef, P> {
-    pub(crate) ops_to_refs: HashMap<Digest<CgkaOperation>, HashSet<Cr>>,
+    pub(crate) ops_to_refs: HashMap<Digest<GroupSecretEpoch>, HashSet<Cr>>,
     pub(crate) refs_to_digests: HashMap<Cr, HashSet<Digest<EncryptedContent<P, Cr>>>>,
 
     #[allow(clippy::type_complexity)]
@@ -63,7 +64,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     #[instrument(level = "debug", skip(self))]
     pub async fn get_by_pcs_update(
         &self,
-        pcs_update_op: &Digest<CgkaOperation>,
+        pcs_update_op: &Digest<GroupSecretEpoch>,
     ) -> Vec<Arc<EncryptedContent<P, Cr>>> {
         let locked = self.0.lock().await;
 
@@ -90,7 +91,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     pub async fn insert(&self, encrypted: Arc<EncryptedContent<P, Cr>>) {
         let digest = encrypted.digest();
         let content_ref = encrypted.content_ref.clone();
-        let pcs_update_op_hash = encrypted.pcs_update_op_hash;
+        let pcs_update_op_hash = encrypted.group_secret_epoch_hash;
 
         let mut locked = self.0.lock().await;
 
@@ -135,17 +136,19 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
 
         locked
             .ops_to_refs
-            .entry(encrypted.pcs_update_op_hash)
+            .entry(encrypted.group_secret_epoch_hash)
             .and_modify(|crs| {
                 crs.remove(&encrypted.content_ref);
             });
 
         if locked
             .ops_to_refs
-            .get(&encrypted.pcs_update_op_hash)?
+            .get(&encrypted.group_secret_epoch_hash)?
             .is_empty()
         {
-            locked.ops_to_refs.remove(&encrypted.pcs_update_op_hash);
+            locked
+                .ops_to_refs
+                .remove(&encrypted.group_secret_epoch_hash);
         }
 
         locked

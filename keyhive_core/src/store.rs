@@ -1,3 +1,3 @@
 //! Top-level storage.
 
-pub mod ciphertext;
+pub use keyhive_content::store as ciphertext;

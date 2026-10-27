@@ -2,9 +2,9 @@ use dupe::Dupe;
 use std::sync::Arc;
 
 use super::{base64::Base64, change_id::JsChangeId};
-use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
 use future_form::{FutureForm, Local};
 use keyhive_codec::error::DecodeError;
+use keyhive_content::{application_secret::GroupSecretEpoch, encrypted::EncryptedContent};
 use keyhive_core::{
     crypto::digest::Digest,
     store::ciphertext::{memory::MemoryCiphertextStore, CiphertextStore},
@@ -91,7 +91,7 @@ impl CiphertextStore<Local, JsChangeId, Vec<u8>> for JsCiphertextStore {
 
     fn get_ciphertext_by_pcs_update<'a>(
         &'a self,
-        pcs_update: &'a Digest<CgkaOperation>,
+        pcs_update: &'a Digest<GroupSecretEpoch>,
     ) -> <Local as FutureForm>::Future<
         'a,
         Result<Vec<Arc<EncryptedContent<Vec<u8>, JsChangeId>>>, Self::GetCiphertextError>,

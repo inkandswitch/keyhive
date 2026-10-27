@@ -24,11 +24,12 @@ use crate::{
     },
     update::AddMemberUpdate,
 };
-use beekem::{encrypted::EncryptedContent, error::CgkaError};
+use beekem::error::CgkaError;
 use dupe::Dupe;
 use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_content::encrypted::EncryptedContent;
 use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::Identifier,

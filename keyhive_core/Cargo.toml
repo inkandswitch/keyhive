@@ -15,13 +15,11 @@ rust-version.workspace = true
 # Keyhive
 beekem = { workspace = true, features = ["std"] }
 keyhive_codec = { workspace = true, features = ["std"] }
+keyhive_content = { workspace = true, features = ["std"] }
 keyhive_crypto = { workspace = true, features = ["std"] }
 keyline = { workspace = true, features = ["std"] }
 # The in-memory Keyline store, for the test helpers.
 keyline_memory = { workspace = true, features = ["std"], optional = true }
-
-# Docs
-aquamarine = { workspace = true, optional = true }
 
 # Encoding
 
@@ -82,7 +80,7 @@ tracing-subscriber = { workspace = true, features = ["ansi", "env-filter"] }
 default = []
 arbitrary = ["dep:arbitrary", "keyline/arbitrary"]
 debug_events = ["prettytable-rs"]
-mermaid_docs = ["aquamarine"]
+mermaid_docs = ["keyhive_content/mermaid_docs"]
 test_utils = ["beekem/test_utils", "dep:keyline_memory", "proptest", "proptest-derive"]
 
 [[bench]]

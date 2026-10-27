@@ -1,6 +1,6 @@
-//! Exposes CGKA (Continuous Group Key Agreement) operations like deriving
-//! a new application secret, rotating keys, and adding and removing members
-//! from the group.
+//! Exposes CGKA (Continuous Group Key Agreement) operations like producing
+//! the group secret for new content, rotating keys, and adding and removing
+//! members from the group.
 //!
 //! A CGKA protocol is responsible for maintaining a stream of shared group keys
 //! updated over time. We are using a variant of the TreeKEM protocol (which
@@ -11,7 +11,7 @@
 
 use crate::{
     collections::Set,
-    encrypted::{encrypt_secret_with, EncryptedContent, PairedKey, PredecessorRefs},
+    encrypted::{encrypt_secret_with, PairedKey},
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, NodeKey, ShareKeyMap},
@@ -19,7 +19,7 @@ use crate::{
         CgkaBatch, CgkaChange, CgkaOperation, CgkaOperationGraph, CitationId, Invitation,
         InvitationSecret, PredecessorSecret, RemovedMember,
     },
-    pcs_key::{ApplicationSecret, PcsKey},
+    pcs_key::PcsKey,
     root_secrets::{RootSecrets, VerifiedRootSecret},
     transact::{Fork, Merge},
     tree::BeeKem,
@@ -32,11 +32,9 @@ use core::{
 };
 use future_form::FutureForm;
 use keyhive_crypto::{
-    content::reference::ContentRef,
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
     signer::async_signer::AsyncSigner,
-    symmetric_key::SymmetricKey,
     verified::Verified,
 };
 use nonempty::NonEmpty;
@@ -54,9 +52,9 @@ pub trait MembershipView: Debug + Send + Sync {
     ) -> Option<BTreeSet<MemberId>>;
 }
 
-/// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
-/// a new application secret, rotating keys, and adding and removing members
-/// from the group.
+/// Exposes CGKA (Continuous Group Key Agreement) operations like producing
+/// the group secret for new content, rotating keys, and adding and removing
+/// members from the group.
 ///
 /// A CGKA protocol is responsible for maintaining a stream of shared group keys
 /// updated over time. We are using a variant of the TreeKEM protocol (which
@@ -243,13 +241,14 @@ impl Cgka {
         self.ops_graph.cgka_ops.get(digest)
     }
 
-    /// Derive an [`ApplicationSecret`] from our current [`PcsKey`] for new content
-    /// to encrypt.
+    /// The current CGKA group secret (our current [`PcsKey`]), for deriving
+    /// the application secret of new content, along with the update that
+    /// produced it.
     ///
     /// If the tree has no root secret, or this member cannot derive it (a path
     /// secret it would decrypt does not decrypt or does not match its node's
     /// key), this member first rotates its leaf. That update and the new key
-    /// pair are returned as the second element, which is `None` when there was
+    /// pair are returned as the third element, which is `None` when there was
     /// no rotation.
     ///
     /// Returns [`CgkaError::MembershipUnknown`] if a pending replay lacks a
@@ -263,20 +262,18 @@ impl Cgka {
     /// The returned key pair contains unencrypted secret key material.
     #[instrument(skip_all)]
     #[allow(clippy::type_complexity)]
-    pub async fn new_app_secret_for<
+    pub async fn group_secret_for_write<
         F: FutureForm,
         S: AsyncSigner<F>,
-        T: ContentRef,
         R: rand::CryptoRng + rand::RngCore,
     >(
         &mut self,
-        content_ref: &T,
-        pred_refs: &[T],
         signer: &S,
         csprng: &mut R,
     ) -> Result<
         (
-            ApplicationSecret<T>,
+            PcsKey,
+            Digest<CgkaOperation>,
             Option<(Verified<CgkaOperation>, LeafKeyPair)>,
         ),
         CgkaError,
@@ -290,7 +287,7 @@ impl Cgka {
             // no current root secret, a path another member wrote does not decrypt,
             // or another instance of this identity rotated our leaf and we don't
             // have its secret yet.
-            if self.has_tree_root_secret() && self.decrypt_tree_root_secret().is_ok() {
+            if self.has_tree_root_secret() && self.decrypt_current_group_secret().is_ok() {
                 return Err(CgkaError::UnknownPcsKey);
             }
             let new_share_secret_key = ShareSecretKey::generate(csprng);
@@ -301,38 +298,12 @@ impl Cgka {
             let op_hash = update_op.digest();
             (pcs_key, op_hash, Some((update_op, key_pair)))
         };
-        Ok((
-            current_pcs_key.derive_application_secret(
-                content_ref,
-                &PredecessorRefs::digest(pred_refs),
-                &current_op_hash,
-            ),
-            rotation,
-        ))
-    }
-
-    /// Derive a decryption key for encrypted data.
-    ///
-    /// We must first derive a [`PcsKey`] for the encrypted data's associated
-    /// hashes. Then we use that [`PcsKey`] to derive an [`ApplicationSecret`].
-    #[instrument(skip_all)]
-    pub fn decryption_key_for<T, Cr: ContentRef>(
-        &mut self,
-        encrypted: &EncryptedContent<T, Cr>,
-    ) -> Result<SymmetricKey, CgkaError> {
-        let pcs_key =
-            self.root_secret_from_hashes(&encrypted.pcs_key_hash, &encrypted.pcs_update_op_hash)?;
-        let app_secret = pcs_key.derive_application_secret(
-            &encrypted.content_ref,
-            &encrypted.pred_refs,
-            &encrypted.pcs_update_op_hash,
-        );
-        Ok(app_secret.key())
+        Ok((current_pcs_key, current_op_hash, rotation))
     }
 
     /// Whether the tree has a root key and the graph a single head, meaning there is
     /// a current root secret. Does not check if we can decrypt it.
-    pub fn has_tree_root_secret(&self) -> bool {
+    pub(crate) fn has_tree_root_secret(&self) -> bool {
         self.tree.has_root_key() && self.ops_graph.has_single_head()
     }
 
@@ -924,20 +895,21 @@ impl Cgka {
     }
 
     /// Decrypt the current tree's root secret as the owner.
-    pub fn decrypt_tree_root_secret(&mut self) -> Result<PcsKey, CgkaError> {
+    pub fn decrypt_current_group_secret(&mut self) -> Result<PcsKey, CgkaError> {
         let key = self
             .tree
             .decrypt_tree_secret(self.owner_id, &mut self.owner_sks)?;
         Ok(PcsKey::new(key))
     }
 
-    /// The root secret `update_op_hash` produced if that secret's hash is `pcs_key_hash`.
+    /// The CGKA group secret `update_op_hash` produced if that secret's hash
+    /// is `pcs_key_hash`.
     ///
     /// Returns [`CgkaError::UnknownPcsKey`] if the secret for that update
     /// has a different hash or cannot be found, or the error from rebuilding the
     /// tree if it is tried and fails.
     #[instrument(skip_all)]
-    pub(crate) fn root_secret_from_hashes(
+    pub fn group_secret_from_hashes(
         &mut self,
         pcs_key_hash: &Digest<PcsKey>,
         update_op_hash: &Digest<CgkaOperation>,
@@ -1071,7 +1043,7 @@ impl Cgka {
         if let Some(pcs_key) = self.root_secrets.get(&op_hash) {
             return Some((op_hash, pcs_key));
         }
-        let pcs_key = self.decrypt_tree_root_secret().ok()?;
+        let pcs_key = self.decrypt_current_group_secret().ok()?;
 
         self.record_root_secret_for(pcs_key, op_hash)
             .then_some((op_hash, pcs_key))

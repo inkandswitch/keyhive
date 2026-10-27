@@ -69,7 +69,7 @@ async fn a_member_who_receives_forged_path_secrets_still_agrees_on_later_keys() 
     // Each other member finds that the forged update's path does not match
     // its keys, rather than keeping what it decrypted.
     for replica in &mut group.replicas[1..] {
-        let root = replica.decrypt_tree_root_secret();
+        let root = replica.decrypt_current_group_secret();
         assert!(
             matches!(root, Err(CgkaError::PathSecretMismatch)),
             "{root:?}"
@@ -81,8 +81,8 @@ async fn a_member_who_receives_forged_path_secrets_still_agrees_on_later_keys() 
 
     // The member on the forged node's side can still write by rotating.
     let signer = group.members[1].signer.clone();
-    let (_, rotation) = group.replicas[1]
-        .new_app_secret_for::<Local, _, [u8; 32], _>(&[0; 32], &[], &signer, &mut rng)
+    let (_, _, rotation) = group.replicas[1]
+        .group_secret_for_write::<Local, _, _>(&signer, &mut rng)
         .await
         .expect("a member who cannot derive the root secret still writes");
     let (op, _) = rotation.expect("writing rotated");

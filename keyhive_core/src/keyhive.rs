@@ -44,7 +44,6 @@ use crate::{
 use beekem::{
     cgka::MembershipView,
     collections::Set,
-    encrypted::EncryptedContent,
     error::CgkaError,
     id::MemberId,
     keys::{LeafKeyPair, ShareKeyMap},
@@ -55,6 +54,7 @@ use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_content::encrypted::EncryptedContent;
 use keyhive_crypto::{
     bytes::Bytes,
     content::reference::ContentRef,
@@ -1770,8 +1770,12 @@ where {
         P: Clone + Encode + Decode,
     {
         let mut to_walk = entrypoints.to_vec();
-        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(&self.ciphertext_store, doc, &mut to_walk)
-            .await
+        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(
+            &self.ciphertext_store,
+            doc.into(),
+            &mut to_walk,
+        )
+        .await
     }
 
     /// Decrypt `encrypted` out of `doc`.

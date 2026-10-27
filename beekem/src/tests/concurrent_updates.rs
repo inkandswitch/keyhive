@@ -110,7 +110,7 @@ fn a_secret_neither_its_path_nor_the_chain_reaches_is_rebuilt() {
             "precondition: no later update can wrap the secret in the chain"
         );
         assert_eq!(
-            d.root_secret_from_hashes(&secret.digest(), &a_hash).ok(),
+            d.group_secret_from_hashes(&secret.digest(), &a_hash).ok(),
             Some(secret),
             "a rebuild from d's earlier leaf key should derive the secret"
         );

@@ -1,6 +1,6 @@
 # Threat Model
 
-This document describes who Keyhive defends against, what it defends, and what it does not. It covers the crates in this repository (`keyhive_core`, `keyhive_crypto`, `beekem`, `keyhive_wasm`). Transport-level threats (handshake impersonation, replay, denial of service on a relay) are covered by [Subduction's threat model][subduction threats].
+This document describes who Keyhive defends against, what it defends, and what it does not. It covers the crates in this repository (`keyhive_core`, `keyhive_content`, `keyhive_crypto`, `beekem`, `keyhive_wasm`). Transport-level threats (handshake impersonation, replay, denial of service on a relay) are covered by [Subduction's threat model][subduction threats].
 
 > [!WARNING]
 > Keyhive is pre-alpha and has not been audited. This document describes the intended security properties; [Known Gaps](#known-gaps) lists where the current code falls short of them. See [SECURITY.md](../SECURITY.md) for how to report a problem.

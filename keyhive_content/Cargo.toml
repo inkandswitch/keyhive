@@ -1,0 +1,62 @@
+[package]
+name = "keyhive_content"
+description = "Keyhive's encrypted content: its format, application secrets, causal envelopes and ciphertext store"
+version = "0.1.0"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+blake3 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+keyhive_codec = { workspace = true }
+keyhive_crypto = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true, features = ["attributes"] }
+
+# std-only dependencies: the envelope and the ciphertext store
+derivative = { workspace = true, optional = true }
+derive-where = { workspace = true, optional = true }
+dupe = { workspace = true, optional = true }
+future_form = { workspace = true, optional = true }
+futures = { workspace = true, features = ["std"], optional = true }
+
+aquamarine = { workspace = true, optional = true }
+arbitrary = { workspace = true, optional = true }
+
+[dev-dependencies]
+arbitrary = { workspace = true }
+bolero.workspace = true
+ed25519-dalek = { workspace = true, features = ["rand_core", "std"] }
+keyhive_codec = { workspace = true, features = ["laws", "std"] }
+keyhive_crypto = { workspace = true, features = ["arbitrary", "std"] }
+rand = { workspace = true, features = ["std", "std_rng"] }
+test-utils = { workspace = true }
+testresult = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[features]
+default = ["std"]
+std = [
+  "blake3/std",
+  "dep:derivative",
+  "dep:derive-where",
+  "dep:dupe",
+  "dep:future_form",
+  "dep:futures",
+  "keyhive_codec/std",
+  "keyhive_crypto/std",
+  "thiserror/std",
+  "tracing/std",
+]
+arbitrary = ["dep:arbitrary", "keyhive_crypto/arbitrary"]
+mermaid_docs = ["dep:aquamarine", "std"]
+# Everything the full test suite needs. Also the feature hosted CI and
+# cargo-mutants pass to every crate: without it, `--features test_utils` fails
+# to build this crate and its mutants are never tested.
+test_utils = ["arbitrary"]
+
+[lints]
+workspace = true
