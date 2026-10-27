@@ -52,8 +52,11 @@ impl Kind {
     /// hashed into the block's key, never signed or sent.
     pub const PREDECESSOR_REFS: Kind = Kind(b'H');
 
+    /// A change to a BeeKEM tree: an add, a remove or an update.
+    pub const CGKA_OPERATION: Kind = Kind(b'C');
+
     /// Every kind in the registry.
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::DELEGATION,
         Kind::REVOCATION,
         Kind::CERTIFICATE_SET,
@@ -62,6 +65,7 @@ impl Kind {
         Kind::BYTES,
         Kind::PCS_KEY,
         Kind::PREDECESSOR_REFS,
+        Kind::CGKA_OPERATION,
     ];
 
     /// The registered kind with byte `b`, if any.

@@ -2,7 +2,6 @@
 
 use crate::test_utils::{for_each_seed, Group};
 use alloc::vec;
-use keyhive_crypto::digest::Digest;
 use rand::{rngs::StdRng, SeedableRng};
 
 #[tokio::test]
@@ -49,7 +48,7 @@ fn a_concurrent_updates_secret_is_decrypted_from_its_own_path() {
 
         // Each reader listed received that update while it had another head.
         for (author, op, readers) in [(0, &by_a, vec![1]), (1, &by_b, vec![0, 2, 3])] {
-            let op_hash = Digest::hash(op.as_ref());
+            let op_hash = op.digest();
             let secret = group.replicas[author]
                 .root_secrets
                 .get(&op_hash)
@@ -84,7 +83,7 @@ fn a_secret_neither_its_path_nor_the_chain_reaches_is_rebuilt() {
         group.deliver(&by_c, &[0, 3]);
         let by_a = group.rotate(0, &mut rng).await;
         group.deliver(&by_a, &[3]);
-        let a_hash = Digest::hash(by_a.as_ref());
+        let a_hash = by_a.digest();
         let secret = group.replicas[0]
             .root_secrets
             .get(&a_hash)

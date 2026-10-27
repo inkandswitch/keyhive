@@ -19,8 +19,8 @@ use future_form::Local;
 use keyhive_crypto::{
     digest::Digest,
     share_key::{ShareKey, ShareSecretKey},
-    signed::SerdeSigned,
     signer::memory::MemorySigner,
+    verified::Verified,
 };
 use rand::rngs::StdRng;
 
@@ -53,8 +53,8 @@ pub struct Group {
     doc_id: TreeId,
     /// Every operation synced so far, in the order it was synced, so a member
     /// added part way through can be given a replica of their own.
-    log: Vec<Arc<SerdeSigned<CgkaOperation>>>,
-    logged: BTreeSet<Digest<SerdeSigned<CgkaOperation>>>,
+    log: Vec<Arc<Verified<CgkaOperation>>>,
+    logged: BTreeSet<Digest<CgkaOperation>>,
     /// The membership view every replica uses, if any.
     view: Option<Arc<dyn MembershipView>>,
 }
@@ -111,7 +111,7 @@ impl Group {
         &mut self,
         author: usize,
         citations: BTreeSet<CitationId>,
-    ) -> Arc<SerdeSigned<CgkaOperation>> {
+    ) -> Arc<Verified<CgkaOperation>> {
         let signer = &self.members[author].signer;
         let op = self.replicas[author]
             .remove_by_citations::<Local, _>(citations, signer)
@@ -126,7 +126,7 @@ impl Group {
         author: usize,
         id: MemberId,
         pk: ShareKey,
-    ) -> Arc<SerdeSigned<CgkaOperation>> {
+    ) -> Arc<Verified<CgkaOperation>> {
         self.try_add(author, id, pk)
             .await
             .expect("the added member is new")
@@ -139,7 +139,7 @@ impl Group {
         author: usize,
         id: MemberId,
         pk: ShareKey,
-    ) -> Option<Arc<SerdeSigned<CgkaOperation>>> {
+    ) -> Option<Arc<Verified<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
             .add::<Local, _>(id, pk, None, NO_CITATIONS, signer)
@@ -153,7 +153,7 @@ impl Group {
         &mut self,
         author: usize,
         target: MemberId,
-    ) -> Arc<SerdeSigned<CgkaOperation>> {
+    ) -> Arc<Verified<CgkaOperation>> {
         self.try_remove(author, target)
             .await
             .expect("the removed member is present")
@@ -165,7 +165,7 @@ impl Group {
         &mut self,
         author: usize,
         target: MemberId,
-    ) -> Option<Arc<SerdeSigned<CgkaOperation>>> {
+    ) -> Option<Arc<Verified<CgkaOperation>>> {
         let signer = &self.members[author].signer;
         self.replicas[author]
             .remove::<Local, _>(target, NO_CITATIONS, signer)
@@ -179,7 +179,7 @@ impl Group {
         &mut self,
         author: usize,
         rng: &mut StdRng,
-    ) -> Arc<SerdeSigned<CgkaOperation>> {
+    ) -> Arc<Verified<CgkaOperation>> {
         self.try_rotate(author, rng)
             .await
             .expect("the rotating member is present")
@@ -191,7 +191,7 @@ impl Group {
         &mut self,
         author: usize,
         rng: &mut StdRng,
-    ) -> Option<Arc<SerdeSigned<CgkaOperation>>> {
+    ) -> Option<Arc<Verified<CgkaOperation>>> {
         let sk = ShareSecretKey::generate(rng);
         let pk = sk.share_key();
         let signer = &self.members[author].signer;
@@ -213,7 +213,7 @@ impl Group {
     }
 
     /// Deliver `op` to the replicas named by `to`, recording it in the log.
-    pub fn deliver(&mut self, op: &Arc<SerdeSigned<CgkaOperation>>, to: &[usize]) {
+    pub fn deliver(&mut self, op: &Arc<Verified<CgkaOperation>>, to: &[usize]) {
         let could_not_apply = self.try_deliver(op, to);
         assert!(
             could_not_apply.is_empty(),
@@ -223,11 +223,7 @@ impl Group {
 
     /// Deliver `op` to the replicas named by `to`, recording it in the log, and
     /// report which of them could not apply it.
-    pub fn try_deliver(
-        &mut self,
-        op: &Arc<SerdeSigned<CgkaOperation>>,
-        to: &[usize],
-    ) -> Vec<usize> {
+    pub fn try_deliver(&mut self, op: &Arc<Verified<CgkaOperation>>, to: &[usize]) -> Vec<usize> {
         let could_not_apply: Vec<usize> = to
             .iter()
             .copied()
@@ -237,14 +233,14 @@ impl Group {
                     .is_err()
             })
             .collect();
-        if could_not_apply.len() < to.len() && self.logged.insert(Digest::hash(op.as_ref())) {
+        if could_not_apply.len() < to.len() && self.logged.insert(op.digest()) {
             self.log.push(op.clone());
         }
         could_not_apply
     }
 
     /// Deliver `op` to every replica.
-    pub fn broadcast(&mut self, op: &Arc<SerdeSigned<CgkaOperation>>) {
+    pub fn broadcast(&mut self, op: &Arc<Verified<CgkaOperation>>) {
         self.deliver(op, &Vec::from_iter(0..self.replicas.len()));
     }
 
@@ -457,13 +453,13 @@ pub(crate) fn assert_chain_bookkeeping(cgka: &Cgka, context: &str) {
     let updates: BTreeSet<_> = graph
         .cgka_ops
         .iter()
-        .filter(|(_, op)| matches!(op.payload, CgkaOperation::Update { .. }))
+        .filter(|(_, op)| op.payload().is_update())
         .map(|(op_hash, _)| *op_hash)
         .collect();
     let chainable: BTreeSet<_> = updates
         .iter()
         .flat_map(|update| {
-            let predecessors = graph.cgka_ops.get(update).unwrap().payload.predecessors();
+            let predecessors = graph.cgka_ops.get(update).unwrap().payload().predecessors();
             graph.nearest_update_ancestors(&predecessors)
         })
         .collect();

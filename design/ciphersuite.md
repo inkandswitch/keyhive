@@ -18,6 +18,8 @@ Every key derivation is BLAKE3 `derive_key` under its own context, and every con
 
 | Context | Derives | From |
 |---|---|---|
+| `/keyhive/cgka/invitation-key/v1/2026-10-31` | The key an inviter seals root secrets to an invitee under | X25519 output, both public keys |
+| `/keyhive/cgka/node-secret-key/v1/2026-10-31` | The key a BeeKEM node secret is sealed under | X25519 output, both public keys |
 | `/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31` | The key an update seals earlier root secrets under | Its root secret |
 | `/keyhive/content/application-key/v1/2026-10-31` | A block's application key | Root secret, predecessors, content ref |
 | `/keyhive/content/encryption-key/v1/2026-10-31` | A block's cipher key | Its application key |
@@ -26,9 +28,8 @@ Every key derivation is BLAKE3 `derive_key` under its own context, and every con
 | `/keyhive/prekey/selection/v1/2026-10-31` | The stream an individual's prekey for a document is drawn from | Individual, document |
 | `/keyhive/seal/encryption-key/v1/2026-10-31` | A sealed blob's cipher key | The key it is sealed under |
 | `/keyhive/seal/nonce-key/v1/2026-10-31` | A sealed blob's synthetic-nonce key | The key it is sealed under |
-| `/keyhive/share-key/exchange-key/v1/2026-10-31` | The key two share keys' holders share | X25519 output, both public keys |
 
-Content-addressing digests (`Digest::hash`) and signing digests (`signed::Signed`) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level. Types migrated to the canonical codec (Keyline certificates and prekey operations so far) instead travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature` and sign and hash the frame without its signature (`keyhive_crypto::signable`); see [Keyline's implementation notes](./keyline/implementation.md#domain-separation).
+Signed statements (Keyline certificates, prekey operations, CGKA operations, and application bytes) travel as a frame `"KH" ‖ kind ‖ version ‖ issuer ‖ payload_len ‖ payload ‖ signature`, and sign and hash the frame without its signature (`keyhive_crypto::signable`), so a statement's identity is who signed it and what it says, and two signatures over one statement are one statement; see [Keyline's implementation notes](./keyline/implementation.md#domain-separation). The remaining content-addressing digests (`Digest::hash`, events until they move to the frame) are plain `blake3::hash` over the `bincode` encoding, without a separator; `Digest<T>` separates them at the type level.
 
 ## Synthetic Nonce and Key Commitment
 
@@ -83,15 +84,15 @@ The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ pcs_ke
 
 ## Key Derivation in BeeKEM
 
-Inner-node secrets are X25519 secret keys sampled independently from the CSPRNG (no ratcheting; see [`beekem/README.md`](../beekem/README.md)). Each secret is sealed for a sibling under the key the two share keys' holders share (`ShareSecretKey::derive_symmetric_key`):
+Inner-node secrets are X25519 secret keys sampled independently from the CSPRNG (no ratcheting; see [`beekem/README.md`](../beekem/README.md)). Each secret is sealed for a sibling under a key the two share keys' holders derive from their exchange (`ShareSecretKey::derive_symmetric_key`):
 
 ```
-key    = derive_key("/keyhive/share-key/exchange-key/v1/2026-10-31",
+key    = derive_key("/keyhive/cgka/node-secret-key/v1/2026-10-31",
                     X25519(sk, pk) ‖ low_pk ‖ high_pk)
 sealed = try_seal(key, secret, aad = tree_id ‖ encrypter_pk ‖ paired_pk)
 ```
 
-The derivation binds both public keys, as HPKE binds its shared secret to them; they go in byte order, so both sides derive the same key. The tree ID binds the secret to its tree: share keys can appear in several trees, since prekeys are shared across documents, and without it a secret sealed in one would open in another. The public keys in the associated data bind it to who encrypted for whom. Opening checks the synthetic nonce, so a node secret is committed to one key. `EncryptedSecret` travels as `sealed_len ‖ sealed ‖ paired_pk`, and a sealed blob shorter than its nonce and tag does not decode.
+The derivation binds both public keys, as HPKE binds its shared secret to them; they go in byte order, so both sides derive the same key. An add's invitation seals root secrets to the invitee the same way, under `/keyhive/cgka/invitation-key/v1/2026-10-31`: the sealed type picks the context (`beekem::encrypted::Sealable`), so a node secret never opens as an invitation's root secret, or the reverse, even between the same two keys. The tree ID binds the secret to its tree: share keys can appear in several trees, since prekeys are shared across documents, and without it a secret sealed in one would open in another. The public keys in the associated data bind it to who encrypted for whom. Opening checks the synthetic nonce, so a node secret is committed to one key. `EncryptedSecret` travels as `sealed_len ‖ sealed ‖ paired_pk`, and a sealed blob shorter than its nonce and tag does not decode.
 
 A block's application key is derived from the root secret (the `PcsKey`), its predecessors and its content ref:
 

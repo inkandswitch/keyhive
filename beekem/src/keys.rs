@@ -1,12 +1,17 @@
 //! Share key management for CGKA tree nodes.
 
 use crate::{
-    encrypted::EncryptedSecret,
+    encrypted::{EncryptedSecret, Sealable},
     error::CgkaError,
     id::TreeId,
     transact::{Fork, Merge},
 };
-use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::ToString,
+    vec,
+    vec::Vec,
+};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use serde::{Deserialize, Serialize};
 
@@ -45,11 +50,11 @@ impl ShareKeyMap {
         self.0.contains_key(pk)
     }
 
-    pub fn try_decrypt_encryption(
+    pub fn try_decrypt_encryption<T: Sealable>(
         &self,
         doc_id: TreeId,
         encrypter_pk: ShareKey,
-        encrypted: &EncryptedSecret<ShareSecretKey>,
+        encrypted: &EncryptedSecret<T>,
     ) -> Result<Vec<u8>, CgkaError> {
         let sk = self
             .get(&encrypted.paired_pk)
@@ -194,7 +199,7 @@ impl NodeKey {
     /// * `removed` — The keys removed as part of a [`PathChange`](crate::tree::PathChange).
     ///               It's possible that `self` will be one of those,
     ///               in which case a new key is substituted.
-    pub fn merge(&self, new_key: &NodeKey, removed: &[ShareKey]) -> Self {
+    pub fn merge(&self, new_key: &NodeKey, removed: &BTreeSet<ShareKey>) -> Self {
         match self {
             NodeKey::ShareKey(key) => {
                 if removed.contains(key) {

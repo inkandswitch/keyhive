@@ -13,7 +13,6 @@ use keyhive_crypto::{
     digest::Digest,
     share_key::ShareSecretKey,
     signable::{Kind, Kinded},
-    signed::SerdeSigned,
     symmetric_key::SymmetricKey,
 };
 use serde::{Deserialize, Serialize};
@@ -27,7 +26,7 @@ use tracing::instrument;
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
     pcs_key_hash: Digest<PcsKey>,
-    pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
+    pcs_update_op_hash: Digest<CgkaOperation>,
     content_ref: Cr,
     pred_refs: Digest<PredecessorRefs<Cr>>,
 }
@@ -37,7 +36,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     pub fn new(
         key: SymmetricKey,
         pcs_key_hash: Digest<PcsKey>,
-        pcs_update_op_hash: Digest<SerdeSigned<CgkaOperation>>,
+        pcs_update_op_hash: Digest<CgkaOperation>,
         content_ref: Cr,
         pred_refs: Digest<PredecessorRefs<Cr>>,
     ) -> Self {
@@ -74,7 +73,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
 }
 
 /// A key used to derive application secrets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct PcsKey(pub ShareSecretKey);
 
 impl PcsKey {
@@ -109,7 +108,7 @@ impl PcsKey {
         &self,
         content_ref: &Cr,
         pred_refs: &Digest<PredecessorRefs<Cr>>,
-        pcs_update_op_hash: &Digest<SerdeSigned<CgkaOperation>>,
+        pcs_update_op_hash: &Digest<CgkaOperation>,
     ) -> ApplicationSecret<Cr> {
         let mut hasher = Context::CONTENT_APPLICATION_KEY.hasher();
         hasher.update(self.0.as_slice());

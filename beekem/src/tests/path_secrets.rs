@@ -1,11 +1,14 @@
 //! Path secrets contained in an update operation.
 
 use crate::{
-    encrypted::encrypt_secret, error::CgkaError, operation::CgkaOperation, test_utils::Group,
+    encrypted::encrypt_secret,
+    error::CgkaError,
+    operation::{CgkaChange, CgkaOperation},
+    test_utils::Group,
 };
 use alloc::sync::Arc;
 use future_form::Local;
-use keyhive_crypto::{share_key::ShareSecretKey, signed::SerdeSigned, signer::async_signer};
+use keyhive_crypto::{share_key::ShareSecretKey, verified::Verified};
 use rand::{rngs::StdRng, SeedableRng};
 
 /// An update by `author` whose every path node is encrypted to its
@@ -15,7 +18,7 @@ async fn forged_update(
     group: &mut Group,
     author: usize,
     rng: &mut StdRng,
-) -> Arc<SerdeSigned<CgkaOperation>> {
+) -> Arc<Verified<CgkaOperation>> {
     // Made on a copy, so the author's own replica receives it like everyone
     // else's.
     let mut copy = group.replicas[author].clone();
@@ -26,11 +29,9 @@ async fn forged_update(
         .await
         .expect("the author can update");
     group.replicas[author].owner_sks.extend(&copy.owner_sks);
-    let mut payload = op.payload;
-    let CgkaOperation::Update {
-        new_path, doc_id, ..
-    } = &mut payload
-    else {
+    let mut payload = op.payload().clone();
+    let doc_id = payload.doc_id;
+    let CgkaChange::Update { new_path, .. } = &mut payload.change else {
         unreachable!("an update")
     };
     for (_, node) in new_path.path.iter_mut() {
@@ -42,7 +43,7 @@ async fn forged_update(
         let incorrect_secret = ShareSecretKey::generate(rng);
         for encrypted in version.sk.values_mut() {
             *encrypted = encrypt_secret(
-                *doc_id,
+                doc_id,
                 incorrect_secret,
                 &encrypter_sk,
                 &encrypted.paired_pk,
@@ -51,7 +52,7 @@ async fn forged_update(
         }
     }
     Arc::new(
-        async_signer::try_sign_async::<Local, _, _>(signer, payload)
+        Verified::sign::<Local, _>(&payload, signer)
             .await
             .expect("signing succeeds"),
     )

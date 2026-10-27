@@ -10,10 +10,7 @@ use keyhive_core::{
     listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
     principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
-use keyhive_crypto::{
-    signed::SerdeSigned,
-    verified::{self, Verified},
-};
+use keyhive_crypto::verified::{self, Verified};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
 use wasm_bindgen::prelude::*;
@@ -68,10 +65,7 @@ impl MembershipListener<Local, JsChangeId> for JsEventHandler {
 }
 
 impl CgkaListener<Local> for JsEventHandler {
-    fn on_cgka_op<'a>(
-        &'a self,
-        data: &'a Arc<SerdeSigned<CgkaOperation>>,
-    ) -> LocalBoxFuture<'a, ()> {
+    fn on_cgka_op<'a>(&'a self, data: &'a Arc<Verified<CgkaOperation>>) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::CgkaOperation(data.dupe()).into()) })
     }
 }

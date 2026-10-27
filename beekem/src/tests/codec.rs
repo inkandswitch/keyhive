@@ -4,8 +4,12 @@
 use crate::{
     encrypted::{encrypt_secret, EncryptedSecret},
     id::TreeId,
-    operation::{CitationId, Invitation, InvitationSecret, PredecessorSecret, RemovedMember},
+    operation::{
+        CgkaChange, CgkaOperation, CitationId, Invitation, InvitationSecret, PredecessorSecret,
+        RemovedMember,
+    },
     secret_store::{SecretStore, SecretStoreVersion},
+    tree::PathChange,
     treemath::TreeNodeIndex,
 };
 use alloc::{collections::BTreeMap, vec::Vec};
@@ -84,6 +88,17 @@ fn invitation_laws() {
 #[test]
 fn predecessor_secret_laws() {
     laws::<PredecessorSecret>();
+}
+
+#[test]
+fn path_change_laws() {
+    laws::<PathChange>();
+}
+
+#[test]
+fn cgka_operation_laws() {
+    laws::<CgkaChange>();
+    laws::<CgkaOperation>();
 }
 
 fn version(seed: u8) -> SecretStoreVersion {
@@ -175,4 +190,151 @@ fn a_small_order_paired_key_is_rejected() {
         EncryptedSecret::<ShareSecretKey>::decode(&bytes),
         Err(DecodeError::InvalidField(_))
     ));
+}
+
+/// Fixed values for the operation layouts below.
+mod layout {
+    use super::*;
+    use crate::id::MemberId;
+    use keyhive_crypto::digest::Digest;
+
+    pub(super) fn doc() -> TreeId {
+        TreeId::from(&SigningKey::from_bytes(&[1; 32]))
+    }
+
+    pub(super) fn member() -> MemberId {
+        MemberId::from(&SigningKey::from_bytes(&[2; 32]))
+    }
+
+    pub(super) fn share_key(n: u8) -> ShareKey {
+        ShareSecretKey::force_from_bytes([n; 32]).share_key()
+    }
+
+    pub(super) fn digest<T>() -> Digest<T> {
+        Digest::from([4; 32])
+    }
+
+    /// `parts` in order, as one byte string.
+    pub(super) fn concat(parts: &[&[u8]]) -> Vec<u8> {
+        parts.concat()
+    }
+}
+
+/// `doc ‖ predecessors ‖ 0 ‖ added_id ‖ pk ‖ leaf_index ‖ invitation? ‖
+/// key_proof? ‖ citations`, an absent invitation as tag `0` and a present
+/// key proof as tag `1` and its length-prefixed bytes.
+#[test]
+fn an_add_encodes_in_its_documented_layout() {
+    use layout::*;
+    let op = CgkaOperation {
+        doc_id: doc(),
+        predecessors: Default::default(),
+        change: CgkaChange::Add {
+            added_id: member(),
+            pk: share_key(3),
+            leaf_index: 3,
+            invitation: None,
+            key_proof: Some(alloc::vec![9, 9]),
+            citations: [CitationId([5; 32])].into(),
+        },
+    };
+    let expected = concat(&[
+        doc().as_bytes(),
+        &[0, 0],
+        member().as_bytes(),
+        share_key(3).as_bytes(),
+        &[3, 0, 1, 2, 9, 9, 1],
+        &[5; 32],
+    ]);
+    assert_eq!(op.encode().as_bytes(), expected);
+    assert_eq!(CgkaOperation::decode(&expected), Ok(op));
+}
+
+/// `doc ‖ predecessors ‖ 1 ‖ citations ‖ removed`, each set a count and then
+/// its elements ascending.
+#[test]
+fn a_remove_encodes_in_its_documented_layout() {
+    use layout::*;
+    let op = CgkaOperation {
+        doc_id: doc(),
+        predecessors: [digest()].into(),
+        change: CgkaChange::Remove {
+            citations: [CitationId([5; 32])].into(),
+            removed: [RemovedMember {
+                id: member(),
+                leaf_idx: 7,
+            }]
+            .into(),
+        },
+    };
+    let expected = concat(&[
+        doc().as_bytes(),
+        &[1],
+        &[4; 32],
+        &[1, 1],
+        &[5; 32],
+        &[1],
+        member().as_bytes(),
+        &[7],
+    ]);
+    assert_eq!(op.encode().as_bytes(), expected);
+    assert_eq!(CgkaOperation::decode(&expected), Ok(op));
+}
+
+/// `doc ‖ predecessors ‖ 2 ‖ leaf_idx ‖ leaf_pk ‖ path ‖ removed_keys ‖
+/// predecessor_secrets`, the path a count and then `( index ‖ node )*`.
+#[test]
+fn an_update_encodes_in_its_documented_layout() {
+    use layout::*;
+    let node = SecretStore::new(share_key(6), share_key(3), BTreeMap::new());
+    let op = CgkaOperation {
+        doc_id: doc(),
+        predecessors: Default::default(),
+        change: CgkaChange::Update {
+            new_path: alloc::boxed::Box::new(PathChange {
+                leaf_idx: 2,
+                leaf_pk: share_key(3),
+                path: alloc::vec![(1, node.clone())],
+                removed_keys: [share_key(8)].into(),
+            }),
+            predecessor_secrets: alloc::vec![PredecessorSecret {
+                update_op_hash: digest(),
+                encrypted_root_secret: alloc::vec![6, 6, 6],
+            }],
+        },
+    };
+    let expected = concat(&[
+        doc().as_bytes(),
+        &[0, 2, 2],
+        share_key(3).as_bytes(),
+        &[1, 1],
+        node.encode().as_bytes(),
+        &[1],
+        share_key(8).as_bytes(),
+        &[1],
+        &[4; 32],
+        &[3, 6, 6, 6],
+    ]);
+    assert_eq!(op.encode().as_bytes(), expected);
+    assert_eq!(CgkaOperation::decode(&expected), Ok(op));
+}
+
+/// Each set refuses elements out of order or repeated, so an operation has
+/// one encoding.
+#[test]
+fn an_operation_with_unsorted_predecessors_is_refused() {
+    use layout::*;
+    let mut bytes = concat(&[doc().as_bytes(), &[2], &[9; 32], &[4; 32]]);
+    bytes.extend(
+        CgkaChange::Remove {
+            citations: Default::default(),
+            removed: Default::default(),
+        }
+        .encode()
+        .as_bytes(),
+    );
+    assert_eq!(
+        CgkaOperation::decode(&bytes),
+        Err(DecodeError::UnsortedKeys)
+    );
 }

@@ -11,7 +11,6 @@ use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use keyhive_crypto::{
     content::reference::ContentRef,
-    signed::SerdeSigned,
     verified::{self, Verified},
 };
 use keyline::{delegation::Delegation, revocation::Revocation};
@@ -57,7 +56,7 @@ impl<F: FutureForm, T: ContentRef> MembershipListener<F, T> for NoListener {
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm> CgkaListener<F> for NoListener {
-    fn on_cgka_op<'a>(&'a self, _data: &'a Arc<SerdeSigned<CgkaOperation>>) -> F::Future<'a, ()> {
+    fn on_cgka_op<'a>(&'a self, _data: &'a Arc<Verified<CgkaOperation>>) -> F::Future<'a, ()> {
         F::ready(())
     }
 }

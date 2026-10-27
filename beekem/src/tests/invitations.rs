@@ -1,13 +1,13 @@
 use crate::{
     encrypted::encrypt_secret,
     keys::ShareKeyMap,
-    operation::{CgkaOperation, Invitation, InvitationSecret},
+    operation::{CgkaChange, CgkaOperation, Invitation, InvitationSecret},
     pcs_key::PcsKey,
     test_utils::{member, Group},
 };
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeSet, vec, vec::Vec};
 use future_form::Local;
-use keyhive_crypto::{digest::Digest, share_key::ShareSecretKey, signer::async_signer};
+use keyhive_crypto::{share_key::ShareSecretKey, verified::Verified};
 use rand::{rngs::StdRng, SeedableRng};
 
 #[tokio::test]
@@ -16,7 +16,7 @@ async fn changing_owner_records_an_invitation_addressed_to_the_new_one() {
     let mut group = Group::new(2, &mut rng).await;
 
     let op = group.rotate(0, &mut rng).await;
-    let op_hash = Digest::hash(op.as_ref());
+    let op_hash = op.digest();
     let root = group.replicas[0]
         .root_secrets
         .get(&op_hash)
@@ -54,11 +54,11 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
     group.broadcast(&op1);
     let root1 = group.replicas[0]
         .root_secrets
-        .get(&Digest::hash(op1.as_ref()))
+        .get(&op1.digest())
         .expect("the author records the secret its own update produced");
     let op2 = group.rotate(0, &mut rng).await;
     group.broadcast(&op2);
-    let op2_hash = Digest::hash(op2.as_ref());
+    let op2_hash = op2.digest();
     let root2 = group.replicas[0]
         .root_secrets
         .get(&op2_hash)
@@ -69,28 +69,27 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
     // could be selected to be incorrect.
     let inviter_sk = ShareSecretKey::generate(&mut rng);
     let inviter_pk = inviter_sk.share_key();
-    let create_add_with_invitation_wrapping = |secret: PcsKey| CgkaOperation::Add {
-        added_id: bob_id,
-        pk: bob_pk,
-        leaf_index: 1,
-        citations: Vec::new(),
-        key_proof: None,
-        invitation: Some(Box::new(Invitation {
-            inviter_pk,
-            ancestor_secrets: vec![InvitationSecret {
-                update_op_hash: op2_hash,
-                encrypted_root_secret: encrypt_secret(doc_id, secret.0, &inviter_sk, &bob_pk)
-                    .unwrap(),
-            }],
-        })),
-        predecessors: Vec::new(),
+    let create_add_with_invitation_wrapping = |secret: PcsKey| CgkaOperation {
         doc_id,
+        predecessors: BTreeSet::new(),
+        change: CgkaChange::Add {
+            added_id: bob_id,
+            pk: bob_pk,
+            leaf_index: 1,
+            invitation: Some(Box::new(Invitation {
+                inviter_pk,
+                ancestor_secrets: vec![InvitationSecret {
+                    update_op_hash: op2_hash,
+                    encrypted_root_secret: encrypt_secret(doc_id, secret, &inviter_sk, &bob_pk)
+                        .unwrap(),
+                }],
+            })),
+            key_proof: None,
+            citations: BTreeSet::new(),
+        },
     };
-    let sign = |op| async {
-        async_signer::try_sign_async::<Local, _, _>(&alice_signer, op)
-            .await
-            .unwrap()
-    };
+    let alice = &alice_signer;
+    let sign = |op| async move { Verified::sign::<Local, _>(&op, alice).await.unwrap() };
 
     // Bob recorded op2's secret from the tree when it arrived, so drop it to
     // leave the invitation as the only thing under test.
@@ -127,7 +126,7 @@ async fn an_invitation_wraps_every_concurrent_update_head() {
     let mut heads = Vec::new();
     for author in 1..=4 {
         let op = group.rotate(author, &mut rng).await;
-        heads.push(Digest::hash(op.as_ref()));
+        heads.push(op.digest());
         group.deliver(&op, &[0]);
     }
 
@@ -146,7 +145,7 @@ async fn an_invitation_wraps_every_concurrent_update_head() {
 
     let invitee = member(&mut rng);
     let add = group.add(0, invitee.id, invitee.pk).await;
-    let CgkaOperation::Add { invitation, .. } = &add.payload else {
+    let CgkaChange::Add { invitation, .. } = &add.payload().change else {
         panic!("an add should be an Add op")
     };
     let wrapped: Vec<_> = invitation

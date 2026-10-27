@@ -406,7 +406,8 @@ async fn own_cgka_graph_converges_with_creators_ops(bob_sorts_first: bool) -> Te
 
         // His add is authorized by his founding delegation, so it makes the
         // document known to him.
-        bob.receive_cgka_op(bob_add).await?;
+        bob.receive_cgka_op(bob_add.signed().as_ref().clone())
+            .await?;
         assert!(bob.get_document(doc_id).await.is_some());
     }
 

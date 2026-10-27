@@ -13,9 +13,7 @@ use beekem::{
 use divan::Bencher;
 use future_form::Local;
 use futures::executor::block_on;
-use keyhive_crypto::{
-    share_key::ShareSecretKey, signed::SerdeSigned, signer::memory::MemorySigner,
-};
+use keyhive_crypto::{share_key::ShareSecretKey, signer::memory::MemorySigner, verified::Verified};
 use nonempty::NonEmpty;
 use rand::{rngs::StdRng, SeedableRng};
 use std::{sync::Arc, time::Duration};
@@ -126,7 +124,7 @@ impl Fixture {
 
     /// An update by member `i` from the tree as it stands, without merging
     /// it, and the replica that made it. Member `i` keeps its new secret.
-    fn update_from(&mut self, i: usize) -> (Arc<SerdeSigned<CgkaOperation>>, Cgka) {
+    fn update_from(&mut self, i: usize) -> (Arc<Verified<CgkaOperation>>, Cgka) {
         let mut replica = self.replica(i);
         let sk = ShareSecretKey::generate(&mut self.rng);
         let (_pcs_key, op, _key_pair) = block_on(replica.update::<Local, _, _>(
@@ -149,7 +147,7 @@ impl Fixture {
         }
     }
 
-    fn merge_all<I: IntoIterator<Item = Arc<SerdeSigned<CgkaOperation>>>>(&mut self, ops: I) {
+    fn merge_all<I: IntoIterator<Item = Arc<Verified<CgkaOperation>>>>(&mut self, ops: I) {
         for op in ops {
             self.tree
                 .merge_concurrent_operation(op)

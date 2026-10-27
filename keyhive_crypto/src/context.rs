@@ -28,6 +28,14 @@
 pub struct Context(&'static str);
 
 impl Context {
+    /// The key an inviter seals root secrets to an invitee under, from their
+    /// X25519 exchange.
+    pub const CGKA_INVITATION_KEY: Self = Self::new("/keyhive/cgka/invitation-key/v1/2026-10-31");
+
+    /// The key a BeeKEM node secret is sealed under, from the X25519 exchange
+    /// between its encrypter and its recipient.
+    pub const CGKA_NODE_SECRET_KEY: Self = Self::new("/keyhive/cgka/node-secret-key/v1/2026-10-31");
+
     /// The key an update seals its predecessors' root secrets under, from its
     /// own root secret.
     pub const CGKA_PREDECESSOR_SECRETS_KEY: Self =
@@ -58,15 +66,12 @@ impl Context {
     /// A sealed blob's synthetic-nonce key, from the key it is sealed under.
     pub const SEAL_NONCE_KEY: Self = Self::new("/keyhive/seal/nonce-key/v1/2026-10-31");
 
-    /// The symmetric key two share keys' holders derive from their X25519
-    /// exchange.
-    pub const SHARE_KEY_EXCHANGE_KEY: Self =
-        Self::new("/keyhive/share-key/exchange-key/v1/2026-10-31");
-
     /// Every context. [`Context::new`], the only way to make one, refuses a
     /// string that is not here, so the checks over this list (each well
     /// formed, no two the same) cover every context in use.
-    const ALL: [&'static str; 9] = [
+    const ALL: [&'static str; 10] = [
+        "/keyhive/cgka/invitation-key/v1/2026-10-31",
+        "/keyhive/cgka/node-secret-key/v1/2026-10-31",
         "/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31",
         "/keyhive/content/application-key/v1/2026-10-31",
         "/keyhive/content/encryption-key/v1/2026-10-31",
@@ -75,7 +80,6 @@ impl Context {
         "/keyhive/prekey/selection/v1/2026-10-31",
         "/keyhive/seal/encryption-key/v1/2026-10-31",
         "/keyhive/seal/nonce-key/v1/2026-10-31",
-        "/keyhive/share-key/exchange-key/v1/2026-10-31",
     ];
 
     /// A context must be listed in [`Context::ALL`]: a constant that is not
