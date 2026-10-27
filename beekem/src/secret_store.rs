@@ -4,6 +4,7 @@ use crate::{
     collections::Set,
     encrypted::EncryptedSecret,
     error::CgkaError,
+    id::TreeId,
     keys::{share_secret_key_from_decrypted_secret, ConflictKeys, NodeKey, ShareKeyMap},
     treemath::TreeNodeIndex,
 };
@@ -100,6 +101,7 @@ impl SecretStore {
 
     pub fn decrypt_secret(
         &self,
+        doc_id: TreeId,
         child_node_key: &NodeKey,
         child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
@@ -109,7 +111,7 @@ impl SecretStore {
         }
         self.versions
             .head
-            .decrypt_secret(child_node_key, child_sks, seen_idxs)
+            .decrypt_secret(doc_id, child_node_key, child_sks, seen_idxs)
     }
 
     /// Decrypt this node's secret with the secret of its child's sibling, found
@@ -118,14 +120,18 @@ impl SecretStore {
     ///
     /// Returns `None` if the node has more than one version or none of its
     /// encryptions is to a key in `sks`.
-    pub(crate) fn decrypt_with_sibling_secret(&self, sks: &ShareKeyMap) -> Option<ShareSecretKey> {
+    pub(crate) fn decrypt_with_sibling_secret(
+        &self,
+        doc_id: TreeId,
+        sks: &ShareKeyMap,
+    ) -> Option<ShareSecretKey> {
         if self.has_conflict() {
             return None;
         }
         let version = &self.versions.head;
         version.sk.values().find_map(|encrypted| {
             let plaintext = sks
-                .try_decrypt_encryption(version.encrypter_pk, encrypted)
+                .try_decrypt_encryption(doc_id, version.encrypter_pk, encrypted)
                 .ok()?;
             share_secret_key_from_decrypted_secret(plaintext)
         })
@@ -138,6 +144,7 @@ impl SecretStore {
     /// that child's secret.
     pub(crate) fn decrypt_with_child_secret(
         &self,
+        doc_id: TreeId,
         child_sk: &ShareSecretKey,
     ) -> Option<ShareSecretKey> {
         if self.has_conflict() {
@@ -147,7 +154,7 @@ impl SecretStore {
             .head
             .sk
             .values()
-            .find_map(|encrypted| encrypted.try_encrypter_decrypt(child_sk).ok())
+            .find_map(|encrypted| encrypted.try_encrypter_decrypt(doc_id, child_sk).ok())
             .and_then(share_secret_key_from_decrypted_secret)
     }
 
@@ -242,6 +249,7 @@ impl StreamDecode for SecretStoreVersion {
 impl SecretStoreVersion {
     pub fn decrypt_secret(
         &self,
+        doc_id: TreeId,
         child_node_key: &NodeKey,
         child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
@@ -274,10 +282,10 @@ impl SecretStoreVersion {
                 .ok_or(CgkaError::SecretKeyNotFound)?;
 
             encrypted
-                .try_encrypter_decrypt(secret_key)
+                .try_encrypter_decrypt(doc_id, secret_key)
                 .map_err(|e| CgkaError::Decryption(e.to_string()))?
         } else {
-            child_sks.try_decrypt_encryption(self.encrypter_pk, encrypted)?
+            child_sks.try_decrypt_encryption(doc_id, self.encrypter_pk, encrypted)?
         };
 
         share_secret_key_from_decrypted_secret(decrypted).ok_or(CgkaError::Conversion)

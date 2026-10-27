@@ -2,26 +2,38 @@
 //! the rejections that keep each value to one encoding.
 
 use crate::{
-    encrypted::EncryptedSecret,
+    encrypted::{encrypt_secret, EncryptedSecret},
+    id::TreeId,
     operation::{CitationId, Invitation, InvitationSecret, PredecessorSecret, RemovedMember},
     secret_store::{SecretStore, SecretStoreVersion},
     treemath::TreeNodeIndex,
 };
 use alloc::{collections::BTreeMap, vec::Vec};
+use ed25519_dalek::SigningKey;
 use keyhive_codec::{
     error::DecodeError,
     laws::{canonical_near, round_trip, stream},
+    prefixed::encode_bytes,
     traits::{Decode, Encode, StreamDecode},
 };
-use keyhive_crypto::{
-    share_key::{ShareKey, ShareSecretKey},
-    siv::Siv,
-};
+use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use rand::{rngs::StdRng, SeedableRng};
 
 /// The share key from seed `n`.
 fn key(n: u8) -> ShareKey {
     ShareSecretKey::generate(&mut StdRng::seed_from_u64(n.into())).share_key()
+}
+
+/// A secret from seed `n`, sealed to [`key`]`(n)`.
+fn sealed(n: u8) -> EncryptedSecret<ShareSecretKey> {
+    let mut rng = StdRng::seed_from_u64(u64::from(n) + 1000);
+    encrypt_secret(
+        TreeId::from(&SigningKey::from_bytes(&[n; 32])),
+        ShareSecretKey::generate(&mut rng),
+        &ShareSecretKey::generate(&mut rng),
+        &key(n),
+    )
+    .expect("a fresh secret seals")
 }
 
 fn laws<T>()
@@ -75,10 +87,12 @@ fn predecessor_secret_laws() {
 }
 
 fn version(seed: u8) -> SecretStoreVersion {
-    let secret = EncryptedSecret::new(Siv::from([seed; 24]), Vec::from([seed; 40]), key(seed));
     SecretStoreVersion {
         pk: key(seed),
-        sk: BTreeMap::from([(TreeNodeIndex::decode(&[seed]).expect("one byte"), secret)]),
+        sk: BTreeMap::from([(
+            TreeNodeIndex::decode(&[seed]).expect("one byte"),
+            sealed(seed),
+        )]),
         encrypter_pk: key(seed.wrapping_add(1)),
     }
 }
@@ -138,11 +152,23 @@ fn a_secret_map_must_ascend_by_tree_index() {
     );
 }
 
+/// Every sealed secret holds at least its 24-byte nonce and 16-byte tag.
+#[test]
+fn a_sealed_secret_holds_at_least_a_nonce_and_tag() {
+    let decode = |len| {
+        let mut bytes = Vec::new();
+        encode_bytes(&alloc::vec![0; len], &mut bytes);
+        key(1).encode_into(&mut bytes);
+        EncryptedSecret::<ShareSecretKey>::decode(&bytes)
+    };
+    assert_eq!(decode(0), Err(DecodeError::InvalidField("sealed")));
+    assert_eq!(decode(39), Err(DecodeError::InvalidField("sealed")));
+    assert!(decode(40).is_ok());
+}
+
 #[test]
 fn a_small_order_paired_key_is_rejected() {
-    let secret: EncryptedSecret<ShareSecretKey> =
-        EncryptedSecret::new(Siv::from([0; 24]), Vec::from([1, 2, 3]), key(9));
-    let mut bytes = secret.encode().into_bytes();
+    let mut bytes = sealed(9).encode().into_bytes();
     let at = bytes.len() - 32;
     bytes[at..].copy_from_slice(&[0; 32]);
     assert!(matches!(

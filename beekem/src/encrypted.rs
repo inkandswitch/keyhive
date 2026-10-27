@@ -33,7 +33,7 @@ use keyhive_crypto::{
     share_key::{ShareKey, ShareSecretKey},
     signable::{Kind, Kinded, TAG},
     signed::SerdeSigned,
-    siv::{nonces_match, Siv},
+    siv::nonces_match,
     symmetric_key::SymmetricKey,
 };
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,10 @@ const AEAD_TAG_LEN: usize = 16;
 
 /// Bytes a chunk adds to its plaintext: its nonce and its AEAD tag.
 pub const CHUNK_OVERHEAD: usize = NONCE_LEN + AEAD_TAG_LEN;
+
+/// Bytes [`SymmetricKey::try_seal`] adds to its plaintext: its nonce and its
+/// AEAD tag.
+const SEAL_OVERHEAD: usize = NONCE_LEN + AEAD_TAG_LEN;
 
 const FULL_CHUNK: usize = CHUNK_LEN + CHUNK_OVERHEAD;
 
@@ -347,18 +351,18 @@ fn chunk_count(len: usize) -> Option<usize> {
     well_formed.then_some(count)
 }
 
-/// The public information for an encrypted secret ciphertext.
+/// A secret sealed for the holder of `paired_pk`'s secret, under the key a
+/// Diffie-Hellman exchange between that holder and the encrypter gives.
 ///
-/// This wraps a ciphertext that includes the [`Siv`] and the type of the data
-/// that was encrypted (or that the plaintext is _expected_ to be).
+/// The seal's associated data is the tree and both public keys of the
+/// exchange (`tree_id ‖ encrypter_pk ‖ paired_pk`), and opening checks the
+/// synthetic nonce ([`SymmetricKey::try_open`]). A ciphertext therefore opens
+/// only in the tree, and between the two keys, it was sealed for, and under
+/// only one key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct EncryptedSecret<T> {
-    /// The nonce used to encrypt the data.
-    pub nonce: Siv,
-
-    /// The encrypted data.
-    pub ciphertext: Vec<u8>,
+    /// `nonce ‖ ciphertext ‖ tag`, from [`SymmetricKey::try_seal`].
+    sealed: Vec<u8>,
 
     /// The [`ShareKey`] used as a Diffie Hellman partner when encrypting.
     pub paired_pk: ShareKey,
@@ -368,33 +372,40 @@ pub struct EncryptedSecret<T> {
 }
 
 impl<T> EncryptedSecret<T> {
-    /// Associate a nonce with a ciphertext and assert the plaintext type.
-    pub fn new(nonce: Siv, ciphertext: Vec<u8>, paired_pk: ShareKey) -> EncryptedSecret<T> {
-        EncryptedSecret {
-            nonce,
-            ciphertext,
-            paired_pk,
-            _plaintext_tag: PhantomData,
-        }
-    }
-
-    /// Decrypt the secret using the encrypter's secret key.
-    #[instrument(skip(self))]
+    /// Open with the encrypter's secret key.
+    #[instrument(skip_all)]
     pub fn try_encrypter_decrypt(
         &self,
-        encrypter_secret_key: &ShareSecretKey,
+        doc_id: TreeId,
+        encrypter_sk: &ShareSecretKey,
     ) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        let mut buf: Vec<u8> = self.ciphertext.clone();
-        let key = encrypter_secret_key.derive_symmetric_key(&self.paired_pk);
-        key.try_decrypt(self.nonce, &mut buf)?;
-        Ok(buf)
+        encrypter_sk.derive_symmetric_key(&self.paired_pk).try_open(
+            &self.sealed,
+            &node_secret_aad(doc_id, &encrypter_sk.share_key(), &self.paired_pk),
+        )
+    }
+
+    /// Open with `paired_sk`, the secret of [`Self::paired_pk`], given the
+    /// encrypter's public key.
+    #[instrument(skip_all)]
+    pub fn try_paired_decrypt(
+        &self,
+        doc_id: TreeId,
+        paired_sk: &ShareSecretKey,
+        encrypter_pk: &ShareKey,
+    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+        paired_sk.derive_symmetric_key(encrypter_pk).try_open(
+            &self.sealed,
+            &node_secret_aad(doc_id, encrypter_pk, &self.paired_pk),
+        )
     }
 }
 
-/// A symmetric key derived from a Diffie-Hellman exchange, with the public key
-/// it was derived against.
+/// A symmetric key derived from a Diffie-Hellman exchange, with the public
+/// keys of both sides.
 pub struct PairedKey {
     key: SymmetricKey,
+    encrypter_pk: ShareKey,
     paired_pk: ShareKey,
 }
 
@@ -403,16 +414,41 @@ impl PairedKey {
     pub fn new(sk: &ShareSecretKey, paired_pk: &ShareKey) -> Self {
         PairedKey {
             key: sk.derive_symmetric_key(paired_pk),
+            encrypter_pk: sk.share_key(),
             paired_pk: *paired_pk,
         }
     }
 }
 
-/// `nonce ‖ ciphertext_len:bijou32 ‖ ciphertext ‖ paired_pk`.
+/// `tree_id ‖ encrypter_pk ‖ paired_pk`, the associated data a node secret is
+/// sealed under.
+fn node_secret_aad(doc_id: TreeId, encrypter_pk: &ShareKey, paired_pk: &ShareKey) -> [u8; 96] {
+    let mut aad = [0; 96];
+    aad[..32].copy_from_slice(doc_id.as_bytes());
+    aad[32..64].copy_from_slice(encrypter_pk.as_bytes());
+    aad[64..].copy_from_slice(paired_pk.as_bytes());
+    aad
+}
+
+/// Up to a few blocks of arbitrary sealed bytes, never shorter than a nonce
+/// and a tag, so that every value has an encoding that decodes.
+#[cfg(any(test, feature = "arbitrary"))]
+impl<'a, T> arbitrary::Arbitrary<'a> for EncryptedSecret<T> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let mut sealed = <[u8; SEAL_OVERHEAD]>::arbitrary(u)?.to_vec();
+        sealed.extend(Vec::<u8>::arbitrary(u)?);
+        Ok(EncryptedSecret {
+            sealed,
+            paired_pk: ShareKey::arbitrary(u)?,
+            _plaintext_tag: PhantomData,
+        })
+    }
+}
+
+/// `sealed_len:bijou32 ‖ sealed ‖ paired_pk`.
 impl<T> Encode for EncryptedSecret<T> {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.nonce.encode_into(out);
-        encode_bytes(&self.ciphertext, out);
+        encode_bytes(&self.sealed, out);
         self.paired_pk.encode_into(out);
     }
 }
@@ -425,19 +461,25 @@ impl<T> Decode for EncryptedSecret<T> {
 
 impl<T> StreamDecode for EncryptedSecret<T> {
     fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
-        let (nonce, rest) = Siv::decode_next(bytes)?;
-        let (ciphertext, rest) = decode_bytes(rest)?;
+        let (sealed, rest) = decode_bytes(bytes)?;
+        if sealed.len() < SEAL_OVERHEAD {
+            return Err(DecodeError::InvalidField("sealed"));
+        }
         let (paired_pk, rest) = ShareKey::decode_next(rest)?;
         Ok((
-            EncryptedSecret::new(nonce, ciphertext.to_vec(), paired_pk),
+            EncryptedSecret {
+                sealed: sealed.to_vec(),
+                paired_pk,
+                _plaintext_tag: PhantomData,
+            },
             rest,
         ))
     }
 }
 
-/// Encrypt a secret key for a tree node, paired with the given public key.
+/// Seal a secret key for a tree node, paired with the given public key.
 pub fn encrypt_secret(
-    doc_id: &[u8],
+    doc_id: TreeId,
     secret: ShareSecretKey,
     sk: &ShareSecretKey,
     paired_pk: &ShareKey,
@@ -445,18 +487,28 @@ pub fn encrypt_secret(
     encrypt_secret_with(&PairedKey::new(sk, paired_pk), doc_id, secret)
 }
 
-/// Encrypt a secret key under an already derived [`PairedKey`].
+/// Seal a secret key under an already derived [`PairedKey`].
 pub fn encrypt_secret_with(
     paired: &PairedKey,
-    doc_id: &[u8],
+    doc_id: TreeId,
     secret: ShareSecretKey,
 ) -> Result<EncryptedSecret<ShareSecretKey>, CgkaError> {
-    let PairedKey { key, paired_pk } = paired;
-    let mut ciphertext: Vec<u8> = (&secret).into();
-    let nonce = Siv::new(key, &ciphertext, doc_id);
-    key.try_encrypt(nonce, &mut ciphertext)
+    let PairedKey {
+        key,
+        encrypter_pk,
+        paired_pk,
+    } = paired;
+    let sealed = key
+        .try_seal(
+            &Vec::<u8>::from(&secret),
+            &node_secret_aad(doc_id, encrypter_pk, paired_pk),
+        )
         .map_err(CgkaError::Encryption)?;
-    Ok(EncryptedSecret::new(nonce, ciphertext, *paired_pk))
+    Ok(EncryptedSecret {
+        sealed,
+        paired_pk: *paired_pk,
+        _plaintext_tag: PhantomData,
+    })
 }
 
 #[cfg(test)]
@@ -720,6 +772,54 @@ mod tests {
         assert_eq!(
             PredecessorRefs::digest(&[[3u8; 32]]).raw.to_hex().as_str(),
             "55450d263093c72d5367b8002c03f45eabcb4096e3e3344b3d628df936039a4e"
+        );
+    }
+
+    fn share_sk(n: u8) -> ShareSecretKey {
+        ShareSecretKey::force_from_bytes([n; 32])
+    }
+
+    /// The encrypter and the paired key's holder both open a node secret in
+    /// the tree it was sealed in, and neither opens it in another.
+    #[test]
+    fn a_node_secret_opens_only_in_its_tree() {
+        let (secret, encrypter, paired) = (share_sk(1), share_sk(2), share_sk(3));
+        let sealed =
+            encrypt_secret(doc(1), secret, &encrypter, &paired.share_key()).expect("seals");
+        let plaintext = Vec::<u8>::from(&secret);
+        for (tree, expected) in [
+            (doc(1), Ok(plaintext)),
+            (doc(2), Err(chacha20poly1305::Error)),
+        ] {
+            assert_eq!(sealed.try_encrypter_decrypt(tree, &encrypter), expected);
+            assert_eq!(
+                sealed.try_paired_decrypt(tree, &paired, &encrypter.share_key()),
+                expected
+            );
+        }
+    }
+
+    /// A blob that authenticates under the right key and associated data,
+    /// but whose nonce is not its synthetic nonce, is refused.
+    #[test]
+    fn a_node_secret_whose_nonce_is_not_synthetic_is_refused() {
+        let (encrypter, paired) = (share_sk(2), share_sk(3));
+        let aad = node_secret_aad(doc(1), &encrypter.share_key(), &paired.share_key());
+        let nonce = [7; NONCE_LEN];
+        let mut forged = Vec::<u8>::from(&share_sk(1));
+        encrypter
+            .derive_symmetric_key(&paired.share_key())
+            .to_xchacha()
+            .encrypt_in_place(&XNonce::from(nonce), &aad, &mut forged)
+            .expect("encrypts");
+        forged.splice(0..0, nonce);
+        let mut bytes = Vec::new();
+        encode_bytes(&forged, &mut bytes);
+        paired.share_key().encode_into(&mut bytes);
+        let secret = EncryptedSecret::<ShareSecretKey>::decode(&bytes).expect("decodes");
+        assert_eq!(
+            secret.try_encrypter_decrypt(doc(1), &encrypter),
+            Err(chacha20poly1305::Error)
         );
     }
 }

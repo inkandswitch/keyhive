@@ -447,7 +447,7 @@ impl Cgka {
         let invitation_secrets: Vec<InvitationSecret> = ancestor_secrets
             .iter()
             .filter_map(|(update_op_hash, secret)| {
-                match encrypt_secret_with(&key, self.doc_id.as_bytes(), secret.0) {
+                match encrypt_secret_with(&key, self.doc_id, secret.0) {
                     Ok(encrypted_root_secret) => Some(InvitationSecret {
                         update_op_hash: *update_op_hash,
                         encrypted_root_secret,
@@ -578,7 +578,11 @@ impl Cgka {
     ) -> Option<PcsKey> {
         let plaintext = self
             .owner_sks
-            .try_decrypt_encryption(inviter_pk, &invitation_secret.encrypted_root_secret)
+            .try_decrypt_encryption(
+                self.doc_id,
+                inviter_pk,
+                &invitation_secret.encrypted_root_secret,
+            )
             .ok()?;
         PcsKey::from_decrypted_secret(plaintext)
     }
@@ -993,7 +997,7 @@ impl Cgka {
         else {
             return None;
         };
-        let pcs_key = PcsKey::new(new_path.decrypt_root_secret(&self.owner_sks)?);
+        let pcs_key = PcsKey::new(new_path.decrypt_root_secret(self.doc_id, &self.owner_sks)?);
         self.record_root_secret_for(pcs_key, *op_hash)
             .then_some(pcs_key)
     }
