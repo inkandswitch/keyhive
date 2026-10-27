@@ -435,6 +435,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn removing_a_ciphertext_returns_it_and_forgets_it() -> TestResult {
+        let mut csprng = OsRng;
+        let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
+        let op_hash: Digest<GroupSecretEpoch> = [9u8; 32].into();
+        let (one, _) = setup(
+            "one".to_string(),
+            [0; 32],
+            op_hash,
+            HashMap::new(),
+            doc_id,
+            &mut csprng,
+        );
+        let store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(one.dupe()).await;
+
+        assert_eq!(store.remove(&one.digest()).await, Some(one));
+        assert_eq!(get_ct(&store, &[0; 32]).await, Ok(None));
+        assert!(store.get_by_pcs_update(&op_hash).await.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_hash_map_get_ciphertext() -> TestResult {
         test_utils::init_logging();
 

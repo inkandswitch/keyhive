@@ -414,6 +414,18 @@ mod tests {
     }
 
     #[test]
+    fn a_chunk_holds_64_kib_of_plaintext() {
+        assert_eq!(
+            encrypt(&vec![0; 65_536]).chunks().len(),
+            65_536 + CHUNK_OVERHEAD
+        );
+        assert_eq!(
+            encrypt(&vec![0; 65_537]).chunks().len(),
+            65_537 + 2 * CHUNK_OVERHEAD
+        );
+    }
+
+    #[test]
     fn the_encoding_starts_with_the_header() {
         let bytes = encrypt(b"hi").encode().into_bytes();
         assert_eq!(&bytes[..4], b"KHE\x00");
