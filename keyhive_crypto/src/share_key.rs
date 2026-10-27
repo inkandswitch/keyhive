@@ -115,19 +115,21 @@ impl ShareSecretKey {
         &self.0
     }
 
-    /// The symmetric key this secret's holder and `other`'s holder share:
+    /// The symmetric key this secret's holder and `other`'s holder share for
+    /// the purpose `context` names:
     ///
     /// ```text
-    /// derive_key(SHARE_KEY_EXCHANGE_KEY, X25519(self, other) ‖ low_pk ‖ high_pk)
+    /// derive_key(context, X25519(self, other) ‖ low_pk ‖ high_pk)
     /// ```
     ///
     /// The two public keys are bound in, in byte order so both sides derive
-    /// the same key, as HPKE binds its shared secret to them.
+    /// the same key, as HPKE binds its shared secret to them. Each purpose
+    /// has its own context, so a key for one never opens what another sealed.
     #[instrument(skip_all)]
-    pub fn derive_symmetric_key(&self, other: &ShareKey) -> SymmetricKey {
+    pub fn derive_symmetric_key(&self, other: &ShareKey, context: Context) -> SymmetricKey {
         let shared = x25519_dalek::StaticSecret::from(*self).diffie_hellman(&other.0);
         let mine = self.share_key();
-        let mut hasher = Context::SHARE_KEY_EXCHANGE_KEY.hasher();
+        let mut hasher = context.hasher();
         hasher.update(shared.as_bytes());
         hasher.update(mine.as_bytes().min(other.as_bytes()));
         hasher.update(mine.as_bytes().max(other.as_bytes()));
@@ -329,16 +331,17 @@ mod tests {
         bolero::check!()
             .with_arbitrary::<(ShareSecretKey, ShareSecretKey, ShareSecretKey)>()
             .for_each(|(a, b, c)| {
-                let key = a.derive_symmetric_key(&b.share_key());
-                assert_eq!(key, b.derive_symmetric_key(&a.share_key()));
+                let ctx = Context::CGKA_NODE_SECRET_KEY;
+                let key = a.derive_symmetric_key(&b.share_key(), ctx);
+                assert_eq!(key, b.derive_symmetric_key(&a.share_key(), ctx));
                 if c.share_key() != b.share_key() {
-                    assert_ne!(key, a.derive_symmetric_key(&c.share_key()));
+                    assert_ne!(key, a.derive_symmetric_key(&c.share_key(), ctx));
                 }
             });
     }
 
-    /// RFC 7748 §6.1's keys and shared secret `K`, then the derivation,
-    /// checked with `b3sum --derive-key` under `SHARE_KEY_EXCHANGE_KEY` over
+    /// RFC 7748 §6.1's keys and shared secret `K`, then the derivation under
+    /// each exchange context, checked with `b3sum --derive-key` over
     /// `K ‖ alice_pk ‖ bob_pk` (Alice's key sorts first).
     #[test]
     fn known_answer() {
@@ -363,10 +366,25 @@ mod tests {
             bob.share_key().to_bytes(),
             hex("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
         );
-        let expected = SymmetricKey::from(hex(
-            "8d7ebcf51160e75874632614e3564e4b73375d6e1b0cc722e0471b32996e4258",
-        ));
-        assert_eq!(alice.derive_symmetric_key(&bob.share_key()), expected);
-        assert_eq!(bob.derive_symmetric_key(&alice.share_key()), expected);
+        for (context, expected) in [
+            (
+                Context::CGKA_NODE_SECRET_KEY,
+                "fd792fc2488de6c5cc641e80fbf9574f7dad399da74e3574ca646b0398776ebe",
+            ),
+            (
+                Context::CGKA_INVITATION_KEY,
+                "0cf68021a38b1e4098da3c1326a72a9b55711902ed9519e70ebe4620fa0cb90c",
+            ),
+        ] {
+            let expected = SymmetricKey::from(hex(expected));
+            assert_eq!(
+                alice.derive_symmetric_key(&bob.share_key(), context),
+                expected
+            );
+            assert_eq!(
+                bob.derive_symmetric_key(&alice.share_key(), context),
+                expected
+            );
+        }
     }
 }

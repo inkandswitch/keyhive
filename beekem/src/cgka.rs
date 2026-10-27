@@ -445,7 +445,7 @@ impl Cgka {
         let invitation_secrets: Vec<InvitationSecret> = ancestor_secrets
             .iter()
             .filter_map(|(update_op_hash, secret)| {
-                match encrypt_secret_with(&key, self.doc_id, secret.0) {
+                match encrypt_secret_with(&key, self.doc_id, *secret) {
                     Ok(encrypted_root_secret) => Some(InvitationSecret {
                         update_op_hash: *update_op_hash,
                         encrypted_root_secret,

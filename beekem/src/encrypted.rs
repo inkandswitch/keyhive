@@ -344,14 +344,45 @@ fn chunk_count(len: usize) -> Option<usize> {
     well_formed.then_some(count)
 }
 
-/// A secret sealed for the holder of `paired_pk`'s secret, under the key a
-/// Diffie-Hellman exchange between that holder and the encrypter gives.
+/// A secret that is sealed to a share key. Its type picks the key derivation,
+/// so a sealed node secret never opens as an invitation's root secret, or the
+/// reverse.
+pub trait Sealable {
+    /// The context its key is derived under, from the X25519 exchange.
+    const CONTEXT: Context;
+
+    /// The secret's bytes, as sealed.
+    fn secret_bytes(&self) -> [u8; 32];
+}
+
+/// A BeeKEM node's secret, sealed to a node of its sibling's resolution.
+impl Sealable for ShareSecretKey {
+    const CONTEXT: Context = Context::CGKA_NODE_SECRET_KEY;
+
+    fn secret_bytes(&self) -> [u8; 32] {
+        self.to_bytes()
+    }
+}
+
+/// A root secret, sealed to an invitee so they can read what came before
+/// their add.
+impl Sealable for PcsKey {
+    const CONTEXT: Context = Context::CGKA_INVITATION_KEY;
+
+    fn secret_bytes(&self) -> [u8; 32] {
+        self.0.to_bytes()
+    }
+}
+
+/// A `T` sealed for the holder of `paired_pk`'s secret, under the key a
+/// Diffie-Hellman exchange between that holder and the encrypter gives for
+/// `T` ([`Sealable::CONTEXT`]).
 ///
 /// The seal's associated data is the tree and both public keys of the
 /// exchange (`tree_id ‖ encrypter_pk ‖ paired_pk`), and opening checks the
 /// synthetic nonce ([`SymmetricKey::try_open`]). A ciphertext therefore opens
-/// only in the tree, and between the two keys, it was sealed for, and under
-/// only one key.
+/// only as a `T`, only in the tree, and between the two keys, it was sealed
+/// for, and under only one key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EncryptedSecret<T> {
     /// `nonce ‖ ciphertext ‖ tag`, from [`SymmetricKey::try_seal`].
@@ -364,7 +395,7 @@ pub struct EncryptedSecret<T> {
     _plaintext_tag: PhantomData<T>,
 }
 
-impl<T> EncryptedSecret<T> {
+impl<T: Sealable> EncryptedSecret<T> {
     /// Open with the encrypter's secret key.
     #[instrument(skip_all)]
     pub fn try_encrypter_decrypt(
@@ -372,10 +403,12 @@ impl<T> EncryptedSecret<T> {
         doc_id: TreeId,
         encrypter_sk: &ShareSecretKey,
     ) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        encrypter_sk.derive_symmetric_key(&self.paired_pk).try_open(
-            &self.sealed,
-            &node_secret_aad(doc_id, &encrypter_sk.share_key(), &self.paired_pk),
-        )
+        encrypter_sk
+            .derive_symmetric_key(&self.paired_pk, T::CONTEXT)
+            .try_open(
+                &self.sealed,
+                &node_secret_aad(doc_id, &encrypter_sk.share_key(), &self.paired_pk),
+            )
     }
 
     /// Open with `paired_sk`, the secret of [`Self::paired_pk`], given the
@@ -387,28 +420,32 @@ impl<T> EncryptedSecret<T> {
         paired_sk: &ShareSecretKey,
         encrypter_pk: &ShareKey,
     ) -> Result<Vec<u8>, chacha20poly1305::Error> {
-        paired_sk.derive_symmetric_key(encrypter_pk).try_open(
-            &self.sealed,
-            &node_secret_aad(doc_id, encrypter_pk, &self.paired_pk),
-        )
+        paired_sk
+            .derive_symmetric_key(encrypter_pk, T::CONTEXT)
+            .try_open(
+                &self.sealed,
+                &node_secret_aad(doc_id, encrypter_pk, &self.paired_pk),
+            )
     }
 }
 
-/// A symmetric key derived from a Diffie-Hellman exchange, with the public
-/// keys of both sides.
-pub struct PairedKey {
+/// The key a Diffie-Hellman exchange gives for sealing a `T`, with the
+/// public keys of both sides.
+pub struct PairedKey<T> {
     key: SymmetricKey,
     encrypter_pk: ShareKey,
     paired_pk: ShareKey,
+    _plaintext_tag: PhantomData<T>,
 }
 
-impl PairedKey {
-    /// Derive the key `paired_pk`'s holder needs to decrypt what `sk` encrypts.
+impl<T: Sealable> PairedKey<T> {
+    /// Derive the key `paired_pk`'s holder needs to open the `T`s `sk` seals.
     pub fn new(sk: &ShareSecretKey, paired_pk: &ShareKey) -> Self {
         PairedKey {
-            key: sk.derive_symmetric_key(paired_pk),
+            key: sk.derive_symmetric_key(paired_pk, T::CONTEXT),
             encrypter_pk: sk.share_key(),
             paired_pk: *paired_pk,
+            _plaintext_tag: PhantomData,
         }
     }
 }
@@ -470,30 +507,31 @@ impl<T> StreamDecode for EncryptedSecret<T> {
     }
 }
 
-/// Seal a secret key for a tree node, paired with the given public key.
-pub fn encrypt_secret(
+/// Seal `secret` for the holder of `paired_pk`'s secret.
+pub fn encrypt_secret<T: Sealable>(
     doc_id: TreeId,
-    secret: ShareSecretKey,
+    secret: T,
     sk: &ShareSecretKey,
     paired_pk: &ShareKey,
-) -> Result<EncryptedSecret<ShareSecretKey>, CgkaError> {
+) -> Result<EncryptedSecret<T>, CgkaError> {
     encrypt_secret_with(&PairedKey::new(sk, paired_pk), doc_id, secret)
 }
 
-/// Seal a secret key under an already derived [`PairedKey`].
-pub fn encrypt_secret_with(
-    paired: &PairedKey,
+/// Seal `secret` under an already derived [`PairedKey`].
+pub fn encrypt_secret_with<T: Sealable>(
+    paired: &PairedKey<T>,
     doc_id: TreeId,
-    secret: ShareSecretKey,
-) -> Result<EncryptedSecret<ShareSecretKey>, CgkaError> {
+    secret: T,
+) -> Result<EncryptedSecret<T>, CgkaError> {
     let PairedKey {
         key,
         encrypter_pk,
         paired_pk,
+        ..
     } = paired;
     let sealed = key
         .try_seal(
-            &Vec::<u8>::from(&secret),
+            &secret.secret_bytes(),
             &node_secret_aad(doc_id, encrypter_pk, paired_pk),
         )
         .map_err(CgkaError::Encryption)?;
@@ -770,6 +808,48 @@ mod tests {
 
     fn share_sk(n: u8) -> ShareSecretKey {
         ShareSecretKey::force_from_bytes([n; 32])
+    }
+
+    /// Node secrets and invitations' root secrets are sealed under keys from
+    /// different contexts, so one exchange's node secret does not open as an
+    /// invitation secret, nor the reverse, though their bytes decode as either.
+    #[test]
+    fn a_node_secret_and_an_invitation_secret_do_not_open_as_each_other() {
+        let (encrypter, paired) = (share_sk(2), share_sk(3));
+        let as_other = |bytes: &[u8]| -> EncryptedSecret<PcsKey> {
+            EncryptedSecret::decode(bytes).expect("the layouts are the same")
+        };
+
+        let node_secret =
+            encrypt_secret(doc(1), share_sk(1), &encrypter, &paired.share_key()).expect("seals");
+        assert!(node_secret
+            .try_paired_decrypt(doc(1), &paired, &encrypter.share_key())
+            .is_ok());
+        assert_eq!(
+            as_other(node_secret.encode().as_bytes()).try_paired_decrypt(
+                doc(1),
+                &paired,
+                &encrypter.share_key()
+            ),
+            Err(chacha20poly1305::Error)
+        );
+
+        let invitation = encrypt_secret(
+            doc(1),
+            PcsKey::new(share_sk(1)),
+            &encrypter,
+            &paired.share_key(),
+        )
+        .expect("seals");
+        assert!(invitation
+            .try_paired_decrypt(doc(1), &paired, &encrypter.share_key())
+            .is_ok());
+        let as_node_secret: EncryptedSecret<ShareSecretKey> =
+            EncryptedSecret::decode(invitation.encode().as_bytes()).expect("same layout");
+        assert_eq!(
+            as_node_secret.try_paired_decrypt(doc(1), &paired, &encrypter.share_key()),
+            Err(chacha20poly1305::Error)
+        );
     }
 
     /// The encrypter and the paired key's holder both open a node secret in

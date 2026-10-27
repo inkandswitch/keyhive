@@ -7,6 +7,7 @@ use crate::{
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::NodeKey,
+    pcs_key::PcsKey,
     transact::{Fork, Merge},
     tree::PathChange,
 };
@@ -28,7 +29,7 @@ use keyhive_codec::{
 };
 use keyhive_crypto::{
     digest::Digest,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::ShareKey,
     signable::{Kind, Kinded},
     verified::Verified,
 };
@@ -100,7 +101,7 @@ pub struct InvitationSecret {
 
     /// The root secret, encrypted to the `pk` of the [`CgkaChange::Add`]
     /// wrapping this invitation.
-    pub encrypted_root_secret: EncryptedSecret<ShareSecretKey>,
+    pub encrypted_root_secret: EncryptedSecret<PcsKey>,
 }
 
 /// `update_op_hash ‖ encrypted_root_secret`.

@@ -1,7 +1,7 @@
 //! Share key management for CGKA tree nodes.
 
 use crate::{
-    encrypted::EncryptedSecret,
+    encrypted::{EncryptedSecret, Sealable},
     error::CgkaError,
     id::TreeId,
     transact::{Fork, Merge},
@@ -50,11 +50,11 @@ impl ShareKeyMap {
         self.0.contains_key(pk)
     }
 
-    pub fn try_decrypt_encryption(
+    pub fn try_decrypt_encryption<T: Sealable>(
         &self,
         doc_id: TreeId,
         encrypter_pk: ShareKey,
-        encrypted: &EncryptedSecret<ShareSecretKey>,
+        encrypted: &EncryptedSecret<T>,
     ) -> Result<Vec<u8>, CgkaError> {
         let sk = self
             .get(&encrypted.paired_pk)
