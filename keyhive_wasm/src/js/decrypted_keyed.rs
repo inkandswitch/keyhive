@@ -1,6 +1,7 @@
 use wasm_bindgen::prelude::*;
 
-/// Plaintext plus the application secret key that decrypted it.
+/// The payload of decrypted content, with the application secret key that
+/// decrypted it.
 #[wasm_bindgen(js_name = DecryptedKeyed)]
 pub struct JsDecryptedKeyed {
     plaintext: Vec<u8>,
@@ -9,7 +10,7 @@ pub struct JsDecryptedKeyed {
 
 #[wasm_bindgen(js_class = DecryptedKeyed)]
 impl JsDecryptedKeyed {
-    /// Copies the plaintext out of wasm memory on every call.
+    /// Copies the payload out of wasm memory on every call.
     pub fn plaintext(&self) -> Vec<u8> {
         self.plaintext.clone()
     }

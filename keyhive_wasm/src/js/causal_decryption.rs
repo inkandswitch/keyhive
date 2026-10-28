@@ -26,8 +26,8 @@ impl JsCausalDecryption {
     }
 
     /// Blocks that could not be read, because `load` failed for the block, the
-    /// key it was provided does not open it, or its plaintext is not an
-    /// envelope. A block `load` failed for is also in `next()` to retry. A
+    /// key it was provided does not open it, or its body is not an envelope.
+    /// A block `load` failed for is also in `next()` to retry. A
     /// block can be listed more than once, and can also be in `complete()`: if
     /// it was provided two keys and one was wrong, or if `load` failed for it
     /// once and gave it another time.

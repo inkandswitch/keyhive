@@ -28,6 +28,7 @@ use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_content::{
     encrypted::EncryptedContent,
+    envelope::Envelope,
     reference::ContentRef,
     store::{memory::MemoryCiphertextStore, CausalDecryptionError, CausalDecryptionState},
 };
@@ -749,8 +750,8 @@ impl TestContext {
         Ok(self.record_content_write(out.encrypted_content, doc))
     }
 
-    /// Write `content` in an envelope listing the ancestors and carrying the keys to open
-    /// them. Simulates what an application would do.
+    /// Write `content` with the keys of its ancestors, so a reader can open them.
+    /// Simulates what an application would do.
     ///
     /// The author is also given a copy in their own store, as an application would keep what
     /// it wrote. Other readers still need to be given one.
@@ -1057,7 +1058,8 @@ pub fn decrypt_with_key(
     key: SymmetricKey,
     doc: DocumentId,
 ) -> TestResult<Vec<u8>> {
-    ct.try_decrypt(key, doc.into())
+    Envelope::<_, Vec<u8>>::open(ct, key, doc.into())
+        .map(|envelope| envelope.plaintext)
         .map_err(|e| TestError::Other(format!("decryption with the given key failed: {e}")))
 }
 

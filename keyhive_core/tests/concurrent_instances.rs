@@ -144,14 +144,18 @@ async fn the_instance_that_lost_the_leaf_reads_again_once_it_has_the_winning_sec
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.try_decrypt_content(design_doc, &after).await?,
+        alice
+            .try_decrypt_content(design_doc, &after)
+            .await?
+            .plaintext,
         b"after".to_vec(),
         "both instances should be able to decrypt after sharing secrets and syncing ops"
     );
     assert_eq!(
         alice_replica
             .try_decrypt_content(design_doc, &after)
-            .await?,
+            .await?
+            .plaintext,
         b"after".to_vec(),
         "both instances should be able to decrypt after sharing secrets and syncing ops"
     );
@@ -185,12 +189,14 @@ async fn writes_made_during_a_partition_survive_the_merge() -> Result<()> {
         ("bob", &bob),
     ] {
         assert_eq!(
-            who.try_decrypt_content(doc, &from_alice).await?,
+            who.try_decrypt_content(doc, &from_alice).await?.plaintext,
             b"written in the partition".to_vec(),
             "{name} reads what the first instance wrote during the partition"
         );
         assert_eq!(
-            who.try_decrypt_content(doc, &from_alice_replica).await?,
+            who.try_decrypt_content(doc, &from_alice_replica)
+                .await?
+                .plaintext,
             b"also written in the partition".to_vec(),
             "{name} reads what the second instance wrote during the partition"
         );

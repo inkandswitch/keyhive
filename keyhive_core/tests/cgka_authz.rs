@@ -800,7 +800,8 @@ async fn a_reader_no_writer_can_add_adds_itself() -> TestResult {
     send(&alice, &bob).await;
     assert_eq!(
         bob.try_decrypt_content(doc_id, ct.encrypted_content())
-            .await?,
+            .await?
+            .plaintext,
         b"for bob".to_vec()
     );
     Ok(())
@@ -1012,7 +1013,8 @@ async fn a_reader_removed_and_granted_again_can_add_itself_again() -> TestResult
     send(&alice, &bob).await;
     assert_eq!(
         bob.try_decrypt_content(doc_id, ct.encrypted_content())
-            .await?,
+            .await?
+            .plaintext,
         b"for bob again".to_vec()
     );
     Ok(())

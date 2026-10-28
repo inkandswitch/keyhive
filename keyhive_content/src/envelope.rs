@@ -1,14 +1,18 @@
 //! The (plaintext) container for causal encryption.
 
-use crate::reference::ContentRef;
+use crate::{
+    encrypted::{encode_ancestors, ContentDecryptError, EncryptedContent},
+    reference::ContentRef,
+};
 use derivative::Derivative;
 use keyhive_codec::{
     error::DecodeError,
-    prefixed::{decode_len, encode_len},
+    prefixed::decode_len,
     traits::{Decode, Encode, StreamDecode},
 };
-use keyhive_crypto::symmetric_key::SymmetricKey;
+use keyhive_crypto::{identifier::Identifier, symmetric_key::SymmetricKey};
 use std::{collections::HashMap, vec::Vec};
+use thiserror::Error;
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// A container for an arbitrary payload and the references and keys of its ancestors.
 ///
@@ -98,17 +102,7 @@ pub struct Envelope<C: ContentRef, T> {
 /// length.
 impl<C: ContentRef, T: Encode> Encode for Envelope<C, T> {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        let mut ancestors: Vec<(Vec<u8>, [u8; 32])> = self
-            .ancestors
-            .iter()
-            .map(|(content_ref, key)| (content_ref.encode().into_bytes(), (*key).into()))
-            .collect();
-        ancestors.sort_unstable();
-        encode_len(ancestors.len(), out);
-        for (content_ref, key) in &ancestors {
-            out.extend_from_slice(content_ref);
-            out.extend_from_slice(key);
-        }
+        encode_ancestors(&self.ancestors, out);
         self.plaintext.encode_into(out);
     }
 }
@@ -117,25 +111,67 @@ impl<C: ContentRef, T: Encode> Encode for Envelope<C, T> {
 /// encoding; the payload's own codec decides what follows them.
 impl<C: ContentRef, T: Decode> Decode for Envelope<C, T> {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        let (count, mut rest) = decode_len(bytes)?;
-        let mut ancestors = HashMap::new();
-        let mut previous: Option<&[u8]> = None;
-        for _ in 0..count {
-            let (content_ref, after_ref) = C::decode_next(rest)?;
-            let encoded = &rest[..rest.len() - after_ref.len()];
-            if previous.is_some_and(|p| p >= encoded) {
-                return Err(DecodeError::UnsortedKeys);
-            }
-            let (key, after_key) = <[u8; 32]>::decode_next(after_ref)?;
-            ancestors.insert(content_ref, SymmetricKey::from(key));
-            previous = Some(encoded);
-            rest = after_key;
-        }
+        let (ancestors, payload) = decode_ancestors(bytes)?;
         Ok(Envelope {
-            plaintext: T::decode(rest)?,
+            plaintext: T::decode(payload)?,
             ancestors,
         })
     }
+}
+
+/// The ancestors at the start of an envelope's encoding and the payload
+/// after them.
+fn decode_ancestors<C: ContentRef>(
+    bytes: &[u8],
+) -> Result<(HashMap<C, SymmetricKey>, &[u8]), DecodeError> {
+    let (count, mut rest) = decode_len(bytes)?;
+    let mut ancestors = HashMap::new();
+    let mut previous: Option<&[u8]> = None;
+    for _ in 0..count {
+        let (content_ref, after_ref) = C::decode_next(rest)?;
+        let encoded = &rest[..rest.len() - after_ref.len()];
+        if previous.is_some_and(|p| p >= encoded) {
+            return Err(DecodeError::UnsortedKeys);
+        }
+        let (key, after_key) = <[u8; 32]>::decode_next(after_ref)?;
+        ancestors.insert(content_ref, SymmetricKey::from(key));
+        previous = Some(encoded);
+        rest = after_key;
+    }
+    Ok((ancestors, rest))
+}
+
+impl<C: ContentRef> Envelope<C, Vec<u8>> {
+    /// Decrypt `encrypted` with `key`, for the document `doc_id`, and decode
+    /// its body, which is always an envelope. The payload keeps the decrypted
+    /// buffer rather than a copy of it.
+    pub fn open<P>(
+        encrypted: &EncryptedContent<P, C>,
+        key: SymmetricKey,
+        doc_id: Identifier,
+    ) -> Result<Self, OpenEnvelopeError> {
+        let mut body = encrypted.try_decrypt(key, doc_id)?;
+        let (ancestors, payload) = decode_ancestors(&body)?;
+        let payload_start = body.len() - payload.len();
+        body.drain(..payload_start);
+        Ok(Envelope {
+            plaintext: body,
+            ancestors,
+        })
+    }
+}
+
+/// Why [`Envelope::open`] failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum OpenEnvelopeError {
+    /// The body did not decrypt.
+    #[error(transparent)]
+    Decrypt(#[from] ContentDecryptError),
+
+    /// The body decrypted, but is not an envelope. Only a writer with the
+    /// block's key can produce this.
+    #[error("the content is not an envelope: {0}")]
+    Decode(#[from] DecodeError),
 }
 
 #[cfg(test)]
@@ -144,6 +180,7 @@ mod tests {
     use std::vec;
 
     type Env = Envelope<[u8; 32], Vec<u8>>;
+    type Encrypted = EncryptedContent<Vec<u8>, [u8; 32]>;
 
     fn envelope(ancestors: &[u8], payload: &[u8]) -> Env {
         Envelope {
@@ -234,5 +271,45 @@ mod tests {
             Envelope::<[u8; 32], [u8; 4]>::decode(&bytes),
             Err(DecodeError::TrailingBytes)
         );
+    }
+
+    fn encrypt(body: &[u8]) -> (Encrypted, SymmetricKey, Identifier) {
+        use crate::encrypted::PredecessorRefs;
+        use ed25519_dalek::SigningKey;
+
+        let key = SymmetricKey::from([1; 32]);
+        let doc_id = Identifier::from(&SigningKey::from_bytes(&[2; 32]));
+        let encrypted = EncryptedContent::encrypt(
+            &key,
+            doc_id,
+            [3; 32],
+            PredecessorRefs::digest(&[]),
+            [4; 32].into(),
+            [5; 32].into(),
+            body,
+        )
+        .expect("a fresh key encrypts");
+        (encrypted, key, doc_id)
+    }
+
+    #[test]
+    fn an_encrypted_envelope_opens_to_itself() {
+        bolero::check!()
+            .with_arbitrary::<(Vec<([u8; 32], [u8; 32])>, Vec<u8>)>()
+            .for_each(|(ancestors, payload)| {
+                let original = arbitrary_envelope(ancestors, payload);
+                let (encrypted, key, doc_id) = encrypt(original.encode().as_bytes());
+                assert_eq!(Env::open(&encrypted, key, doc_id), Ok(original));
+            });
+    }
+
+    #[test]
+    fn a_body_that_is_not_an_envelope_does_not_open() {
+        // A count of one ancestor, with no ancestor after it.
+        let (encrypted, key, doc_id) = encrypt(&[1]);
+        assert!(matches!(
+            Env::open(&encrypted, key, doc_id),
+            Err(OpenEnvelopeError::Decode(_))
+        ));
     }
 }

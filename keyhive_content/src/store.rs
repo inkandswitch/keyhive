@@ -4,7 +4,9 @@ pub mod memory;
 
 use self::memory::MemoryCiphertextStore;
 use crate::{
-    application_secret::GroupSecretOrigin, encrypted::EncryptedContent, envelope::Envelope,
+    application_secret::GroupSecretOrigin,
+    encrypted::EncryptedContent,
+    envelope::{Envelope, OpenEnvelopeError},
     reference::ContentRef,
 };
 use derive_where::derive_where;
@@ -168,7 +170,7 @@ pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<
     /// call can start from it.
     ///
     /// If any block cannot be fetched, decrypted or marked decrypted, or its
-    /// plaintext is not an envelope, returns [`CausalDecryptionError`] with
+    /// body is not an envelope whose payload decodes as `T`, returns [`CausalDecryptionError`] with
     /// the reason in its [`cannot`][CausalDecryptionError::cannot] and the
     /// state in its [`progress`][CausalDecryptionError::progress]. A failure
     /// to fetch an ancestor of `start` is listed under the block that listed
@@ -215,52 +217,38 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                 progress.keys.insert(ciphertext.content_ref.clone(), key);
                 let content_ref = ciphertext.content_ref.clone();
 
-                match ciphertext.try_decrypt(key, doc_id) {
-                    Err(_) => {
+                let opened = match Envelope::<Cr, Vec<u8>>::open(&ciphertext, key, doc_id) {
+                    Ok(envelope) => T::decode(&envelope.plaintext)
+                        .map(|plaintext| (plaintext, envelope.ancestors))
+                        .map_err(ErrorReason::DeserializationFailed),
+                    Err(OpenEnvelopeError::Decrypt(_)) => Err(ErrorReason::DecryptionFailed(key)),
+                    Err(OpenEnvelopeError::Decode(e)) => Err(ErrorReason::DeserializationFailed(e)),
+                };
+                let (plaintext, ancestors) = match opened {
+                    Ok(opened) => opened,
+                    Err(reason) => {
                         seen.remove(&content_ref);
-                        cannot.insert(content_ref.clone(), ErrorReason::DecryptionFailed(key));
+                        cannot.insert(content_ref, reason);
                         continue;
                     }
-                    Ok(decrypted) => {
-                        let result = Envelope::<Cr, T>::decode(decrypted.as_slice());
-                        match result {
-                            Err(e) => {
-                                seen.remove(&content_ref);
-                                cannot.insert(
-                                    content_ref.clone(),
-                                    ErrorReason::DeserializationFailed(e),
-                                );
-                                continue;
-                            }
-                            Ok(envelope) => {
-                                for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
-                                    match self.get_ciphertext(ancestor_ref).await {
-                                        Err(e) => {
-                                            seen.remove(&content_ref);
-                                            cannot.insert(
-                                                content_ref.clone(),
-                                                ErrorReason::GetCiphertextError(e),
-                                            );
-                                            continue;
-                                        }
-                                        Ok(None) => {
-                                            progress
-                                                .next
-                                                .insert(ancestor_ref.clone(), *ancestor_key);
-                                        }
-                                        Ok(Some(ancestor)) => {
-                                            to_decrypt.push((ancestor.dupe(), *ancestor_key));
-                                        }
-                                    }
-                                }
-
-                                progress
-                                    .complete
-                                    .push((ciphertext.content_ref.clone(), envelope.plaintext));
-                            }
+                };
+                for (ancestor_ref, ancestor_key) in ancestors {
+                    match self.get_ciphertext(&ancestor_ref).await {
+                        Err(e) => {
+                            seen.remove(&content_ref);
+                            cannot.insert(content_ref.clone(), ErrorReason::GetCiphertextError(e));
+                            continue;
+                        }
+                        Ok(None) => {
+                            progress.next.insert(ancestor_ref, ancestor_key);
+                        }
+                        Ok(Some(ancestor)) => {
+                            to_decrypt.push((ancestor.dupe(), ancestor_key));
                         }
                     }
                 }
+
+                progress.complete.push((content_ref, plaintext));
             }
 
             for id in progress.complete.iter().map(|(id, _)| id) {

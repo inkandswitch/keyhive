@@ -25,7 +25,10 @@ async fn an_invitation_wraps_a_secret_from_after_the_inviter_joined() -> Result<
     ctx.give_content(&carol, &second).await?;
 
     assert_eq!(
-        carol.try_decrypt_content(design_doc, &second).await?,
+        carol
+            .try_decrypt_content(design_doc, &second)
+            .await?
+            .plaintext,
         b"under the second".to_vec(),
         "bob could derive the newer secret, so his invitation wraps that one"
     );
@@ -94,7 +97,10 @@ async fn an_invitation_can_wrap_a_secret_the_inviter_got_from_its_own_invitation
 
     for (reader, who) in [(&carol, "carol"), (&dave, "dave")] {
         assert_eq!(
-            reader.try_decrypt_content(design_doc, &early).await?,
+            reader
+                .try_decrypt_content(design_doc, &early)
+                .await?
+                .plaintext,
             b"before anyone else was added".to_vec(),
             "{who} reads content from before they joined"
         );

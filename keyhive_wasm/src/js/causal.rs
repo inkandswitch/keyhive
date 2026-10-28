@@ -355,18 +355,21 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    async fn a_causal_decryption_of_content_without_an_envelope_throws() {
+    async fn content_written_without_ancestors_decrypts_causally_on_its_own() {
         let (kh, doc, _) = write_chain([]).await;
+        let payload = b"\0 starts like an empty list of ancestors";
         let plain = kh
-            .try_encrypt(&doc, &JsChangeId::new(vec![9]), vec![], b"not an envelope")
+            .try_encrypt(&doc, &JsChangeId::new(vec![9]), vec![], payload)
             .await
             .expect("the content encrypts")
             .encrypted_content();
 
         let read = kh
             .try_causal_decrypt(&doc, &plain, js_sys::Function::new_no_args(""))
-            .await;
+            .await
+            .expect("the content decrypts");
 
-        assert!(read.is_err());
+        let complete: Vec<Vec<u8>> = read.complete().iter().map(|b| b.content()).collect();
+        assert_eq!(complete, vec![payload.to_vec()]);
     }
 }

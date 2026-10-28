@@ -201,13 +201,17 @@ async fn two_instances_creating_documents_independently_converge() -> Result<()>
     ctx.sync(&alice_replica, &reader).await?;
 
     assert_eq!(
-        reader.try_decrypt_content(from_alice, &alice_wrote).await?,
+        reader
+            .try_decrypt_content(from_alice, &alice_wrote)
+            .await?
+            .plaintext,
         b"from alice".to_vec()
     );
     assert_eq!(
         reader
             .try_decrypt_content(replica_doc, &replica_wrote)
-            .await?,
+            .await?
+            .plaintext,
         b"from the replica".to_vec(),
         "one reader, two instances, both documents"
     );
@@ -261,7 +265,8 @@ async fn a_revocation_and_a_redelegation_reach_the_other_instance() -> Result<()
     assert_eq!(
         reader
             .try_decrypt_content(design_doc, &replica_wrote)
-            .await?,
+            .await?
+            .plaintext,
         b"after the re-delegation".to_vec(),
         "the document is public again, so the reader reads what the replica wrote"
     );
@@ -304,7 +309,9 @@ async fn a_peer_cannot_read_an_instance_it_has_not_heard_from() -> Result<()> {
 
     ctx.sync(&alice_replica, &bob).await?;
     assert_eq!(
-        bob.try_decrypt_content(design_doc, &replica_wrote).await?,
+        bob.try_decrypt_content(design_doc, &replica_wrote)
+            .await?
+            .plaintext,
         b"written on the replica".to_vec(),
         "the second round completes it"
     );
@@ -363,7 +370,10 @@ async fn a_keyhive_built_outside_the_context_can_join_the_cast() -> Result<()> {
         "alice treats it as a member"
     );
     assert_eq!(
-        outsider.try_decrypt_content(design_doc, &ct).await?,
+        outsider
+            .try_decrypt_content(design_doc, &ct)
+            .await?
+            .plaintext,
         b"for the outsider".to_vec(),
         "and it reads what it was given, so it is fully in the sync arrangement"
     );
@@ -413,7 +423,7 @@ async fn the_second_instance_writes_and_a_member_reads_it() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        bob.try_decrypt_content(design_doc, &ct).await?,
+        bob.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"written by the replica".to_vec(),
         "bob reads what the second instance wrote, not only what the first did"
     );
@@ -443,7 +453,7 @@ async fn the_second_instance_writes_to_a_document_owned_through_a_group() -> Res
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        bob.try_decrypt_content(design_doc, &ct).await?,
+        bob.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"written by the replica".to_vec(),
         "bob reads the write even though alice reaches the document through a group"
     );
@@ -478,7 +488,7 @@ async fn a_relay_carries_the_second_instances_write_to_a_reader() -> Result<()> 
     ctx.sync(&relay, &bob).await?;
 
     assert_eq!(
-        bob.try_decrypt_content(design_doc, &ct).await?,
+        bob.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"relayed from the replica".to_vec(),
         "the relay carried the second instance's write through to a reader"
     );
@@ -533,7 +543,7 @@ async fn an_instance_reads_what_its_replica_wrote_after_a_rotation() -> Result<(
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.try_decrypt_content(design_doc, &ct).await?,
+        alice.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"written by the replica".to_vec(),
         "the rotation's key reached the other instance so it can still decrypt"
     );
@@ -553,7 +563,7 @@ async fn an_instance_adopts_a_leaf_secret_that_arrives_after_the_rotation() -> R
     ctx.share_prekey_secrets(&alice_replica, &alice).await?;
 
     assert_eq!(
-        alice.try_decrypt_content(design_doc, &ct).await?,
+        alice.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"written by the replica".to_vec(),
         "the secret is adopted when it arrives"
     );
@@ -582,7 +592,8 @@ async fn an_instance_reads_what_its_replica_forced_a_pcs_update_for() -> Result<
     assert_eq!(
         alice
             .try_decrypt_content(design_doc, written.encrypted_content())
-            .await?,
+            .await?
+            .plaintext,
         content.to_vec(),
         "a forced update keeps its leaf key reachable, just like an ordinary rotation"
     );
@@ -603,7 +614,7 @@ async fn an_instance_adopts_a_leaf_secret_carried_by_an_archive() -> Result<()> 
         .await?;
 
     assert_eq!(
-        alice.try_decrypt_content(design_doc, &ct).await?,
+        alice.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"written by the replica".to_vec(),
         "an archive's prekey secrets are adopted into the documents that need them"
     );
@@ -629,14 +640,18 @@ async fn concurrent_rotations_at_a_shared_leaf_converge() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        alice.try_decrypt_content(design_doc, &after).await?,
+        alice
+            .try_decrypt_content(design_doc, &after)
+            .await?
+            .plaintext,
         b"from bob".to_vec(),
         "alice reads past the merged leaf"
     );
     assert_eq!(
         alice_replica
             .try_decrypt_content(design_doc, &after)
-            .await?,
+            .await?
+            .plaintext,
         b"from bob".to_vec(),
         "and so does the replica"
     );

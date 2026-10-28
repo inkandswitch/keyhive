@@ -34,7 +34,7 @@ async fn a_reader_reads_what_a_member_wrote() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        bob.try_decrypt_content(design_doc, &ct).await?,
+        bob.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"hello world".to_vec()
     );
     Ok(())
@@ -96,7 +96,7 @@ match bob.add_member(carol.id(), design_doc, Read).await.map_err(TestError::from
   leaving it to surface later as a failing decryption.
 
 Decryption does not benefit in this way. Decrypt via the Keyhive API:
-`bob.try_decrypt_content(design_doc, &ct)`.
+`bob.try_decrypt_content(design_doc, &ct)`, whose `.plaintext` is the content.
 
 Causal decryption is the exception, because the walk reads ancestors out of the
 instance's own ciphertext store. So a reader has to be given the content first:

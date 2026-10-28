@@ -61,7 +61,7 @@ async fn a_group_member_reaches_the_groups_documents() -> Result<()> {
         .await?;
     ctx.sync_all_unsent().await?;
     assert_eq!(
-        bob.try_decrypt_content(design_doc, &ct).await?,
+        bob.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"through the group".to_vec(),
         "bob reads it through the group, not only reaches it"
     );

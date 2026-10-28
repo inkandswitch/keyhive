@@ -64,7 +64,15 @@ Trade-offs:
 
 ## Content
 
-Content is encrypted in chunks of 64 KiB, so a block of any size streams through bounded memory, and any byte range decrypts by reading only the chunks that cover it. Each block's application key derives two subkeys:
+A block's body is its ancestors' content refs and keys, then its payload:
+
+```
+body = count ‖ ( content_ref ‖ key:32 )* ‖ payload
+```
+
+The refs are in ascending order of their encodings, each once, and a block with no ancestors has a count of zero, so every block has one body format.
+
+The body is encrypted in chunks of 64 KiB, so a block of any size streams through bounded memory, and any byte range of the body decrypts by reading only the chunks that cover it. A range of the payload lies after the ancestors, so a reader locates it only after decrypting the chunks that contain them, usually just the first. Each block's application key derives two subkeys:
 
 ```
 enc_key   = derive_key("/keyhive/content/encryption-key/v1/2026-10-31", app_key)
@@ -75,12 +83,12 @@ nonce_i = BLAKE3_keyed(nonce_key, aad_i ‖ chunk_i)[0..24]
 ct_i    = XChaCha20-Poly1305(enc_key, nonce_i, aad_i, chunk_i)
 ```
 
-The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ group_secret_hash ‖ group_secret_origin_hash ‖ ( nonce_i ‖ ct_i )+`. Every chunk but the last is full; the last is empty only when the whole plaintext is, so each plaintext has one chunking.
+The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ group_secret_hash ‖ group_secret_origin_hash ‖ ( nonce_i ‖ ct_i )+`. Every chunk but the last is full; the last is empty only when the whole body is, so each body has one chunking.
 
 - _Commitment per chunk._ The reader recomputes each `nonce_i` from what the chunk decrypts to and rejects a mismatch. Causal encryption hands ancestors' keys out in envelopes that any writer composes, so without the check one ciphertext could decrypt under its real key and under a key an envelope names, to two histories.
 - _Bound to its header and document._ The header digest and `doc_id` are in every chunk's associated data, so editing a header field or reading a block as part of another document fails authentication.
 - _Order and length._ The index and final flag are in each chunk's associated data, so reordering chunks, truncating at a chunk boundary, or appending a chunk fails authentication.
-- _Overhead._ 132 bytes of header and 40 bytes per chunk (nonce and tag): 0.06% at 64 KiB.
+- _Overhead._ 132 bytes of header, the ancestors (a varint count, one byte when there are none, then each one's encoded ref and 32-byte key), and 40 bytes per chunk (nonce and tag), which is 0.06% of a full chunk.
 
 ## Key Derivation in BeeKEM
 

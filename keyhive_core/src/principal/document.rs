@@ -21,15 +21,15 @@ use beekem::{
 };
 use future_form::FutureForm;
 use id::DocumentId;
-use keyhive_codec::traits::{Decode, Encode};
+use keyhive_codec::{
+    error::DecodeError,
+    traits::{Decode, Encode},
+};
 use keyhive_content::{
     encrypted::{ContentDecryptError, EncryptedContent},
-    envelope::Envelope,
+    envelope::{Envelope, OpenEnvelopeError},
     reference::ContentRef,
-    store::{
-        CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
-        ErrorReason,
-    },
+    store::{CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{
     identifier::Identifier,
@@ -210,9 +210,9 @@ impl<T: ContentRef> DocumentState<T> {
         self.known_decryption_keys.get(content_ref).copied()
     }
 
-    /// Encrypt `content`, returning it with the key it is encrypted under. The third
-    /// element is the update this write had to make, and the key pair it sampled for our
-    /// key in the CGKA group, if we had no current key.
+    /// Encrypt `content` with the keys of its `ancestors`, returning it with the key it is
+    /// encrypted under. The third element is the update this write had to make and the key
+    /// pair it sampled for our key in the CGKA group, if we had no current key.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed<
         F: FutureForm,
@@ -223,6 +223,7 @@ impl<T: ContentRef> DocumentState<T> {
         content_ref: &T,
         content: &[u8],
         pred_refs: &[T],
+        ancestors: &[(T, SymmetricKey)],
         signer: &S,
         csprng: &mut R,
     ) -> Result<
@@ -244,49 +245,50 @@ impl<T: ContentRef> DocumentState<T> {
             .insert(content_ref.clone(), application_secret_key);
 
         let encrypted_content = app_secret
-            .try_encrypt(self.doc_id().into(), content)
+            .try_encrypt(self.doc_id().into(), ancestors, content)
             .map_err(EncryptError::EncryptionFailed)?;
 
         Ok((encrypted_content, application_secret_key, rotation))
     }
 
+    /// Decrypt content with its key from this document's CGKA group.
     #[instrument(skip_all)]
-    pub fn try_decrypt_content<P: Decode>(
+    pub fn try_decrypt_content<P>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
-    ) -> Result<Vec<u8>, DecryptError> {
+    ) -> Result<Envelope<T, Vec<u8>>, DecryptError> {
         self.try_decrypt_content_keyed(encrypted_content)
-            .map(|(plaintext, _key)| plaintext)
+            .map(|(envelope, _key)| envelope)
     }
 
-    /// Decrypt content and return the application secret that was used.
+    /// [`Self::try_decrypt_content`], also returning the application secret
+    /// that was used.
     #[instrument(skip_all)]
-    pub fn try_decrypt_content_keyed<P: Decode>(
+    pub fn try_decrypt_content_keyed<P>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
-    ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
+    ) -> Result<(Envelope<T, Vec<u8>>, SymmetricKey), DecryptError> {
         let decrypt_key = self
             .cgka
             .decryption_key_for(encrypted_content)
             .map_err(|_| DecryptError::KeyNotFound)?;
         self.try_decrypt_content_with(encrypted_content, decrypt_key)
+            .map(|envelope| (envelope, decrypt_key))
     }
 
     /// Decrypt content with `decrypt_key`, its key from this document's CGKA
-    /// group, and return that key.
-    pub(crate) fn try_decrypt_content_with<P: Decode>(
+    /// group, and return its envelope. Records the key as known.
+    pub(crate) fn try_decrypt_content_with<P>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
         decrypt_key: SymmetricKey,
-    ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
-        let plaintext = encrypted_content
-            .try_decrypt(decrypt_key, self.doc_id().into())
-            .map_err(DecryptError::from)?;
+    ) -> Result<Envelope<T, Vec<u8>>, DecryptError> {
+        let envelope = Envelope::open(encrypted_content, decrypt_key, self.doc_id().into())?;
 
         self.known_decryption_keys
             .insert(encrypted_content.content_ref.clone(), decrypt_key);
 
-        Ok((plaintext, decrypt_key))
+        Ok(envelope)
     }
 
     #[instrument(skip_all)]
@@ -300,16 +302,7 @@ impl<T: ContentRef> DocumentState<T> {
         store: C,
     ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<F, T, P, C>>
 where {
-        let raw_entrypoint = self.try_decrypt_content(encrypted_content)?;
-
-        let entrypoint_envelope = Envelope::<T, Vec<u8>>::decode(raw_entrypoint.as_slice())
-            .map_err(|e| CausalDecryptionError::<F, T, P, C> {
-                progress: Box::new(CausalDecryptionState::new()),
-                cannot: HashMap::from_iter([(
-                    encrypted_content.content_ref.clone(),
-                    ErrorReason::DeserializationFailed(e),
-                )]),
-            })?;
+        let entrypoint_envelope = self.try_decrypt_content(encrypted_content)?;
 
         let mut to_decrypt: Vec<(Arc<EncryptedContent<P, T>>, SymmetricKey)> = vec![];
         let mut not_served = HashMap::new();
@@ -585,6 +578,20 @@ pub enum DecryptError {
 
     #[error("Unable to build SIV due to IO error: {0}")]
     IoErrorOnSivBuild(#[from] std::io::Error),
+
+    /// The content decrypted, but is not an envelope. Only a writer with
+    /// its key can produce this.
+    #[error("the content is not an envelope: {0}")]
+    MalformedEnvelope(DecodeError),
+}
+
+impl From<OpenEnvelopeError> for DecryptError {
+    fn from(err: OpenEnvelopeError) -> Self {
+        match err {
+            OpenEnvelopeError::Decrypt(e) => e.into(),
+            OpenEnvelopeError::Decode(e) => DecryptError::MalformedEnvelope(e),
+        }
+    }
 }
 
 impl From<ContentDecryptError> for DecryptError {
