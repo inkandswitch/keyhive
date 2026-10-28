@@ -1,128 +1,28 @@
-//! Causal encryption: content in an envelope that contains its ancestors' keys
-//! and decryption that traverses back through them over the application's own
-//! storage.
+//! Causal decryption over the application's own storage: the `load` store
+//! and the traversal behind `Keyhive.tryCausalDecrypt` and
+//! `Keyhive.tryCausalDecryptFrom`.
 
 use super::{
-    ancestor::{JsAncestor, JsAncestorRef},
-    change_id::JsChangeId,
+    ancestor::JsAncestor, causal_decryption::JsCausalDecryption, change_id::JsChangeId,
+    decrypt_failure::JsDecryptFailure, decrypted_content::JsDecryptedContent,
     document_id::JsDocumentId,
-    encrypted::JsEncrypted,
-    encrypted_keyed::JsEncryptedKeyed,
-    keyhive::{JsDecryptError, JsEncryptError, JsKeyhive},
 };
-use crate::macros::init_span;
-use from_js_ref::FromJsRef;
 use future_form::{FutureForm, Local};
 use keyhive_codec::traits::Decode;
 use keyhive_content::{
     application_secret::GroupSecretOrigin,
     encrypted::EncryptedContent,
-    envelope::Envelope,
     store::{CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{digest::Digest, symmetric_key::SymmetricKey};
-use std::{cell::RefCell, convert::Infallible, rc::Rc, sync::Arc};
+use std::{cell::RefCell, convert::Infallible, sync::Arc};
 use thiserror::Error;
 use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
 
-#[wasm_bindgen(js_class = Keyhive)]
-impl JsKeyhive {
-    /// Encrypt `content` in an envelope that contains `ancestors`, so a reader
-    /// who opens it can open them too. The ancestors are also the content's
-    /// predecessors, in the order given. Read it back with `tryCausalDecrypt`.
-    ///
-    /// Returns the content with its own key, for a later write to contain.
-    #[wasm_bindgen(js_name = tryEncryptWithAncestors)]
-    pub async fn try_encrypt_with_ancestors(
-        &self,
-        doc_id: &JsDocumentId,
-        content_ref: &JsChangeId,
-        ancestors: Vec<JsAncestorRef>,
-        content: &[u8],
-    ) -> Result<JsEncryptedKeyed, JsEncryptError> {
-        init_span!("JsKeyhive::try_encrypt_with_ancestors");
-        let ancestors: Vec<_> = ancestors
-            .iter()
-            .map(|r| JsAncestor::from_js_ref(r).into_parts())
-            .collect();
-        let (inner, key) = self
-            .0
-            .try_encrypt_content_with_ancestors(doc_id.0, content_ref, &ancestors, content)
-            .await?;
-        Ok(JsEncryptedKeyed {
-            inner,
-            application_secret: key.as_slice().to_vec(),
-        })
-    }
-
-    /// Decrypt `encrypted`, written by `tryEncryptWithAncestors`, with this
-    /// keyhive's key for it, then the ancestors its envelope lists, and theirs
-    /// in turn, as `tryCausalDecryptFrom` does. `encrypted` is the first block
-    /// in `complete()`.
-    ///
-    /// Throws a `DecryptError` if this keyhive cannot decrypt `encrypted` and
-    /// an `Error` if its plaintext is not an envelope. Failures among its
-    /// ancestors are reported in `failed()`, not thrown.
-    #[wasm_bindgen(js_name = tryCausalDecrypt)]
-    pub async fn try_causal_decrypt(
-        &self,
-        doc_id: &JsDocumentId,
-        encrypted: &JsEncrypted,
-        load: js_sys::Function,
-    ) -> Result<JsCausalDecryption, JsValue> {
-        init_span!("JsKeyhive::try_causal_decrypt");
-        let (plaintext, key) = self
-            .0
-            .try_decrypt_content_keyed(doc_id.0, &encrypted.0)
-            .await
-            .map_err(JsDecryptError::from)?;
-        let envelope = Envelope::<JsChangeId, Vec<u8>>::decode(&plaintext)
-            .map_err(|e| JsError::new(&format!("the content is not an envelope: {e}")))?;
-        let start: Vec<_> = envelope.ancestors.into_iter().collect();
-        let mut decryption = causal_decrypt(doc_id, &start, load).await;
-        decryption.complete.insert(
-            0,
-            JsDecryptedContent {
-                content_ref: encrypted.0.content_ref.clone(),
-                content: envelope.plaintext.into(),
-                key,
-            },
-        );
-        Ok(decryption)
-    }
-
-    /// Decrypt each of `start` with its key, then the ancestors its envelope
-    /// lists, and theirs in turn. `start` is the ancestors of a block already
-    /// read, a block's own `ChangeId` and key, or the `next()` of an earlier
-    /// decryption.
-    ///
-    /// `load` is called with a `ChangeId` and returns that block's bytes
-    /// (`Encrypted.toBytes()`), a promise of them, or `undefined` or `null` if
-    /// the application does not have it. A block it does not have is reported
-    /// in `next()`, so returning `undefined` for content already read stops the
-    /// traversal there. If `load` throws, rejects, returns anything else, or
-    /// returns bytes that are not this block's encrypted content, the block is
-    /// reported in both `next()` and `failed()`. `load` is called once for each
-    /// listing of a block, so a block that several blocks list can be loaded
-    /// more than once. This never throws.
-    #[wasm_bindgen(js_name = tryCausalDecryptFrom)]
-    pub async fn try_causal_decrypt_from(
-        &self,
-        doc_id: &JsDocumentId,
-        start: Vec<JsAncestorRef>,
-        load: js_sys::Function,
-    ) -> JsCausalDecryption {
-        init_span!("JsKeyhive::try_causal_decrypt_from");
-        let start: Vec<_> = start
-            .iter()
-            .map(|r| JsAncestor::from_js_ref(r).into_parts())
-            .collect();
-        causal_decrypt(doc_id, &start, load).await
-    }
-}
-
-async fn causal_decrypt(
+/// Decrypt each of `start` with its key, then the ancestors each lists, and
+/// theirs in turn, reading blocks through `load`.
+pub(crate) async fn causal_decrypt(
     doc_id: &JsDocumentId,
     start: &[(JsChangeId, SymmetricKey)],
     load: js_sys::Function,
@@ -176,93 +76,6 @@ async fn causal_decrypt(
                 reason,
             })
             .collect(),
-    }
-}
-
-/// What a causal decryption read, what it did not reach, and what it could
-/// not read.
-#[wasm_bindgen(js_name = CausalDecryption)]
-#[derive(Debug)]
-pub struct JsCausalDecryption {
-    complete: Vec<JsDecryptedContent>,
-    next: Vec<JsAncestor>,
-    failed: Vec<JsDecryptFailure>,
-}
-
-#[wasm_bindgen(js_class = CausalDecryption)]
-impl JsCausalDecryption {
-    /// Each block read. Their order is not causal.
-    pub fn complete(&self) -> Vec<JsDecryptedContent> {
-        self.complete.clone()
-    }
-
-    /// Blocks `load` did not provide, each with the key that opens it.
-    pub fn next(&self) -> Vec<JsAncestor> {
-        self.next.clone()
-    }
-
-    /// Blocks that could not be read, because `load` failed for the block, the
-    /// key it was provided does not open it, or its plaintext is not an
-    /// envelope. A block `load` failed for is also in `next()` to retry. A
-    /// block can be listed more than once, and can also be in `complete()`: if
-    /// it was provided two keys and one was wrong, or if `load` failed for it
-    /// once and gave it another time.
-    pub fn failed(&self) -> Vec<JsDecryptFailure> {
-        self.failed.clone()
-    }
-}
-
-/// One block a causal decryption read.
-#[wasm_bindgen(js_name = DecryptedContent)]
-#[derive(Debug, Clone)]
-pub struct JsDecryptedContent {
-    content_ref: JsChangeId,
-    content: Rc<[u8]>,
-    key: SymmetricKey,
-}
-
-#[wasm_bindgen(js_class = DecryptedContent)]
-impl JsDecryptedContent {
-    /// The block's `ChangeId`.
-    #[wasm_bindgen(getter, js_name = contentRef)]
-    pub fn content_ref(&self) -> JsChangeId {
-        self.content_ref.clone()
-    }
-
-    /// Copies the content out of wasm memory on every call.
-    pub fn content(&self) -> Vec<u8> {
-        self.content.to_vec()
-    }
-
-    /// The block's 32-byte application secret, for a descendant to contain.
-    /// Treat as secret: do not log or persist unencrypted.
-    #[wasm_bindgen(getter, js_name = applicationSecret)]
-    pub fn application_secret(&self) -> Vec<u8> {
-        self.key.as_slice().to_vec()
-    }
-}
-
-/// A block a causal decryption could not read.
-#[wasm_bindgen(js_name = DecryptFailure)]
-#[derive(Debug, Clone)]
-pub struct JsDecryptFailure {
-    content_ref: JsChangeId,
-    reason: String,
-}
-
-#[wasm_bindgen(js_class = DecryptFailure)]
-impl JsDecryptFailure {
-    /// The `ChangeId` of the block that could not be read.
-    #[wasm_bindgen(getter, js_name = contentRef)]
-    pub fn content_ref(&self) -> JsChangeId {
-        self.content_ref.clone()
-    }
-
-    /// Why, as text for a person to read. Its wording may change, so do not
-    /// match on it.
-    #[wasm_bindgen(getter)]
-    pub fn reason(&self) -> String {
-        self.reason.clone()
     }
 }
 
@@ -370,7 +183,10 @@ impl LoadError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::js::{ciphertext_store::JsCiphertextStore, signer::JsSigner};
+    use crate::js::{
+        ciphertext_store::JsCiphertextStore, encrypted::JsEncrypted, keyhive::JsKeyhive,
+        signer::JsSigner,
+    };
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen_test::*;
 
