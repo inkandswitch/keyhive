@@ -101,7 +101,7 @@ app_key = derive_key("/keyhive/content/application-key/v1/2026-10-31",
                      group_secret ‖ Digest<PredecessorRefs> ‖ content_ref)
 ```
 
-`Digest<PredecessorRefs>` is a kinded hash, BLAKE3 over `"KH" ‖ 'H' ‖ 0x00 ‖ count ‖ refs`, and the content ref is its canonical, self-delimiting encoding. Each block therefore gets a distinct key bound to the CGKA epoch and to its causal position; see [`causal_encryption.md`](./causal_encryption.md). The application key is what a causal envelope hands to a successor's readers.
+`Digest<PredecessorRefs>` is a kinded hash, BLAKE3 over `"KH" ‖ 'H' ‖ 0x00 ‖ count ‖ refs`, with each distinct ref once, in ascending order of their encodings, and the content ref is its canonical, self-delimiting encoding. Each block therefore gets a distinct key bound to the CGKA epoch and to its causal position; see [`causal_encryption.md`](./causal_encryption.md). The application key is what a causal envelope hands to a successor's readers.
 
 Each update also encrypts the root secrets of earlier updates under a key derived from its own root secret. The BeeKEM tree ID is the associated data (authenticated, and an input to the nonce), and opening checks the synthetic nonce:
 

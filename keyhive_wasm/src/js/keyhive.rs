@@ -284,7 +284,7 @@ impl JsKeyhive {
 
     /// Encrypt `content` in an envelope that contains `ancestors`, so a reader
     /// who opens it can open them too. The ancestors are also the content's
-    /// predecessors, in the order given. Read it back with `tryCausalDecrypt`.
+    /// predecessors, in any order. Read it back with `tryCausalDecrypt`.
     ///
     /// Returns the content with its own key, for a later write to contain.
     #[wasm_bindgen(js_name = tryEncryptWithAncestors)]
