@@ -1,7 +1,9 @@
 pub mod add_member_error;
 pub mod all_agent_events;
+pub mod ancestor;
 pub mod archive;
 pub mod capability;
+pub mod causal;
 pub mod cgka_operation;
 pub mod change_id;
 pub mod ciphertext_store;

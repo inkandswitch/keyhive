@@ -18,8 +18,7 @@ use crate::{
         active::{Active, ImportPrekeySecretsError},
         document::{
             id::DocumentId, AddMemberError, DecryptError, DocCausalDecryptionError, Document,
-            DocumentState, EncryptError, EncryptInEnvelopeError, EncryptedContentWithUpdate,
-            GenerateDocError,
+            DocumentState, EncryptError, EncryptedContentWithUpdate, GenerateDocError,
         },
         group::{id::GroupId, Group, RevokeMemberError},
         individual::{
@@ -55,6 +54,7 @@ use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_content::{
     encrypted::EncryptedContent,
+    envelope::Envelope,
     store::{CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{
@@ -1635,8 +1635,9 @@ where
             .0)
     }
 
-    /// Encrypt `content` into `doc` in an [`Envelope`](keyhive_content::envelope::Envelope),
-    /// listing its ancestors and carrying the keys to open them.
+    /// Encrypt `content` into `doc` in an [`Envelope`](keyhive_content::envelope::Envelope)
+    /// that lists each of `pred_refs` with the key this document has for it. Fails with
+    /// [`EnvelopeError::NoKeyForAncestor`] if it has none.
     ///
     /// Read it back with [`Keyhive::try_causal_decrypt_content`], which unwraps the envelope.
     /// [`Keyhive::try_decrypt_content`] returns the serialized envelope instead.
@@ -1648,37 +1649,57 @@ where
         content_ref: &T,
         pred_refs: &[T],
         content: &[u8],
-    ) -> Result<EncryptedContentWithUpdate<T>, EnvelopeError<T>>
-where {
-        let writing = self
-            .prepare_to_write(doc)
-            .await
-            .map_err(EncryptInEnvelopeError::from)?;
-        let encrypted: Result<_, EnvelopeError<T>> = async {
+    ) -> Result<EncryptedContentWithUpdate<T>, EnvelopeError<T>> {
+        let ancestors = {
             let handle = self.document_by_id(doc).await?;
-            let signer = { self.active.signer.clone() };
-            let mut locked_csprng = self.csprng.lock().await;
-            let mut locked = handle.lock().await;
-            self.settle_for_write(doc, &mut locked)
-                .await
-                .map_err(EncryptInEnvelopeError::from)?;
-            Ok(locked
-                .try_encrypt_content_in_envelope(
-                    content_ref,
-                    content,
-                    pred_refs,
-                    &signer,
-                    &mut *locked_csprng,
-                )
-                .await?)
-        }
-        .await;
-        self.finish_write(writing).await;
-        let (encrypted_content, rotation) = encrypted?;
-        Ok(EncryptedContentWithUpdate {
-            encrypted_content,
-            update_op: self.record_rotation(rotation).await,
-        })
+            let locked = handle.lock().await;
+            pred_refs
+                .iter()
+                .map(|pred| {
+                    locked
+                        .known_decryption_key(pred)
+                        .map(|key| (pred.clone(), key))
+                        .ok_or_else(|| EnvelopeError::NoKeyForAncestor(pred.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        Ok(self
+            .try_encrypt_content_with_ancestors(doc, content_ref, &ancestors, content)
+            .await?
+            .0)
+    }
+
+    /// Encrypt `content` into `doc` in an [`Envelope`] that contains `ancestors`. Each entry
+    /// in `ancestors` is the ancestor's content ref and the key that opens it. A reader who
+    /// opens the result can then open each ancestor and traverse back from there with
+    /// [`CiphertextStoreExt::try_causal_decrypt_from_keys`].
+    ///
+    /// The ancestors are also the content's predecessors, in the order given. If a content
+    /// ref appears more than once, it is a predecessor each time, and the envelope keeps its
+    /// last key.
+    ///
+    /// Returns the application secret the content was encrypted under. A later write passes
+    /// it in `ancestors`.
+    #[instrument(skip_all)]
+    pub async fn try_encrypt_content_with_ancestors(
+        &self,
+        doc: DocumentId,
+        content_ref: &T,
+        ancestors: &[(T, SymmetricKey)],
+        content: &[u8],
+    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
+        let pred_refs: Vec<T> = ancestors.iter().map(|(pred, _)| pred.clone()).collect();
+        let envelope = Envelope {
+            plaintext: content.to_vec(),
+            ancestors: ancestors.iter().cloned().collect(),
+        };
+        self.try_encrypt_content_keyed(
+            doc,
+            content_ref,
+            &pred_refs,
+            &envelope.encode().into_bytes(),
+        )
+        .await
     }
 
     /// Encrypt `content` into `doc`. Returns the application secret it was
@@ -4021,14 +4042,17 @@ impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
     }
 }
 
-/// Why content could not be written into an [`Envelope`](keyhive_content::envelope::Envelope).
+/// Why content could not be written into an [`Envelope`].
 #[derive(Debug, Error)]
 pub enum EnvelopeError<T: ContentRef> {
     #[error(transparent)]
     NotFound(#[from] NotFound),
 
+    #[error("no key for ancestor {0:?}")]
+    NoKeyForAncestor(T),
+
     #[error(transparent)]
-    Encrypt(#[from] EncryptInEnvelopeError<T>),
+    Encrypt(#[from] EncryptContentError),
 }
 
 /// Why an archive could not be loaded.
