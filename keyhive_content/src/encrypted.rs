@@ -23,12 +23,12 @@ use crate::{
     application_secret::{GroupSecret, GroupSecretOrigin},
     reference::ContentRef,
 };
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305, XNonce};
 use core::{convert::Infallible, marker::PhantomData};
 use keyhive_codec::{
     error::DecodeError,
-    prefixed::encode_list,
+    prefixed::encode_len,
     traits::{Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::{
@@ -261,10 +261,14 @@ impl<'a, T, Cr: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
 pub struct PredecessorRefs<Cr>(Infallible, PhantomData<Cr>);
 
 impl<Cr: ContentRef> PredecessorRefs<Cr> {
-    /// The digest of `refs`, in the order given: `count ‖ ref*`.
+    /// The digest of `refs` as a set: `count ‖ ref*`, with each distinct ref
+    /// once, in ascending order of its encoding. Neither the order a writer
+    /// lists them in nor a repeat changes the block's key.
     pub fn digest(refs: &[Cr]) -> Digest<PredecessorRefs<Cr>> {
+        let encoded: BTreeSet<Vec<u8>> = refs.iter().map(|r| r.encode().into_bytes()).collect();
         let mut bytes = Vec::new();
-        encode_list(refs, &mut bytes);
+        encode_len(encoded.len(), &mut bytes);
+        encoded.iter().for_each(|r| bytes.extend_from_slice(r));
         Digest::of_bytes(&bytes)
     }
 }
@@ -604,8 +608,28 @@ mod tests {
             });
     }
 
+    #[test]
+    fn the_predecessor_digest_hashes_the_refs_in_ascending_order() {
+        assert_eq!(
+            PredecessorRefs::digest(&[[7u8; 32], [3; 32]])
+                .raw
+                .to_hex()
+                .as_str(),
+            "f7e5bf5486ee0006ccd8280bb1f93abb14c29172b7eb3123d69f8cffae807041"
+        );
+    }
+
+    #[test]
+    fn a_repeated_predecessor_is_hashed_once() {
+        assert_eq!(
+            PredecessorRefs::digest(&[[3u8; 32], [3; 32]]),
+            PredecessorRefs::digest(&[[3u8; 32]])
+        );
+    }
+
     /// Pins the v1 derivations: a change here changes every ciphertext. The
-    /// predecessor digest is BLAKE3 over `"KH" ‖ 'H' ‖ 0x00 ‖ count ‖ refs`.
+    /// predecessor digest is BLAKE3 over `"KH" ‖ 'H' ‖ 0x00 ‖ count ‖ refs`,
+    /// with each distinct ref once, sorted.
     #[test]
     fn known_answer() {
         let content = encrypt(b"keyhive");
