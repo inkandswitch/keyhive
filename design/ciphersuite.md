@@ -2,10 +2,10 @@
 
 | Feature            | Algorithm                                                  | Where                                              |
 |--------------------|------------------------------------------------------------|----------------------------------------------------|
-| Hash / KDF         | [BLAKE3] (plain hash, XOF, and `derive_key` modes)         | `keyhive_crypto::digest`, `siv`, `separable`, `beekem::pcs_key` |
+| Hash / KDF         | [BLAKE3] (plain hash, XOF, and `derive_key` modes)         | `keyhive_crypto::digest`, `siv`, `separable`, `beekem::pcs_key`, `keyhive_content::application_secret` |
 | Signatures         | [Ed25519] (RFC 8032, via `ed25519-dalek`)                  | `keyhive_crypto::signed`, `verified`, `id`         |
 | Key exchange       | [X25519] (RFC 7748, via `x25519-dalek`)                    | `keyhive_crypto::share_key`, BeeKEM path secrets   |
-| Symmetric AEAD     | [XChaCha20-Poly1305] with a BLAKE3-derived synthetic nonce | `keyhive_crypto::symmetric_key`, `siv`; `beekem::encrypted` (content) |
+| Symmetric AEAD     | [XChaCha20-Poly1305] with a BLAKE3-derived synthetic nonce | `keyhive_crypto::symmetric_key`, `siv`; `keyhive_content::encrypted` (content) |
 | Content addressing | BLAKE3, 32-byte output, typed as `Digest<T>`               | `keyhive_crypto::digest`                           |
 
 All identifiers in Keyhive (individuals, groups, documents) are Ed25519 verifying keys. Read access comes from X25519 "share keys" (prekeys and BeeKEM leaf/inner-node keys). Content, BeeKEM node secrets, and the earlier root secrets an update wraps are encrypted with XChaCha20-Poly1305. The key is derived from an X25519 exchange (BeeKEM node secrets), from a BeeKEM root secret (wrapped root secrets), or from a BeeKEM application secret (document content).
@@ -75,7 +75,7 @@ nonce_i = BLAKE3_keyed(nonce_key, aad_i ‖ chunk_i)[0..24]
 ct_i    = XChaCha20-Poly1305(enc_key, nonce_i, aad_i, chunk_i)
 ```
 
-The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ pcs_key_hash ‖ pcs_update_op ‖ ( nonce_i ‖ ct_i )+`. Every chunk but the last is full; the last is empty only when the whole plaintext is, so each plaintext has one chunking.
+The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ group_secret_hash ‖ group_secret_origin_hash ‖ ( nonce_i ‖ ct_i )+`. Every chunk but the last is full; the last is empty only when the whole plaintext is, so each plaintext has one chunking.
 
 - _Commitment per chunk._ The reader recomputes each `nonce_i` from what the chunk decrypts to and rejects a mismatch. Causal encryption hands ancestors' keys out in envelopes that any writer composes, so without the check one ciphertext could decrypt under its real key and under a key an envelope names, to two histories.
 - _Bound to its header and document._ The header digest and `doc_id` are in every chunk's associated data, so editing a header field or reading a block as part of another document fails authentication.
@@ -94,11 +94,11 @@ sealed = try_seal(key, secret, aad = tree_id ‖ encrypter_pk ‖ paired_pk)
 
 The derivation binds both public keys, as HPKE binds its shared secret to them; they go in byte order, so both sides derive the same key. An add's invitation seals root secrets to the invitee the same way, under `/keyhive/cgka/invitation-key/v1/2026-10-31`: the sealed type picks the context (`beekem::encrypted::Sealable`), so a node secret never opens as an invitation's root secret, or the reverse, even between the same two keys. The tree ID binds the secret to its tree: share keys can appear in several trees, since prekeys are shared across documents, and without it a secret sealed in one would open in another. The public keys in the associated data bind it to who encrypted for whom. Opening checks the synthetic nonce, so a node secret is committed to one key. `EncryptedSecret` travels as `sealed_len ‖ sealed ‖ paired_pk`, and a sealed blob shorter than its nonce and tag does not decode.
 
-A block's application key is derived from the root secret (the `PcsKey`), its predecessors and its content ref:
+A block's application key is derived from the group secret (BeeKEM's root secret, `GroupSecret` in keyhive_content), its predecessors and its content ref:
 
 ```
 app_key = derive_key("/keyhive/content/application-key/v1/2026-10-31",
-                     root_secret ‖ Digest<PredecessorRefs> ‖ content_ref)
+                     group_secret ‖ Digest<PredecessorRefs> ‖ content_ref)
 ```
 
 `Digest<PredecessorRefs>` is a kinded hash, BLAKE3 over `"KH" ‖ 'H' ‖ 0x00 ‖ count ‖ refs`, and the content ref is its canonical, self-delimiting encoding. Each block therefore gets a distinct key bound to the CGKA epoch and to its causal position; see [`causal_encryption.md`](./causal_encryption.md). The application key is what a causal envelope hands to a successor's readers.

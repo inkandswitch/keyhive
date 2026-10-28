@@ -100,7 +100,8 @@ impl<F: FutureForm, T: ContentRef + Send + Sync> CgkaListener<F> for Log<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{keyhive::Keyhive, store::ciphertext::memory::MemoryCiphertextStore};
+    use crate::keyhive::Keyhive;
+    use keyhive_content::store::memory::MemoryCiphertextStore;
     use keyhive_crypto::signer::memory::MemorySigner;
     use keyline::power::Power;
     use keyline_memory::MemoryKeyline;

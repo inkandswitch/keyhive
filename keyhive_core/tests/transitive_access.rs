@@ -1,5 +1,6 @@
 use beekem::operation::CitationId;
 use future_form::Sendable;
+use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_core::{
     event::static_event::StaticEvent,
     keyhive::Keyhive,
@@ -8,7 +9,6 @@ use keyhive_core::{
         document::id::DocumentId,
         individual::{id::IndividualId, op::KeyOp, IndividualState},
     },
-    store::ciphertext::memory::MemoryCiphertextStore,
     test_utils::{make_simple_keyhive, Hive, TestContext},
 };
 use keyhive_crypto::{

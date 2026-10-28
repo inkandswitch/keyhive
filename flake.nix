@@ -254,12 +254,12 @@
           # dependency that uses `std` still compiles here, and only a target
           # without `std` (e.g., thumbv7em-none-eabi) rejects it.
           ci-no-std = mkCheck "ci-no-std" ''
-            cargo check -p beekem -p keyhive_codec -p keyhive_crypto -p keyline -p keyline_memory --no-default-features
+            cargo check -p beekem -p keyhive_codec -p keyhive_content -p keyhive_crypto -p keyline -p keyline_memory --no-default-features
             # Browser Wasm. This target ships `std`, so it does not prove
             # no_std either. It does reject `getrandom` without its `js`
             # feature, which is what kept `keyline` off Wasm until the
             # workspace turned off `chacha20poly1305`'s default features.
-            cargo check -p beekem -p keyhive_codec -p keyhive_crypto -p keyline -p keyline_memory --no-default-features --target wasm32-unknown-unknown
+            cargo check -p beekem -p keyhive_codec -p keyhive_content -p keyhive_crypto -p keyline -p keyline_memory --no-default-features --target wasm32-unknown-unknown
             # Unit tests, and every conformance scenario against MemoryKeyline,
             # on the no_std crate code: the harness is std, the crates never
             # link it.

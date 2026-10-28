@@ -192,9 +192,9 @@ async fn ingesting_a_strangers_archive_adds_them_as_an_individual() -> Result<()
 
 #[tokio::test]
 async fn an_archive_does_not_load_with_another_identitys_signer() -> Result<()> {
+    use keyhive_content::store::memory::MemoryCiphertextStore;
     use keyhive_core::{
-        keyhive::Keyhive, listener::no_listener::NoListener,
-        store::ciphertext::memory::MemoryCiphertextStore, test_utils::KeylineStore,
+        keyhive::Keyhive, listener::no_listener::NoListener, test_utils::KeylineStore,
     };
     use keyhive_crypto::signer::memory::MemorySigner;
     use std::sync::Arc;

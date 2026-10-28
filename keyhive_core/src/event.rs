@@ -9,12 +9,12 @@ use crate::{
         document::id::DocumentId,
         individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
     },
-    store::ciphertext::CiphertextStore,
 };
-use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
+use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use future_form::FutureForm;
+use keyhive_content::{encrypted::EncryptedContent, store::CiphertextStore};
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
@@ -71,7 +71,7 @@ impl<T: ContentRef> Event<T> {
                 let op_digest = op.digest();
                 let doc_id: DocumentId = (*op.payload().doc_id()).into();
                 let more = ciphertext_store
-                    .get_ciphertext_by_pcs_update(&op_digest)
+                    .get_ciphertext_by_group_secret_origin(&op_digest.coerce())
                     .await?;
 
                 acc.entry(doc_id).or_default().extend(more.into_iter());
@@ -125,15 +125,14 @@ impl<T: ContentRef> Dupe for Event<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        principal::individual::id::IndividualId, store::ciphertext::memory::MemoryCiphertextStore,
-    };
+    use crate::principal::individual::id::IndividualId;
     use beekem::{
         id::{MemberId, TreeId},
         operation::CgkaChange,
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
+    use keyhive_content::store::memory::MemoryCiphertextStore;
     use keyhive_crypto::{
         identifier::Identifier, share_key::ShareKey, signer::memory::MemorySigner,
         symmetric_key::SymmetricKey, verifiable::Verifiable, verified::Verified,
@@ -239,7 +238,7 @@ mod tests {
             [1u8; 32],
             [1u8; 32].into(),
             [1u8; 32].into(),
-            hash1,
+            hash1.coerce(),
             &[4, 5, 6],
         )?);
 
@@ -249,7 +248,7 @@ mod tests {
             [2u8; 32],
             [2u8; 32].into(),
             [2u8; 32].into(),
-            hash2,
+            hash2.coerce(),
             &[1, 2, 3],
         )?);
 
@@ -265,7 +264,7 @@ mod tests {
                 [3u8; 32],
                 [3u8; 32].into(),
                 [3u8; 32].into(),
-                hash3,
+                hash3.coerce(),
                 &[0],
             )?))
             .await;

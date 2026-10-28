@@ -11,13 +11,13 @@ use crate::{
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::document::AddMemberError,
-    store::ciphertext::{CiphertextStore, CiphertextStoreExt},
     update::{AddMemberUpdate, RevokeMemberUpdate},
 };
 use beekem::error::CgkaError;
 use future_form::FutureForm;
 use id::GroupId;
 use keyhive_codec::traits::Decode;
+use keyhive_content::store::{CiphertextStore, CiphertextStoreExt};
 use keyhive_crypto::{
     content::reference::ContentRef, identifier::Identifier, signer::async_signer::AsyncSigner,
     verified::Signed,

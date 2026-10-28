@@ -1,11 +1,12 @@
-use crate::crypto::digest::Digest;
-use beekem::{encrypted::EncryptedContent, operation::CgkaOperation};
+use crate::{application_secret::GroupSecretOrigin, encrypted::EncryptedContent};
 use dupe::Dupe;
 use futures::lock::Mutex;
-use keyhive_crypto::content::reference::ContentRef;
+use keyhive_crypto::{content::reference::ContentRef, digest::Digest};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    vec,
+    vec::Vec,
 };
 use tracing::instrument;
 
@@ -25,7 +26,7 @@ where
 
 #[derive(Debug, Clone)]
 pub struct MemoryCiphertextStoreInner<Cr: ContentRef, P> {
-    pub(crate) ops_to_refs: HashMap<Digest<CgkaOperation>, HashSet<Cr>>,
+    pub(crate) origins_to_refs: HashMap<Digest<GroupSecretOrigin>, HashSet<Cr>>,
     pub(crate) refs_to_digests: HashMap<Cr, HashSet<Digest<EncryptedContent<P, Cr>>>>,
 
     #[allow(clippy::type_complexity)]
@@ -37,7 +38,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     #[instrument(level = "debug")]
     pub fn new() -> Self {
         MemoryCiphertextStore(Arc::new(Mutex::new(MemoryCiphertextStoreInner {
-            ops_to_refs: HashMap::new(),
+            origins_to_refs: HashMap::new(),
             refs_to_digests: HashMap::new(),
             store: HashMap::new(),
         })))
@@ -61,15 +62,15 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     }
 
     #[instrument(level = "debug", skip(self))]
-    pub async fn get_by_pcs_update(
+    pub async fn get_by_group_secret_origin(
         &self,
-        pcs_update_op: &Digest<CgkaOperation>,
+        origin: &Digest<GroupSecretOrigin>,
     ) -> Vec<Arc<EncryptedContent<P, Cr>>> {
         let locked = self.0.lock().await;
 
         locked
-            .ops_to_refs
-            .get(pcs_update_op)
+            .origins_to_refs
+            .get(origin)
             .iter()
             .fold(vec![], |mut acc, content_refs| {
                 for content_ref in content_refs.iter() {
@@ -90,7 +91,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
     pub async fn insert(&self, encrypted: Arc<EncryptedContent<P, Cr>>) {
         let digest = encrypted.digest();
         let content_ref = encrypted.content_ref.clone();
-        let pcs_update_op_hash = encrypted.pcs_update_op_hash;
+        let group_secret_origin_hash = encrypted.group_secret_origin_hash;
 
         let mut locked = self.0.lock().await;
 
@@ -103,8 +104,8 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
         }
 
         locked
-            .ops_to_refs
-            .entry(pcs_update_op_hash)
+            .origins_to_refs
+            .entry(group_secret_origin_hash)
             .or_default()
             .insert(content_ref.clone());
 
@@ -134,18 +135,20 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
         let (_, encrypted) = locked.store.remove(digest)?;
 
         locked
-            .ops_to_refs
-            .entry(encrypted.pcs_update_op_hash)
+            .origins_to_refs
+            .entry(encrypted.group_secret_origin_hash)
             .and_modify(|crs| {
                 crs.remove(&encrypted.content_ref);
             });
 
         if locked
-            .ops_to_refs
-            .get(&encrypted.pcs_update_op_hash)?
+            .origins_to_refs
+            .get(&encrypted.group_secret_origin_hash)?
             .is_empty()
         {
-            locked.ops_to_refs.remove(&encrypted.pcs_update_op_hash);
+            locked
+                .origins_to_refs
+                .remove(&encrypted.group_secret_origin_hash);
         }
 
         locked

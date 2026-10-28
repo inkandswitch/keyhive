@@ -44,8 +44,9 @@ impl Kind {
     /// Bytes an application signs, which Keyhive gives no meaning.
     pub const BYTES: Kind = Kind(b'B');
 
-    /// A PCS key, hashed to name the key a block was encrypted under: hashed,
-    /// never signed or sent.
+    /// A PCS key (`K` for key) that is never signed or sent. Its digest is
+    /// included in a block's header to capture the key the block's key was
+    /// derived from.
     pub const PCS_KEY: Kind = Kind(b'K');
 
     /// The content refs a block names as its predecessors (`H` for history):

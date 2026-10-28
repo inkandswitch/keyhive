@@ -510,9 +510,9 @@ fn assert_everyone_kept_and_c_reads_heal_from_a(
 ) {
     group.check(context);
     group.assert_members(context, &["a", "b", "c", "d"]);
-    let expected = group.replicas[a].decrypt_tree_root_secret().unwrap();
+    let expected = group.replicas[a].decrypt_current_group_secret().unwrap();
     assert_eq!(
-        group.replicas[c].decrypt_tree_root_secret().ok(),
+        group.replicas[c].decrypt_current_group_secret().ok(),
         Some(expected),
         "{context}: c is in the tree but cannot derive the root secret"
     );

@@ -229,16 +229,16 @@ async fn a_write_rotates_only_when_there_is_no_current_key() {
     let signer = group.members[0].signer.clone();
 
     group.rotate(0, &mut rng).await;
-    let (_, rotation) = group.replicas[0]
-        .new_app_secret_for::<Local, _, u32, _>(&1, &[], &signer, &mut rng)
+    let (_, _, rotation) = group.replicas[0]
+        .group_secret_for_write::<Local, _, _>(&signer, &mut rng)
         .await
         .expect("a member can write");
     assert!(rotation.is_none(), "a write should reuse the current key");
 
     let carol = member(&mut rng);
     group.add(0, carol.id, carol.pk).await;
-    let (_, rotation) = group.replicas[0]
-        .new_app_secret_for::<Local, _, u32, _>(&2, &[], &signer, &mut rng)
+    let (_, _, rotation) = group.replicas[0]
+        .group_secret_for_write::<Local, _, _>(&signer, &mut rng)
         .await
         .expect("a member can write");
     assert!(
@@ -281,14 +281,14 @@ fn a_secret_is_accepted_only_for_the_update_that_produced_it() {
             .expect("the author records the secret its own update produced");
 
         assert_eq!(
-            cgka.root_secret_from_hashes(&current.digest(), &second)
+            cgka.group_secret_from_hashes(&current.digest(), &second)
                 .ok(),
             Some(current),
             "a secret was refused for the update that produced it"
         );
         assert!(
             matches!(
-                cgka.root_secret_from_hashes(&current.digest(), &first),
+                cgka.group_secret_from_hashes(&current.digest(), &first),
                 Err(CgkaError::UnknownPcsKey)
             ),
             "a secret was returned for an update that did not produce it"
@@ -336,7 +336,8 @@ fn an_earlier_secret_that_was_not_recorded_is_found() {
         cgka.root_secrets.remove(&first);
 
         assert_eq!(
-            cgka.root_secret_from_hashes(&earlier.digest(), &first).ok(),
+            cgka.group_secret_from_hashes(&earlier.digest(), &first)
+                .ok(),
             Some(earlier),
             "the earlier update's secret should be derived again, not taken from the current tree"
         );
@@ -461,8 +462,8 @@ async fn a_member_who_lacks_its_leaf_secret_rotates_its_leaf_to_write() {
     stranded.root_secrets = Default::default();
     let signer = group.members[1].signer.clone();
     let leaf = stranded.owner_leaf_key();
-    let (_, rotation) = stranded
-        .new_app_secret_for::<Local, _, [u8; 32], _>(&[0; 32], &[], &signer, &mut rng)
+    let (_, _, rotation) = stranded
+        .group_secret_for_write::<Local, _, _>(&signer, &mut rng)
         .await
         .expect("a member who lacks its leaf secret still writes");
 

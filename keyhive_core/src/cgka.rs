@@ -10,14 +10,17 @@ use crate::principal::{document::id::DocumentId, individual::id::IndividualId};
 use beekem::{
     cgka::MembershipView,
     collections::Set,
-    encrypted::EncryptedContent,
     error::CgkaError,
     id::{MemberId, TreeId},
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaBatch, CgkaChange, CgkaOperation, CitationId},
-    pcs_key::{ApplicationSecret, PcsKey},
+    pcs_key::PcsKey,
 };
 use future_form::FutureForm;
+use keyhive_content::{
+    application_secret::{ApplicationSecret, GroupSecret},
+    encrypted::{EncryptedContent, PredecessorRefs},
+};
 use keyhive_crypto::{
     content::reference::ContentRef,
     digest::Digest,
@@ -33,6 +36,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
+use tracing::instrument;
 
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
@@ -74,7 +78,7 @@ impl Cgka {
     }
 
     pub fn try_pcs_key_hash(&mut self) -> Result<Digest<PcsKey>, CgkaError> {
-        let pcs_key = self.0.decrypt_tree_root_secret()?;
+        let pcs_key = self.0.decrypt_current_group_secret()?;
         Ok(pcs_key.digest())
     }
 
@@ -86,6 +90,10 @@ impl Cgka {
         &mut self.0.owner_sks
     }
 
+    /// The application secret for new content at `content_ref` with
+    /// predecessors `pred_refs`, derived from the current CGKA group
+    /// secret. If BeeKEM's `Cgka::group_secret_for_write` rotated
+    /// this member's leaf first, that rotation is returned with it.
     pub async fn new_app_secret_for<
         F: FutureForm,
         S: AsyncSigner<F>,
@@ -104,16 +112,34 @@ impl Cgka {
         ),
         CgkaError,
     > {
-        self.0
-            .new_app_secret_for(content_ref, pred_refs, signer, csprng)
-            .await
+        let (pcs_key, op_hash, rotation) = self.0.group_secret_for_write(signer, csprng).await?;
+        let app_secret = GroupSecret(pcs_key.0).derive_application_secret(
+            content_ref,
+            &PredecessorRefs::digest(pred_refs),
+            &op_hash.coerce(),
+        );
+        Ok((app_secret, rotation))
     }
 
+    /// The application key `encrypted` was encrypted under, derived from the
+    /// group secret its header refers to. Fails as BeeKEM's
+    /// `Cgka::group_secret_from_hashes` does if that secret cannot be found or
+    /// does not match its hash.
+    #[instrument(skip_all)]
     pub fn decryption_key_for<T, Cr: ContentRef>(
         &mut self,
         encrypted: &EncryptedContent<T, Cr>,
     ) -> Result<SymmetricKey, CgkaError> {
-        self.0.decryption_key_for(encrypted)
+        let pcs_key = self.0.group_secret_from_hashes(
+            &encrypted.group_secret_hash.coerce(),
+            &encrypted.group_secret_origin_hash.coerce(),
+        )?;
+        let app_secret = GroupSecret(pcs_key.0).derive_application_secret(
+            &encrypted.content_ref,
+            &encrypted.pred_refs,
+            &encrypted.group_secret_origin_hash,
+        );
+        Ok(app_secret.key())
     }
 
     /// Add a member, returning its add operation or `None` if the member

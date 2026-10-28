@@ -9,11 +9,9 @@ pub use context::{
     TestResult,
 };
 
-use crate::{
-    keyhive::Keyhive, listener::no_listener::NoListener,
-    store::ciphertext::memory::MemoryCiphertextStore, update::RevokeMemberUpdate,
-};
+use crate::{keyhive::Keyhive, listener::no_listener::NoListener, update::RevokeMemberUpdate};
 use beekem::operation::{CgkaChange, CitationId};
+use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_crypto::{signer::memory::MemorySigner, verified::SignError};
 use rand::rngs::OsRng;
 

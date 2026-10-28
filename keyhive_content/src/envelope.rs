@@ -9,7 +9,7 @@ use keyhive_codec::{
 use keyhive_crypto::{
     content::reference::ContentRef, read_capability::ReadCap, symmetric_key::SymmetricKey,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, vec::Vec};
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// A container for an arbitrary payload and the [`ReadCap`]s required to identify and decrypt its ancestors.
 ///
@@ -155,6 +155,7 @@ impl<C: ContentRef, T: Decode> Decode for Envelope<C, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::vec;
 
     type Env = Envelope<[u8; 32], Vec<u8>>;
 

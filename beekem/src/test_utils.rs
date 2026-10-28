@@ -351,7 +351,7 @@ impl Group {
         for i in 0..self.replicas.len() {
             let owner = self.replicas[i].owner_id;
             let is_member = self.replicas[i].tree.contains_id(&owner);
-            let key = self.replicas[i].decrypt_tree_root_secret();
+            let key = self.replicas[i].decrypt_current_group_secret();
             let name = self.label(&owner);
             if !is_member {
                 assert!(
@@ -401,10 +401,10 @@ impl Group {
     ) {
         let mut replica = self.replica_for(id, sks);
         let key = replica
-            .decrypt_tree_root_secret()
+            .decrypt_current_group_secret()
             .unwrap_or_else(|e| panic!("{context}: {on_failure} {e:?}"));
         let group_key = self.replicas[0]
-            .decrypt_tree_root_secret()
+            .decrypt_current_group_secret()
             .expect("replica 0's owner is a member");
         assert!(
             key == group_key,

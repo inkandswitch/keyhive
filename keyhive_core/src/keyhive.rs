@@ -33,7 +33,6 @@ use crate::{
         Principal,
     },
     stats::Stats,
-    store::ciphertext::{CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
     transact::{
         fork::ForkAsync,
         merge::{Merge, MergeAsync},
@@ -44,7 +43,6 @@ use crate::{
 use beekem::{
     cgka::MembershipView,
     collections::Set,
-    encrypted::EncryptedContent,
     error::CgkaError,
     id::MemberId,
     keys::{LeafKeyPair, ShareKeyMap},
@@ -55,6 +53,10 @@ use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_content::{
+    encrypted::EncryptedContent,
+    store::{CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
+};
 use keyhive_crypto::{
     bytes::Bytes,
     content::reference::ContentRef,
@@ -89,7 +91,7 @@ use tracing::instrument;
 // Only `cgka_members_for()` uses this.
 // Only `try_causal_decrypt_from` uses this.
 #[cfg(any(test, feature = "test_utils"))]
-use crate::store::ciphertext::CausalDecryptionError;
+use keyhive_content::store::CausalDecryptionError;
 
 /// The main object for a replica: a shared handle to its [`KeyhiveState`].
 ///
@@ -1633,7 +1635,7 @@ where
             .0)
     }
 
-    /// Encrypt `content` into `doc` in an [`Envelope`](crate::crypto::envelope::Envelope),
+    /// Encrypt `content` into `doc` in an [`Envelope`](keyhive_content::envelope::Envelope),
     /// listing its ancestors and carrying the keys to open them.
     ///
     /// Read it back with [`Keyhive::try_causal_decrypt_content`], which unwraps the envelope.
@@ -1770,8 +1772,12 @@ where {
         P: Clone + Encode + Decode,
     {
         let mut to_walk = entrypoints.to_vec();
-        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(&self.ciphertext_store, doc, &mut to_walk)
-            .await
+        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(
+            &self.ciphertext_store,
+            doc.into(),
+            &mut to_walk,
+        )
+        .await
     }
 
     /// Decrypt `encrypted` out of `doc`.
@@ -4015,7 +4021,7 @@ impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
     }
 }
 
-/// Why content could not be written into an [`Envelope`](crate::crypto::envelope::Envelope).
+/// Why content could not be written into an [`Envelope`](keyhive_content::envelope::Envelope).
 #[derive(Debug, Error)]
 pub enum EnvelopeError<T: ContentRef> {
     #[error(transparent)]
@@ -4383,12 +4389,12 @@ mod tests {
     use crate::{
         certificate::route_through,
         listener::no_listener::NoListener,
-        store::ciphertext::memory::MemoryCiphertextStore,
         test_utils::{has_remove_citing_its_revocation, Hive},
         transact::transact_async,
     };
     use future_form::Sendable;
     use keyhive_codec::traits::Decode;
+    use keyhive_content::store::memory::MemoryCiphertextStore;
     use keyhive_crypto::{signer::memory::MemorySigner, verifiable::Verifiable};
     use keyline::power::Power;
     use keyline_memory::MemoryKeyline;

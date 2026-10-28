@@ -1,6 +1,6 @@
 use super::{change_id::JsChangeId, document_id::JsDocumentId};
-use beekem::encrypted::EncryptedContent;
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_content::encrypted::EncryptedContent;
 use keyhive_crypto::symmetric_key::SymmetricKey;
 use wasm_bindgen::prelude::*;
 
@@ -32,7 +32,7 @@ impl JsEncrypted {
 
     #[wasm_bindgen(getter, js_name = pcsKeyHash)]
     pub fn pcs_key_hash(&self) -> Vec<u8> {
-        self.0.pcs_key_hash.raw.as_bytes().to_vec()
+        self.0.group_secret_hash.raw.as_bytes().to_vec()
     }
 
     /// Copies the content ref out of wasm memory on every call.

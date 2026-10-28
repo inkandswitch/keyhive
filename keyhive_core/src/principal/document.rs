@@ -7,20 +7,14 @@ use crate::{
     certificate::{CertificateError, KeylineStorageError},
     cgka::Cgka,
     content::heads::ContentHeads,
-    crypto::envelope::Envelope,
     error::not_found::NotFound,
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::{group::RevokeMemberError, membered::id::MemberedId},
-    store::ciphertext::{
-        CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
-        ErrorReason,
-    },
     update::{AddMemberUpdate, RevokeMemberUpdate},
 };
 use beekem::{
     cgka::MembershipView,
-    encrypted::{ContentDecryptError, EncryptedContent},
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaBatch, CgkaOperation, CitationId},
@@ -28,6 +22,14 @@ use beekem::{
 use future_form::FutureForm;
 use id::DocumentId;
 use keyhive_codec::traits::{Decode, Encode};
+use keyhive_content::{
+    encrypted::{ContentDecryptError, EncryptedContent},
+    envelope::Envelope,
+    store::{
+        CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
+        ErrorReason,
+    },
+};
 use keyhive_crypto::{
     content::reference::ContentRef,
     identifier::Identifier,
@@ -366,7 +368,7 @@ where {
         // was given. The entrypoint's own go in the same report, with their
         // keys, so the reader knows what to fetch and can open it.
         let mut walked = store
-            .try_causal_decrypt(self.doc_id(), &mut to_decrypt)
+            .try_causal_decrypt(self.doc_id().into(), &mut to_decrypt)
             .await;
         match &mut walked {
             Ok(state) => state.next.extend(not_served),

@@ -5,9 +5,9 @@
 use divan::Bencher;
 use future_form::Local;
 use futures::lock::Mutex;
+use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_core::{
-    keyhive::Keyhive, listener::no_listener::NoListener,
-    store::ciphertext::memory::MemoryCiphertextStore, test_utils::make_simple_keyhive,
+    keyhive::Keyhive, listener::no_listener::NoListener, test_utils::make_simple_keyhive,
 };
 use keyhive_crypto::signer::memory::MemorySigner;
 use keyline::power::Power;

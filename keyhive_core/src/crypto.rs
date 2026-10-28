@@ -4,4 +4,3 @@
 //! This module contains types that depend on keyhive_core domain concepts.
 
 pub mod digest;
-pub mod envelope;

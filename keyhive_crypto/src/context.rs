@@ -41,7 +41,7 @@ impl Context {
     pub const CGKA_PREDECESSOR_SECRETS_KEY: Self =
         Self::new("/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31");
 
-    /// A block's application key, from its root secret, predecessors and
+    /// A block's application key, from its group secret, predecessors and
     /// content ref.
     pub const CONTENT_APPLICATION_KEY: Self =
         Self::new("/keyhive/content/application-key/v1/2026-10-31");
