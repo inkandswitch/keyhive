@@ -74,6 +74,10 @@ pub trait CiphertextStore<F: FutureForm, Cr: ContentRef, T>: Sized {
 /// (either [`Sendable`] or [`Local`]). The `#[future_form]` macro
 /// stamps out both variants via a blanket impl.
 ///
+/// Neither method stores the keys it finds. They are in the returned state's
+/// [`keys`][CausalDecryptionState::keys]. A caller that will later write
+/// content referring to these blocks as predecessors has to store them itself.
+///
 /// [`try_causal_decrypt`]: CiphertextStoreExt::try_causal_decrypt
 /// [`try_causal_decrypt_from_keys`]: CiphertextStoreExt::try_causal_decrypt_from_keys
 /// [`Sendable`]: future_form::Sendable
