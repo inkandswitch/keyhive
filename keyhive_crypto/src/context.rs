@@ -41,6 +41,10 @@ impl Context {
     pub const CGKA_PREDECESSOR_SECRETS_KEY: Self =
         Self::new("/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31");
 
+    /// The key a block's ancestors are sealed under, from its application key.
+    pub const CONTENT_ANCESTORS_KEY: Self =
+        Self::new("/keyhive/content/ancestors-key/v1/2026-10-31");
+
     /// A block's application key, from its group secret, predecessors and
     /// content ref.
     pub const CONTENT_APPLICATION_KEY: Self =
@@ -50,8 +54,8 @@ impl Context {
     pub const CONTENT_ENCRYPTION_KEY: Self =
         Self::new("/keyhive/content/encryption-key/v1/2026-10-31");
 
-    /// The digest of a block's document and header, in each chunk's associated
-    /// data.
+    /// The digest of a block's document and header, in its sealed ancestors'
+    /// associated data, and with the sealed ancestors, in each chunk's.
     pub const CONTENT_HEADER: Self = Self::new("/keyhive/content/header/v1/2026-10-31");
 
     /// A block's synthetic-nonce key, from its application key.
@@ -69,10 +73,11 @@ impl Context {
     /// Every context. [`Context::new`], the only way to make one, refuses a
     /// string that is not here, so the checks over this list (each well
     /// formed, no two the same) cover every context in use.
-    const ALL: [&'static str; 10] = [
+    const ALL: [&'static str; 11] = [
         "/keyhive/cgka/invitation-key/v1/2026-10-31",
         "/keyhive/cgka/node-secret-key/v1/2026-10-31",
         "/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31",
+        "/keyhive/content/ancestors-key/v1/2026-10-31",
         "/keyhive/content/application-key/v1/2026-10-31",
         "/keyhive/content/encryption-key/v1/2026-10-31",
         "/keyhive/content/header/v1/2026-10-31",

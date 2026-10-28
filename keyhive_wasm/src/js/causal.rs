@@ -1,4 +1,4 @@
-//! Causal encryption: content in an envelope that contains its ancestors' keys
+//! Causal encryption: content that contains its ancestors' keys, in their own section,
 //! and decryption that traverses back through them over the application's own
 //! storage.
 
@@ -17,7 +17,6 @@ use keyhive_codec::traits::Decode;
 use keyhive_content::{
     application_secret::GroupSecretOrigin,
     encrypted::EncryptedContent,
-    envelope::Envelope,
     store::{CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{digest::Digest, symmetric_key::SymmetricKey};
@@ -28,7 +27,7 @@ use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen(js_class = Keyhive)]
 impl JsKeyhive {
-    /// Encrypt `content` in an envelope that contains `ancestors`, so a reader
+    /// Encrypt `content` with the keys of its `ancestors`, so a reader
     /// who opens it can open them too. The ancestors are also the content's
     /// predecessors, in any order. Read it back with `tryCausalDecrypt`.
     ///
@@ -57,13 +56,13 @@ impl JsKeyhive {
     }
 
     /// Decrypt `encrypted`, written by `tryEncryptWithAncestors`, with this
-    /// keyhive's key for it, then the ancestors its envelope lists, and theirs
+    /// keyhive's key for it, then the ancestors it lists, and theirs
     /// in turn, as `tryCausalDecryptFrom` does. `encrypted` is the first block
     /// in `complete()`.
     ///
     /// Throws a `DecryptError` if this keyhive cannot decrypt `encrypted` and
-    /// an `Error` if its plaintext is not an envelope. Failures among its
-    /// ancestors are reported in `failed()`, not thrown.
+    /// an `Error` if its ancestors section does not decrypt or is malformed.
+    /// Failures among its ancestors are reported in `failed()`, not thrown.
     #[wasm_bindgen(js_name = tryCausalDecrypt)]
     pub async fn try_causal_decrypt(
         &self,
@@ -77,23 +76,24 @@ impl JsKeyhive {
             .try_decrypt_content_keyed(doc_id.0, &encrypted.0)
             .await
             .map_err(JsDecryptError::from)?;
-        let envelope = Envelope::<JsChangeId, Vec<u8>>::decode(&plaintext)
-            .map_err(|e| JsError::new(&format!("the content is not an envelope: {e}")))?;
-        let start: Vec<_> = envelope.ancestors.into_iter().collect();
+        let start = encrypted
+            .0
+            .try_decrypt_ancestors(key, doc_id.0.into())
+            .map_err(|e| JsError::new(&format!("the ancestors do not decrypt: {e}")))?;
         let mut decryption = causal_decrypt(doc_id, &start, load).await;
         decryption.complete.insert(
             0,
             JsDecryptedContent {
                 content_ref: encrypted.0.content_ref.clone(),
-                content: envelope.plaintext.into(),
+                content: plaintext.into(),
                 key,
             },
         );
         Ok(decryption)
     }
 
-    /// Decrypt each of `start` with its key, then the ancestors its envelope
-    /// lists, and theirs in turn. `start` is the ancestors of a block already
+    /// Decrypt each of `start` with its key, then the ancestors each lists,
+    /// and theirs in turn. `start` is the ancestors of a block already
     /// read, a block's own `ChangeId` and key, or the `next()` of an earlier
     /// decryption.
     ///
@@ -202,11 +202,11 @@ impl JsCausalDecryption {
     }
 
     /// Blocks that could not be read, because `load` failed for the block, the
-    /// key it was provided does not open it, or its plaintext is not an
-    /// envelope. A block `load` failed for is also in `next()` to retry. A
-    /// block can be listed more than once, and can also be in `complete()`: if
-    /// it was provided two keys and one was wrong, or if `load` failed for it
-    /// once and gave it another time.
+    /// key it was provided does not open it, or its ancestors section or
+    /// content is malformed. A block `load` failed for is also in `next()` to
+    /// retry. A block can be listed more than once, and can also be in
+    /// `complete()`: if it was provided two keys and one was wrong, or if
+    /// `load` failed for it once and gave it another time.
     pub fn failed(&self) -> Vec<JsDecryptFailure> {
         self.failed.clone()
     }
@@ -539,18 +539,22 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    async fn a_causal_decryption_of_content_without_an_envelope_throws() {
+    async fn content_written_without_ancestors_decrypts_causally_on_its_own() {
         let (kh, doc, _) = write_chain([]).await;
         let plain = kh
-            .try_encrypt(&doc, &JsChangeId::new(vec![9]), vec![], b"not an envelope")
+            .try_encrypt(&doc, &JsChangeId::new(vec![9]), vec![], b"plain")
             .await
             .expect("the content encrypts")
             .encrypted_content();
 
         let read = kh
             .try_causal_decrypt(&doc, &plain, js_sys::Function::new_no_args(""))
-            .await;
+            .await
+            .expect("the content decrypts");
 
-        assert!(read.is_err());
+        let complete: Vec<Vec<u8>> = read.complete().iter().map(|b| b.content()).collect();
+        assert_eq!(complete, vec![b"plain".to_vec()]);
+        assert!(read.next().is_empty());
+        assert!(read.failed().is_empty());
     }
 }

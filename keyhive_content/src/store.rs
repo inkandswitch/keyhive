@@ -4,7 +4,9 @@ pub mod memory;
 
 use self::memory::MemoryCiphertextStore;
 use crate::{
-    application_secret::GroupSecretOrigin, encrypted::EncryptedContent, envelope::Envelope,
+    application_secret::GroupSecretOrigin,
+    encrypted::{ContentDecryptError, EncryptedContent},
+    envelope::{Envelope, OpenEnvelopeError},
     reference::ContentRef,
 };
 use derive_where::derive_where;
@@ -168,9 +170,10 @@ pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<
     /// call can start from it.
     ///
     /// If any block cannot be fetched, decrypted or marked decrypted, or its
-    /// plaintext is not an envelope, returns [`CausalDecryptionError`] with
-    /// the reason in its [`cannot`][CausalDecryptionError::cannot] and the
-    /// state in its [`progress`][CausalDecryptionError::progress]. A failure
+    /// ancestors section or content is malformed, returns
+    /// [`CausalDecryptionError`] with the reason in its
+    /// [`cannot`][CausalDecryptionError::cannot] and the state in its
+    /// [`progress`][CausalDecryptionError::progress]. A failure
     /// to fetch an ancestor of `start` is listed under the block that listed
     /// it, and that ancestor's key is not kept.
     fn try_causal_decrypt_from_keys<'a>(
@@ -215,50 +218,39 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                 progress.keys.insert(ciphertext.content_ref.clone(), key);
                 let content_ref = ciphertext.content_ref.clone();
 
-                match ciphertext.try_decrypt(key, doc_id) {
-                    Err(_) => {
+                match Envelope::<Cr, T>::open(&ciphertext, key, doc_id) {
+                    Err(e) => {
                         seen.remove(&content_ref);
-                        cannot.insert(content_ref.clone(), ErrorReason::DecryptionFailed(key));
+                        let reason = match e {
+                            OpenEnvelopeError::Payload(e) => ErrorReason::DeserializationFailed(e),
+                            OpenEnvelopeError::Decrypt(e) => ErrorReason::opening(key, e),
+                        };
+                        cannot.insert(content_ref.clone(), reason);
                         continue;
                     }
-                    Ok(decrypted) => {
-                        let result = Envelope::<Cr, T>::decode(decrypted.as_slice());
-                        match result {
-                            Err(e) => {
-                                seen.remove(&content_ref);
-                                cannot.insert(
-                                    content_ref.clone(),
-                                    ErrorReason::DeserializationFailed(e),
-                                );
-                                continue;
-                            }
-                            Ok(envelope) => {
-                                for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
-                                    match self.get_ciphertext(ancestor_ref).await {
-                                        Err(e) => {
-                                            seen.remove(&content_ref);
-                                            cannot.insert(
-                                                content_ref.clone(),
-                                                ErrorReason::GetCiphertextError(e),
-                                            );
-                                            continue;
-                                        }
-                                        Ok(None) => {
-                                            progress
-                                                .next
-                                                .insert(ancestor_ref.clone(), *ancestor_key);
-                                        }
-                                        Ok(Some(ancestor)) => {
-                                            to_decrypt.push((ancestor.dupe(), *ancestor_key));
-                                        }
-                                    }
+                    Ok(envelope) => {
+                        for (ancestor_ref, ancestor_key) in envelope.ancestors.iter() {
+                            match self.get_ciphertext(ancestor_ref).await {
+                                Err(e) => {
+                                    seen.remove(&content_ref);
+                                    cannot.insert(
+                                        content_ref.clone(),
+                                        ErrorReason::GetCiphertextError(e),
+                                    );
+                                    continue;
                                 }
-
-                                progress
-                                    .complete
-                                    .push((ciphertext.content_ref.clone(), envelope.plaintext));
+                                Ok(None) => {
+                                    progress.next.insert(ancestor_ref.clone(), *ancestor_key);
+                                }
+                                Ok(Some(ancestor)) => {
+                                    to_decrypt.push((ancestor.dupe(), *ancestor_key));
+                                }
                             }
                         }
+
+                        progress
+                            .complete
+                            .push((ciphertext.content_ref.clone(), envelope.plaintext));
                     }
                 }
             }
@@ -446,6 +438,19 @@ pub enum ErrorReason<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr,
     CannotFindCiphertext(Cr),
 }
 
+impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> ErrorReason<F, Cr, T, S> {
+    /// Why a block did not open with `key`: a malformed ancestors section is a
+    /// decoding failure, and anything else a decryption failure.
+    pub fn opening(key: SymmetricKey, error: ContentDecryptError) -> Self {
+        match error {
+            ContentDecryptError::MalformedAncestors(e) => ErrorReason::DeserializationFailed(e),
+            ContentDecryptError::Decryption | ContentDecryptError::NonceMismatch => {
+                ErrorReason::DecryptionFailed(key)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,11 +484,7 @@ mod tests {
         let group_secret_hash = group_secret.digest();
 
         let key = SymmetricKey::generate(csprng);
-        let envelope = Envelope {
-            plaintext,
-            ancestors,
-        };
-        let bytes = envelope.encode().into_bytes();
+        let ancestors: Vec<_> = ancestors.into_iter().collect();
         (
             Arc::new(
                 EncryptedContent::<String, [u8; 32]>::encrypt(
@@ -493,12 +494,29 @@ mod tests {
                     PredecessorRefs::digest(&[]),
                     group_secret_hash,
                     group_secret_origin_hash,
-                    &bytes,
+                    &ancestors,
+                    plaintext.encode().as_bytes(),
                 )
                 .expect("a fresh key encrypts"),
             ),
             key,
         )
+    }
+
+    #[test]
+    fn a_malformed_ancestors_section_is_a_decoding_failure_and_anything_else_a_decryption_failure()
+    {
+        type Reason = ErrorReason<Local, [u8; 32], String, MemoryCiphertextStore<[u8; 32], String>>;
+        let key = SymmetricKey::from([1; 32]);
+        let malformed = ContentDecryptError::MalformedAncestors(DecodeError::UnsortedKeys);
+        assert!(matches!(
+            Reason::opening(key, malformed),
+            ErrorReason::DeserializationFailed(DecodeError::UnsortedKeys)
+        ));
+        assert!(matches!(
+            Reason::opening(key, ContentDecryptError::Decryption),
+            ErrorReason::DecryptionFailed(k) if k == key
+        ));
     }
 
     #[tokio::test]
@@ -572,7 +590,7 @@ mod tests {
     /// An envelope that contains the wrong key for an ancestor does not open it.
     /// Decryption reports the ancestor instead of trusting the key.
     #[tokio::test]
-    async fn a_wrong_ancestor_key_in_an_envelope_does_not_decrypt_the_ancestor() -> TestResult {
+    async fn a_wrong_ancestor_key_does_not_decrypt_the_ancestor() -> TestResult {
         let mut csprng = OsRng;
         let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
         let origin: Digest<GroupSecretOrigin> = [9u8; 32].into();

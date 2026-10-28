@@ -749,8 +749,8 @@ impl TestContext {
         Ok(self.record_content_write(out.encrypted_content, doc))
     }
 
-    /// Write `content` in an envelope listing the ancestors and carrying the keys to open
-    /// them. Simulates what an application would do.
+    /// Write `content` with its ancestors' keys in their own section. Simulates what an
+    /// application would do.
     ///
     /// The author is also given a copy in their own store, as an application would keep what
     /// it wrote. Other readers still need to be given one.

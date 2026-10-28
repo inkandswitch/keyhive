@@ -24,7 +24,6 @@ use id::DocumentId;
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_content::{
     encrypted::{ContentDecryptError, EncryptedContent},
-    envelope::Envelope,
     reference::ContentRef,
     store::{
         CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
@@ -58,8 +57,8 @@ pub struct DocumentState<T: ContentRef> {
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
-    /// Keys for content this document has written or read, so a later write can carry
-    /// them to a reader in an envelope. Not persisted, and not evicted.
+    /// Keys for content this document has written or read, so a later write can include
+    /// them in its ancestors section. Not persisted, and not evicted.
     known_decryption_keys: HashMap<T, SymmetricKey>,
 
     /// This replica's CGKA group. A replica has a document only as a
@@ -210,9 +209,9 @@ impl<T: ContentRef> DocumentState<T> {
         self.known_decryption_keys.get(content_ref).copied()
     }
 
-    /// Encrypt `content`, returning it with the key it is encrypted under. The third
-    /// element is the update this write had to make, and the key pair it sampled for our
-    /// key in the CGKA group, if we had no current key.
+    /// Encrypt `content` with the keys of its `ancestors`, returning it with the key it is
+    /// encrypted under. The third element is the update this write had to make, and the key
+    /// pair it sampled for our key in the CGKA group, if we had no current key.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed<
         F: FutureForm,
@@ -223,6 +222,7 @@ impl<T: ContentRef> DocumentState<T> {
         content_ref: &T,
         content: &[u8],
         pred_refs: &[T],
+        ancestors: &[(T, SymmetricKey)],
         signer: &S,
         csprng: &mut R,
     ) -> Result<
@@ -244,7 +244,7 @@ impl<T: ContentRef> DocumentState<T> {
             .insert(content_ref.clone(), application_secret_key);
 
         let encrypted_content = app_secret
-            .try_encrypt(self.doc_id().into(), content)
+            .try_encrypt(self.doc_id().into(), ancestors, content)
             .map_err(EncryptError::EncryptionFailed)?;
 
         Ok((encrypted_content, application_secret_key, rotation))
@@ -300,20 +300,21 @@ impl<T: ContentRef> DocumentState<T> {
         store: C,
     ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<F, T, P, C>>
 where {
-        let raw_entrypoint = self.try_decrypt_content(encrypted_content)?;
+        let (_, key) = self.try_decrypt_content_keyed(encrypted_content)?;
 
-        let entrypoint_envelope = Envelope::<T, Vec<u8>>::decode(raw_entrypoint.as_slice())
+        let entrypoint_ancestors = encrypted_content
+            .try_decrypt_ancestors(key, self.doc_id().into())
             .map_err(|e| CausalDecryptionError::<F, T, P, C> {
                 progress: Box::new(CausalDecryptionState::new()),
                 cannot: HashMap::from_iter([(
                     encrypted_content.content_ref.clone(),
-                    ErrorReason::DeserializationFailed(e),
+                    ErrorReason::opening(key, e),
                 )]),
             })?;
 
         let mut to_decrypt: Vec<(Arc<EncryptedContent<P, T>>, SymmetricKey)> = vec![];
         let mut not_served = HashMap::new();
-        for (digest, symm_key) in entrypoint_envelope.ancestors.iter() {
+        for (digest, symm_key) in entrypoint_ancestors.iter() {
             if let Some(encrypted) = store
                 .get_ciphertext(digest)
                 .await
@@ -583,6 +584,9 @@ pub enum DecryptError {
     #[error("SIV mismatch versus expected")]
     SivMismatch,
 
+    #[error("The ancestors section is malformed: {0}")]
+    MalformedAncestors(keyhive_codec::error::DecodeError),
+
     #[error("Unable to build SIV due to IO error: {0}")]
     IoErrorOnSivBuild(#[from] std::io::Error),
 }
@@ -594,6 +598,7 @@ impl From<ContentDecryptError> for DecryptError {
                 DecryptError::DecryptionFailed(chacha20poly1305::Error)
             }
             ContentDecryptError::NonceMismatch => DecryptError::SivMismatch,
+            ContentDecryptError::MalformedAncestors(e) => DecryptError::MalformedAncestors(e),
         }
     }
 }

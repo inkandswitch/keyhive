@@ -21,9 +21,10 @@ Every key derivation is BLAKE3 `derive_key` under its own context, and every con
 | `/keyhive/cgka/invitation-key/v1/2026-10-31` | The key an inviter seals root secrets to an invitee under | X25519 output, both public keys |
 | `/keyhive/cgka/node-secret-key/v1/2026-10-31` | The key a BeeKEM node secret is sealed under | X25519 output, both public keys |
 | `/keyhive/cgka/predecessor-secrets-key/v1/2026-10-31` | The key an update seals earlier root secrets under | Its root secret |
+| `/keyhive/content/ancestors-key/v1/2026-10-31` | The key a block's ancestors are sealed under | Its application key |
 | `/keyhive/content/application-key/v1/2026-10-31` | A block's application key | Root secret, predecessors, content ref |
 | `/keyhive/content/encryption-key/v1/2026-10-31` | A block's cipher key | Its application key |
-| `/keyhive/content/header/v1/2026-10-31` | The header digest in each chunk's associated data | Tree ID, header |
+| `/keyhive/content/header/v1/2026-10-31` | The digest in the sealed ancestors' associated data, and in each chunk's | Tree ID, header; and for a chunk, the sealed ancestors |
 | `/keyhive/content/nonce-key/v1/2026-10-31` | A block's synthetic-nonce key | Its application key |
 | `/keyhive/prekey/selection/v1/2026-10-31` | The stream an individual's prekey for a document is drawn from | Individual, document |
 | `/keyhive/seal/encryption-key/v1/2026-10-31` | A sealed blob's cipher key | The key it is sealed under |
@@ -64,23 +65,35 @@ Trade-offs:
 
 ## Content
 
-Content is encrypted in chunks of 64 KiB, so a block of any size streams through bounded memory, and any byte range decrypts by reading only the chunks that cover it. Each block's application key derives two subkeys:
+A block has two encrypted sections: its ancestors' content refs and keys, then its body. A reader can get the ancestors' keys without decrypting the body. The section is bound to the header but not to the body, so only a reader who also decrypts the body knows the two were sealed together. The ancestors are sealed with `SymmetricKey::try_seal` (see above) under their own subkey, and associated data that binds them to the header and the document:
+
+```
+ancestors_key = derive_key("/keyhive/content/ancestors-key/v1/2026-10-31", app_key)
+ancestors     = try_seal(ancestors_key, count ‖ ( content_ref ‖ key )*,
+                         aad = BLAKE3_derive("/keyhive/content/header/v1/2026-10-31", doc_id ‖ header))
+```
+
+The refs are in ascending order of their encodings, each once, so the section has one plaintext for a given set of ancestors.
+
+The body is encrypted in chunks of 64 KiB, so a block of any size streams through bounded memory, and any byte range decrypts by reading only the chunks that cover it. Each block's application key derives two more subkeys:
 
 ```
 enc_key   = derive_key("/keyhive/content/encryption-key/v1/2026-10-31", app_key)
 nonce_key = derive_key("/keyhive/content/nonce-key/v1/2026-10-31",      app_key)
 
-aad_i   = BLAKE3_derive("/keyhive/content/header/v1/2026-10-31", doc_id ‖ header) ‖ i:u64 ‖ last:u8
+aad_i   = BLAKE3_derive("/keyhive/content/header/v1/2026-10-31",
+                        doc_id ‖ header ‖ len(ancestors) ‖ ancestors) ‖ i:u64 ‖ last:u8
 nonce_i = BLAKE3_keyed(nonce_key, aad_i ‖ chunk_i)[0..24]
 ct_i    = XChaCha20-Poly1305(enc_key, nonce_i, aad_i, chunk_i)
 ```
 
-The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ group_secret_hash ‖ group_secret_origin_hash ‖ ( nonce_i ‖ ct_i )+`. Every chunk but the last is full; the last is empty only when the whole plaintext is, so each plaintext has one chunking.
+The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ group_secret_hash ‖ group_secret_origin_hash ‖ len(ancestors) ‖ ancestors ‖ ( nonce_i ‖ ct_i )+`. Every chunk but the last is full; the last is empty only when the whole body is, so each body has one chunking.
 
-- _Commitment per chunk._ The reader recomputes each `nonce_i` from what the chunk decrypts to and rejects a mismatch. Causal encryption hands ancestors' keys out in envelopes that any writer composes, so without the check one ciphertext could decrypt under its real key and under a key an envelope names, to two histories.
-- _Bound to its header and document._ The header digest and `doc_id` are in every chunk's associated data, so editing a header field or reading a block as part of another document fails authentication.
+- _Commitment per chunk and section._ The reader recomputes each `nonce_i`, and the ancestors section's nonce, from what it decrypts to and rejects a mismatch. Causal encryption hands ancestors' keys out in sections that any writer composes, so without the check one ciphertext could decrypt under its real key and under a key another block lists, to two histories.
+- _Bound to its header and document._ The header digest and `doc_id` are in both sections' associated data, so editing a header field or reading a block as part of another document fails authentication.
+- _Body bound to its ancestors._ The sealed ancestors are in every chunk's associated data, so a body decrypts only with the ancestors section it was encrypted with.
 - _Order and length._ The index and final flag are in each chunk's associated data, so reordering chunks, truncating at a chunk boundary, or appending a chunk fails authentication.
-- _Overhead._ 132 bytes of header and 40 bytes per chunk (nonce and tag): 0.06% at 64 KiB.
+- _Overhead._ 132 bytes of header, 42 bytes for an empty ancestors section plus each ancestor's encoded ref and 32-byte key, and 40 bytes per chunk (nonce and tag): 0.06% at 64 KiB.
 
 ## Key Derivation in BeeKEM
 
@@ -101,7 +114,7 @@ app_key = derive_key("/keyhive/content/application-key/v1/2026-10-31",
                      group_secret ‖ Digest<PredecessorRefs> ‖ content_ref)
 ```
 
-`Digest<PredecessorRefs>` is a kinded hash, BLAKE3 over `"KH" ‖ 'H' ‖ 0x00 ‖ count ‖ refs`, with each distinct ref once, in ascending order of their encodings, and the content ref is its canonical, self-delimiting encoding. Each block therefore gets a distinct key bound to the CGKA epoch and to its causal position; see [`causal_encryption.md`](./causal_encryption.md). The application key is what a causal envelope hands to a successor's readers.
+`Digest<PredecessorRefs>` is a kinded hash, BLAKE3 over `"KH" ‖ 'H' ‖ 0x00 ‖ count ‖ refs`, with each distinct ref once, in ascending order of their encodings, and the content ref is its canonical, self-delimiting encoding. Each block therefore gets a distinct key bound to the CGKA epoch and to its causal position; see [`causal_encryption.md`](./causal_encryption.md). A successor's ancestors section contains this application key, for that successor's readers.
 
 Each update also encrypts the root secrets of earlier updates under a key derived from its own root secret. The BeeKEM tree ID is the associated data (authenticated, and an input to the nonce), and opening checks the synthetic nonce:
 

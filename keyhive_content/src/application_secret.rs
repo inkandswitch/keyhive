@@ -17,8 +17,9 @@ use tracing::instrument;
 
 /// A block's application key, with its ciphertext's header fields.
 ///
-/// Each later block's envelope stores this key for the block so anyone who
-/// can read a later block can read this one too. The key opens this block only.
+/// Each later block's ancestors section contains this key for the block, so
+/// anyone who can read a later block can read this one too. The key opens
+/// this block only.
 #[derive(Debug, Clone)]
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
@@ -51,10 +52,12 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         self.key
     }
 
-    /// Encrypt `plaintext` for the document `doc_id`.
+    /// Encrypt `plaintext` for the document `doc_id`, with the keys of its
+    /// `ancestors`.
     pub fn try_encrypt<T>(
         &self,
         doc_id: Identifier,
+        ancestors: &[(Cr, SymmetricKey)],
         plaintext: &[u8],
     ) -> Result<EncryptedContent<T, Cr>, chacha20poly1305::Error> {
         EncryptedContent::encrypt(
@@ -64,6 +67,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
             self.pred_refs,
             self.group_secret_hash,
             self.group_secret_origin_hash,
+            ancestors,
             plaintext,
         )
     }

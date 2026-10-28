@@ -238,6 +238,7 @@ mod tests {
             [1u8; 32].into(),
             [1u8; 32].into(),
             hash1.coerce(),
+            &[],
             &[4, 5, 6],
         )?);
 
@@ -248,6 +249,7 @@ mod tests {
             [2u8; 32].into(),
             [2u8; 32].into(),
             hash2.coerce(),
+            &[],
             &[1, 2, 3],
         )?);
 
@@ -264,6 +266,7 @@ mod tests {
                 [3u8; 32].into(),
                 [3u8; 32].into(),
                 hash3.coerce(),
+                &[],
                 &[0],
             )?))
             .await;
