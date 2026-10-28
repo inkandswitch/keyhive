@@ -1674,9 +1674,8 @@ where
     /// opens the result can then open each ancestor and traverse back from there with
     /// [`CiphertextStoreExt::try_causal_decrypt_from_keys`].
     ///
-    /// The ancestors are also the content's predecessors, in the order given. If a content
-    /// ref appears more than once, it is a predecessor each time, and the envelope keeps its
-    /// last key.
+    /// The ancestors are also the content's predecessors, in any order. If a content ref
+    /// appears more than once, it is one predecessor, and the envelope keeps its last key.
     ///
     /// Returns the application secret the content was encrypted under. A later write passes
     /// it in `ancestors`.
