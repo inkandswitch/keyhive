@@ -1,7 +1,7 @@
 [package]
 name = "keyhive_content"
 description = "Keyhive's encrypted content: its format, application secrets, causal envelopes and ciphertext store"
-version = "0.1.0"
+version = "0.2.0"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
