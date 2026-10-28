@@ -306,7 +306,8 @@ mod tests {
             .for_each(|(ancestors, payload)| {
                 let original = arbitrary_envelope(ancestors, payload);
                 let (encrypted, key, doc_id) = encrypt(original.encode().as_bytes());
-                assert_eq!(Env::open(&encrypted, key, doc_id), Ok(original));
+                let opened = Env::open(&encrypted, key, doc_id).map(|(envelope, _)| envelope);
+                assert_eq!(opened, Ok(original));
             });
     }
 
