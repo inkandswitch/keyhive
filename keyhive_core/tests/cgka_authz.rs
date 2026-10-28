@@ -1227,7 +1227,7 @@ async fn a_revoked_reader_cannot_sign_after_the_remove() -> TestResult {
 }
 
 #[tokio::test]
-async fn an_operation_on_a_document_the_replica_cannot_read_is_refused() -> TestResult {
+async fn an_operation_on_a_document_the_replica_has_no_standing_over_is_refused() -> TestResult {
     let alice = make_simple_keyhive().await?;
     let carol = make_simple_keyhive().await?;
     let doc = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;

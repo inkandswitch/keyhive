@@ -251,10 +251,10 @@ async fn a_replica_takes_in_a_delegation_to_a_member_known_by_contact_card() -> 
     Ok(())
 }
 
-/// Membership reaches bob through a relay that knows everyone only by contact
-/// card; the key agreement, which a relay does not hold, comes from alice.
+/// Membership and key agreement reach bob through a relay that knows everyone
+/// only by contact card. Bob never syncs with alice.
 #[tokio::test]
-async fn a_member_decrypts_with_membership_from_a_relay_known_by_contact_card() -> TestResult {
+async fn a_member_decrypts_through_a_relay_known_by_contact_card() -> TestResult {
     let alice = make_simple_keyhive().await?;
     let relay = make_simple_keyhive().await?;
     let bob = make_simple_keyhive().await?;
@@ -284,10 +284,9 @@ async fn a_member_decrypts_with_membership_from_a_relay_known_by_contact_card() 
         "and knows he is a member"
     );
     assert!(
-        !bob.has_document(doc_id).await,
-        "a relay holds no key agreement to pass on"
+        bob.has_document(doc_id).await,
+        "the relay passed on the key agreement"
     );
-    sync_to(&alice, &bob).await;
     assert_eq!(
         bob.try_decrypt_content(doc_id, encrypted.encrypted_content())
             .await?,
