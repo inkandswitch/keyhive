@@ -27,9 +27,9 @@ This document describes who Keyhive defends against, what it defends, and what i
 
 ### A1. Untrusted relay
 
-Holds `Relay`: stores and forwards ciphertext and the document's CGKA operations; sees operation hashes, sizes, timing, the membership graph, and the BeeKEM tree's shape and public keys. Cannot decrypt.
+Holds `Relay`: stores and forwards ciphertext and the document's CGKA operations; sees operation hashes, sizes, timing, the membership graph, and the CGKA group's shape and public keys. Cannot decrypt.
 
-_Mitigations_: content is E2EE; `Relay` is excluded from the BeeKEM tree, so a relay never receives a path secret (the CGKA operations it carries are signed, and their secrets are encrypted to the tree's members); a relay serves only peers that can prove `Relay` or better. A relay can still remove members from a document's tree ([G3](#g3-eviction-through-a-self-revoked-delegation)).
+_Mitigations_: content is E2EE; `Relay` is excluded from the CGKA group, so a relay never receives a path secret (the CGKA operations it carries are signed, and their secrets are encrypted to the CGKA group's members); a relay serves only peers that can prove `Relay` or better. A relay can still remove members from a document's CGKA group ([G3](#g3-eviction-through-a-self-revoked-delegation)).
 
 ### A2. Revoked member
 

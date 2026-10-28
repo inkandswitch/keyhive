@@ -1,11 +1,11 @@
 //! A relay: a peer with `Relay` power that stores and forwards a document's
-//! membership and key agreement without reading the document.
+//! membership and CGKA ops without reading the document.
 //!
 //! It holds the certificates, prekeys and CGKA operations, so it answers who
-//! may do what as a member would, and serves the key agreement to members who
-//! sync only with it. It is never placed in the BeeKEM tree, so it holds no
-//! key: the operations are signed, and their secrets are encrypted to the
-//! tree's members.
+//! may do what as a member would, and serves the CGKA ops to members who sync
+//! only with it. It is never added to the CGKA group, so it holds no key: the
+//! operations are signed, and their secrets are encrypted to the CGKA group's
+//! members.
 
 use std::collections::HashSet;
 
@@ -62,7 +62,7 @@ async fn a_relay_holds_and_serves_key_agreement_but_no_key() -> Result<()> {
             assert_eq!(
                 Some(&sent),
                 held_ops(&alice, design_doc).await.as_ref(),
-                "the relay is sent the document's key agreement ({case})"
+                "the relay is sent the document's CGKA ops ({case})"
             );
 
             assert_eq!(
@@ -92,7 +92,7 @@ async fn a_relay_holds_and_serves_key_agreement_but_no_key() -> Result<()> {
                     .await?
                     .expect("alice holds the document")
                     .contains(&relay.id()),
-                "it is not in the BeeKEM tree ({case})"
+                "it is not in the CGKA group ({case})"
             );
             ctx.give_content(&relay, &ct).await?;
             assert!(
@@ -104,10 +104,10 @@ async fn a_relay_holds_and_serves_key_agreement_but_no_key() -> Result<()> {
     Ok(())
 }
 
-/// A reader who syncs only with a relay gets the key agreement from it, and
+/// A reader who syncs only with a relay gets the CGKA ops from it, and
 /// with it the document.
 #[tokio::test]
-async fn a_reader_takes_the_key_agreement_from_a_relay() -> Result<()> {
+async fn a_reader_takes_the_cgka_ops_from_a_relay() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bob = ctx.individual("bob").await?;
@@ -125,16 +125,16 @@ async fn a_reader_takes_the_key_agreement_from_a_relay() -> Result<()> {
         held_ops(&bob, design_doc).await,
         held_ops(&alice, design_doc).await
     );
-    let tree = bob
+    let members = bob
         .cgka_members_for(design_doc)
         .await?
         .expect("bob has joined the document's CGKA group");
     assert!(
-        tree.contains(&alice.id()) && tree.contains(&bob.id()),
-        "the readers are in the tree bob built from the relay's operations"
+        members.contains(&alice.id()) && members.contains(&bob.id()),
+        "the readers are in the CGKA group bob built from the relay's operations"
     );
     assert!(
-        !tree.contains(&relay.id()),
+        !members.contains(&relay.id()),
         "and the relay that carried them is not"
     );
     ctx.give_content(&bob, &ct).await?;
@@ -155,7 +155,7 @@ async fn a_member_reads_with_membership_from_a_relay() -> Result<()> {
     alice.add_member(relay.id(), design_doc, Relay).await?;
     let ct = ctx.encrypt(&alice, design_doc, b"for bob").await?;
 
-    // Bob's certificates come from the relay; the key agreement from alice.
+    // Bob's certificates come from the relay; the CGKA ops from alice.
     ctx.sync(&alice, &relay).await?;
     ctx.sync(&relay, &bob).await?;
     ctx.sync_without(&alice, &bob, EventKind::Delegated).await?;
@@ -192,7 +192,7 @@ async fn the_all_agents_index_includes_relays() -> Result<()> {
 }
 
 /// A relay's archive keeps what it relays: restored, it answers as before,
-/// still holds the key agreement, and still holds no key.
+/// still holds the CGKA ops, and still holds no key.
 #[tokio::test]
 async fn a_relay_keeps_what_it_relays_across_an_archive() -> Result<()> {
     let mut ctx = TestContext::new().await;
@@ -218,9 +218,9 @@ async fn a_relay_keeps_what_it_relays_across_an_archive() -> Result<()> {
     Ok(())
 }
 
-/// A relay cut off from a document is sent none of its later key agreement.
+/// A relay cut off from a document is sent none of its later CGKA ops.
 #[tokio::test]
-async fn a_revoked_relay_is_sent_no_new_key_agreement() -> Result<()> {
+async fn a_revoked_relay_is_sent_no_new_cgka_ops() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let relay = ctx.individual("relay").await?;

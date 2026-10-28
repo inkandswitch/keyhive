@@ -2088,7 +2088,7 @@ where {
                 continue;
             };
             let id = subject;
-            let kind = if self.holds_cgka_graph(DocumentId(id)).await {
+            let kind = if self.contains_cgka_graph(DocumentId(id)).await {
                 MemberedId::DocumentId(DocumentId(id))
             } else {
                 MemberedId::GroupId(GroupId(id))
@@ -2307,8 +2307,8 @@ where {
 
     /// The CGKA operations of every document whose CGKA graph this replica
     /// holds and that `who` stands over, relays included: the operations are
-    /// signed, and their secrets are encrypted to the tree, which a relay
-    /// never joins.
+    /// signed, and their secrets are encrypted to the CGKA group's members,
+    /// which a relay never becomes.
     #[instrument(skip_all)]
     pub async fn cgka_ops_reachable_by_agent(
         &self,
@@ -2662,7 +2662,7 @@ where {
     }
 
     /// Whether this replica holds `id`'s CGKA graph, joined or not.
-    async fn holds_cgka_graph(&self, id: DocumentId) -> bool {
+    async fn contains_cgka_graph(&self, id: DocumentId) -> bool {
         self.has_document(id).await || self.unjoined.lock().await.contains_key(&id)
     }
 
@@ -3023,12 +3023,13 @@ where {
         // becomes its document once its invitation merges; starting on the
         // first operation, not the invitation, lets every arriving one make
         // progress. A relay's stays unjoined, and is served from there.
-        let may_hold = invites(op.payload(), me) || self.ever_stands_over(doc, me.into()).await?;
+        let stands_over =
+            invites(op.payload(), me) || self.ever_stands_over(doc, me.into()).await?;
         let (merged, joined) = {
             let mut unjoined = self.unjoined.lock().await;
             let cgka = match unjoined.entry(doc_id) {
                 Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) if may_hold => {
+                Entry::Vacant(entry) if stands_over => {
                     let mut cgka = Cgka::new(doc_id, me, ShareKeyMap::new());
                     cgka.set_membership_view(self.membership_view(doc));
                     entry.insert(cgka)
