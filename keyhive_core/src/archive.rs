@@ -2,9 +2,10 @@
 //!
 //! What a replica cannot recompute: its identity and key pairs, the
 //! individuals it knows, the certificate set, every CGKA operation it holds,
-//! each document's content heads, and the events still waiting. CGKA groups
-//! are rebuilt from the operations on load, as a second instance of an
-//! identity builds them; group membership is the certificate set.
+//! each document's content heads and content keys, and the events still
+//! waiting. A document's content keys are those of the content it has written
+//! or read. CGKA groups are rebuilt from the operations on load, as a second
+//! instance of an identity builds them; group membership is the certificate set.
 
 use crate::{
     content::heads::ContentHeads,
@@ -43,7 +44,7 @@ impl<T: ContentRef> Archive<T> {
 
     /// The format this build reads and writes. Only it decodes, so an archive
     /// in another format is refused rather than misread.
-    pub const FORMAT: u8 = 3;
+    pub const FORMAT: u8 = 4;
 
     /// Getter for the user that the [`Archive`] is for.
     pub fn id(&self) -> IndividualId {

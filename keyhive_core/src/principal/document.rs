@@ -26,6 +26,8 @@ use keyhive_codec::{
     traits::{Decode, Encode},
 };
 use keyhive_content::{
+    ancestor_key::AncestorKey,
+    application_secret::TryEncryptError,
     encrypted::{ContentDecryptError, EncryptedContent},
     envelope::{Envelope, OpenEnvelopeError},
     reference::ContentRef,
@@ -58,9 +60,11 @@ pub struct DocumentState<T: ContentRef> {
     pub(crate) content_heads: HashSet<T>,
     pub(crate) content_state: HashSet<T>,
 
-    /// Keys for content this document has written or read, so a later write can carry
-    /// them to a reader in an envelope. Not persisted, and not evicted.
-    known_decryption_keys: HashMap<T, SymmetricKey>,
+    /// Keys for content this document has written or read through its CGKA
+    /// group or a traversal. Each one encrypted or decrypted a block whose
+    /// header claims that content ref. A write takes its predecessors' keys
+    /// from here. Archived, and not evicted.
+    known_decryption_keys: HashMap<T, AncestorKey<T>>,
 
     /// This replica's CGKA group. A replica has a document only as a
     /// member whose creation or invitation has merged. A relay has none of
@@ -204,10 +208,45 @@ impl<T: ContentRef> DocumentState<T> {
         Ok((op, new_key_pair))
     }
 
-    /// The key this document has for `content_ref`, from content it has written or read.
-    #[cfg(any(test, feature = "test_utils"))]
-    pub(crate) fn known_decryption_key(&self, content_ref: &T) -> Option<SymmetricKey> {
-        self.known_decryption_keys.get(content_ref).copied()
+    /// The keys of `pred_refs`, from content this document has written or read.
+    /// Fails with the first predecessor it has no key for.
+    pub(crate) fn predecessor_keys(&self, pred_refs: &[T]) -> Result<Vec<AncestorKey<T>>, T> {
+        pred_refs
+            .iter()
+            .map(|pred| {
+                self.known_decryption_keys
+                    .get(pred)
+                    .cloned()
+                    .ok_or_else(|| pred.clone())
+            })
+            .collect()
+    }
+
+    /// Remember `key` for its content ref, unless this document already has one for it.
+    pub(crate) fn remember_key(&mut self, key: AncestorKey<T>) {
+        self.known_decryption_keys
+            .entry(key.content_ref().clone())
+            .or_insert(key);
+    }
+
+    /// Every key this document has.
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &AncestorKey<T>> {
+        self.known_decryption_keys.values()
+    }
+
+    /// Remember the key that decrypted each block a traversal read, unless
+    /// this document already has one for it.
+    pub(crate) fn remember_traversed_keys<F: FutureForm, P, S: CiphertextStore<F, T, P>>(
+        &mut self,
+        walked: &Result<CausalDecryptionState<T, P>, CausalDecryptionError<F, T, P, S>>,
+    ) {
+        let read = match walked {
+            Ok(read) => read,
+            Err(err) => &err.progress,
+        };
+        for key in read.keys.values() {
+            self.remember_key(key.clone());
+        }
     }
 
     /// Encrypt `content` with the keys of its `ancestors`, returning it with the key it is
@@ -222,8 +261,7 @@ impl<T: ContentRef> DocumentState<T> {
         &mut self,
         content_ref: &T,
         content: &[u8],
-        pred_refs: &[T],
-        ancestors: &[(T, SymmetricKey)],
+        ancestors: &[AncestorKey<T>],
         signer: &S,
         csprng: &mut R,
     ) -> Result<
@@ -234,19 +272,19 @@ impl<T: ContentRef> DocumentState<T> {
         ),
         EncryptError,
     > {
+        let pred_refs: Vec<T> = ancestors.iter().map(|a| a.content_ref().clone()).collect();
         let (app_secret, rotation) = self
             .cgka
-            .new_app_secret_for(content_ref, pred_refs, signer, csprng)
+            .new_app_secret_for(content_ref, &pred_refs, signer, csprng)
             .await
             .map_err(EncryptError::FailedToMakeAppSecret)?;
 
-        let application_secret_key = app_secret.key();
-        self.known_decryption_keys
-            .insert(content_ref.clone(), application_secret_key);
-
-        let encrypted_content = app_secret
+        let (encrypted_content, own_key) = app_secret
             .try_encrypt(self.doc_id().into(), ancestors, content)
             .map_err(EncryptError::EncryptionFailed)?;
+        let application_secret_key = own_key.key();
+        self.known_decryption_keys
+            .insert(content_ref.clone(), own_key);
 
         Ok((encrypted_content, application_secret_key, rotation))
     }
@@ -277,16 +315,17 @@ impl<T: ContentRef> DocumentState<T> {
     }
 
     /// Decrypt content with `decrypt_key`, its key from this document's CGKA
-    /// group, and return its envelope. Records the key as known.
+    /// group, and return its envelope. Records the key, unless this document
+    /// already has one for that content ref.
     pub(crate) fn try_decrypt_content_with<P>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
         decrypt_key: SymmetricKey,
     ) -> Result<Envelope<T, Vec<u8>>, DecryptError> {
-        let envelope = Envelope::open(encrypted_content, decrypt_key, self.doc_id().into())?;
+        let (envelope, opened_by) =
+            Envelope::open(encrypted_content, decrypt_key, self.doc_id().into())?;
 
-        self.known_decryption_keys
-            .insert(encrypted_content.content_ref.clone(), decrypt_key);
+        self.remember_key(opened_by);
 
         Ok(envelope)
     }
@@ -328,6 +367,7 @@ where {
             Ok(state) => state.next.extend(not_served),
             Err(err) => err.progress.next.extend(not_served),
         }
+        self.remember_traversed_keys(&walked);
         Ok(walked?)
     }
 
@@ -336,6 +376,11 @@ where {
         DocumentArchive {
             content_heads: self.content_heads.clone(),
             content_state: self.content_state.clone(),
+            content_keys: self
+                .known_decryption_keys
+                .iter()
+                .map(|(content_ref, key)| (content_ref.clone(), key.key()))
+                .collect(),
         }
     }
 }
@@ -476,7 +521,7 @@ pub enum EncryptError {
     NotFound(#[from] NotFound),
 
     #[error("Encryption failed: {0}")]
-    EncryptionFailed(chacha20poly1305::Error),
+    EncryptionFailed(TryEncryptError),
 
     #[error("Unable to PCS update: {0}")]
     UnableToPcsUpdate(CgkaError),

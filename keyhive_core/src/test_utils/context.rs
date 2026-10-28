@@ -208,8 +208,8 @@ impl From<EncryptError> for TestError {
     }
 }
 
-impl From<EncryptContentError> for TestError {
-    fn from(e: EncryptContentError) -> Self {
+impl From<EncryptContentError<[u8; 32]>> for TestError {
+    fn from(e: EncryptContentError<[u8; 32]>) -> Self {
         match e {
             EncryptContentError::NotFound(inner) => inner.into(),
             other => TestError::Other(other.to_string()),
@@ -750,11 +750,8 @@ impl TestContext {
         Ok(self.record_content_write(out.encrypted_content, doc))
     }
 
-    /// Write `content` with the keys of its ancestors, so a reader can open them.
-    /// Simulates what an application would do.
-    ///
-    /// The author is also given a copy in their own store, as an application would keep what
-    /// it wrote. Other readers still need to be given one.
+    /// [`Self::encrypt_after`], also giving the author a copy in their own store, as an
+    /// application would keep what it wrote. Other readers still need to be given one.
     pub async fn encrypt_in_envelope(
         &mut self,
         who: &Instance,
@@ -762,12 +759,7 @@ impl TestContext {
         after: &[&Ciphertext],
         content: &[u8],
     ) -> TestResult<Ciphertext> {
-        let pred_refs = self.predecessor_refs(after, doc)?;
-        let out = who
-            .try_encrypt_content_in_envelope(doc, &content_ref(content), &pred_refs, content)
-            .await
-            .map_err(|e| TestError::Other(e.to_string()))?;
-        let ct = self.record_content_write(out.encrypted_content, doc);
+        let ct = self.encrypt_after(who, doc, after, content).await?;
         self.give_content(who, &ct).await?;
         Ok(ct)
     }
@@ -1059,7 +1051,7 @@ pub fn decrypt_with_key(
     doc: DocumentId,
 ) -> TestResult<Vec<u8>> {
     Envelope::<_, Vec<u8>>::open(ct, key, doc.into())
-        .map(|envelope| envelope.plaintext)
+        .map(|(envelope, _)| envelope.plaintext)
         .map_err(|e| TestError::Other(format!("decryption with the given key failed: {e}")))
 }
 
@@ -1098,6 +1090,6 @@ impl CausalDecryptionExt for CausalDecryptionState<[u8; 32], Vec<u8>> {
     }
 
     fn key_for_recovered(&self, ct: &Ciphertext) -> Option<SymmetricKey> {
-        self.keys.get(&ct.content_ref).copied()
+        self.keys.get(&ct.content_ref).map(|key| key.key())
     }
 }

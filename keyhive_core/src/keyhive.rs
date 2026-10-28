@@ -53,10 +53,11 @@ use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_content::{
+    ancestor_key::AncestorKey,
     encrypted::EncryptedContent,
     envelope::Envelope,
     reference::ContentRef,
-    store::{CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
+    store::{CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{
     bytes::Bytes,
@@ -87,11 +88,6 @@ use std::{
 
 use thiserror::Error;
 use tracing::instrument;
-
-// Only `cgka_members_for()` uses this.
-// Only `try_causal_decrypt_from` uses this.
-#[cfg(any(test, feature = "test_utils"))]
-use keyhive_content::store::CausalDecryptionError;
 
 /// The main object for a replica: a shared handle to its [`KeyhiveState`].
 ///
@@ -1621,7 +1617,15 @@ where
         Ok(())
     }
 
-    /// Encrypt `content` into `doc`, with no ancestors' keys.
+    /// Encrypt `content` into `doc` after `pred_refs`, with the key this document has for
+    /// each, from content it has written or read. A reader who opens the result can then
+    /// open each predecessor and traverse back from there with
+    /// [`Keyhive::try_causal_decrypt_content`] or [`Keyhive::try_causal_decrypt_from_keys`].
+    /// If a content ref appears more than once in `pred_refs`, it is one predecessor.
+    ///
+    /// Fails with [`EncryptContentError::NoKeyForPredecessor`] if this document has no key
+    /// for one of `pred_refs`, because this `Keyhive` has not written that content or read
+    /// it.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
         &self,
@@ -1629,70 +1633,15 @@ where
         content_ref: &T,
         pred_refs: &[T],
         content: &[u8],
-    ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError> {
+    ) -> Result<EncryptedContentWithUpdate<T>, EncryptContentError<T>> {
         Ok(self
             .try_encrypt_content_keyed(doc, content_ref, pred_refs, content)
             .await?
             .0)
     }
 
-    /// Encrypt `content` into `doc` with each of `pred_refs` and the key this document has
-    /// for it. Fails with [`EnvelopeError::NoKeyForAncestor`] if it has none.
-    ///
-    /// [`Keyhive::try_causal_decrypt_content`] reads it and its ancestors back.
-    #[cfg(any(test, feature = "test_utils"))]
-    #[instrument(skip_all)]
-    pub async fn try_encrypt_content_in_envelope(
-        &self,
-        doc: DocumentId,
-        content_ref: &T,
-        pred_refs: &[T],
-        content: &[u8],
-    ) -> Result<EncryptedContentWithUpdate<T>, EnvelopeError<T>> {
-        let ancestors = {
-            let handle = self.document_by_id(doc).await?;
-            let locked = handle.lock().await;
-            pred_refs
-                .iter()
-                .map(|pred| {
-                    locked
-                        .known_decryption_key(pred)
-                        .map(|key| (pred.clone(), key))
-                        .ok_or_else(|| EnvelopeError::NoKeyForAncestor(pred.clone()))
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        };
-        Ok(self
-            .try_encrypt_content_with_ancestors(doc, content_ref, &ancestors, content)
-            .await?
-            .0)
-    }
-
-    /// Encrypt `content` into `doc` with `ancestors`. Each entry in `ancestors` is the
-    /// ancestor's content ref and the key that opens it. A reader who opens the result can
-    /// then open each ancestor and traverse back from there with
-    /// [`CiphertextStoreExt::try_causal_decrypt_from_keys`].
-    ///
-    /// The ancestors are also the content's predecessors, in any order. If a content ref
-    /// appears more than once, it is one predecessor, and the envelope keeps its last key.
-    ///
-    /// Returns the application secret the content was encrypted under. A later write passes
-    /// it in `ancestors`.
-    #[instrument(skip_all)]
-    pub async fn try_encrypt_content_with_ancestors(
-        &self,
-        doc: DocumentId,
-        content_ref: &T,
-        ancestors: &[(T, SymmetricKey)],
-        content: &[u8],
-    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
-        let pred_refs: Vec<T> = ancestors.iter().map(|(pred, _)| pred.clone()).collect();
-        self.encrypt_keyed(doc, content_ref, &pred_refs, ancestors, content)
-            .await
-    }
-
-    /// Encrypt `content` into `doc`, with no ancestors' keys. Returns the application secret
-    /// it was encrypted under.
+    /// [`Keyhive::try_encrypt_content`], also returning the application secret the content
+    /// was encrypted under.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed(
         &self,
@@ -1700,19 +1649,7 @@ where
         content_ref: &T,
         pred_refs: &[T],
         content: &[u8],
-    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
-        self.encrypt_keyed(doc, content_ref, pred_refs, &[], content)
-            .await
-    }
-
-    async fn encrypt_keyed(
-        &self,
-        doc: DocumentId,
-        content_ref: &T,
-        pred_refs: &[T],
-        ancestors: &[(T, SymmetricKey)],
-        content: &[u8],
-    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
+    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError<T>> {
         let writing = self.prepare_to_write(doc).await?;
         let encrypted = async {
             let handle = self.document_by_id(doc).await?;
@@ -1720,12 +1657,14 @@ where
             let mut locked_csprng = self.csprng.lock().await;
             let mut locked = handle.lock().await;
             self.settle_for_write(doc, &mut locked).await?;
+            let ancestors = locked
+                .predecessor_keys(pred_refs)
+                .map_err(EncryptContentError::NoKeyForPredecessor)?;
             locked
                 .try_encrypt_content_keyed(
                     content_ref,
                     content,
-                    pred_refs,
-                    ancestors,
+                    &ancestors,
                     &signer,
                     &mut *locked_csprng,
                 )
@@ -1785,6 +1724,8 @@ where
     /// Try causal decrypt from more than one entrypoint at once.
     ///
     /// [`Keyhive::try_causal_decrypt_content`] takes a single entrypoint.
+    /// Remembers the key of each block read, as
+    /// [`Keyhive::try_causal_decrypt_from_keys`] does.
     #[cfg(any(test, feature = "test_utils"))]
     pub async fn try_causal_decrypt_from(
         &self,
@@ -1795,12 +1736,39 @@ where
         P: Clone + Encode + Decode,
     {
         let mut to_walk = entrypoints.to_vec();
-        CiphertextStoreExt::<F, T, P>::try_causal_decrypt(
+        let traversed = CiphertextStoreExt::<F, T, P>::try_causal_decrypt(
             &self.ciphertext_store,
             doc.into(),
             &mut to_walk,
         )
-        .await
+        .await;
+        if let Some(state) = self.document_state(doc).await {
+            state.lock().await.remember_traversed_keys(&traversed);
+        }
+        traversed
+    }
+
+    /// Traverse back over `store` from `start`, each entry a block's content ref
+    /// and the key that opens it, as
+    /// [`CiphertextStoreExt::try_causal_decrypt_from_keys`] does. If this replica
+    /// is a member of `doc`, it remembers the key of each block read so a later
+    /// write can refer to that block as a predecessor.
+    pub async fn try_causal_decrypt_from_keys<G, Store, Q>(
+        &self,
+        doc: DocumentId,
+        start: &[(T, SymmetricKey)],
+        store: &Store,
+    ) -> Result<CausalDecryptionState<T, Q>, CausalDecryptionError<G, T, Q, Store>>
+    where
+        G: FutureForm,
+        Store: CiphertextStore<G, T, Q> + CiphertextStoreExt<G, T, Q>,
+        Q: Clone + Encode + Decode,
+    {
+        let traversed = store.try_causal_decrypt_from_keys(doc.into(), start).await;
+        if let Some(state) = self.document_state(doc).await {
+            state.lock().await.remember_traversed_keys(&traversed);
+        }
+        traversed
     }
 
     /// Decrypt `encrypted` out of `doc`.
@@ -1865,7 +1833,8 @@ where
         .map_err(|_| DecryptError::KeyNotFound)
     }
 
-    /// Walk back from `encrypted` through the ancestors it lists.
+    /// Walk back from `encrypted` through the ancestors it lists. Remembers the key of
+    /// each block read so a later write can list it as a predecessor.
     pub async fn try_causal_decrypt_content(
         &self,
         doc: DocumentId,
@@ -3441,17 +3410,19 @@ where
                 unjoined.insert(doc_id, cgka);
                 continue;
             }
-            let (heads, state) = archive
-                .docs
-                .get(&doc_id)
-                .map(|d| (d.content_heads.clone(), d.content_state.clone()))
-                .unwrap_or_default();
-            documents.insert(
-                doc_id,
-                Arc::new(Mutex::new(DocumentState::with_cgka(
-                    doc_id, cgka, heads, state,
-                ))),
-            );
+            let mut doc = DocumentState::with_cgka(doc_id, cgka, HashSet::new(), HashSet::new());
+            if let Some(archived) = archive.docs.get(&doc_id) {
+                doc.content_heads = archived.content_heads.clone();
+                doc.content_state = archived.content_state.clone();
+                for (content_ref, key) in &archived.content_keys {
+                    doc.remember_key(AncestorKey::from_trusted_storage(
+                        content_ref.clone(),
+                        doc_id.into(),
+                        *key,
+                    ));
+                }
+            }
+            documents.insert(doc_id, Arc::new(Mutex::new(doc)));
         }
         for doc_id in archive.docs.keys() {
             if documents.contains_key(doc_id) {
@@ -3935,7 +3906,10 @@ where
         }
 
         // A document the fork generated is rebuilt here from its operations,
-        // which carry no content heads: take the fork's.
+        // which contain no content heads, so take the fork's heads when this
+        // replica has none. For every document, add the keys of the content the
+        // fork wrote or read where this replica has none for that ref, so a
+        // later write here can list it as a predecessor.
         let forked_docs: Vec<_> = {
             fork.documents
                 .lock()
@@ -3948,10 +3922,19 @@ where
             let Some(doc) = self.document_state(doc_id).await else {
                 continue;
             };
-            let heads = forked.lock().await.content_heads.clone();
+            let (heads, keys): (_, Vec<_>) = {
+                let forked = forked.lock().await;
+                (
+                    forked.content_heads.clone(),
+                    forked.keys().cloned().collect(),
+                )
+            };
             let mut locked = doc.lock().await;
             if locked.content_heads.is_empty() {
                 locked.content_heads = heads;
+            }
+            for key in keys {
+                locked.remember_key(key);
             }
         }
     }
@@ -4048,19 +4031,6 @@ impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
     fn from(error: DocCausalDecryptionError<F, T, P, C>) -> Self {
         CausalDecryptError::Document(Box::new(error))
     }
-}
-
-/// Why content could not be written into an [`Envelope`].
-#[derive(Debug, Error)]
-pub enum EnvelopeError<T: ContentRef> {
-    #[error(transparent)]
-    NotFound(#[from] NotFound),
-
-    #[error("no key for ancestor {0:?}")]
-    NoKeyForAncestor(T),
-
-    #[error(transparent)]
-    Encrypt(#[from] EncryptContentError),
 }
 
 /// Why an archive could not be loaded.
@@ -4404,7 +4374,7 @@ enum CgkaUnauthorized {
 }
 
 #[derive(Debug, Error)]
-pub enum EncryptContentError {
+pub enum EncryptContentError<T: ContentRef> {
     #[error(transparent)]
     NotFound(#[from] NotFound),
 
@@ -4413,6 +4383,11 @@ pub enum EncryptContentError {
 
     #[error("Error signing Cgka op: {0}")]
     SignCgkaOpError(SigningError),
+
+    /// This document has no key for this predecessor because this `Keyhive` has not
+    /// written that content or read it.
+    #[error("no key for predecessor {0:?}")]
+    NoKeyForPredecessor(T),
 }
 
 #[cfg(test)]
@@ -6247,7 +6222,7 @@ mod tests {
         assert!(update.cgka_ops.is_empty());
 
         send(&alice, &bob, true).await?;
-        bob.try_encrypt_content(project_id, &[2u8; 32], &[[1u8; 32]], b"after joining")
+        bob.try_encrypt_content(project_id, &[2u8; 32], &[], b"after joining")
             .await?;
         let members = bob
             .cgka_members_for(project_id)
@@ -6255,6 +6230,31 @@ mod tests {
             .ok_or("bob has not joined the project's CGKA group")?;
         assert!(members.contains(&carol));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_trunk_can_write_after_content_its_fork_wrote() -> TestResult {
+        let alice = make_keyhive().await;
+        let doc = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let trunk = Arc::new(Mutex::new(alice));
+
+        transact_async(
+            &trunk,
+            |fork: Keyhive<Sendable, _, _, _, _, Log<[u8; 32]>, _, _>| async move {
+                fork.try_encrypt_content(doc, &[2u8; 32], &[], b"in the fork")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>(fork)
+            },
+        )
+        .await?;
+
+        trunk
+            .lock()
+            .await
+            .try_encrypt_content(doc, &[3u8; 32], &[[2u8; 32]], b"after the fork")
+            .await?;
         Ok(())
     }
 

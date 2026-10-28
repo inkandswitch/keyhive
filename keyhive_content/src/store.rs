@@ -4,6 +4,7 @@ pub mod memory;
 
 use self::memory::MemoryCiphertextStore;
 use crate::{
+    ancestor_key::AncestorKey,
     application_secret::GroupSecretOrigin,
     encrypted::EncryptedContent,
     envelope::{Envelope, OpenEnvelopeError},
@@ -72,6 +73,10 @@ pub trait CiphertextStore<F: FutureForm, Cr: ContentRef, T>: Sized {
 /// `F::from_future(async { ... })` which requires concrete `F`
 /// (either [`Sendable`] or [`Local`]). The `#[future_form]` macro
 /// stamps out both variants via a blanket impl.
+///
+/// Neither method stores the keys it finds. They are in the returned state's
+/// [`keys`][CausalDecryptionState::keys]. A caller that will later write
+/// content referring to these blocks as predecessors has to store them itself.
 ///
 /// [`try_causal_decrypt`]: CiphertextStoreExt::try_causal_decrypt
 /// [`try_causal_decrypt_from_keys`]: CiphertextStoreExt::try_causal_decrypt_from_keys
@@ -214,17 +219,16 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                     continue;
                 }
 
-                progress.keys.insert(ciphertext.content_ref.clone(), key);
                 let content_ref = ciphertext.content_ref.clone();
 
                 let opened = match Envelope::<Cr, Vec<u8>>::open(&ciphertext, key, doc_id) {
-                    Ok(envelope) => T::decode(&envelope.plaintext)
-                        .map(|plaintext| (plaintext, envelope.ancestors))
+                    Ok((envelope, opened_by)) => T::decode(&envelope.plaintext)
+                        .map(|plaintext| (plaintext, envelope.ancestors, opened_by))
                         .map_err(ErrorReason::DeserializationFailed),
                     Err(OpenEnvelopeError::Decrypt(_)) => Err(ErrorReason::DecryptionFailed(key)),
                     Err(OpenEnvelopeError::Decode(e)) => Err(ErrorReason::DeserializationFailed(e)),
                 };
-                let (plaintext, ancestors) = match opened {
+                let (plaintext, ancestors, opened_by) = match opened {
                     Ok(opened) => opened,
                     Err(reason) => {
                         seen.remove(&content_ref);
@@ -248,6 +252,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                     }
                 }
 
+                progress.keys.insert(content_ref.clone(), opened_by);
                 progress.complete.push((content_ref, plaintext));
             }
 
@@ -313,8 +318,14 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
 
 #[derive(Debug, Clone, Default)]
 pub struct CausalDecryptionState<Cr: ContentRef, T> {
+    /// Each block read, with its payload.
     pub complete: Vec<(Cr, T)>,
-    pub keys: HashMap<Cr, SymmetricKey>,
+
+    /// The key that opened each block in `complete`.
+    pub keys: HashMap<Cr, AncestorKey<Cr>>,
+
+    /// Blocks the store did not have, each with the key an envelope listed
+    /// for it, which has not been checked.
     pub next: HashMap<Cr, SymmetricKey>,
 }
 

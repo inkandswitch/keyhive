@@ -49,13 +49,17 @@ impl JsEncrypted {
     /// Decrypt this content with an explicit 32-byte application secret key,
     /// bypassing CGKA, and return its payload. The document is part of what
     /// every chunk authenticates.
+    ///
+    /// Nothing stores the key, so a later write cannot refer to this content
+    /// as a predecessor. Use `Keyhive.tryCausalDecryptFrom` to read it in a
+    /// way that allows that.
     #[wasm_bindgen(js_name = decryptWithKey)]
     pub fn decrypt_with_key(&self, key: &[u8], doc_id: &JsDocumentId) -> Result<Vec<u8>, JsValue> {
         let key_arr: [u8; 32] = key
             .try_into()
             .map_err(|_| JsValue::from_str("application secret key must be 32 bytes"))?;
         Envelope::<JsChangeId, Vec<u8>>::open(&self.0, SymmetricKey::from(key_arr), doc_id.0.into())
-            .map(|envelope| envelope.plaintext)
+            .map(|(envelope, _)| envelope.plaintext)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }

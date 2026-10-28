@@ -36,7 +36,10 @@ const groupId = await keyhive.generateGroup([]);
 const head = new ChangeId(initialChangeHash); // Uint8Array: your CRDT's first change hash
 const docId = await keyhive.generateDocument([groupId.toIdentifier()], head, []);
 
-// Encrypt a CRDT change, naming its causal predecessors.
+// Encrypt CRDT changes, listing each one's causal predecessors. A predecessor
+// must be content this keyhive has encrypted or decrypted, so the first change
+// is encrypted before a later one lists it.
+await keyhive.tryEncrypt(docId, head, [], firstPayload);
 const next = new ChangeId(nextChangeHash);
 const encrypted = await keyhive.tryEncrypt(docId, next, [head], payload);
 

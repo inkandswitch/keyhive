@@ -5,14 +5,14 @@
 use super::{
     ancestor::JsAncestor, causal_decryption::JsCausalDecryption, change_id::JsChangeId,
     decrypt_failure::JsDecryptFailure, decrypted_content::JsDecryptedContent,
-    document_id::JsDocumentId,
+    document_id::JsDocumentId, keyhive::JsKeyhive,
 };
 use future_form::{FutureForm, Local};
 use keyhive_codec::traits::Decode;
 use keyhive_content::{
     application_secret::GroupSecretOrigin,
     encrypted::EncryptedContent,
-    store::{CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
+    store::{CausalDecryptionState, CiphertextStore},
 };
 use keyhive_crypto::{digest::Digest, symmetric_key::SymmetricKey};
 use std::{cell::RefCell, convert::Infallible, sync::Arc};
@@ -21,8 +21,10 @@ use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
 
 /// Decrypt each of `start` with its key, then the ancestors each lists, and
-/// theirs in turn, reading blocks through `load`.
+/// theirs in turn, reading blocks through `load`. `keyhive` remembers the key
+/// of each block read so a later write can list it as a predecessor.
 pub(crate) async fn causal_decrypt(
+    keyhive: &JsKeyhive,
     doc_id: &JsDocumentId,
     start: &[(JsChangeId, SymmetricKey)],
     load: js_sys::Function,
@@ -31,12 +33,10 @@ pub(crate) async fn causal_decrypt(
         load,
         failed: RefCell::default(),
     };
-    let walked = CiphertextStoreExt::<Local, _, _>::try_causal_decrypt_from_keys(
-        &store,
-        doc_id.0.into(),
-        start,
-    )
-    .await;
+    let walked = keyhive
+        .0
+        .try_causal_decrypt_from_keys::<Local, _, _>(doc_id.0, start, &store)
+        .await;
     let (state, cannot) = match walked {
         Ok(state) => (state, Default::default()),
         Err(err) => (*err.progress, err.cannot),
@@ -58,9 +58,10 @@ pub(crate) async fn causal_decrypt(
         complete: complete
             .into_iter()
             .map(|(content_ref, content)| JsDecryptedContent {
-                key: *keys
+                key: keys
                     .get(&content_ref)
-                    .expect("the traversal records the key of each block it reads"),
+                    .expect("the traversal records the key of each block it reads")
+                    .key(),
                 content_ref,
                 content: content.into(),
             })
@@ -226,19 +227,16 @@ mod tests {
             .generate_doc(vec![], &JsChangeId::new(vec![0]), vec![])
             .await
             .expect("a document is created");
-        let mut ancestors = vec![];
+        let mut pred_refs = vec![];
         let mut written = vec![];
         for (n, content) in contents.into_iter().enumerate() {
             let content_ref = JsChangeId::new(vec![n as u8 + 1]);
             let keyed = kh
-                .try_encrypt_with_ancestors(&doc, &content_ref, ancestors, content)
+                .try_encrypt_keyed(&doc, &content_ref, pred_refs, content)
                 .await
                 .expect("the content encrypts");
-            let key = keyed.application_secret();
-            ancestors = vec![JsAncestor::new(&content_ref, &key)
-                .expect("a key is 32 bytes")
-                .into()];
-            written.push((keyed.encrypted_content(), key));
+            pred_refs = vec![content_ref.into()];
+            written.push((keyed.encrypted_content(), keyed.application_secret()));
         }
         let written = <[_; N]>::try_from(written).expect("each block was written");
         (kh, doc, written)
