@@ -1,6 +1,6 @@
 [package]
 name = "keyline"
-version = "0.1.0"
+version = "0.2.0"
 description = "Keyline: Keyhive's convergent authority graph of signed delegations and revocations"
 
 authors.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "keyhive_crypto"
-version = "0.3.0"
+version = "0.4.0"
 description = "Shared cryptographic primitives for Keyhive"
 
 authors.workspace = true
