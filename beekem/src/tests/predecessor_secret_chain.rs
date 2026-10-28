@@ -52,7 +52,7 @@ fn added_to_chain(op: &Verified<CgkaOperation>, hash: &Digest<CgkaOperation>) ->
 /// `member`'s [`Cgka`] built by applying every operation in `source`.
 fn view_of(source: &Cgka, member: &Member) -> Cgka {
     let mut sks = ShareKeyMap::new();
-    sks.insert(member.pk, member.sk);
+    sks.insert(member.pk, member.sk.clone());
     let mut view = Cgka::new(source.doc_id, member.id, sks);
     view.apply_batches(&source.ops().unwrap()).unwrap();
     view
@@ -155,7 +155,7 @@ fn the_traversal_ignores_an_entry_whose_secret_is_not_its_updates() {
         let alice_signer = group.members[0].signer.clone();
         let bob_id = group.members[1].id;
         let bob_pk = group.members[1].pk;
-        let bob_sk = group.members[1].sk;
+        let bob_sk = group.members[1].sk.clone();
         let alice = &mut group.replicas[0];
 
         let (_, op1) = rotate(alice, &alice_signer, &mut rng).await;
@@ -315,7 +315,7 @@ fn the_traversal_records_each_secret_it_derives() {
         let (_, mut carol_cgka, updates) = carol_added_after_three_updates(&mut rng).await;
         assert_eq!(
             carol_cgka.root_secret_from_chain(&updates[0].0),
-            Some(updates[0].1),
+            Some(updates[0].1.clone()),
             "precondition: Carol reads back to the oldest update"
         );
 

@@ -36,15 +36,16 @@ async fn forged_update(
     };
     for (_, node) in new_path.path.iter_mut() {
         let version = node.head_mut();
-        let encrypter_sk = *copy
+        let encrypter_sk = copy
             .owner_sks
             .get(&version.encrypter_pk)
-            .expect("the author has its path secrets");
+            .expect("the author has its path secrets")
+            .clone();
         let incorrect_secret = ShareSecretKey::generate(rng);
         for encrypted in version.sk.values_mut() {
             *encrypted = encrypt_secret(
                 doc_id,
-                incorrect_secret,
+                incorrect_secret.clone(),
                 &encrypter_sk,
                 &encrypted.paired_pk,
             )

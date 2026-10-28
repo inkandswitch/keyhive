@@ -31,10 +31,11 @@ impl JsAncestor {
         self.content_ref.clone()
     }
 
-    /// Treat as secret: do not log or persist unencrypted.
+    /// Treat as secret: do not log or persist unencrypted. Each call copies it
+    /// into a new JS array, which JS cannot wipe.
     #[wasm_bindgen(getter)]
-    pub fn key(&self) -> Vec<u8> {
-        self.key.as_slice().to_vec()
+    pub fn key(&self) -> js_sys::Uint8Array {
+        js_sys::Uint8Array::from(self.key.as_slice())
     }
 }
 

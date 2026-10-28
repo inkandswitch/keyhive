@@ -127,14 +127,14 @@ impl Fixture {
     fn update_from(&mut self, i: usize) -> (Arc<Verified<CgkaOperation>>, Cgka) {
         let mut replica = self.replica(i);
         let sk = ShareSecretKey::generate(&mut self.rng);
-        let (_pcs_key, op, _key_pair) = block_on(replica.update::<Local, _, _>(
+        let (_pcs_key, op, (pk, sk)) = block_on(replica.update::<Local, _, _>(
             sk.share_key(),
             sk,
             &self.members[i].signer,
             &mut self.rng,
         ))
         .expect("a member can update");
-        self.secrets[i].insert(sk.share_key(), sk);
+        self.secrets[i].insert(pk, sk);
         (Arc::new(op), replica)
     }
 
@@ -174,7 +174,7 @@ impl Fixture {
 /// `m`'s secret for the key it joins with.
 fn leaf_secret(m: &Member) -> ShareKeyMap {
     let mut secrets = ShareKeyMap::new();
-    secrets.insert(m.pk, m.sk);
+    secrets.insert(m.pk, m.sk.clone());
     secrets
 }
 

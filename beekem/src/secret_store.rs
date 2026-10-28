@@ -5,7 +5,7 @@ use crate::{
     encrypted::EncryptedSecret,
     error::CgkaError,
     id::TreeId,
-    keys::{share_secret_key_from_decrypted_secret, ConflictKeys, NodeKey, ShareKeyMap},
+    keys::{ConflictKeys, NodeKey, ShareKeyMap},
     treemath::TreeNodeIndex,
 };
 use alloc::{
@@ -132,7 +132,7 @@ impl SecretStore {
             let plaintext = sks
                 .try_decrypt_encryption(doc_id, version.encrypter_pk, encrypted)
                 .ok()?;
-            share_secret_key_from_decrypted_secret(plaintext)
+            ShareSecretKey::try_from_slice(&plaintext)
         })
     }
 
@@ -154,7 +154,7 @@ impl SecretStore {
             .sk
             .values()
             .find_map(|encrypted| encrypted.try_encrypter_decrypt(doc_id, child_sk).ok())
-            .and_then(share_secret_key_from_decrypted_secret)
+            .and_then(|plaintext| ShareSecretKey::try_from_slice(&plaintext))
     }
 
     /// Drop the versions corresponding to `removed_keys` and then merge `other`.
@@ -275,7 +275,7 @@ impl SecretStoreVersion {
             .get(lookup_idx)
             .ok_or(CgkaError::EncryptedSecretNotFound)?;
 
-        let decrypted: Vec<u8> = if is_encrypter {
+        let decrypted = if is_encrypter {
             let secret_key = child_sks
                 .get(&self.encrypter_pk)
                 .ok_or(CgkaError::SecretKeyNotFound)?;
@@ -287,6 +287,6 @@ impl SecretStoreVersion {
             child_sks.try_decrypt_encryption(doc_id, self.encrypter_pk, encrypted)?
         };
 
-        share_secret_key_from_decrypted_secret(decrypted).ok_or(CgkaError::Conversion)
+        ShareSecretKey::try_from_slice(&decrypted).ok_or(CgkaError::Conversion)
     }
 }

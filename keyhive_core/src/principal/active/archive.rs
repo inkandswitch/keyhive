@@ -3,15 +3,20 @@
 use crate::principal::individual::IndividualState;
 use keyhive_codec::{
     error::DecodeError,
+    prefixed::encode_len,
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
+use keyhive_crypto::{
+    secret::write_secret,
+    share_key::{ShareKey, ShareSecretKey},
+};
 use std::{
     collections::BTreeMap,
     fmt,
     fmt::{Debug, Formatter},
     hash::{Hash, Hasher},
 };
+use zeroize::Zeroizing;
 
 #[derive(Clone)]
 pub struct ActiveArchive {
@@ -90,5 +95,46 @@ impl StreamDecode for ActiveArchive {
             },
             rest,
         ))
+    }
+}
+
+/// Encode `key_pairs`, `count ‖ ( share_key ‖ secret )*`, into a buffer that
+/// is wiped when dropped and never grows, so it leaves no copy of a secret.
+pub fn encode_key_pairs(key_pairs: &BTreeMap<ShareKey, ShareSecretKey>) -> Zeroizing<Vec<u8>> {
+    write_secret(key_pairs_len(key_pairs), |out| key_pairs.encode_into(out))
+}
+
+/// The length of `key_pairs`' encoding, found without writing a secret.
+pub(crate) fn key_pairs_len(key_pairs: &BTreeMap<ShareKey, ShareSecretKey>) -> usize {
+    /// A share key and its secret, 32 bytes each.
+    const KEY_PAIR_LEN: usize = 64;
+
+    let mut count = Vec::new();
+    encode_len(key_pairs.len(), &mut count);
+    count.len() + key_pairs.len() * KEY_PAIR_LEN
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wiped encoding is the key pairs' encoding, byte for byte, written
+    /// into a buffer of exactly that length.
+    #[test]
+    fn key_pairs_encode_the_same_into_a_wiped_buffer() {
+        bolero::check!()
+            .with_arbitrary::<Vec<[u8; 32]>>()
+            .for_each(|secrets| {
+                let key_pairs: BTreeMap<_, _> = secrets
+                    .iter()
+                    .map(|bytes| {
+                        let secret = ShareSecretKey::force_from_bytes(*bytes);
+                        (secret.share_key(), secret)
+                    })
+                    .collect();
+                let wiped = encode_key_pairs(&key_pairs);
+                assert_eq!(wiped.as_slice(), key_pairs.encode().as_bytes());
+                assert_eq!(wiped.capacity(), wiped.len(), "the buffer never grew");
+            });
     }
 }

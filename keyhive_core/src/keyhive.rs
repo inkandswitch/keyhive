@@ -87,6 +87,7 @@ use std::{
 
 use thiserror::Error;
 use tracing::instrument;
+use zeroize::Zeroizing;
 
 // Only `cgka_members_for()` uses this.
 // Only `try_causal_decrypt_from` uses this.
@@ -1275,13 +1276,14 @@ where
             (active.signer.clone(), active.id(), owner_pk)
         };
         let owner_pk = owner_pk.ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
-        let owner_sk = *self
+        let owner_sk = self
             .active
             .key_pairs
             .lock()
             .await
             .get(&owner_pk)
-            .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
+            .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?
+            .clone();
 
         // The owner's add has no predecessors, so it cites the whole closure,
         // root edges included, and every later add has it as an ancestor.
@@ -1921,8 +1923,8 @@ where
             self.settle_for_write(doc, &mut locked).await?;
             locked.pcs_update(&signer, &mut *locked_csprng).await?
         };
-        let (pk, sk) = new_key_pair;
-        self.active.insert_rotated_secret(pk, sk).await;
+        let (pk, sk) = &new_key_pair;
+        self.active.insert_rotated_secret(*pk, sk.clone()).await;
         Ok((op, new_key_pair))
     }
 
@@ -2974,7 +2976,7 @@ where
             let pairs = self.active.key_pairs.lock().await;
             own_cgka_keys(&op, me)
                 .into_iter()
-                .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, *sk)))
+                .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, sk.clone())))
                 .collect()
         };
         let merged = {
@@ -3098,7 +3100,7 @@ where
         let Some(prekey) = self.active.pick_prekey(doc_id).await else {
             return Ok(false);
         };
-        let sk = { self.active.key_pairs.lock().await.get(&prekey).copied() };
+        let sk = { self.active.key_pairs.lock().await.get(&prekey).cloned() };
         let (Some(sk), Some(key_proof)) = (sk, self.key_proof(me, &prekey).await) else {
             return Ok(false);
         };
@@ -3180,9 +3182,10 @@ where
     ///
     /// # Security
     ///
-    /// The returned bytes contain unencrypted secret key material.
-    /// Callers are responsible for protecting this data at rest and in transit.
-    pub async fn export_prekey_secrets(&self) -> Vec<u8> {
+    /// The returned bytes contain unencrypted secret key material, wiped when
+    /// dropped. Callers are responsible for protecting any copy they make, at
+    /// rest and in transit.
+    pub async fn export_prekey_secrets(&self) -> Zeroizing<Vec<u8>> {
         self.active.export_prekey_secrets().await
     }
 
@@ -4193,7 +4196,7 @@ fn adopt_cgka_secrets<I: IntoIterator<Item = ShareKey>>(
     for pk in keys {
         if !cgka.owner_sks().contains_key(&pk) {
             if let Some(sk) = secrets.get(&pk) {
-                cgka.owner_sks_mut().insert(pk, *sk);
+                cgka.owner_sks_mut().insert(pk, sk.clone());
             }
         }
     }

@@ -20,6 +20,7 @@ This document describes who Keyhive defends against, what it defends, and what i
 - Ed25519, X25519, XChaCha20-Poly1305, and BLAKE3 are secure. The synthetic-nonce construction in [`ciphersuite.md`](./ciphersuite.md) is assumed secure pending review.
 - Each replica's CSPRNG is sound. BeeKEM samples every path secret from it.
 - A replica's local storage is as trustworthy as the replica. There is no defence against an adversary who controls the host.
+- An adversary does not read a replica's memory while it holds a key. Keys are wiped when dropped (`zeroize`), as defence in depth against memory read later (a core dump, swap, a later disclosure bug). Each key's bytes are in their own allocation, and encodings that hold secrets (prekey exports, archives, causal envelopes) are written into buffers that never grow, so neither a resize nor a reallocation leaves a copy. This is best effort: temporaries on the stack and blake3's hasher state are not wiped, and JS cannot wipe what it is given. A secret export is the caller's to protect once it has it.
 - Operations are delivered causally. The sync layer is responsible for this; Keyhive buffers operations whose predecessors are missing.
 - The genesis key of a group or document is honest at creation.
 

@@ -22,6 +22,7 @@ pub mod context;
 pub mod digest;
 pub mod hex;
 pub mod identifier;
+pub mod secret;
 pub mod share_key;
 pub mod signable;
 pub mod signer;

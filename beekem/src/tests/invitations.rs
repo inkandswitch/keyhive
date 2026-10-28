@@ -108,7 +108,9 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
         "an invitation pairing op2 with a secret it did not produce should be ignored"
     );
 
-    bob.record_secrets_from_invitation(&sign(create_add_with_invitation_wrapping(root2)).await);
+    bob.record_secrets_from_invitation(
+        &sign(create_add_with_invitation_wrapping(root2.clone())).await,
+    );
     assert_eq!(
         bob.root_secrets.get(&op2_hash),
         Some(root2),

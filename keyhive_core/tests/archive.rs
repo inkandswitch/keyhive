@@ -427,3 +427,22 @@ async fn an_archive_re_encodes_to_the_same_bytes() -> Result<()> {
     assert_eq!(decoded.encode().as_bytes(), bytes.as_bytes());
     Ok(())
 }
+
+/// The wiped encoding is the archive's encoding, byte for byte, written into
+/// a buffer of exactly that length.
+#[tokio::test]
+async fn an_archive_encodes_the_same_into_a_wiped_buffer() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let doc = ctx.doc(&alice, "doc").await?;
+    alice.add_member(bob.id(), doc, Read).await?;
+    ctx.encrypt(&alice, doc, b"some content").await?;
+    ctx.sync_all_unsent().await?;
+
+    let archive = alice.into_archive().await?;
+    let wiped = archive.encode_zeroizing();
+    assert_eq!(wiped.as_slice(), archive.encode().as_bytes());
+    assert_eq!(wiped.capacity(), wiped.len(), "the buffer never grew");
+    Ok(())
+}

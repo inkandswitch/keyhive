@@ -1,8 +1,6 @@
 //! The root secrets of a BeeKEM tree, which are the CGKA
 //! group secrets.
 
-use crate::keys::share_secret_key_from_decrypted_secret;
-use alloc::vec::Vec;
 use keyhive_crypto::{
     context::Context,
     digest::Digest,
@@ -10,9 +8,11 @@ use keyhive_crypto::{
     signable::{Kind, Kinded},
     symmetric_key::SymmetricKey,
 };
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// A key used to derive application secrets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A key used to derive application secrets. Wiped when dropped, through its
+/// [`ShareSecretKey`]; equality takes constant time.
+#[derive(Debug, Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct PcsKey(pub ShareSecretKey);
 
 impl PcsKey {
@@ -23,8 +23,8 @@ impl PcsKey {
 
     /// A root secret decrypted from an invitation or a predecessor secret.
     /// Returns `None` unless `decrypted_secret` is 32 bytes.
-    pub(crate) fn from_decrypted_secret(decrypted_secret: Vec<u8>) -> Option<Self> {
-        share_secret_key_from_decrypted_secret(decrypted_secret).map(Self::new)
+    pub(crate) fn from_decrypted_secret(decrypted_secret: &[u8]) -> Option<Self> {
+        ShareSecretKey::try_from_slice(decrypted_secret).map(Self::new)
     }
 
     /// The digest of this key.
@@ -53,6 +53,14 @@ impl From<ShareSecretKey> for PcsKey {
         PcsKey(share_secret_key)
     }
 }
+
+// Fails to compile unless the key wipes itself when dropped and has a
+// destructor, which a `Copy` type cannot have.
+const _: () = assert!(core::mem::needs_drop::<PcsKey>());
+const _: fn() = || {
+    fn wiped_on_drop<T: ZeroizeOnDrop>() {}
+    wiped_on_drop::<PcsKey>();
+};
 
 #[cfg(test)]
 mod tests {

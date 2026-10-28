@@ -10,7 +10,7 @@ use crate::{
     content::heads::ContentHeads,
     event::static_event::StaticEvent,
     principal::{
-        active::archive::ActiveArchive,
+        active::archive::{key_pairs_len, ActiveArchive},
         document::{archive::DocumentArchive, id::DocumentId},
         individual::{id::IndividualId, IndividualState},
     },
@@ -22,9 +22,10 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_content::reference::ContentRef;
-use keyhive_crypto::verified;
+use keyhive_crypto::{secret::write_secret, verified};
 use keyline::certificate::Certificate;
 use std::collections::{BTreeMap, HashMap};
+use zeroize::Zeroizing;
 
 /// What a [`Keyhive`][crate::keyhive::Keyhive] stores to be rebuilt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,19 +50,32 @@ impl<T: ContentRef> Archive<T> {
     pub fn id(&self) -> IndividualId {
         self.active.individual.id()
     }
-}
 
-/// `"KHIV" ‖ format ‖ active ‖ individuals ‖ docs ‖ cgka_ops ‖ certificates ‖
-/// pending_events`. Every collection is a count and then its elements in
-/// ascending order of a key: an individual's id, a document's id, or a signed
-/// statement's digest. A statement held twice is written once, so each archive
-/// has one encoding. Individuals are stored without their ids, which their
-/// prekey operations give.
-impl<T: ContentRef> Encode for Archive<T> {
-    fn encode_into(&self, out: &mut Vec<u8>) {
+    /// The archive's encoding, the same bytes as [`Encode`] gives, in a buffer
+    /// that is wiped when dropped: it holds this replica's secret keys.
+    ///
+    /// The buffer never grows, so it leaves no copy of a key behind. Use this,
+    /// not [`Encode::encode`], to store an archive.
+    pub fn encode_zeroizing(&self) -> Zeroizing<Vec<u8>> {
+        let mut public = Vec::new();
+        self.encode_public_into(&mut public);
+        let len = Self::MAGIC.len() + 1 + key_pairs_len(&self.active.key_pairs) + public.len();
+        write_secret(len, |out| {
+            self.encode_secret_into(out);
+            out.extend_from_slice(&public);
+        })
+    }
+
+    /// The header and the key pairs: everything up to the first public field.
+    fn encode_secret_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&Self::MAGIC);
         out.push(Self::FORMAT);
-        self.active.encode_into(out);
+        self.active.key_pairs.encode_into(out);
+    }
+
+    /// Everything after the key pairs, none of it secret.
+    fn encode_public_into(&self, out: &mut Vec<u8>) {
+        self.active.individual.encode_into(out);
         let individuals: BTreeMap<_, _> = self.individuals.values().map(|i| (i.id(), i)).collect();
         encode_len(individuals.len(), out);
         individuals.values().for_each(|i| i.encode_into(out));
@@ -74,6 +88,19 @@ impl<T: ContentRef> Encode for Archive<T> {
         encode_by_key(&self.cgka_ops, |op| op.digest(), out);
         encode_by_key(&self.certificates, |cert| cert.id(), out);
         encode_by_key(&self.pending_events, |event| event.digest(), out);
+    }
+}
+
+/// `"KHIV" ‖ format ‖ active ‖ individuals ‖ docs ‖ cgka_ops ‖ certificates ‖
+/// pending_events`. Every collection is a count and then its elements in
+/// ascending order of a key: an individual's id, a document's id, or a signed
+/// statement's digest. A statement held twice is written once, so each archive
+/// has one encoding. Individuals are stored without their ids, which their
+/// prekey operations give.
+impl<T: ContentRef> Encode for Archive<T> {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.encode_secret_into(out);
+        self.encode_public_into(out);
     }
 }
 
