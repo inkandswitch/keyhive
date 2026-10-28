@@ -449,6 +449,10 @@ mod tests {
         );
         let store = MemoryCiphertextStore::<[u8; 32], String>::new();
         store.insert(one.dupe()).await;
+        assert_eq!(
+            store.get_by_group_secret_origin(&origin).await,
+            vec![one.dupe()]
+        );
 
         assert_eq!(store.remove(&one.digest()).await, Some(one));
         assert_eq!(get_ct(&store, &[0; 32]).await, Ok(None));
