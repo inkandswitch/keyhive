@@ -20,6 +20,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod ancestor_key;
 pub mod application_secret;
 pub mod encrypted;
 #[cfg(feature = "std")]

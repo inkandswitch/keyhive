@@ -1,6 +1,7 @@
 //! The (plaintext) container for causal encryption.
 
 use crate::{
+    ancestor_key::AncestorKey,
     encrypted::{encode_ancestors, ContentDecryptError, EncryptedContent},
     reference::ContentRef,
 };
@@ -143,21 +144,27 @@ fn decode_ancestors<C: ContentRef>(
 
 impl<C: ContentRef> Envelope<C, Vec<u8>> {
     /// Decrypt `encrypted` with `key`, for the document `doc_id`, and decode
-    /// its body, which is always an envelope. The payload keeps the decrypted
-    /// buffer rather than a copy of it.
+    /// its body, which is always an envelope. Returns it with `key` as the
+    /// block's [`AncestorKey`]. The payload keeps the decrypted buffer rather
+    /// than a copy of it.
     pub fn open<P>(
         encrypted: &EncryptedContent<P, C>,
         key: SymmetricKey,
         doc_id: Identifier,
-    ) -> Result<Self, OpenEnvelopeError> {
+    ) -> Result<(Self, AncestorKey<C>), OpenEnvelopeError> {
         let mut body = encrypted.try_decrypt(key, doc_id)?;
         let (ancestors, payload) = decode_ancestors(&body)?;
         let payload_start = body.len() - payload.len();
         body.drain(..payload_start);
-        Ok(Envelope {
-            plaintext: body,
-            ancestors,
-        })
+        Ok((
+            Envelope {
+                plaintext: body,
+                ancestors,
+            },
+            // We have just demonstrated that `key` can decrypt the content
+            // for `encrypted.content_ref` for `doc_id`.
+            AncestorKey::new(encrypted.content_ref.clone(), doc_id, key),
+        ))
     }
 }
 

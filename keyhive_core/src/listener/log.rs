@@ -195,7 +195,7 @@ mod tests {
         log.clear().await;
 
         let written = hive
-            .try_encrypt_content(doc, &[1u8; 32], &[[0u8; 32]], b"after the add")
+            .try_encrypt_content(doc, &[1u8; 32], &[], b"after the add")
             .await
             .expect("the owner can write");
         let rotated = written

@@ -55,7 +55,7 @@ impl JsEncrypted {
             .try_into()
             .map_err(|_| JsValue::from_str("application secret key must be 32 bytes"))?;
         Envelope::<JsChangeId, Vec<u8>>::open(&self.0, SymmetricKey::from(key_arr), doc_id.0.into())
-            .map(|envelope| envelope.plaintext)
+            .map(|(envelope, _)| envelope.plaintext)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }

@@ -356,6 +356,22 @@ async fn a_rebuilt_instance_can_write_and_walk_back() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn a_restored_instance_can_refer_to_what_it_wrote_before_as_a_predecessor() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    let genesis = ctx.encrypt(&alice, design_doc, b"genesis").await?;
+
+    let bytes = alice.into_archive().await?.encode();
+    let archive = Archive::<[u8; 32]>::decode(bytes.as_bytes())
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    let restored = ctx.rebuild_from_archive(&archive, "alice-restored").await?;
+    ctx.encrypt_after(&restored, design_doc, &[&genesis], b"head")
+        .await?;
+    Ok(())
+}
+
 /// An invitation that cannot be opened yet waits in the pending queue, and
 /// the queue is part of the archive: a replica restored from it opens the
 /// invitation once the prekey secret arrives.
@@ -401,15 +417,15 @@ async fn only_an_archive_in_the_current_format_decodes() -> Result<()> {
     let mut ctx = TestContext::new().await;
     let alice = ctx.individual("alice").await?;
     let bytes = alice.into_archive().await?.encode().into_bytes();
-    assert_eq!(bytes[..5], *b"KHIV\x03");
+    assert_eq!(bytes[..5], *b"KHIV\x04");
 
     let mut older = bytes.clone();
-    older[4] = 2;
+    older[4] = 3;
     assert_eq!(
         Archive::<[u8; 32]>::decode(&older),
         Err(DecodeError::UnsupportedVersion {
             kind: b'I',
-            version: 2
+            version: 3
         })
     );
 

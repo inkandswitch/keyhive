@@ -1,11 +1,16 @@
 //! Reading a chain of content by walking back through the ancestors each write lists.
 
+use future_form::Sendable;
+use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_core::{
+    keyhive::EncryptContentError,
     principal::document::id::DocumentId,
     test_utils::{
-        decrypt_with_key, CausalDecryptionExt, Instance, TestContext, TestResult as Result,
+        decrypt_with_key, CausalDecryptionExt, Instance, TestContext, TestError,
+        TestResult as Result,
     },
 };
+use keyhive_crypto::symmetric_key::SymmetricKey;
 use keyline::power::Power::Read;
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -81,6 +86,127 @@ async fn content_reads_back_as_its_payload_however_it_was_written() -> Result<()
     );
     let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
     assert_eq!(walked.recovered(), contents(&[b"\0genesis"]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_write_cannot_refer_to_a_predecessor_this_replica_has_not_read() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+    let genesis = ctx.encrypt(&alice, design_doc, b"genesis").await?;
+    ctx.sync_all_unsent().await?;
+
+    let written = bob
+        .try_encrypt_content(design_doc, &[9; 32], &[genesis.content_ref], b"head")
+        .await;
+    assert!(matches!(
+        written,
+        Err(EncryptContentError::NoKeyForPredecessor(r)) if r == genesis.content_ref
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_block_read_by_a_traversal_can_be_referred_to_as_a_predecessor() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+    let genesis = ctx.encrypt(&alice, design_doc, b"genesis").await?;
+    let head = ctx
+        .encrypt_after(&alice, design_doc, &[&genesis], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+    for ct in [&genesis, &head] {
+        ctx.give_content(&bob, ct).await?;
+    }
+
+    bob.try_causal_decrypt_content(design_doc, &head).await?;
+    ctx.encrypt_after(&bob, design_doc, &[&genesis], b"sibling")
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_block_read_by_a_traversal_from_keys_can_be_referred_to_as_a_predecessor() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+    let genesis = ctx.encrypt(&alice, design_doc, b"genesis").await?;
+    let head = ctx
+        .encrypt_after(&alice, design_doc, &[&genesis], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+
+    let envelope = bob.try_decrypt_content(design_doc, &head).await?;
+    let start: Vec<_> = envelope.ancestors.into_iter().collect();
+    let store = MemoryCiphertextStore::new();
+    store.insert(Arc::new(genesis.clone())).await;
+    bob.try_causal_decrypt_from_keys::<Sendable, _, _>(design_doc, &start, &store)
+        .await
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    ctx.encrypt_after(&bob, design_doc, &[&genesis], b"sibling")
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn another_block_with_the_same_ref_does_not_replace_a_known_key() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+    let genesis = ctx.encrypt(&alice, design_doc, b"genesis").await?;
+    // Listing genesis as its predecessor gives the impostor a key of its own.
+    let (impostor, impostor_key) = alice
+        .try_encrypt_content_keyed(
+            design_doc,
+            &genesis.content_ref,
+            &[genesis.content_ref],
+            b"impostor",
+        )
+        .await?;
+    let impostor = impostor.encrypted_content().clone();
+    ctx.sync_all_unsent().await?;
+    let (_, genesis_key) = bob.try_decrypt_content_keyed(design_doc, &genesis).await?;
+    assert_ne!(genesis_key, impostor_key);
+
+    bob.try_decrypt_content(design_doc, &impostor).await?;
+    let store = MemoryCiphertextStore::new();
+    store.insert(Arc::new(impostor)).await;
+    bob.try_causal_decrypt_from_keys::<Sendable, _, _>(
+        design_doc,
+        &[(genesis.content_ref, impostor_key)],
+        &store,
+    )
+    .await
+    .map_err(|e| TestError::Other(e.to_string()))?;
+
+    let after = bob
+        .try_encrypt_content(design_doc, &[9; 32], &[genesis.content_ref], b"after")
+        .await?;
+    let read = alice
+        .try_decrypt_content(design_doc, after.encrypted_content())
+        .await?;
+    assert_eq!(read.ancestors.get(&genesis.content_ref), Some(&genesis_key));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_key_that_fails_to_decrypt_a_block_is_not_remembered() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+    let head = ctx.encrypt(&alice, design_doc, b"head").await?;
+    ctx.sync_all_unsent().await?;
+    let store = MemoryCiphertextStore::new();
+    store.insert(Arc::new(head.clone())).await;
+
+    let walked = bob
+        .try_causal_decrypt_from_keys::<Sendable, _, _>(
+            design_doc,
+            &[(head.content_ref, SymmetricKey::from([9; 32]))],
+            &store,
+        )
+        .await;
+    assert!(matches!(&walked, Err(err) if err.cannot.contains_key(&head.content_ref)));
+
+    let written = bob
+        .try_encrypt_content(design_doc, &[8; 32], &[head.content_ref], b"after head")
+        .await;
+    assert!(matches!(
+        written,
+        Err(EncryptContentError::NoKeyForPredecessor(r)) if r == head.content_ref
+    ));
     Ok(())
 }
 

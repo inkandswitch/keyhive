@@ -209,6 +209,12 @@ impl JsKeyhive {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Encrypt `content` after `predRefs`, with the key this keyhive has for
+    /// each, from content it has written or read, so a reader who decrypts it
+    /// can decrypt them too and traverse back with `tryCausalDecrypt`.
+    ///
+    /// Throws an `EncryptError` if this keyhive has neither written nor read one
+    /// of `predRefs`.
     #[wasm_bindgen(js_name = tryEncrypt)]
     pub async fn try_encrypt(
         &self,
@@ -230,7 +236,7 @@ impl JsKeyhive {
             .into())
     }
 
-    /// Encrypt content and also return the application secret key it was
+    /// `tryEncrypt`, also returning the application secret key the content was
     /// encrypted under.
     #[wasm_bindgen(js_name = tryEncryptKeyed)]
     pub async fn try_encrypt_keyed(
@@ -289,37 +295,12 @@ impl JsKeyhive {
         ))
     }
 
-    /// Encrypt `content` with the keys of its `ancestors`, so a reader who
-    /// opens it can open them too. The ancestors are also the content's
-    /// predecessors, in any order. Read it back with `tryCausalDecrypt`.
-    ///
-    /// Returns the content with its own key, for a later write to contain.
-    #[wasm_bindgen(js_name = tryEncryptWithAncestors)]
-    pub async fn try_encrypt_with_ancestors(
-        &self,
-        doc_id: &JsDocumentId,
-        content_ref: &JsChangeId,
-        ancestors: Vec<JsAncestorRef>,
-        content: &[u8],
-    ) -> Result<JsEncryptedKeyed, JsEncryptError> {
-        init_span!("JsKeyhive::try_encrypt_with_ancestors");
-        let ancestors: Vec<_> = ancestors
-            .iter()
-            .map(|r| JsAncestor::from_js_ref(r).into_parts())
-            .collect();
-        let (inner, key) = self
-            .0
-            .try_encrypt_content_with_ancestors(doc_id.0, content_ref, &ancestors, content)
-            .await?;
-        Ok(JsEncryptedKeyed {
-            inner,
-            application_secret: key.as_slice().to_vec(),
-        })
-    }
-
     /// Decrypt `encrypted` with this keyhive's key for it, then the ancestors
     /// it lists, and theirs in turn, as `tryCausalDecryptFrom` does.
     /// `encrypted` is the first block in `complete()`.
+    ///
+    /// The key that decrypted each block in `complete()` is remembered, so
+    /// `tryEncrypt` can list that block as a predecessor.
     ///
     /// Throws a `DecryptError` if this keyhive cannot decrypt `encrypted` or
     /// its body is not an envelope. Failures among its ancestors are reported
@@ -338,7 +319,7 @@ impl JsKeyhive {
             .await
             .map_err(JsDecryptError::from)?;
         let start: Vec<_> = envelope.ancestors.into_iter().collect();
-        let mut decryption = causal_decrypt(doc_id, &start, load).await;
+        let mut decryption = causal_decrypt(self, doc_id, &start, load).await;
         decryption.complete.insert(
             0,
             JsDecryptedContent {
@@ -353,7 +334,8 @@ impl JsKeyhive {
     /// Decrypt each of `start` with its key, then the ancestors its envelope
     /// lists, and theirs in turn. `start` is the ancestors of a block already
     /// read, a block's own `ChangeId` and key, or the `next()` of an earlier
-    /// decryption.
+    /// decryption. The key that opened each block in `complete()` is
+    /// remembered, so `tryEncrypt` can list that block as a predecessor.
     ///
     /// `load` is called with a `ChangeId` and returns that block's bytes
     /// (`Encrypted.toBytes()`), a promise of them, or `undefined` or `null` if
@@ -376,7 +358,7 @@ impl JsKeyhive {
             .iter()
             .map(|r| JsAncestor::from_js_ref(r).into_parts())
             .collect();
-        causal_decrypt(doc_id, &start, load).await
+        causal_decrypt(self, doc_id, &start, load).await
     }
 
     /// Delegate access over `membered` to `to_add`.
@@ -438,7 +420,7 @@ impl JsKeyhive {
             .0
             .force_pcs_update(doc_id.0)
             .await
-            .map_err(EncryptContentError::from)
+            .map_err(EncryptContentError::<JsChangeId>::from)
             .map_err(JsEncryptError::from)?;
         Ok(BTreeMap::from([new_key_pair])
             .encode()
@@ -804,7 +786,7 @@ impl From<JsReceivePreKeyOpError> for JsValue {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsEncryptError(#[from] EncryptContentError);
+pub struct JsEncryptError(#[from] EncryptContentError<JsChangeId>);
 
 impl From<JsEncryptError> for JsValue {
     fn from(err: JsEncryptError) -> Self {
@@ -960,11 +942,8 @@ mod tests {
             let change_id = JsChangeId::new(vec![0]);
             let doc = bh.generate_doc(vec![], &change_id, vec![]).await?;
             let content = vec![1, 2, 3, 4];
-            let pred_refs = vec![JsChangeId::new(vec![10, 11, 12]).into()];
             let content_ref = JsChangeId::new(vec![13, 14, 15]);
-            let encrypted = bh
-                .try_encrypt(&doc, &content_ref, pred_refs, &content)
-                .await?;
+            let encrypted = bh.try_encrypt(&doc, &content_ref, vec![], &content).await?;
             let decrypted = bh.try_decrypt(&doc, &encrypted.encrypted_content()).await?;
             assert_eq!(content, decrypted);
             bh.force_pcs_update(&doc)

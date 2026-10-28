@@ -2,6 +2,7 @@
 //! secret.
 
 use crate::{
+    ancestor_key::AncestorKey,
     encrypted::{encode_ancestors, EncryptedContent, PredecessorRefs},
     reference::ContentRef,
 };
@@ -54,20 +55,34 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
 
     /// Encrypt `payload` for the document `doc_id`, with the keys of its
     /// `ancestors` before it in the body (see the [`encrypted`] module docs).
-    /// Where a content ref is listed more than once, its last key is kept.
+    /// Returns the block with its own [`AncestorKey`], for a later write.
+    ///
+    /// The ancestors must be in `doc_id` and must be exactly the predecessors
+    /// this secret was derived for. Where a content ref is listed more than
+    /// once, its last key is kept.
     ///
     /// [`encrypted`]: crate::encrypted
     pub fn try_encrypt<T>(
         &self,
         doc_id: Identifier,
-        ancestors: &[(Cr, SymmetricKey)],
+        ancestors: &[AncestorKey<Cr>],
         payload: &[u8],
-    ) -> Result<EncryptedContent<T, Cr>, chacha20poly1305::Error> {
+    ) -> Result<(EncryptedContent<T, Cr>, AncestorKey<Cr>), TryEncryptError> {
+        if ancestors.iter().any(|a| a.doc_id() != doc_id) {
+            return Err(TryEncryptError::AncestorInAnotherDocument);
+        }
+        let refs: Vec<Cr> = ancestors.iter().map(|a| a.content_ref().clone()).collect();
+        if PredecessorRefs::digest(&refs) != self.pred_refs {
+            return Err(TryEncryptError::AncestorsAreNotPredecessors);
+        }
         let mut body = Vec::new();
-        encode_ancestors(ancestors.iter().map(|(r, k)| (r, k)), &mut body);
+        encode_ancestors(
+            ancestors.iter().map(|a| (a.content_ref(), a.key_ref())),
+            &mut body,
+        );
         body.reserve_exact(payload.len());
         body.extend_from_slice(payload);
-        EncryptedContent::encrypt(
+        let encrypted = EncryptedContent::encrypt(
             &self.key,
             doc_id,
             self.content_ref.clone(),
@@ -76,7 +91,28 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
             self.group_secret_origin_hash,
             &body,
         )
+        .map_err(|_| TryEncryptError::Encryption)?;
+        Ok((
+            encrypted,
+            AncestorKey::new(self.content_ref.clone(), doc_id, self.key),
+        ))
     }
+}
+
+/// Why [`ApplicationSecret::try_encrypt`] did not encrypt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum TryEncryptError {
+    /// An ancestor's key is for a block in another document.
+    #[error("an ancestor is in another document")]
+    AncestorInAnotherDocument,
+
+    /// The ancestors are not the predecessors the secret was derived for.
+    #[error("the ancestors are not the block's predecessors")]
+    AncestorsAreNotPredecessors,
+
+    /// The cipher refused the plaintext.
+    #[error("encryption failed")]
+    Encryption,
 }
 
 /// A CGKA group secret, which application secrets are derived from.
@@ -158,5 +194,54 @@ mod tests {
                 .as_bytes()
             )
         );
+    }
+
+    fn secret(pred_refs: &[[u8; 32]]) -> ApplicationSecret<[u8; 32]> {
+        GroupSecret(ShareSecretKey::force_from_bytes([1; 32])).derive_application_secret(
+            &[2; 32],
+            &PredecessorRefs::digest(pred_refs),
+            &[5; 32].into(),
+        )
+    }
+
+    fn doc(n: u8) -> Identifier {
+        Identifier::from(&ed25519_dalek::SigningKey::from_bytes(&[n; 32]))
+    }
+
+    fn ancestor(content_ref: u8, doc_id: Identifier) -> AncestorKey<[u8; 32]> {
+        AncestorKey::new(
+            [content_ref; 32],
+            doc_id,
+            SymmetricKey::from([content_ref; 32]),
+        )
+    }
+
+    #[test]
+    fn a_write_refuses_an_ancestor_from_another_document() {
+        assert_eq!(
+            secret(&[[3; 32]])
+                .try_encrypt::<Vec<u8>>(doc(1), &[ancestor(3, doc(2))], b"")
+                .map(|_| ()),
+            Err(TryEncryptError::AncestorInAnotherDocument)
+        );
+    }
+
+    #[test]
+    fn a_write_refuses_ancestors_that_are_not_its_predecessors() {
+        assert_eq!(
+            secret(&[[3; 32], [4; 32]])
+                .try_encrypt::<Vec<u8>>(doc(1), &[ancestor(3, doc(1))], b"")
+                .map(|_| ()),
+            Err(TryEncryptError::AncestorsAreNotPredecessors)
+        );
+    }
+
+    #[test]
+    fn a_write_returns_the_key_that_decrypts_it() {
+        let (encrypted, own) = secret(&[[3; 32]])
+            .try_encrypt::<Vec<u8>>(doc(1), &[ancestor(3, doc(1))], b"payload")
+            .expect("the ancestors are the predecessors");
+        assert!(encrypted.try_decrypt(own.key(), own.doc_id()).is_ok());
+        assert_eq!(own.content_ref(), &encrypted.content_ref);
     }
 }
