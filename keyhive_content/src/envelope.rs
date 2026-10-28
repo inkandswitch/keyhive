@@ -7,10 +7,10 @@ use keyhive_codec::{
     prefixed::{decode_len, encode_len},
     traits::{Decode, Encode, StreamDecode},
 };
-use keyhive_crypto::{read_capability::ReadCap, symmetric_key::SymmetricKey};
+use keyhive_crypto::symmetric_key::SymmetricKey;
 use std::{collections::HashMap, vec::Vec};
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
-/// A container for an arbitrary payload and the [`ReadCap`]s required to identify and decrypt its ancestors.
+/// A container for an arbitrary payload and the references and keys of its ancestors.
 ///
 /// This is the core primitive of [causal encryption]. In the diagram below, each large block represents
 /// an [`Envelope`], which are decrypted in turn by their successors.
@@ -89,19 +89,6 @@ pub struct Envelope<C: ContentRef, T> {
         Hash(hash_with = "crate::util::hasher::hash_map_keys")
     )]
     pub ancestors: HashMap<C, SymmetricKey>,
-}
-
-impl<C: ContentRef, T> Envelope<C, T> {
-    /// Extract the [read capabilities][ReadCap] for the ancestors of this envelope.
-    pub fn ancestor_read_caps(&self) -> Vec<ReadCap<C>> {
-        self.ancestors
-            .iter()
-            .map(|(id, key)| ReadCap {
-                id: id.clone(),
-                key: *key,
-            })
-            .collect()
-    }
 }
 
 /// `count ‖ ( content_ref ‖ key )* ‖ payload`: the ancestors in ascending order
