@@ -229,8 +229,8 @@
           '';
 
           ci-doc = mkCheck "ci-doc" ''
-            cargo test --doc --workspace --features mermaid_docs,test_utils
-            RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --features mermaid_docs
+            cargo test --doc --workspace --features test_utils
+            RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
           '';
 
           ci-wasm = mkCheck "ci-wasm" ''

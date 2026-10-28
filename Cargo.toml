@@ -27,7 +27,6 @@ version = "0.0.0-alpha.3"
 [workspace.dependencies]
 # Crates that also build `no_std` turn default features off here; `std` crates
 # list what they need, so each version is set once and features stay explicit.
-aquamarine = "0.6"
 arbitrary = { version = "1.4.1", features = ["derive"] }
 # `no_std`; `std` only adds a blocking fallback.
 async-lock = { version = "3.4", default-features = false }
@@ -39,7 +38,6 @@ bolero = { version = "0.11.1", features = ["arbitrary"] }
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
 console_error_panic_hook = "0.1"
 curve25519-dalek = "4.1"
-derivative = "2.2"
 derive-where = "1.2"
 derive_more = { version = "1.0", default-features = false, features = [
   "debug",

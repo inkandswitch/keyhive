@@ -19,7 +19,6 @@ use crate::{
         merge::{Merge, MergeAsync},
     },
 };
-use derivative::Derivative;
 use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
@@ -41,11 +40,8 @@ use std::{collections::BTreeMap, fmt, marker::PhantomData, sync::Arc};
 use thiserror::Error;
 
 /// This replica's own individual, which can sign and encrypt.
-#[derive(Derivative)]
-#[derivative(Debug)]
 pub struct Active<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> {
     /// The signing key of the active individual.
-    #[derivative(Debug = "ignore")]
     pub(crate) signer: S,
 
     // TODO generalize to use e.g. KMS for X25519 secret keys
@@ -59,7 +55,6 @@ pub struct Active<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyList
     pub(crate) individual: Arc<Mutex<IndividualState>>,
 
     ///The listener for prekey events.
-    #[derivative(Debug = "ignore", PartialEq = "ignore")]
     pub(crate) listener: L,
 
     pub(crate) _phantom: PhantomData<(F, T)>,
@@ -332,6 +327,18 @@ impl<F: FutureForm, S: AsyncSigner<F> + Clone, T: ContentRef, L: PrekeyListener<
             listener: self.listener.clone(),
             _phantom: PhantomData,
         }
+    }
+}
+
+impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> fmt::Debug
+    for Active<F, S, T, L>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Active")
+            .field("key_pairs", &self.key_pairs)
+            .field("id", &self.id)
+            .field("individual", &self.individual)
+            .finish_non_exhaustive()
     }
 }
 

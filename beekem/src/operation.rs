@@ -491,8 +491,8 @@ impl StreamDecode for CgkaChange {
 
 /// Causal graph of [`CgkaOperation`]s.
 ///
-/// Manual `Hash` impl replaces `derivative`, sorting collection keys
-/// for deterministic hashing.
+/// Hashed by hand, with collection keys sorted, so the hash does not depend
+/// on iteration order.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct CgkaOperationGraph {
     pub cgka_ops: CaMap<CgkaOperation>,
