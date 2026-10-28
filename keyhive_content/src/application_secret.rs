@@ -1,9 +1,11 @@
 //! Application secrets for content encryption, derived from a CGKA group
 //! secret.
 
-use crate::encrypted::{EncryptedContent, PredecessorRefs};
+use crate::{
+    encrypted::{EncryptedContent, PredecessorRefs},
+    reference::ContentRef,
+};
 use keyhive_crypto::{
-    content::reference::ContentRef,
     context::Context,
     digest::Digest,
     identifier::Identifier,

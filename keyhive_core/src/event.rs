@@ -14,9 +14,8 @@ use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
 use dupe::Dupe;
 use future_form::FutureForm;
-use keyhive_content::{encrypted::EncryptedContent, store::CiphertextStore};
+use keyhive_content::{encrypted::EncryptedContent, reference::ContentRef, store::CiphertextStore};
 use keyhive_crypto::{
-    content::reference::ContentRef,
     digest::Digest,
     verified::{self, Verified},
 };

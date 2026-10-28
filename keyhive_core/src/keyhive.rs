@@ -55,11 +55,11 @@ use keyhive_codec::traits::{Decode, Encode};
 use keyhive_content::{
     encrypted::EncryptedContent,
     envelope::Envelope,
+    reference::ContentRef,
     store::{CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
 };
 use keyhive_crypto::{
     bytes::Bytes,
-    content::reference::ContentRef,
     digest::Digest,
     identifier::{Identifier, InvalidIdentifier},
     share_key::{ShareKey, ShareSecretKey},
