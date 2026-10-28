@@ -123,6 +123,18 @@ async fn a_reader_takes_the_key_agreement_from_a_relay() -> Result<()> {
         held_ops(&bob, design_doc).await,
         held_ops(&alice, design_doc).await
     );
+    let tree = bob
+        .cgka_members_for(design_doc)
+        .await?
+        .expect("bob has joined the document's CGKA group");
+    assert!(
+        tree.contains(&alice.id()) && tree.contains(&bob.id()),
+        "the readers are in the tree bob built from the relay's operations"
+    );
+    assert!(
+        !tree.contains(&relay.id()),
+        "and the relay that carried them is not"
+    );
     ctx.give_content(&bob, &ct).await?;
     assert!(bob.can_decrypt_content(design_doc, &ct).await?);
     Ok(())
