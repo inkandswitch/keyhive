@@ -129,15 +129,17 @@ pub struct KeyhiveState<
     #[allow(clippy::type_complexity)]
     documents: Mutex<HashMap<DocumentId, Arc<Mutex<DocumentState<T>>>>>,
 
-    /// `Cgka`s for documents this replica can read but whose invitation (an add
-    /// of this replica) has not merged yet. Operations merge here as they
-    /// arrive, in causal order; the `Cgka` moves to `documents` once the
-    /// invitation merges.
-    awaiting_invitation: Mutex<HashMap<DocumentId, Cgka>>,
+    /// `Cgka`s for documents this replica stands over but has not joined: a
+    /// reader whose invitation (an add of this replica) has not merged yet,
+    /// or a relay, which is never added and so never joins. Operations merge
+    /// here as they arrive, in causal order, without secrets for the tree, and
+    /// are served to others like a held document's. The `Cgka` moves to
+    /// `documents` once an invitation merges.
+    unjoined: Mutex<HashMap<DocumentId, Cgka>>,
 
     /// What each CGKA operation's causal past cites. Used for authorizing
     /// CGKA operations that were generated from these certificates. Locked
-    /// after a document's lock or `awaiting_invitation` when both are held.
+    /// after a document's lock or `unjoined` when both are held.
     certificate_sets: Mutex<CertificateSets>,
 
     /// [`StaticEvent`]s that are still awaiting dependencies.
@@ -260,7 +262,7 @@ where
             )])),
             active: inner_active,
             documents: Mutex::new(HashMap::new()),
-            awaiting_invitation: Mutex::new(HashMap::new()),
+            unjoined: Mutex::new(HashMap::new()),
             certificate_sets: Mutex::new(CertificateSets::new()),
             pending_events: Mutex::new(Vec::new()),
             ciphertext_store,
@@ -1734,8 +1736,9 @@ where {
         Some(op)
     }
 
-    /// The members of `doc`'s CGKA group. Returns `None` if this replica can
-    /// read it but its invitation has not merged yet, or if Keyline cannot
+    /// The members of `doc`'s CGKA group. Returns `None` if this replica holds
+    /// its CGKA graph without having joined (awaiting an invitation, or a
+    /// relay), or if Keyline cannot
     /// answer a membership question a replay of its CGKA graph requires.
     ///
     /// Returns an error if `doc` is not known.
@@ -2062,8 +2065,8 @@ where {
     }
 
     /// `who`'s power over every subject in Keyline other than itself. A
-    /// subject is a document when this replica holds its key agreement,
-    /// and a group otherwise.
+    /// subject is a document when this replica holds its CGKA graph, joined
+    /// or not (as a relay does), and a group otherwise.
     async fn standing_of(
         &self,
         who: Identifier,
@@ -2087,7 +2090,7 @@ where {
                 continue;
             };
             let id = subject;
-            let kind = if self.has_document(DocumentId(id)).await {
+            let kind = if self.holds_cgka_graph(DocumentId(id)).await {
                 MemberedId::DocumentId(DocumentId(id))
             } else {
                 MemberedId::GroupId(GroupId(id))
@@ -2304,9 +2307,10 @@ where {
             .collect())
     }
 
-    /// The CGKA operations of every document this replica holds that `who` can
-    /// read, from the document's CGKA graph. A relay is sent none: it neither stores
-    /// nor serves them.
+    /// The CGKA operations of every document whose CGKA graph this replica
+    /// holds and that `who` stands over, at `Relay` or above. A relay is sent
+    /// them to store and serve: they are signed, and their secrets are
+    /// encrypted to the tree's members, which a relay never joins.
     #[instrument(skip_all)]
     pub async fn cgka_ops_reachable_by_agent(
         &self,
@@ -2314,30 +2318,28 @@ where {
     ) -> Result<Vec<Arc<Verified<CgkaOperation>>>, KeylineStorageError<K::Error>> {
         let standing = self.standing_of(who.into()).await?;
         let mut ops = Vec::new();
-        for (id, can) in standing {
+        for id in standing.into_keys() {
             let MemberedId::DocumentId(doc_id) = id else {
                 continue;
             };
-            if !can.is_reader() {
-                continue;
-            }
-            if let Some(doc) = self.document_state(doc_id).await {
-                ops.extend(cgka_ops_for(doc.lock().await.cgka()));
-            }
+            ops.extend(self.cgka_ops_for_doc(&doc_id).await.into_iter().flatten());
         }
         Ok(ops)
     }
 
-    /// Every CGKA operation in this replica's CGKA graph for `doc`. Returns
-    /// `None` if it has not joined `doc`'s CGKA group.
+    /// Every CGKA operation in this replica's CGKA graph for `doc`, whether
+    /// it has joined the CGKA group or not (as a relay, which never does).
+    /// Returns `None` if it holds no CGKA graph for `doc`.
     #[instrument(skip_all)]
     pub async fn cgka_ops_for_doc(
         &self,
         doc: &DocumentId,
     ) -> Option<Vec<Arc<Verified<CgkaOperation>>>> {
-        let state = self.document_state(*doc).await?;
-        let ops = cgka_ops_for(state.lock().await.cgka());
-        Some(ops)
+        if let Some(state) = self.document_state(*doc).await {
+            let ops = cgka_ops_for(state.lock().await.cgka());
+            return Some(ops);
+        }
+        self.unjoined.lock().await.get(doc).map(cgka_ops_for)
     }
 
     /// Every prekey op `who` is sent, grouped by the identifier they belong
@@ -2453,8 +2455,9 @@ where {
         })
     }
 
-    /// Compute CGKA ops for all principals in a single pass: each held document's
-    /// operations, sent to everyone who can read it in Keyline.
+    /// Compute CGKA ops for all principals in a single pass: the operations of
+    /// each CGKA graph this replica holds, joined or not, sent to every member
+    /// of the document in Keyline, relays included.
     #[instrument(skip_all)]
     pub async fn cgka_ops_for_all_agents(
         &self,
@@ -2469,18 +2472,25 @@ where {
                 .map(|(id, doc)| (*id, doc.dupe()))
                 .collect()
         };
+        let mut held = Vec::with_capacity(docs.len());
         for (doc_id, doc) in docs {
-            let doc_ops = cgka_ops_for(doc.lock().await.cgka());
+            held.push((doc_id, cgka_ops_for(doc.lock().await.cgka())));
+        }
+        held.extend(
+            self.unjoined
+                .lock()
+                .await
+                .iter()
+                .map(|(doc_id, cgka)| (*doc_id, cgka_ops_for(cgka))),
+        );
+
+        for (doc_id, doc_ops) in held {
             if doc_ops.is_empty() {
                 continue;
             }
-            let members = self.members_of(doc_id.into()).await?;
-
             let source_id: Identifier = doc_id.into();
-            for (agent_id, can) in &members {
-                if can.is_reader() {
-                    index.entry(*agent_id).or_default().insert(source_id);
-                }
+            for agent_id in self.members_of(source_id).await?.into_keys() {
+                index.entry(agent_id).or_default().insert(source_id);
             }
             ops.insert(source_id, doc_ops);
         }
@@ -2652,6 +2662,12 @@ where {
     #[instrument(skip_all)]
     pub async fn has_document(&self, id: DocumentId) -> bool {
         self.documents.lock().await.contains_key(&id)
+    }
+
+    /// Whether this replica holds `id`'s CGKA graph: as a member, or unjoined,
+    /// awaiting an invitation or as a relay.
+    async fn holds_cgka_graph(&self, id: DocumentId) -> bool {
+        self.has_document(id).await || self.unjoined.lock().await.contains_key(&id)
     }
 
     /// Whether a group with this id is known: a Keyline subject that is
@@ -2859,8 +2875,8 @@ where {
     }
 
     /// Everything the operations `heads` and their causal ancestors cite, from
-    /// this replica's CGKA graph for `doc_id`, whether it is a member or
-    /// awaiting its invitation. Returns `None` if that graph lacks any of them.
+    /// this replica's CGKA graph for `doc_id`, whether it has joined it or
+    /// not. Returns `None` if that graph lacks any of them.
     async fn predecessor_set(
         &self,
         doc_id: DocumentId,
@@ -2874,8 +2890,8 @@ where {
             let mut sets = self.certificate_sets.lock().await;
             return sets.predecessor_set(locked.cgka(), heads);
         }
-        let awaiting = self.awaiting_invitation.lock().await;
-        let cgka = awaiting.get(&doc_id)?;
+        let unjoined = self.unjoined.lock().await;
+        let cgka = unjoined.get(&doc_id)?;
         let mut sets = self.certificate_sets.lock().await;
         sets.predecessor_set(cgka, heads)
     }
@@ -2895,17 +2911,14 @@ where {
             .value)
     }
 
-    /// Whether `who` has ever been able to read `doc`: positive power of at
-    /// least `Read`.
-    async fn reads_ever(
+    /// Whether `who` has ever stood over `doc`, at `Relay` or above: positive
+    /// power, so operations from before a revocation still merge.
+    async fn ever_stands_over(
         &self,
         doc: Identifier,
         who: Identifier,
     ) -> Result<bool, KeylineStorageError<K::Error>> {
-        Ok(self
-            .positive_power(doc, who)
-            .await?
-            .is_some_and(|power| power.is_reader()))
+        Ok(self.positive_power(doc, who).await?.is_some())
     }
 
     #[instrument(skip_all)]
@@ -2980,7 +2993,7 @@ where {
         if let Some(state) = self.document_state(doc_id).await {
             return has_digest(state.lock().await.cgka());
         }
-        self.awaiting_invitation
+        self.unjoined
             .lock()
             .await
             .get(&doc_id)
@@ -2990,8 +3003,8 @@ where {
     /// Merge an authorized operation, whose predecessors the CGKA graph
     /// already has, into this replica's CGKA for `doc_id`. `true` if the graph
     /// did not have it. For a document whose CGKA group this replica has not
-    /// joined, the operation goes into the CGKA graph awaiting its invitation
-    /// or fails with `UnknownDocument` if this replica cannot read the document.
+    /// joined, the operation goes into its unjoined CGKA graph, or fails with
+    /// `UnknownDocument` if this replica has never stood over the document.
     async fn merge_received(
         &self,
         doc_id: DocumentId,
@@ -3009,18 +3022,19 @@ where {
                 .await?;
         }
 
-        // Not a member yet. If this replica can read the document in Keyline,
-        // an invitation is due: its operations merge into a CGKA awaiting it
-        // as they come, in causal order, and that CGKA becomes part of this
-        // replica's document once the invitation has merged. Starting it
-        // on the first operation, not only on the invitation, lets every
-        // arriving operation make progress.
-        let can_join = invites(op.payload(), me) || self.reads_ever(doc, me.into()).await?;
+        // Not a member. If this replica stands over the document in Keyline,
+        // its operations merge into an unjoined CGKA as they come, in causal
+        // order. A reader is due an invitation, and that CGKA becomes part of
+        // this replica's document once it merges; starting it on the first
+        // operation, not only on the invitation, lets every arriving
+        // operation make progress. A relay keeps it to serve, holding no
+        // secrets for the tree.
+        let may_hold = invites(op.payload(), me) || self.ever_stands_over(doc, me.into()).await?;
         let (merged, joined) = {
-            let mut awaiting = self.awaiting_invitation.lock().await;
-            let cgka = match awaiting.entry(doc_id) {
+            let mut unjoined = self.unjoined.lock().await;
+            let cgka = match unjoined.entry(doc_id) {
                 Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) if can_join => {
+                Entry::Vacant(entry) if may_hold => {
                     let mut cgka = Cgka::new(doc_id, me, ShareKeyMap::new());
                     cgka.set_membership_view(self.membership_view(doc));
                     entry.insert(cgka)
@@ -3033,7 +3047,7 @@ where {
                 .require_keyline_answers(doc, cgka, |cgka| merge_one(cgka, op.dupe(), me, secrets))
                 .await??;
             let joined = if invites(op.payload(), me) {
-                awaiting.remove(&doc_id)
+                unjoined.remove(&doc_id)
             } else {
                 None
             };
@@ -3090,15 +3104,14 @@ where {
 
         let mut fresh = Vec::new();
         {
-            // Held throughout, so no operation is received into a CGKA graph
-            // awaiting its invitation while it becomes a document.
+            // Held throughout, so no operation is received into the unjoined
+            // CGKA graph while it becomes a document.
             let _reconciled = self.certificates.reconciled.lock().await;
             let held = self.document_state(doc_id).await;
             let state = match &held {
                 Some(state) => state.dupe(),
                 None => {
-                    let Some(cgka) = self.awaiting_invitation.lock().await.get(&doc_id).cloned()
-                    else {
+                    let Some(cgka) = self.unjoined.lock().await.get(&doc_id).cloned() else {
                         return Ok(false);
                     };
                     Arc::new(Mutex::new(DocumentState::with_cgka(
@@ -3125,7 +3138,7 @@ where {
                     .await?
             };
             if held.is_none() {
-                self.awaiting_invitation.lock().await.remove(&doc_id);
+                self.unjoined.lock().await.remove(&doc_id);
                 self.documents.lock().await.insert(doc_id, state);
             }
             fresh.extend(made.into_iter().map(Arc::new));
@@ -3198,9 +3211,9 @@ where {
             individuals.insert(*id, indie.lock().await.clone());
         }
 
-        // The operations of every CGKA graph: each held document's, and each one
-        // still awaiting its invitation, whose operations are no longer
-        // pending.
+        // The operations of every CGKA graph: each held document's, and each
+        // unjoined one (awaiting an invitation, or relayed), whose operations
+        // are no longer pending.
         let mut docs = HashMap::new();
         let mut cgka_ops: Vec<verified::Signed<CgkaOperation>> = Vec::new();
         for (id, doc) in self.documents.lock().await.iter() {
@@ -3212,7 +3225,7 @@ where {
                     .map(|op| op.signed().as_ref().clone()),
             );
         }
-        for cgka in self.awaiting_invitation.lock().await.values() {
+        for cgka in self.unjoined.lock().await.values() {
             cgka_ops.extend(
                 cgka_ops_for(cgka)
                     .iter()
@@ -3319,7 +3332,7 @@ where {
             active: raw_active,
             individuals: Mutex::new(individuals),
             documents: Mutex::new(HashMap::new()),
-            awaiting_invitation: Mutex::new(HashMap::new()),
+            unjoined: Mutex::new(HashMap::new()),
             certificate_sets: Mutex::new(CertificateSets::new()),
             pending_events: Mutex::new(
                 archive
@@ -3339,7 +3352,7 @@ where {
         // Each document's CGKA is rebuilt from its operations, with the
         // certificates above recorded for its membership view. It becomes a
         // held document if its invitation (or creation) has merged, and
-        // otherwise still awaits it.
+        // otherwise stays unjoined: awaiting it, or relayed.
         let mut by_doc: HashMap<DocumentId, Vec<Arc<Verified<CgkaOperation>>>> = HashMap::new();
         let mut deferred = HashSet::new();
         for signed in archive.cgka_ops.iter().cloned() {
@@ -3365,7 +3378,7 @@ where {
             by_doc.entry(doc_id).or_default().push(op);
         }
         let mut documents = HashMap::new();
-        let mut awaiting_invitation = HashMap::new();
+        let mut unjoined = HashMap::new();
         for (doc_id, ops) in by_doc {
             let invitations: HashSet<_> = ops
                 .iter()
@@ -3402,7 +3415,7 @@ where {
                 );
             }
             if invitations.is_empty() || !cgka.contains_predecessors(&invitations) {
-                awaiting_invitation.insert(doc_id, cgka);
+                unjoined.insert(doc_id, cgka);
                 continue;
             }
             let (heads, state) = archive
@@ -3424,7 +3437,7 @@ where {
             tracing::warn!(%doc_id, "the archived CGKA graph does not rebuild from its operations");
         }
         *hive.documents.lock().await = documents;
-        *hive.awaiting_invitation.lock().await = awaiting_invitation;
+        *hive.unjoined.lock().await = unjoined;
 
         Ok(hive)
     }
@@ -3708,17 +3721,17 @@ where {
     }
 
     /// This replica's document for `id`, as a member of its CGKA group.
-    /// Returns `None` if it can read the document but its invitation has
-    /// not merged yet and a `NotFound` error if it has nothing for it
-    /// (a relay included).
+    /// Returns `None` if it holds the document's CGKA graph without having
+    /// joined (awaiting an invitation, or a relay), so has no keys, and a
+    /// `NotFound` error if it has nothing for it.
     async fn member_document(
         &self,
         id: DocumentId,
     ) -> Result<Option<Arc<Mutex<DocumentState<T>>>>, NotFound> {
         match self.document_state(id).await {
             Some(doc) => Ok(Some(doc)),
-            // Readable here, with its invitation not merged yet.
-            None if self.awaiting_invitation.lock().await.contains_key(&id) => Ok(None),
+            // Held, but not joined: no keys.
+            None if self.unjoined.lock().await.contains_key(&id) => Ok(None),
             None => Err(NotFound::new(id)),
         }
     }
