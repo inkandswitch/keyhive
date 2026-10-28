@@ -130,11 +130,10 @@ pub struct KeyhiveState<
     documents: Mutex<HashMap<DocumentId, Arc<Mutex<DocumentState<T>>>>>,
 
     /// `Cgka`s for documents this replica stands over but has not joined: a
-    /// reader whose invitation (an add of this replica) has not merged yet,
-    /// or a relay, which is never added and so never joins. Operations merge
-    /// here as they arrive, in causal order, without secrets for the tree, and
-    /// are served to others like a held document's. The `Cgka` moves to
-    /// `documents` once an invitation merges.
+    /// reader whose invitation (an add of this replica) has not merged yet, or
+    /// a relay, which is never added. Operations merge here in causal order
+    /// and are served like a held document's. A `Cgka` moves to `documents`
+    /// once an invitation merges.
     unjoined: Mutex<HashMap<DocumentId, Cgka>>,
 
     /// What each CGKA operation's causal past cites. Used for authorizing
@@ -1737,9 +1736,8 @@ where {
     }
 
     /// The members of `doc`'s CGKA group. Returns `None` if this replica holds
-    /// its CGKA graph without having joined (awaiting an invitation, or a
-    /// relay), or if Keyline cannot
-    /// answer a membership question a replay of its CGKA graph requires.
+    /// its CGKA graph unjoined, or if Keyline cannot answer a membership
+    /// question a replay of its CGKA graph requires.
     ///
     /// Returns an error if `doc` is not known.
     #[cfg(any(test, feature = "test_utils"))]
@@ -2308,9 +2306,9 @@ where {
     }
 
     /// The CGKA operations of every document whose CGKA graph this replica
-    /// holds and that `who` stands over, at `Relay` or above. A relay is sent
-    /// them to store and serve: they are signed, and their secrets are
-    /// encrypted to the tree's members, which a relay never joins.
+    /// holds and that `who` stands over, relays included: the operations are
+    /// signed, and their secrets are encrypted to the tree, which a relay
+    /// never joins.
     #[instrument(skip_all)]
     pub async fn cgka_ops_reachable_by_agent(
         &self,
@@ -2327,9 +2325,8 @@ where {
         Ok(ops)
     }
 
-    /// Every CGKA operation in this replica's CGKA graph for `doc`, whether
-    /// it has joined the CGKA group or not (as a relay, which never does).
-    /// Returns `None` if it holds no CGKA graph for `doc`.
+    /// Every CGKA operation in this replica's CGKA graph for `doc`, joined or
+    /// not. Returns `None` if it holds none.
     #[instrument(skip_all)]
     pub async fn cgka_ops_for_doc(
         &self,
@@ -2457,7 +2454,7 @@ where {
 
     /// Compute CGKA ops for all principals in a single pass: the operations of
     /// each CGKA graph this replica holds, joined or not, sent to every member
-    /// of the document in Keyline, relays included.
+    /// of the document, relays included.
     #[instrument(skip_all)]
     pub async fn cgka_ops_for_all_agents(
         &self,
@@ -2664,8 +2661,7 @@ where {
         self.documents.lock().await.contains_key(&id)
     }
 
-    /// Whether this replica holds `id`'s CGKA graph: as a member, or unjoined,
-    /// awaiting an invitation or as a relay.
+    /// Whether this replica holds `id`'s CGKA graph, joined or not.
     async fn holds_cgka_graph(&self, id: DocumentId) -> bool {
         self.has_document(id).await || self.unjoined.lock().await.contains_key(&id)
     }
@@ -2911,8 +2907,8 @@ where {
             .value)
     }
 
-    /// Whether `who` has ever stood over `doc`, at `Relay` or above: positive
-    /// power, so operations from before a revocation still merge.
+    /// Whether `who` has ever had any power over `doc`. Positive power, so
+    /// operations from before a revocation still merge.
     async fn ever_stands_over(
         &self,
         doc: Identifier,
@@ -3022,13 +3018,11 @@ where {
                 .await?;
         }
 
-        // Not a member. If this replica stands over the document in Keyline,
-        // its operations merge into an unjoined CGKA as they come, in causal
-        // order. A reader is due an invitation, and that CGKA becomes part of
-        // this replica's document once it merges; starting it on the first
-        // operation, not only on the invitation, lets every arriving
-        // operation make progress. A relay keeps it to serve, holding no
-        // secrets for the tree.
+        // Not a member. If this replica has ever stood over the document, its
+        // operations merge into an unjoined CGKA in causal order. A reader's
+        // becomes its document once its invitation merges; starting on the
+        // first operation, not the invitation, lets every arriving one make
+        // progress. A relay's stays unjoined, and is served from there.
         let may_hold = invites(op.payload(), me) || self.ever_stands_over(doc, me.into()).await?;
         let (merged, joined) = {
             let mut unjoined = self.unjoined.lock().await;
@@ -3721,9 +3715,8 @@ where {
     }
 
     /// This replica's document for `id`, as a member of its CGKA group.
-    /// Returns `None` if it holds the document's CGKA graph without having
-    /// joined (awaiting an invitation, or a relay), so has no keys, and a
-    /// `NotFound` error if it has nothing for it.
+    /// Returns `None` if it holds the CGKA graph unjoined, so has no keys, and
+    /// a `NotFound` error if it has nothing for it.
     async fn member_document(
         &self,
         id: DocumentId,

@@ -9,19 +9,21 @@
 
 use std::collections::HashSet;
 
+use beekem::operation::CgkaOperation;
 use keyhive_core::{
     principal::document::id::DocumentId,
     test_utils::{EventKind, Instance, TestContext, TestResult as Result},
 };
+use keyhive_crypto::digest::Digest;
 use keyline::power::Power::{Read, Relay};
 
 /// The digests of the CGKA operations `who` holds for `doc`, if any.
-async fn held_ops(who: &Instance, doc: DocumentId) -> Option<HashSet<String>> {
+async fn held_ops(who: &Instance, doc: DocumentId) -> Option<HashSet<Digest<CgkaOperation>>> {
     Some(
         who.cgka_ops_for_doc(&doc)
             .await?
             .iter()
-            .map(|op| op.digest().to_string())
+            .map(|op| op.digest())
             .collect(),
     )
 }
@@ -51,11 +53,11 @@ async fn a_relay_holds_and_serves_key_agreement_but_no_key() -> Result<()> {
                 .encrypt(&alice, design_doc, b"not for the relay")
                 .await?;
 
-            let sent: HashSet<String> = alice
+            let sent: HashSet<_> = alice
                 .cgka_ops_reachable_by_agent(relay.id())
                 .await?
                 .iter()
-                .map(|op| op.digest().to_string())
+                .map(|op| op.digest())
                 .collect();
             assert_eq!(
                 Some(&sent),
@@ -94,8 +96,8 @@ async fn a_relay_holds_and_serves_key_agreement_but_no_key() -> Result<()> {
             );
             ctx.give_content(&relay, &ct).await?;
             assert!(
-                !matches!(relay.can_decrypt_content(design_doc, &ct).await, Ok(true)),
-                "and cannot decrypt ({case})"
+                !relay.can_decrypt_content(design_doc, &ct).await?,
+                "it knows the document but holds no key for it ({case})"
             );
         }
     }
@@ -238,5 +240,33 @@ async fn a_revoked_relay_is_sent_no_new_key_agreement() -> Result<()> {
     ctx.sync(&alice, &relay).await?;
     assert_eq!(held_ops(&relay, design_doc).await, before);
     assert_ne!(held_ops(&alice, design_doc).await, before);
+    Ok(())
+}
+
+/// A relay promoted to reader joins the document from the CGKA graph it was
+/// already holding.
+#[tokio::test]
+async fn a_relay_promoted_to_reader_joins_from_what_it_holds() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let relay = ctx.individual("relay").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(relay.id(), design_doc, Relay).await?;
+    alice.force_pcs_update(design_doc).await?;
+    ctx.sync(&alice, &relay).await?;
+    assert!(held_ops(&relay, design_doc).await.is_some());
+    assert!(!relay.has_document(design_doc).await);
+
+    alice.add_member(relay.id(), design_doc, Read).await?;
+    let ct = ctx.encrypt(&alice, design_doc, b"for the reader").await?;
+    assert_eq!(ctx.sync(&alice, &relay).await?, 0);
+
+    assert!(relay.has_document(design_doc).await);
+    assert_eq!(
+        held_ops(&relay, design_doc).await,
+        held_ops(&alice, design_doc).await
+    );
+    ctx.give_content(&relay, &ct).await?;
+    assert!(relay.can_decrypt_content(design_doc, &ct).await?);
     Ok(())
 }
