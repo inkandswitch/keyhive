@@ -21,7 +21,8 @@ use keyhive_codec::{
     prefixed::{decode_len, decode_list, encode_len, encode_list},
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use keyhive_crypto::{content::reference::ContentRef, verified};
+use keyhive_content::reference::ContentRef;
+use keyhive_crypto::verified;
 use keyline::certificate::Certificate;
 use std::collections::{BTreeMap, HashMap};
 

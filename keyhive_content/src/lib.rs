@@ -24,5 +24,6 @@ pub mod application_secret;
 pub mod encrypted;
 #[cfg(feature = "std")]
 pub mod envelope;
+pub mod reference;
 #[cfg(feature = "std")]
 pub mod store;
