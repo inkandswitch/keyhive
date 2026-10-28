@@ -4,7 +4,8 @@
 //! bounded memory and any byte range decrypts on its own:
 //!
 //! ```text
-//! "KHE" ‖ version ‖ content_ref ‖ pred_refs:32 ‖ pcs_key_hash:32 ‖ pcs_update_op:32
+//! "KHE" ‖ version ‖ content_ref ‖ pred_refs:32 ‖ group_secret_hash:32
+//!       ‖ group_secret_origin_hash:32
 //!       ‖ ( nonce_i:24 ‖ ciphertext_i )+                          to the end
 //!
 //! aad_i   = BLAKE3(doc_id ‖ header) ‖ i:u64 ‖ last:u8
@@ -18,7 +19,7 @@
 //! ciphertext could decrypt under two keys to two plaintexts, and a causal
 //! envelope containing the second key would show its readers a different history.
 
-use crate::application_secret::{GroupSecret, GroupSecretEpoch};
+use crate::application_secret::{GroupSecret, GroupSecretOrigin};
 use alloc::vec::Vec;
 use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305, XNonce};
 use core::{convert::Infallible, marker::PhantomData};
@@ -73,8 +74,8 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
     /// The CGKA group secret the block's key is derived from.
     pub group_secret_hash: Digest<GroupSecret>,
 
-    /// The epoch of the group secret, i.e., the update that produced it.
-    pub group_secret_epoch_hash: Digest<GroupSecretEpoch>,
+    /// The CGKA operation that generated the group secret.
+    pub group_secret_origin_hash: Digest<GroupSecretOrigin>,
 
     /// `( nonce_i ‖ ciphertext_i )+`.
     chunks: Vec<u8>,
@@ -92,14 +93,14 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         content_ref: Cr,
         pred_refs: Digest<PredecessorRefs<Cr>>,
         group_secret_hash: Digest<GroupSecret>,
-        group_secret_epoch_hash: Digest<GroupSecretEpoch>,
+        group_secret_origin_hash: Digest<GroupSecretOrigin>,
         plaintext: &[u8],
     ) -> Result<Self, chacha20poly1305::Error> {
         let mut content = EncryptedContent {
             content_ref,
             pred_refs,
             group_secret_hash,
-            group_secret_epoch_hash,
+            group_secret_origin_hash,
             chunks: Vec::with_capacity(plaintext.len()),
             _plaintext_tag: PhantomData,
         };
@@ -163,7 +164,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         Digest::from(blake3::hash(self.encode().as_bytes()))
     }
 
-    /// `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ pcs_key_hash ‖ pcs_update_op`.
+    /// `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ group_secret_hash ‖ group_secret_origin_hash`.
     fn header(&self) -> Vec<u8> {
         let mut out = Vec::new();
         self.encode_header(&mut out);
@@ -176,7 +177,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         self.content_ref.encode_into(out);
         self.pred_refs.encode_into(out);
         self.group_secret_hash.encode_into(out);
-        self.group_secret_epoch_hash.encode_into(out);
+        self.group_secret_origin_hash.encode_into(out);
     }
 }
 
@@ -209,14 +210,14 @@ impl<T, Cr: ContentRef> Decode for EncryptedContent<T, Cr> {
         }
         let (content_ref, rest) = Cr::decode_next(rest)?;
         let (pred_refs, rest) = Digest::decode_next(rest)?;
-        let (pcs_key_hash, rest) = Digest::decode_next(rest)?;
-        let (pcs_update_op_hash, chunks) = Digest::decode_next(rest)?;
+        let (group_secret_hash, rest) = Digest::decode_next(rest)?;
+        let (group_secret_origin_hash, chunks) = Digest::decode_next(rest)?;
         chunk_count(chunks.len()).ok_or(DecodeError::InvalidField("chunks"))?;
         Ok(EncryptedContent {
             content_ref,
             pred_refs,
-            group_secret_hash: pcs_key_hash,
-            group_secret_epoch_hash: pcs_update_op_hash,
+            group_secret_hash,
+            group_secret_origin_hash,
             chunks: chunks.to_vec(),
             _plaintext_tag: PhantomData,
         })
@@ -452,8 +453,8 @@ mod tests {
         let fields = [
             ("content_ref", 4),
             ("pred_refs", 36),
-            ("pcs_key_hash", 68),
-            ("pcs_update_op", 100),
+            ("group_secret_hash", 68),
+            ("group_secret_origin_hash", 100),
         ];
         for (field, at) in fields {
             let edited = reencoded(&content, |b| b[at] ^= 1);

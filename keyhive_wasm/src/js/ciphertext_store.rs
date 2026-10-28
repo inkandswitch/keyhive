@@ -5,7 +5,7 @@ use super::{base64::Base64, change_id::JsChangeId};
 use future_form::{FutureForm, Local};
 use keyhive_codec::error::DecodeError;
 use keyhive_content::{
-    application_secret::GroupSecretEpoch,
+    application_secret::GroupSecretOrigin,
     encrypted::EncryptedContent,
     store::{memory::MemoryCiphertextStore, CiphertextStore},
 };
@@ -90,9 +90,9 @@ impl CiphertextStore<Local, JsChangeId, Vec<u8>> for JsCiphertextStore {
         })
     }
 
-    fn get_ciphertext_by_pcs_update<'a>(
+    fn get_ciphertext_by_group_secret_origin<'a>(
         &'a self,
-        pcs_update: &'a Digest<GroupSecretEpoch>,
+        origin: &'a Digest<GroupSecretOrigin>,
     ) -> <Local as FutureForm>::Future<
         'a,
         Result<Vec<Arc<EncryptedContent<Vec<u8>, JsChangeId>>>, Self::GetCiphertextError>,
@@ -100,7 +100,7 @@ impl CiphertextStore<Local, JsChangeId, Vec<u8>> for JsCiphertextStore {
         Local::from_future(async move {
             match self.inner {
                 JsCiphertextStoreInner::Memory(ref mem_store) => {
-                    Ok(mem_store.get_by_pcs_update(pcs_update).await)
+                    Ok(mem_store.get_by_group_secret_origin(origin).await)
                 }
 
                 // TODO add index

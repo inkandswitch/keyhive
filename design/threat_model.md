@@ -53,7 +53,7 @@ _Mitigations_: Keyhive does not own key storage; `AsyncSigner` and `JsSigner` le
 
 Observes or modifies traffic.
 
-_Mitigations_: every membership, prekey, and CGKA operation is signed; every reference is a BLAKE3 digest; content is E2EE and each chunk is bound by its AEAD tag and `pcs_update_op_hash` to a signed CGKA operation. Content chunks carry no signature of their own; content authorship belongs to the CRDT layer. Traffic-pattern confidentiality depends on the transport.
+_Mitigations_: every membership, prekey, and CGKA operation is signed; every reference is a BLAKE3 digest; content is E2EE and each chunk is bound by its AEAD tag and `group_secret_origin_hash` to a signed CGKA operation. Content chunks carry no signature of their own; content authorship belongs to the CRDT layer. Traffic-pattern confidentiality depends on the transport.
 
 ### A6. Byzantine peer
 

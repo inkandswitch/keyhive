@@ -4,7 +4,7 @@ pub mod memory;
 
 use self::memory::MemoryCiphertextStore;
 use crate::{
-    application_secret::GroupSecretEpoch, encrypted::EncryptedContent, envelope::Envelope,
+    application_secret::GroupSecretOrigin, encrypted::EncryptedContent, envelope::Envelope,
 };
 use derive_where::derive_where;
 use dupe::Dupe;
@@ -53,9 +53,9 @@ pub trait CiphertextStore<F: FutureForm, Cr: ContentRef, T>: Sized {
         id: &'a Cr,
     ) -> F::Future<'a, Result<Option<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
-    fn get_ciphertext_by_pcs_update<'a>(
+    fn get_ciphertext_by_group_secret_origin<'a>(
         &'a self,
-        pcs_update: &'a Digest<GroupSecretEpoch>,
+        origin: &'a Digest<GroupSecretOrigin>,
     ) -> F::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>>;
 
     fn mark_decrypted<'a>(
@@ -293,13 +293,13 @@ where
         })
     }
 
-    fn get_ciphertext_by_pcs_update<'a>(
+    fn get_ciphertext_by_group_secret_origin<'a>(
         &'a self,
-        pcs_update: &'a Digest<GroupSecretEpoch>,
+        origin: &'a Digest<GroupSecretOrigin>,
     ) -> F::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Self::GetCiphertextError>> {
         F::from_future(async move {
             let locked = self.lock().await;
-            locked.get_ciphertext_by_pcs_update(pcs_update).await
+            locked.get_ciphertext_by_group_secret_origin(origin).await
         })
     }
 
@@ -328,11 +328,11 @@ impl<F: FutureForm, T: Clone + 'static, Cr: ContentRef + 'static> CiphertextStor
         F::from_future(async move { Ok(self.get_by_content_ref(cr).await) })
     }
 
-    fn get_ciphertext_by_pcs_update<'a>(
+    fn get_ciphertext_by_group_secret_origin<'a>(
         &'a self,
-        pcs_update: &'a Digest<GroupSecretEpoch>,
+        origin: &'a Digest<GroupSecretOrigin>,
     ) -> F::Future<'a, Result<Vec<Arc<EncryptedContent<T, Cr>>>, Infallible>> {
-        F::from_future(async move { Ok(self.get_by_pcs_update(pcs_update).await) })
+        F::from_future(async move { Ok(self.get_by_group_secret_origin(origin).await) })
     }
 
     fn mark_decrypted<'a>(&'a self, content_ref: &'a Cr) -> F::Future<'a, Result<(), Infallible>> {
@@ -403,13 +403,13 @@ mod tests {
     fn setup(
         plaintext: String,
         cref: [u8; 32],
-        pcs_update_op_hash: Digest<GroupSecretEpoch>,
+        group_secret_origin_hash: Digest<GroupSecretOrigin>,
         ancestors: HashMap<[u8; 32], SymmetricKey>,
         doc_id: Identifier,
         csprng: &mut OsRng,
     ) -> (Arc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
-        let pcs_key: GroupSecret = ShareSecretKey::generate(csprng).into();
-        let pcs_key_hash = pcs_key.digest();
+        let group_secret: GroupSecret = ShareSecretKey::generate(csprng).into();
+        let group_secret_hash = group_secret.digest();
 
         let key = SymmetricKey::generate(csprng);
         let envelope = Envelope {
@@ -424,8 +424,8 @@ mod tests {
                     doc_id,
                     cref,
                     PredecessorRefs::digest(&[]),
-                    pcs_key_hash,
-                    pcs_update_op_hash,
+                    group_secret_hash,
+                    group_secret_origin_hash,
                     &bytes,
                 )
                 .expect("a fresh key encrypts"),
@@ -438,11 +438,11 @@ mod tests {
     async fn removing_a_ciphertext_returns_it_and_forgets_it() -> TestResult {
         let mut csprng = OsRng;
         let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
-        let op_hash: Digest<GroupSecretEpoch> = [9u8; 32].into();
+        let origin: Digest<GroupSecretOrigin> = [9u8; 32].into();
         let (one, _) = setup(
             "one".to_string(),
             [0; 32],
-            op_hash,
+            origin,
             HashMap::new(),
             doc_id,
             &mut csprng,
@@ -452,7 +452,7 @@ mod tests {
 
         assert_eq!(store.remove(&one.digest()).await, Some(one));
         assert_eq!(get_ct(&store, &[0; 32]).await, Ok(None));
-        assert!(store.get_by_pcs_update(&op_hash).await.is_empty());
+        assert!(store.get_by_group_secret_origin(&origin).await.is_empty());
         Ok(())
     }
 
@@ -462,7 +462,7 @@ mod tests {
 
         let mut csprng = OsRng;
         let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
-        let pcs_update_op_hash: Digest<GroupSecretEpoch> = Digest {
+        let group_secret_origin_hash: Digest<GroupSecretOrigin> = Digest {
             raw: blake3::hash(b"PcsOp"),
             _phantom: PhantomData,
         };
@@ -473,7 +473,7 @@ mod tests {
         let (one, one_key) = setup(
             "one".to_string(),
             one_ref,
-            pcs_update_op_hash,
+            group_secret_origin_hash,
             HashMap::new(),
             doc_id,
             &mut csprng,
@@ -482,7 +482,7 @@ mod tests {
         let (two, _two_key) = setup(
             "two".to_string(),
             two_ref,
-            pcs_update_op_hash,
+            group_secret_origin_hash,
             HashMap::from_iter([(one_ref, one_key)]),
             doc_id,
             &mut csprng,
@@ -504,14 +504,14 @@ mod tests {
     async fn a_wrong_ancestor_key_in_an_envelope_does_not_decrypt_the_ancestor() -> TestResult {
         let mut csprng = OsRng;
         let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
-        let op_hash: Digest<GroupSecretEpoch> = [9u8; 32].into();
+        let origin: Digest<GroupSecretOrigin> = [9u8; 32].into();
         let (one_ref, two_ref) = ([0u8; 32], [1u8; 32]);
         let wrong_key = SymmetricKey::generate(&mut csprng);
 
         let (one, _one_key) = setup(
             "one".to_string(),
             one_ref,
-            op_hash,
+            origin,
             HashMap::new(),
             doc_id,
             &mut csprng,
@@ -519,7 +519,7 @@ mod tests {
         let (two, two_key) = setup(
             "two".to_string(),
             two_ref,
-            op_hash,
+            origin,
             HashMap::from_iter([(one_ref, wrong_key)]),
             doc_id,
             &mut csprng,

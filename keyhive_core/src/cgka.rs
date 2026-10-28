@@ -132,12 +132,12 @@ impl Cgka {
     ) -> Result<SymmetricKey, CgkaError> {
         let pcs_key = self.0.group_secret_from_hashes(
             &encrypted.group_secret_hash.coerce(),
-            &encrypted.group_secret_epoch_hash.coerce(),
+            &encrypted.group_secret_origin_hash.coerce(),
         )?;
         let app_secret = GroupSecret(pcs_key.0).derive_application_secret(
             &encrypted.content_ref,
             &encrypted.pred_refs,
-            &encrypted.group_secret_epoch_hash,
+            &encrypted.group_secret_origin_hash,
         );
         Ok(app_secret.key())
     }

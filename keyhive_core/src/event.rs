@@ -71,7 +71,7 @@ impl<T: ContentRef> Event<T> {
                 let op_digest = op.digest();
                 let doc_id: DocumentId = (*op.payload().doc_id()).into();
                 let more = ciphertext_store
-                    .get_ciphertext_by_pcs_update(&op_digest.coerce())
+                    .get_ciphertext_by_group_secret_origin(&op_digest.coerce())
                     .await?;
 
                 acc.entry(doc_id).or_default().extend(more.into_iter());

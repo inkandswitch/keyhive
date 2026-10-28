@@ -21,7 +21,7 @@ use tracing::instrument;
 pub struct ApplicationSecret<Cr: ContentRef> {
     key: SymmetricKey,
     group_secret_hash: Digest<GroupSecret>,
-    group_secret_epoch_hash: Digest<GroupSecretEpoch>,
+    group_secret_origin_hash: Digest<GroupSecretOrigin>,
     content_ref: Cr,
     pred_refs: Digest<PredecessorRefs<Cr>>,
 }
@@ -31,14 +31,14 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     pub fn new(
         key: SymmetricKey,
         group_secret_hash: Digest<GroupSecret>,
-        group_secret_epoch_hash: Digest<GroupSecretEpoch>,
+        group_secret_origin_hash: Digest<GroupSecretOrigin>,
         content_ref: Cr,
         pred_refs: Digest<PredecessorRefs<Cr>>,
     ) -> Self {
         Self {
             key,
             group_secret_hash,
-            group_secret_epoch_hash,
+            group_secret_origin_hash,
             content_ref,
             pred_refs,
         }
@@ -61,7 +61,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
             self.content_ref.clone(),
             self.pred_refs,
             self.group_secret_hash,
-            self.group_secret_epoch_hash,
+            self.group_secret_origin_hash,
             plaintext,
         )
     }
@@ -85,7 +85,7 @@ impl GroupSecret {
         &self,
         content_ref: &Cr,
         pred_refs: &Digest<PredecessorRefs<Cr>>,
-        pcs_update_op_hash: &Digest<GroupSecretEpoch>,
+        group_secret_origin_hash: &Digest<GroupSecretOrigin>,
     ) -> ApplicationSecret<Cr> {
         let mut hasher = Context::CONTENT_APPLICATION_KEY.hasher();
         hasher.update(self.0.as_slice());
@@ -94,7 +94,7 @@ impl GroupSecret {
         ApplicationSecret::new(
             SymmetricKey::from(*hasher.finalize().as_bytes()),
             self.digest(),
-            *pcs_update_op_hash,
+            *group_secret_origin_hash,
             content_ref.clone(),
             *pred_refs,
         )
@@ -102,7 +102,7 @@ impl GroupSecret {
 }
 
 /// The secret is never signed or sent. Its digest is included in each ciphertext's
-/// header so a reader can tell which epoch's secret a block's key came from.
+/// header so a reader can tell which group secret a block's key came from.
 impl Kinded for GroupSecret {
     const KIND: Kind = Kind::PCS_KEY;
     const VERSION: u8 = 0;
@@ -114,21 +114,22 @@ impl From<ShareSecretKey> for GroupSecret {
     }
 }
 
-/// Identifies the epoch whose CGKA group secret a block's key was derived
-/// from. Only `Digest<GroupSecretEpoch>` is used, as bytes the key
-/// agreement supplies. No value of this type exists.
+/// The CGKA operation that generated a group secret. A block's header contains its
+/// hash, which identifies the secret the block's key was derived from. Only
+/// `Digest<GroupSecretOrigin>` is used, as bytes the key agreement supplies.
+/// No value of this type exists.
 #[derive(Debug)]
-pub enum GroupSecretEpoch {}
+pub enum GroupSecretOrigin {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Checked with `b3sum --derive-key` under `CONTENT_APPLICATION_KEY` over
-    /// `[1; 32] ‖ Digest<PredecessorRefs>([[3; 32]]) ‖ [2; 32]`: the root secret,
+    /// `[1; 32] ‖ Digest<PredecessorRefs>([[3; 32]]) ‖ [2; 32]`: the group secret,
     /// the predecessors' digest, then the content ref.
     #[test]
-    fn the_application_key_is_derived_from_root_predecessors_and_ref() {
+    fn the_application_key_is_derived_from_group_secret_predecessors_and_ref() {
         let secret = GroupSecret(ShareSecretKey::force_from_bytes([1; 32]))
             .derive_application_secret(
                 &[2u8; 32],
