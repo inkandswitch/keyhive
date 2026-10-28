@@ -1,7 +1,7 @@
 use keyhive_crypto::symmetric_key::SymmetricKey;
 use wasm_bindgen::prelude::*;
 
-fn key_from_bytes(key: &[u8]) -> Result<SymmetricKey, JsValue> {
+pub(crate) fn key_from_bytes(key: &[u8]) -> Result<SymmetricKey, JsValue> {
     let arr: [u8; 32] = key
         .try_into()
         .map_err(|_| JsValue::from_str("symmetric key must be 32 bytes"))?;

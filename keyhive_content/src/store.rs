@@ -64,8 +64,9 @@ pub trait CiphertextStore<F: FutureForm, Cr: ContentRef, T>: Sized {
     ) -> F::Future<'a, Result<(), Self::MarkDecryptedError>>;
 }
 
-/// Extension trait providing [`try_causal_decrypt`] for all
-/// [`CiphertextStore`] implementations.
+/// Extension trait providing [`try_causal_decrypt`] and
+/// [`try_causal_decrypt_from_keys`] for all [`CiphertextStore`]
+/// implementations.
 ///
 /// This is a separate trait because the default method body uses
 /// `F::from_future(async { ... })` which requires concrete `F`
@@ -73,6 +74,7 @@ pub trait CiphertextStore<F: FutureForm, Cr: ContentRef, T>: Sized {
 /// stamps out both variants via a blanket impl.
 ///
 /// [`try_causal_decrypt`]: CiphertextStoreExt::try_causal_decrypt
+/// [`try_causal_decrypt_from_keys`]: CiphertextStoreExt::try_causal_decrypt_from_keys
 /// [`Sendable`]: future_form::Sendable
 /// [`Local`]: future_form::Local
 pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<F, Cr, T> {
@@ -155,6 +157,31 @@ pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<
     ) -> F::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<F, Cr, T, Self>>>
     where
         T: Clone + Encode + Decode;
+
+    /// Causally decrypts content whose keys are already known (either the
+    /// ancestors an opened [`Envelope`] lists or the
+    /// [`next`][CausalDecryptionState::next] of an earlier decryption).
+    ///
+    /// Everything in `start` is fetched from this store and decrypted with its
+    /// key, then the traversal continues as in
+    /// [`try_causal_decrypt`][CiphertextStoreExt::try_causal_decrypt].
+    /// Anything in `start` the store does not contain is placed in the returned
+    /// state's [`next`][CausalDecryptionState::next], with its key, so a later
+    /// call can start from it.
+    ///
+    /// If any block cannot be fetched, decrypted or marked decrypted, or its
+    /// plaintext is not an envelope, returns [`CausalDecryptionError`] with
+    /// the reason in its [`cannot`][CausalDecryptionError::cannot] and the
+    /// state in its [`progress`][CausalDecryptionError::progress]. A failure
+    /// to fetch an ancestor of `start` is listed under the block that listed
+    /// it, and that ancestor's key is not kept.
+    fn try_causal_decrypt_from_keys<'a>(
+        &'a self,
+        doc_id: Identifier,
+        start: &'a [(Cr, SymmetricKey)],
+    ) -> F::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<F, Cr, T, Self>>>
+    where
+        T: Clone + Encode + Decode + 'a;
 }
 
 #[future_form(
@@ -244,6 +271,48 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                 };
             }
 
+            if cannot.is_empty() {
+                Ok(progress)
+            } else {
+                Err(CausalDecryptionError {
+                    cannot,
+                    progress: Box::new(progress),
+                })
+            }
+        })
+    }
+
+    fn try_causal_decrypt_from_keys<'a>(
+        &'a self,
+        doc_id: Identifier,
+        start: &'a [(Cr, SymmetricKey)],
+    ) -> F::Future<'a, Result<CausalDecryptionState<Cr, T>, CausalDecryptionError<F, Cr, T, Self>>>
+    where
+        T: Clone + Encode + Decode + 'a,
+    {
+        F::from_future(async move {
+            let mut to_decrypt = vec![];
+            let mut not_served = HashMap::new();
+            let mut cannot = HashMap::new();
+            for (content_ref, key) in start {
+                match self.get_ciphertext(content_ref).await {
+                    Ok(Some(encrypted)) => to_decrypt.push((encrypted, *key)),
+                    Ok(None) => {
+                        not_served.insert(content_ref.clone(), *key);
+                    }
+                    Err(e) => {
+                        cannot.insert(content_ref.clone(), ErrorReason::GetCiphertextError(e));
+                    }
+                }
+            }
+
+            let (mut progress, causal_decrypt_cannot) =
+                match self.try_causal_decrypt(doc_id, &mut to_decrypt).await {
+                    Ok(progress) => (progress, HashMap::new()),
+                    Err(err) => (*err.progress, err.cannot),
+                };
+            progress.next.extend(not_served);
+            cannot.extend(causal_decrypt_cannot);
             if cannot.is_empty() {
                 Ok(progress)
             } else {
@@ -543,6 +612,89 @@ mod tests {
             Some(ErrorReason::DecryptionFailed(key)) if *key == wrong_key
         ));
         assert_eq!(err.progress.complete, vec![(two_ref, "two".to_string())]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_causal_decrypt_from_known_keys_reads_each_start_or_reports_why_not() -> TestResult {
+        let mut csprng = OsRng;
+        let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
+        let origin: Digest<GroupSecretOrigin> = [9u8; 32].into();
+        let (parent_ref, read_ref, absent_ref, refused_ref) =
+            ([0u8; 32], [1u8; 32], [2u8; 32], [3u8; 32]);
+        let (parent_key, absent_key, wrong_key) = (
+            SymmetricKey::generate(&mut csprng),
+            SymmetricKey::generate(&mut csprng),
+            SymmetricKey::generate(&mut csprng),
+        );
+        let (read, read_key) = setup(
+            "read".to_string(),
+            read_ref,
+            origin,
+            HashMap::from_iter([(parent_ref, parent_key)]),
+            doc_id,
+            &mut csprng,
+        );
+        let (refused, _) = setup(
+            "refused".to_string(),
+            refused_ref,
+            origin,
+            HashMap::new(),
+            doc_id,
+            &mut csprng,
+        );
+        let store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(read).await;
+        store.insert(refused).await;
+
+        let start = [
+            (read_ref, read_key),
+            (absent_ref, absent_key),
+            (refused_ref, wrong_key),
+        ];
+        let Err(err) = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt_from_keys(
+            &store, doc_id, &start,
+        )
+        .await
+        else {
+            panic!("the block under the wrong key decrypted");
+        };
+        assert_eq!(err.progress.complete, vec![(read_ref, "read".to_string())]);
+        assert_eq!(
+            err.progress.next,
+            HashMap::from_iter([(parent_ref, parent_key), (absent_ref, absent_key)])
+        );
+        assert!(matches!(
+            err.cannot.get(&refused_ref),
+            Some(ErrorReason::DecryptionFailed(key)) if *key == wrong_key
+        ));
+        assert_eq!(err.cannot.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_causal_decrypt_from_known_keys_that_reads_every_start_is_ok() -> TestResult {
+        let mut csprng = OsRng;
+        let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
+        let (only, only_key) = setup(
+            "only".to_string(),
+            [0u8; 32],
+            [9u8; 32].into(),
+            HashMap::new(),
+            doc_id,
+            &mut csprng,
+        );
+        let store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(only).await;
+
+        let read = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt_from_keys(
+            &store,
+            doc_id,
+            &[([0u8; 32], only_key)],
+        )
+        .await
+        .expect("every start is read");
+        assert_eq!(read.complete, vec![([0u8; 32], "only".to_string())]);
         Ok(())
     }
 }

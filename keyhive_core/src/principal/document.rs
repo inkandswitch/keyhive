@@ -204,49 +204,10 @@ impl<T: ContentRef> DocumentState<T> {
         Ok((op, new_key_pair))
     }
 
-    /// Encrypt `content` in an [`Envelope`], listing its ancestors and carrying the keys to
-    /// open them.
+    /// The key this document has for `content_ref`, from content it has written or read.
     #[cfg(any(test, feature = "test_utils"))]
-    #[instrument(skip_all)]
-    pub async fn try_encrypt_content_in_envelope<
-        F: FutureForm,
-        S: AsyncSigner<F>,
-        R: CryptoRng + RngCore,
-    >(
-        &mut self,
-        content_ref: &T,
-        content: &[u8],
-        pred_refs: &[T],
-        signer: &S,
-        csprng: &mut R,
-    ) -> Result<
-        (
-            EncryptedContent<Vec<u8>, T>,
-            Option<(Verified<CgkaOperation>, LeafKeyPair)>,
-        ),
-        EncryptInEnvelopeError<T>,
-    >
-where {
-        let mut ancestors = HashMap::with_capacity(pred_refs.len());
-        for pred in pred_refs {
-            let key = self
-                .known_decryption_keys
-                .get(pred)
-                .copied()
-                .ok_or_else(|| EncryptInEnvelopeError::NoKeyForAncestor(pred.clone()))?;
-            ancestors.insert(pred.clone(), key);
-        }
-
-        let envelope = Envelope {
-            plaintext: content.to_vec(),
-            ancestors,
-        };
-        let bytes = envelope.encode().into_bytes();
-
-        let (encrypted, _key, rotation) = self
-            .try_encrypt_content_keyed::<F, S, R>(content_ref, &bytes, pred_refs, signer, csprng)
-            .await?;
-        Ok((encrypted, rotation))
+    pub(crate) fn known_decryption_key(&self, content_ref: &T) -> Option<SymmetricKey> {
+        self.known_decryption_keys.get(content_ref).copied()
     }
 
     /// Encrypt `content`, returning it with the key it is encrypted under. The third
@@ -541,16 +502,6 @@ pub enum EncryptError {
     /// remove it because it lacks `Read` itself.
     #[error("a member of the CGKA group lacks Read and this replica may not sign its remove")]
     CgkaMemberLacksRead,
-}
-
-/// Why content could not be written into an [`Envelope`].
-#[derive(Debug, Error)]
-pub enum EncryptInEnvelopeError<T: ContentRef> {
-    #[error("no key for ancestor {0:?}")]
-    NoKeyForAncestor(T),
-
-    #[error(transparent)]
-    Encrypt(#[from] EncryptError),
 }
 
 #[derive(Debug, Error)]

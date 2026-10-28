@@ -365,6 +365,35 @@ test.describe("Keyhive", async () => {
     expect(out.otherDocRefused).toBe(true);
   });
 
+  test("a causal decryption reads the ancestors an async load returns", async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      const { Ancestor, ChangeId, Keyhive, Signer, CiphertextStore } = window.keyhive;
+      const kh = await Keyhive.init(
+        await Signer.generate(),
+        CiphertextStore.newInMemory(),
+        (_) => {},
+      );
+      const docId = await kh.generateDocument([], new ChangeId(new Uint8Array([0])), []);
+      const parentRef = new ChangeId(new Uint8Array([1]));
+      const parent = await kh.tryEncryptWithAncestors(docId, parentRef, [], new Uint8Array([1]));
+      const child = await kh.tryEncryptWithAncestors(
+        docId,
+        new ChangeId(new Uint8Array([2])),
+        [new Ancestor(parentRef, parent.applicationSecret)],
+        new Uint8Array([2]),
+      );
+      const parentBytes = parent.encryptedContent().toBytes();
+      const read = await kh.tryCausalDecrypt(
+        docId,
+        child.encryptedContent(),
+        async (id) => (id.toBytes()[0] === 1 ? parentBytes : undefined),
+      );
+      return read.complete().map((piece) => Array.from(piece.content()));
+    });
+
+    expect(out).toStrictEqual([[2], [1]]);
+  });
+
   test("a listener that throws leaves the keyhive usable", async ({ page }) => {
     const out = await page.evaluate(async () => {
       const { Keyhive, Signer, CiphertextStore } = window.keyhive;
