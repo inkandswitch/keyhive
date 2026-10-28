@@ -5,10 +5,11 @@ use derivative::Derivative;
 use keyhive_codec::{
     error::DecodeError,
     prefixed::{decode_len, encode_len},
-    traits::{Decode, Encode, StreamDecode},
+    traits::{Decode, Encode},
 };
-use keyhive_crypto::symmetric_key::SymmetricKey;
+use keyhive_crypto::{secret::write_secret, symmetric_key::SymmetricKey};
 use std::{collections::HashMap, vec::Vec};
+use zeroize::Zeroizing;
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// A container for an arbitrary payload and the references and keys of its ancestors.
 ///
@@ -91,6 +92,49 @@ pub struct Envelope<C: ContentRef, T> {
     pub ancestors: HashMap<C, SymmetricKey>,
 }
 
+impl<C: ContentRef, T> Envelope<C, T> {
+    /// The ancestors' encoded content refs and keys, in ascending order of the
+    /// encodings.
+    fn sorted_ancestors(&self) -> Vec<(Vec<u8>, &SymmetricKey)> {
+        let mut ancestors: Vec<_> = self
+            .ancestors
+            .iter()
+            .map(|(content_ref, key)| (content_ref.encode().into_bytes(), key))
+            .collect();
+        ancestors.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        ancestors
+    }
+}
+
+impl<C: ContentRef, T: Encode> Envelope<C, T> {
+    /// The envelope's encoding, the same bytes as [`Encode`] gives, in a buffer
+    /// that is wiped when dropped: it carries its ancestors' keys.
+    ///
+    /// The buffer never grows, so it leaves no copy of a key behind.
+    pub fn encode_zeroizing(&self) -> Zeroizing<Vec<u8>> {
+        let ancestors = self.sorted_ancestors();
+        let payload = Zeroizing::new(self.plaintext.encode().into_bytes());
+        let mut count = Vec::new();
+        encode_len(ancestors.len(), &mut count);
+        let keys_len: usize = ancestors
+            .iter()
+            .map(|(r, k)| r.len() + k.as_slice().len())
+            .sum();
+        write_secret(count.len() + keys_len + payload.len(), |out| {
+            out.extend_from_slice(&count);
+            write_ancestors(&ancestors, out);
+            out.extend_from_slice(&payload);
+        })
+    }
+}
+
+fn write_ancestors(ancestors: &[(Vec<u8>, &SymmetricKey)], out: &mut Vec<u8>) {
+    for (content_ref, key) in ancestors {
+        out.extend_from_slice(content_ref);
+        out.extend_from_slice(key.as_slice());
+    }
+}
+
 /// `count ‖ ( content_ref ‖ key )* ‖ payload`: the ancestors in ascending order
 /// of their content refs' encodings, so the bytes do not depend on the map's
 /// order and a streaming reader has every ancestor's key first, then the
@@ -98,17 +142,9 @@ pub struct Envelope<C: ContentRef, T> {
 /// length.
 impl<C: ContentRef, T: Encode> Encode for Envelope<C, T> {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        let mut ancestors: Vec<(Vec<u8>, [u8; 32])> = self
-            .ancestors
-            .iter()
-            .map(|(content_ref, key)| (content_ref.encode().into_bytes(), (*key).into()))
-            .collect();
-        ancestors.sort_unstable();
+        let ancestors = self.sorted_ancestors();
         encode_len(ancestors.len(), out);
-        for (content_ref, key) in &ancestors {
-            out.extend_from_slice(content_ref);
-            out.extend_from_slice(key);
-        }
+        write_ancestors(&ancestors, out);
         self.plaintext.encode_into(out);
     }
 }
@@ -126,8 +162,11 @@ impl<C: ContentRef, T: Decode> Decode for Envelope<C, T> {
             if previous.is_some_and(|p| p >= encoded) {
                 return Err(DecodeError::UnsortedKeys);
             }
-            let (key, after_key) = <[u8; 32]>::decode_next(after_ref)?;
-            ancestors.insert(content_ref, SymmetricKey::from(key));
+            let (key, after_key) = after_ref
+                .split_at_checked(32)
+                .ok_or(DecodeError::UnexpectedEnd)?;
+            let key = SymmetricKey::try_from_slice(key).expect("split at 32 bytes");
+            ancestors.insert(content_ref, key);
             previous = Some(encoded);
             rest = after_key;
         }
@@ -163,6 +202,20 @@ mod tests {
                 .map(|(content_ref, key)| (*content_ref, SymmetricKey::from(*key)))
                 .collect(),
         }
+    }
+
+    /// The wiped encoding is the envelope's encoding, byte for byte, written
+    /// into a buffer of exactly that length.
+    #[test]
+    fn an_envelope_encodes_the_same_into_a_wiped_buffer() {
+        bolero::check!()
+            .with_arbitrary::<(Vec<([u8; 32], [u8; 32])>, Vec<u8>)>()
+            .for_each(|(ancestors, payload)| {
+                let envelope = arbitrary_envelope(ancestors, payload);
+                let wiped = envelope.encode_zeroizing();
+                assert_eq!(wiped.as_slice(), envelope.encode().as_bytes());
+                assert_eq!(wiped.capacity(), wiped.len(), "the buffer never grew");
+            });
     }
 
     #[test]

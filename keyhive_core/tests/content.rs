@@ -221,8 +221,8 @@ async fn a_block_does_not_decrypt_for_another_document() -> Result<()> {
     let other_doc = ctx.doc(&alice, "other_doc").await?;
 
     let (ct, key) = ctx.encrypt_keyed(&alice, design_doc, b"one").await?;
-    assert_eq!(decrypt_with_key(&ct, key, design_doc)?, b"one".to_vec());
-    assert!(decrypt_with_key(&ct, key, other_doc).is_err());
+    assert_eq!(decrypt_with_key(&ct, &key, design_doc)?, b"one".to_vec());
+    assert!(decrypt_with_key(&ct, &key, other_doc).is_err());
     Ok(())
 }
 
@@ -237,15 +237,15 @@ async fn the_wrong_key_does_not_decrypt() -> Result<()> {
     assert_ne!(first_key, second_key, "two writes reused one key");
 
     assert_eq!(
-        decrypt_with_key(&first, first_key, design_doc)?,
+        decrypt_with_key(&first, &first_key, design_doc)?,
         b"one".to_vec()
     );
     assert_eq!(
-        decrypt_with_key(&second, second_key, design_doc)?,
+        decrypt_with_key(&second, &second_key, design_doc)?,
         b"two".to_vec()
     );
-    assert!(decrypt_with_key(&first, second_key, design_doc).is_err());
-    assert!(decrypt_with_key(&second, first_key, design_doc).is_err());
+    assert!(decrypt_with_key(&first, &second_key, design_doc).is_err());
+    assert!(decrypt_with_key(&second, &first_key, design_doc).is_err());
     Ok(())
 }
 
@@ -262,7 +262,7 @@ async fn a_ciphertext_is_refused_if_tampered_with() -> Result<()> {
 
     let tampered = with_a_flipped_bit(&ct);
     assert!(
-        decrypt_with_key(&tampered, key, design_doc).is_err(),
+        decrypt_with_key(&tampered, &key, design_doc).is_err(),
         "the cipher is authenticated so one flipped bit causes an error"
     );
     match bob
@@ -291,7 +291,7 @@ async fn a_reader_can_read_what_an_editor_wrote() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert!(bob.can_decrypt_content(design_doc, &ct).await?);
-    assert_eq!(decrypt_with_key(&ct, key, design_doc)?, msg.to_vec());
+    assert_eq!(decrypt_with_key(&ct, &key, design_doc)?, msg.to_vec());
     Ok(())
 }
 

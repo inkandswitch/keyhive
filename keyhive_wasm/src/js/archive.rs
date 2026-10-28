@@ -6,10 +6,7 @@ use super::{
 };
 use derive_more::{Display, From, Into};
 use futures::lock::Mutex;
-use keyhive_codec::{
-    error::DecodeError,
-    traits::{Decode, Encode},
-};
+use keyhive_codec::{error::DecodeError, traits::Decode};
 use keyhive_core::{
     archive::Archive,
     keyhive::{Keyhive, TryFromArchiveError},
@@ -32,9 +29,12 @@ impl JsArchive {
             .map_err(JsSerializationError)
     }
 
+    /// The archive's bytes. They hold this replica's secret keys: do not log
+    /// them, or store them unencrypted. They are copied straight into a JS
+    /// array, which JS cannot wipe; the Wasm buffer they came from is wiped.
     #[wasm_bindgen(js_name = toBytes)]
-    pub fn to_bytes(&self) -> Box<[u8]> {
-        self.0.encode().into_bytes().into_boxed_slice()
+    pub fn to_bytes(&self) -> js_sys::Uint8Array {
+        js_sys::Uint8Array::from(self.0.encode_zeroizing().as_slice())
     }
 
     #[wasm_bindgen(js_name = tryToKeyhive)]

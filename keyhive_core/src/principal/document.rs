@@ -49,6 +49,7 @@ use std::{
 };
 use thiserror::Error;
 use tracing::instrument;
+use zeroize::Zeroizing;
 
 /// A document this replica is a member of: its CGKA group and the
 /// content heads it knows. Its membership is the Keyline certificate set.
@@ -140,7 +141,7 @@ impl<T: ContentRef> DocumentState<T> {
     ) -> Result<(Self, Vec<Verified<CgkaOperation>>), GenerateDocError<E>> {
         let (owner, owner_pk, _, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
-        owner_sks.insert(owner_pk, owner_sk);
+        owner_sks.insert(owner_pk, owner_sk.clone());
         let mut cgka = Cgka::new(id, owner, owner_sks);
         cgka.set_membership_view(view);
         let mut ops = cgka.add_multiple(founders, signer).await?;
@@ -207,7 +208,7 @@ impl<T: ContentRef> DocumentState<T> {
     /// The key this document has for `content_ref`, from content it has written or read.
     #[cfg(any(test, feature = "test_utils"))]
     pub(crate) fn known_decryption_key(&self, content_ref: &T) -> Option<SymmetricKey> {
-        self.known_decryption_keys.get(content_ref).copied()
+        self.known_decryption_keys.get(content_ref).cloned()
     }
 
     /// Encrypt `content`, returning it with the key it is encrypted under. The third
@@ -241,7 +242,7 @@ impl<T: ContentRef> DocumentState<T> {
 
         let application_secret_key = app_secret.key();
         self.known_decryption_keys
-            .insert(content_ref.clone(), application_secret_key);
+            .insert(content_ref.clone(), application_secret_key.clone());
 
         let encrypted_content = app_secret
             .try_encrypt(self.doc_id().into(), content)
@@ -280,11 +281,11 @@ impl<T: ContentRef> DocumentState<T> {
         decrypt_key: SymmetricKey,
     ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
         let plaintext = encrypted_content
-            .try_decrypt(decrypt_key, self.doc_id().into())
+            .try_decrypt(&decrypt_key, self.doc_id().into())
             .map_err(DecryptError::from)?;
 
         self.known_decryption_keys
-            .insert(encrypted_content.content_ref.clone(), decrypt_key);
+            .insert(encrypted_content.content_ref.clone(), decrypt_key.clone());
 
         Ok((plaintext, decrypt_key))
     }
@@ -300,7 +301,8 @@ impl<T: ContentRef> DocumentState<T> {
         store: C,
     ) -> Result<CausalDecryptionState<T, P>, DocCausalDecryptionError<F, T, P, C>>
 where {
-        let raw_entrypoint = self.try_decrypt_content(encrypted_content)?;
+        // The envelope carries its ancestors' keys, so its bytes are wiped.
+        let raw_entrypoint = Zeroizing::new(self.try_decrypt_content(encrypted_content)?);
 
         let entrypoint_envelope = Envelope::<T, Vec<u8>>::decode(raw_entrypoint.as_slice())
             .map_err(|e| CausalDecryptionError::<F, T, P, C> {
@@ -319,9 +321,9 @@ where {
                 .await
                 .map_err(DocCausalDecryptionError::GetCiphertextError)?
             {
-                to_decrypt.push((encrypted, *symm_key));
+                to_decrypt.push((encrypted, symm_key.clone()));
             } else {
-                not_served.insert(digest.clone(), *symm_key);
+                not_served.insert(digest.clone(), symm_key.clone());
             }
         }
 

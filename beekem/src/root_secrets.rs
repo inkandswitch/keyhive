@@ -46,12 +46,14 @@ impl RootSecrets {
 
     /// The root secret recorded for `op_hash`.
     pub(crate) fn get(&self, op_hash: &Digest<CgkaOperation>) -> Option<PcsKey> {
-        self.0.get(op_hash).copied()
+        self.0.get(op_hash).cloned()
     }
 
     /// Every recorded update with its root secret.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Digest<CgkaOperation>, PcsKey)> + '_ {
-        self.0.iter().map(|(op_hash, secret)| (*op_hash, *secret))
+        self.0
+            .iter()
+            .map(|(op_hash, secret)| (*op_hash, secret.clone()))
     }
 
     /// Add every secret `other` has recorded, returning the ones not recorded
@@ -59,7 +61,8 @@ impl RootSecrets {
     pub(crate) fn merge_from(&mut self, other: &Self) -> Vec<(Digest<CgkaOperation>, PcsKey)> {
         let mut added = Vec::new();
         for (op_hash, secret) in other.iter() {
-            if self.0.insert(op_hash, secret) != Some(secret) {
+            if self.0.get(&op_hash) != Some(&secret) {
+                self.0.insert(op_hash, secret.clone());
                 added.push((op_hash, secret));
             }
         }

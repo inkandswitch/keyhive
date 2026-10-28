@@ -62,7 +62,7 @@ fn a_concurrent_updates_secret_is_decrypted_from_its_own_path() {
                 );
                 assert_eq!(
                     cgka.root_secret_from_update_path(&op_hash),
-                    Some(secret),
+                    Some(secret.clone()),
                     "replica {reader} should decrypt the secret from the update's own path"
                 );
             }

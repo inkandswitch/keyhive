@@ -58,9 +58,10 @@ pub(crate) async fn causal_decrypt(
         complete: complete
             .into_iter()
             .map(|(content_ref, content)| JsDecryptedContent {
-                key: *keys
+                key: keys
                     .get(&content_ref)
-                    .expect("the traversal records the key of each block it reads"),
+                    .expect("the traversal records the key of each block it reads")
+                    .clone(),
                 content_ref,
                 content: content.into(),
             })
@@ -234,7 +235,7 @@ mod tests {
                 .try_encrypt_with_ancestors(&doc, &content_ref, ancestors, content)
                 .await
                 .expect("the content encrypts");
-            let key = keyed.application_secret();
+            let key = keyed.application_secret().to_vec();
             ancestors = vec![JsAncestor::new(&content_ref, &key)
                 .expect("a key is 32 bytes")
                 .into()];
@@ -257,7 +258,7 @@ mod tests {
         let complete: Vec<(Vec<u8>, Vec<u8>)> = read
             .complete()
             .iter()
-            .map(|block| (block.content(), block.application_secret()))
+            .map(|block| (block.content(), block.application_secret().to_vec()))
             .collect();
         assert_eq!(
             complete,
@@ -269,7 +270,7 @@ mod tests {
         let next: Vec<(Vec<u8>, Vec<u8>)> = read
             .next()
             .iter()
-            .map(|a| (a.content_ref().to_bytes(), a.key()))
+            .map(|a| (a.content_ref().to_bytes(), a.key().to_vec()))
             .collect();
         assert_eq!(next, vec![(vec![1], grandparent_key)]);
         assert!(read.failed().is_empty());
@@ -302,7 +303,7 @@ mod tests {
         let next: Vec<(Vec<u8>, Vec<u8>)> = read
             .next()
             .iter()
-            .map(|a| (a.content_ref().to_bytes(), a.key()))
+            .map(|a| (a.content_ref().to_bytes(), a.key().to_vec()))
             .collect();
         assert_eq!(next, vec![(vec![1], grandparent_key)]);
     }
@@ -349,7 +350,7 @@ mod tests {
         let next: Vec<(Vec<u8>, Vec<u8>)> = read
             .next()
             .iter()
-            .map(|a| (a.content_ref().to_bytes(), a.key()))
+            .map(|a| (a.content_ref().to_bytes(), a.key().to_vec()))
             .collect();
         assert_eq!(next, vec![(vec![1], parent_key)]);
     }

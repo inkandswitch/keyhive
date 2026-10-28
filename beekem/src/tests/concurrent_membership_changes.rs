@@ -504,7 +504,9 @@ pub(super) fn try_decrypt(
             .try_decrypt_encryption(doc_id, encrypter_pk, encrypted)
             .ok()?,
     };
-    Some(ShareSecretKey::force_from_bytes(bytes.try_into().ok()?))
+    Some(ShareSecretKey::force_from_bytes(
+        <[u8; 32]>::try_from(bytes.as_slice()).ok()?,
+    ))
 }
 
 /// Extend `known` with every node secret it can be used to decrypt from
@@ -657,7 +659,7 @@ async fn a_removal_beats_a_concurrent_add_of_the_same_member() {
     let doc_id = group.replicas[0].doc_id;
     let learned_by_d = learn_from(doc_id, leaf_key(d.pk, d.sk), &paths);
     let c = &group.members[2];
-    let learned_by_c = learn_from(doc_id, leaf_key(c.pk, c.sk), &paths);
+    let learned_by_c = learn_from(doc_id, leaf_key(c.pk, c.sk.clone()), &paths);
     let next_keys: Vec<ShareKey> = new_path(&next)
         .path
         .iter()

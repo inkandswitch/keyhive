@@ -15,6 +15,7 @@ use keyhive_crypto::{
     symmetric_key::SymmetricKey,
 };
 use tracing::instrument;
+use zeroize::Zeroizing;
 
 const NONCE_LEN: usize = 24;
 const AEAD_TAG_LEN: usize = 16;
@@ -30,16 +31,16 @@ pub trait Sealable {
     /// The context its key is derived under, from the X25519 exchange.
     const CONTEXT: Context;
 
-    /// The secret's bytes, as sealed.
-    fn secret_bytes(&self) -> [u8; 32];
+    /// The secret's bytes, as sealed. Borrowed: a copy would not be wiped.
+    fn secret_bytes(&self) -> &[u8];
 }
 
 /// A BeeKEM node's secret, sealed to a node of its sibling's resolution.
 impl Sealable for ShareSecretKey {
     const CONTEXT: Context = Context::CGKA_NODE_SECRET_KEY;
 
-    fn secret_bytes(&self) -> [u8; 32] {
-        self.to_bytes()
+    fn secret_bytes(&self) -> &[u8] {
+        self.as_slice()
     }
 }
 
@@ -48,8 +49,8 @@ impl Sealable for ShareSecretKey {
 impl Sealable for PcsKey {
     const CONTEXT: Context = Context::CGKA_INVITATION_KEY;
 
-    fn secret_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes()
+    fn secret_bytes(&self) -> &[u8] {
+        self.0.as_slice()
     }
 }
 
@@ -62,7 +63,6 @@ impl Sealable for PcsKey {
 /// synthetic nonce ([`SymmetricKey::try_open`]). A ciphertext therefore opens
 /// only as a `T`, only in the tree, and between the two keys, it was sealed
 /// for, and under only one key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EncryptedSecret<T> {
     /// `nonce ‖ ciphertext ‖ tag`, from [`SymmetricKey::try_seal`].
     sealed: Vec<u8>,
@@ -74,6 +74,54 @@ pub struct EncryptedSecret<T> {
     _plaintext_tag: PhantomData<T>,
 }
 
+// Manual impls: `T` only names what is sealed, and derives would require it
+// to be ordered and hashed like the ciphertext, which a secret should not be.
+impl<T> Clone for EncryptedSecret<T> {
+    fn clone(&self) -> Self {
+        EncryptedSecret {
+            sealed: self.sealed.clone(),
+            paired_pk: self.paired_pk,
+            _plaintext_tag: PhantomData,
+        }
+    }
+}
+
+impl<T> PartialEq for EncryptedSecret<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.sealed == other.sealed && self.paired_pk == other.paired_pk
+    }
+}
+
+impl<T> Eq for EncryptedSecret<T> {}
+
+impl<T> PartialOrd for EncryptedSecret<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for EncryptedSecret<T> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        (&self.sealed, &self.paired_pk).cmp(&(&other.sealed, &other.paired_pk))
+    }
+}
+
+impl<T> core::hash::Hash for EncryptedSecret<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.sealed.hash(state);
+        self.paired_pk.hash(state);
+    }
+}
+
+impl<T> core::fmt::Debug for EncryptedSecret<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EncryptedSecret")
+            .field("sealed", &self.sealed)
+            .field("paired_pk", &self.paired_pk)
+            .finish()
+    }
+}
+
 impl<T: Sealable> EncryptedSecret<T> {
     /// Open with the encrypter's secret key.
     #[instrument(skip_all)]
@@ -81,7 +129,7 @@ impl<T: Sealable> EncryptedSecret<T> {
         &self,
         doc_id: TreeId,
         encrypter_sk: &ShareSecretKey,
-    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+    ) -> Result<Zeroizing<Vec<u8>>, chacha20poly1305::Error> {
         encrypter_sk
             .derive_symmetric_key(&self.paired_pk, T::CONTEXT)
             .try_open(
@@ -98,7 +146,7 @@ impl<T: Sealable> EncryptedSecret<T> {
         doc_id: TreeId,
         paired_sk: &ShareSecretKey,
         encrypter_pk: &ShareKey,
-    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+    ) -> Result<Zeroizing<Vec<u8>>, chacha20poly1305::Error> {
         paired_sk
             .derive_symmetric_key(encrypter_pk, T::CONTEXT)
             .try_open(
@@ -210,7 +258,7 @@ pub fn encrypt_secret_with<T: Sealable>(
     } = paired;
     let sealed = key
         .try_seal(
-            &secret.secret_bytes(),
+            secret.secret_bytes(),
             &node_secret_aad(doc_id, encrypter_pk, paired_pk),
         )
         .map_err(CgkaError::Encryption)?;
@@ -282,8 +330,8 @@ mod tests {
     fn a_node_secret_opens_only_in_its_tree() {
         let (secret, encrypter, paired) = (share_sk(1), share_sk(2), share_sk(3));
         let sealed =
-            encrypt_secret(doc(1), secret, &encrypter, &paired.share_key()).expect("seals");
-        let plaintext = Vec::<u8>::from(&secret);
+            encrypt_secret(doc(1), secret.clone(), &encrypter, &paired.share_key()).expect("seals");
+        let plaintext = Zeroizing::new(secret.as_slice().to_vec());
         for (tree, expected) in [
             (doc(1), Ok(plaintext)),
             (doc(2), Err(chacha20poly1305::Error)),

@@ -333,7 +333,7 @@ fn revoked_members_learn_nothing_of_a_rotation_after_their_removal() {
             }
         }
         for joiner in joiners.iter().filter(|j| revoked.contains(&j.id)) {
-            known.insert(joiner.pk, joiner.sk);
+            known.insert(joiner.pk, joiner.sk.clone());
         }
         let paths: Vec<&PathChange> = replica
             .ops_graph

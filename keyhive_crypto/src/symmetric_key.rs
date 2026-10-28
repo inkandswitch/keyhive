@@ -2,11 +2,13 @@
 
 use super::{
     context::Context,
+    secret::{boxed_from_slice, constant_time_eq},
     siv::{nonces_match, synthetic_nonce},
 };
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305, XNonce};
 use tracing::instrument;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const NONCE_LEN: usize = 24;
 
@@ -20,25 +22,34 @@ const NONCE_LEN: usize = 24;
 /// let key = SymmetricKey::generate(&mut rand::rngs::OsRng);
 /// let sealed = key.try_seal(b"hello world", b"some-document-id").expect("seals");
 ///
-/// assert_eq!(
-///     key.try_open(&sealed, b"some-document-id").as_deref(),
-///     Ok(&b"hello world"[..])
-/// );
+/// let opened = key.try_open(&sealed, b"some-document-id").expect("opens");
+/// assert_eq!(opened.as_slice(), b"hello world");
 /// assert!(key.try_open(&sealed, b"another-document").is_err());
 /// ```
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SymmetricKey([u8; 32]);
+///
+/// Wiped when dropped. Not `Copy`: a copy needs an explicit `clone`, and a
+/// clone is wiped too. The bytes are in their own allocation, so moving a
+/// key, or a map of keys growing, does not copy them. Equality takes constant
+/// time.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct SymmetricKey(Box<[u8; 32]>);
 
 impl SymmetricKey {
-    /// Get the key as a byte slice.
+    /// The key's bytes, borrowed: a copy of them would not be wiped.
     pub fn as_slice(&self) -> &[u8] {
-        &self.0
+        self.0.as_slice()
+    }
+
+    /// Copy a key out of `bytes` with no copy on the way. Returns `None`
+    /// unless `bytes` is 32 bytes long.
+    pub fn try_from_slice(bytes: &[u8]) -> Option<Self> {
+        boxed_from_slice(bytes).map(Self)
     }
 
     /// Generate a new random symmetric key.
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
-        let mut key = [0u8; 32];
-        csprng.fill_bytes(&mut key);
+        let mut key = Box::new([0; 32]);
+        csprng.fill_bytes(key.as_mut_slice());
         Self(key)
     }
 
@@ -73,20 +84,21 @@ impl SymmetricKey {
     /// sealed with the same `associated_data`.
     ///
     /// Also refuses a blob whose nonce is not the synthetic nonce of what it
-    /// decrypts to, which commits the blob to this key.
+    /// decrypts to, which commits the blob to this key. The plaintext is wiped
+    /// when dropped, as it is when the blob is refused.
     #[instrument(skip_all)]
     pub fn try_open(
         &self,
         blob: &[u8],
         associated_data: &[u8],
-    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+    ) -> Result<Zeroizing<Vec<u8>>, chacha20poly1305::Error> {
         let Some((nonce, ciphertext)) = blob.split_first_chunk::<NONCE_LEN>() else {
             return Err(chacha20poly1305::Error);
         };
         let keys = SealKeys::new(self);
-        let mut buf = ciphertext.to_vec();
+        let mut buf = Zeroizing::new(ciphertext.to_vec());
         keys.cipher
-            .decrypt_in_place(&XNonce::from(*nonce), associated_data, &mut buf)?;
+            .decrypt_in_place(&XNonce::from(*nonce), associated_data, &mut *buf)?;
         if !nonces_match(&keys.nonce(associated_data, &buf), nonce) {
             return Err(chacha20poly1305::Error);
         }
@@ -97,14 +109,16 @@ impl SymmetricKey {
 /// The subkeys a seal is made with.
 struct SealKeys {
     cipher: XChaCha20Poly1305,
-    nonce_key: [u8; 32],
+    nonce_key: Zeroizing<[u8; 32]>,
 }
 
 impl SealKeys {
     fn new(key: &SymmetricKey) -> Self {
+        // The cipher keeps, and wipes, its own copy of the key.
+        let enc_key = Zeroizing::new(Context::SEAL_ENCRYPTION_KEY.derive_key(key.as_slice()));
         SealKeys {
-            cipher: XChaCha20Poly1305::new(&Context::SEAL_ENCRYPTION_KEY.derive_key(&key.0).into()),
-            nonce_key: Context::SEAL_NONCE_KEY.derive_key(&key.0),
+            cipher: XChaCha20Poly1305::new(enc_key.as_ref().into()),
+            nonce_key: Zeroizing::new(Context::SEAL_NONCE_KEY.derive_key(key.as_slice())),
         }
     }
 
@@ -118,21 +132,38 @@ impl SealKeys {
 
 impl From<[u8; 32]> for SymmetricKey {
     fn from(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+        Self(Box::new(bytes))
     }
 }
 
-impl From<SymmetricKey> for [u8; 32] {
-    fn from(key: SymmetricKey) -> Self {
-        key.0
+/// Copies into a new allocation, so the copy is never on the stack.
+impl Clone for SymmetricKey {
+    fn clone(&self) -> Self {
+        Self::try_from_slice(self.as_slice()).expect("a key is 32 bytes")
     }
 }
+
+impl PartialEq for SymmetricKey {
+    fn eq(&self, other: &Self) -> bool {
+        constant_time_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for SymmetricKey {}
 
 impl core::fmt::Debug for SymmetricKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         "<SymmetricKey>".fmt(f)
     }
 }
+
+// Fails to compile unless the key wipes itself when dropped and has a
+// destructor, which a `Copy` type cannot have.
+const _: () = assert!(core::mem::needs_drop::<SymmetricKey>());
+const _: fn() = || {
+    fn wiped_on_drop<T: ZeroizeOnDrop>() {}
+    wiped_on_drop::<SymmetricKey>();
+};
 
 #[cfg(test)]
 mod tests {

@@ -416,7 +416,7 @@ impl Cgka {
         let invitation_secrets: Vec<InvitationSecret> = ancestor_secrets
             .iter()
             .filter_map(|(update_op_hash, secret)| {
-                match encrypt_secret_with(&key, self.doc_id, *secret) {
+                match encrypt_secret_with(&key, self.doc_id, secret.clone()) {
                     Ok(encrypted_root_secret) => Some(InvitationSecret {
                         update_op_hash: *update_op_hash,
                         encrypted_root_secret,
@@ -452,7 +452,7 @@ impl Cgka {
             .ok()?
             .keys()
             .into_iter()
-            .find_map(|pk| self.owner_sks.get(&pk).map(|sk| (pk, *sk)))
+            .find_map(|pk| self.owner_sks.get(&pk).map(|sk| (pk, sk.clone())))
     }
 
     /// Record the root secrets of `op`'s invitation if it is addressed to us.
@@ -553,7 +553,7 @@ impl Cgka {
                 &invitation_secret.encrypted_root_secret,
             )
             .ok()?;
-        PcsKey::from_decrypted_secret(plaintext)
+        PcsKey::from_decrypted_secret(&plaintext)
     }
 
     /// Remove member from group.
@@ -631,7 +631,7 @@ impl Cgka {
         if !self.tree.contains_id(&self.owner_id) {
             return Err(CgkaError::IdentifierNotFound);
         }
-        self.owner_sks.insert(new_pk, new_sk);
+        self.owner_sks.insert(new_pk, new_sk.clone());
         // Get our reachable ancestors before `encrypt_path` changes the tree so the
         // tree's root still corresponds to the current heads.
         let ancestors = self.reachable_ancestor_secrets();
@@ -650,7 +650,7 @@ impl Cgka {
             };
 
             let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
-            self.record_root_secret_for(pcs_key, signed_op.digest());
+            self.record_root_secret_for(pcs_key.clone(), signed_op.digest());
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
             Err(CgkaError::IdentifierNotFound)
@@ -965,7 +965,7 @@ impl Cgka {
             return None;
         };
         let pcs_key = PcsKey::new(new_path.decrypt_root_secret(self.doc_id, &self.owner_sks)?);
-        self.record_root_secret_for(pcs_key, *op_hash)
+        self.record_root_secret_for(pcs_key.clone(), *op_hash)
             .then_some(pcs_key)
     }
 
@@ -1045,7 +1045,7 @@ impl Cgka {
         }
         let pcs_key = self.decrypt_current_group_secret().ok()?;
 
-        self.record_root_secret_for(pcs_key, op_hash)
+        self.record_root_secret_for(pcs_key.clone(), op_hash)
             .then_some((op_hash, pcs_key))
     }
 
@@ -1057,7 +1057,7 @@ impl Cgka {
     fn mark_chained(&mut self, entries: &[(Digest<CgkaOperation>, PcsKey)]) {
         for (update, secret) in entries {
             if self.unchained_updates.contains(update)
-                && VerifiedRootSecret::verify(&self.ops_graph, *update, *secret).is_some()
+                && VerifiedRootSecret::verify(&self.ops_graph, *update, secret.clone()).is_some()
             {
                 self.unchained_updates.remove(update);
             }
@@ -1111,7 +1111,7 @@ impl Cgka {
                     .ok()?;
                 Some((
                     entry.update_op_hash,
-                    PcsKey::from_decrypted_secret(plaintext)?,
+                    PcsKey::from_decrypted_secret(&plaintext)?,
                 ))
             })
             .collect()
@@ -1149,7 +1149,9 @@ impl Cgka {
             }
             // A secret that is not the update's cannot open that update's own
             // entries, so it is not followed.
-            let Some(verified) = VerifiedRootSecret::verify(&self.ops_graph, op_hash, found) else {
+            let Some(verified) =
+                VerifiedRootSecret::verify(&self.ops_graph, op_hash, found.clone())
+            else {
                 continue;
             };
             self.root_secrets.insert(verified);
@@ -1226,10 +1228,11 @@ impl Cgka {
     /// it is not the secret that update produced.
     #[instrument(skip_all)]
     fn record_root_secret_for(&mut self, pcs_key: PcsKey, op_hash: Digest<CgkaOperation>) -> bool {
-        if self.root_secrets.get(&op_hash) == Some(pcs_key) {
+        if self.root_secrets.get(&op_hash).as_ref() == Some(&pcs_key) {
             return true;
         }
-        let Some(verified) = VerifiedRootSecret::verify(&self.ops_graph, op_hash, pcs_key) else {
+        let Some(verified) = VerifiedRootSecret::verify(&self.ops_graph, op_hash, pcs_key.clone())
+        else {
             debug!(
                 ?op_hash,
                 "a root secret does not match the update it was paired with"

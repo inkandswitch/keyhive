@@ -14,6 +14,7 @@ use keyhive_crypto::{
     symmetric_key::SymmetricKey,
 };
 use tracing::instrument;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A block's application key, with its ciphertext's header fields.
 ///
@@ -48,7 +49,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
 
     /// Getter for the underlying symmetric key.
     pub fn key(&self) -> SymmetricKey {
-        self.key
+        self.key.clone()
     }
 
     /// Encrypt `plaintext` for the document `doc_id`.
@@ -69,8 +70,9 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
     }
 }
 
-/// A CGKA group secret, which application secrets are derived from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A CGKA group secret, which application secrets are derived from. Wiped when
+/// dropped, through its [`ShareSecretKey`]; equality takes constant time.
+#[derive(Debug, Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct GroupSecret(pub ShareSecretKey);
 
 impl GroupSecret {
@@ -115,6 +117,14 @@ impl From<ShareSecretKey> for GroupSecret {
         GroupSecret(share_secret_key)
     }
 }
+
+// Fails to compile unless the secret wipes itself when dropped and has a
+// destructor, which a `Copy` type cannot have.
+const _: () = assert!(core::mem::needs_drop::<GroupSecret>());
+const _: fn() = || {
+    fn wiped_on_drop<T: ZeroizeOnDrop>() {}
+    wiped_on_drop::<GroupSecret>();
+};
 
 /// The CGKA operation that generated a group secret. A block's header contains its
 /// hash, which identifies the secret the block's key was derived from. Only

@@ -283,7 +283,7 @@ fn a_secret_is_accepted_only_for_the_update_that_produced_it() {
         assert_eq!(
             cgka.group_secret_from_hashes(&current.digest(), &second)
                 .ok(),
-            Some(current),
+            Some(current.clone()),
             "a secret was refused for the update that produced it"
         );
         assert!(

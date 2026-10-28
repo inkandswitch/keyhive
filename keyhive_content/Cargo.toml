@@ -15,6 +15,7 @@ keyhive_codec = { workspace = true }
 keyhive_crypto = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }
+zeroize = { workspace = true }
 
 # std-only dependencies: the envelope and the ciphertext store
 derivative = { workspace = true, optional = true }

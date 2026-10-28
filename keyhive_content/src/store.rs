@@ -27,6 +27,7 @@ use std::{
     vec::Vec,
 };
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 /// An async storage interface for ciphertexts.
 ///
@@ -212,16 +213,21 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                     continue;
                 }
 
-                progress.keys.insert(ciphertext.content_ref.clone(), key);
+                progress
+                    .keys
+                    .insert(ciphertext.content_ref.clone(), key.clone());
                 let content_ref = ciphertext.content_ref.clone();
 
-                match ciphertext.try_decrypt(key, doc_id) {
+                match ciphertext.try_decrypt(&key, doc_id) {
                     Err(_) => {
                         seen.remove(&content_ref);
                         cannot.insert(content_ref.clone(), ErrorReason::DecryptionFailed(key));
                         continue;
                     }
                     Ok(decrypted) => {
+                        // The envelope carries its ancestors' keys, so its
+                        // bytes are wiped.
+                        let decrypted = Zeroizing::new(decrypted);
                         let result = Envelope::<Cr, T>::decode(decrypted.as_slice());
                         match result {
                             Err(e) => {
@@ -246,10 +252,11 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                                         Ok(None) => {
                                             progress
                                                 .next
-                                                .insert(ancestor_ref.clone(), *ancestor_key);
+                                                .insert(ancestor_ref.clone(), ancestor_key.clone());
                                         }
                                         Ok(Some(ancestor)) => {
-                                            to_decrypt.push((ancestor.dupe(), *ancestor_key));
+                                            to_decrypt
+                                                .push((ancestor.dupe(), ancestor_key.clone()));
                                         }
                                     }
                                 }
@@ -294,9 +301,9 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
             let mut cannot = HashMap::new();
             for (content_ref, key) in start {
                 match self.get_ciphertext(content_ref).await {
-                    Ok(Some(encrypted)) => to_decrypt.push((encrypted, *key)),
+                    Ok(Some(encrypted)) => to_decrypt.push((encrypted, key.clone())),
                     Ok(None) => {
-                        not_served.insert(content_ref.clone(), *key);
+                        not_served.insert(content_ref.clone(), key.clone());
                     }
                     Err(e) => {
                         cannot.insert(content_ref.clone(), ErrorReason::GetCiphertextError(e));
@@ -591,7 +598,7 @@ mod tests {
             "two".to_string(),
             two_ref,
             origin,
-            HashMap::from_iter([(one_ref, wrong_key)]),
+            HashMap::from_iter([(one_ref, wrong_key.clone())]),
             doc_id,
             &mut csprng,
         );
@@ -633,7 +640,7 @@ mod tests {
             "read".to_string(),
             read_ref,
             origin,
-            HashMap::from_iter([(parent_ref, parent_key)]),
+            HashMap::from_iter([(parent_ref, parent_key.clone())]),
             doc_id,
             &mut csprng,
         );
@@ -651,8 +658,8 @@ mod tests {
 
         let start = [
             (read_ref, read_key),
-            (absent_ref, absent_key),
-            (refused_ref, wrong_key),
+            (absent_ref, absent_key.clone()),
+            (refused_ref, wrong_key.clone()),
         ];
         let Err(err) = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt_from_keys(
             &store, doc_id, &start,

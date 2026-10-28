@@ -54,7 +54,7 @@ impl JsEncrypted {
             .try_into()
             .map_err(|_| JsValue::from_str("application secret key must be 32 bytes"))?;
         self.0
-            .try_decrypt(SymmetricKey::from(key_arr), doc_id.0.into())
+            .try_decrypt(&SymmetricKey::from(key_arr), doc_id.0.into())
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
