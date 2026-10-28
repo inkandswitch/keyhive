@@ -180,6 +180,7 @@ mod tests {
     use std::vec;
 
     type Env = Envelope<[u8; 32], Vec<u8>>;
+    type Encrypted = EncryptedContent<Vec<u8>, [u8; 32]>;
 
     fn envelope(ancestors: &[u8], payload: &[u8]) -> Env {
         Envelope {
@@ -272,26 +273,42 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_body_that_is_not_an_envelope_does_not_open() {
+    fn encrypt(body: &[u8]) -> (Encrypted, SymmetricKey, Identifier) {
         use crate::encrypted::PredecessorRefs;
         use ed25519_dalek::SigningKey;
 
         let key = SymmetricKey::from([1; 32]);
         let doc_id = Identifier::from(&SigningKey::from_bytes(&[2; 32]));
-        // A count of one ancestor, with no ancestor after it.
-        let encrypted: EncryptedContent<Vec<u8>, [u8; 32]> = EncryptedContent::encrypt(
+        let encrypted = EncryptedContent::encrypt(
             &key,
             doc_id,
             [3; 32],
             PredecessorRefs::digest(&[]),
             [4; 32].into(),
             [5; 32].into(),
-            &[1],
+            body,
         )
         .expect("a fresh key encrypts");
+        (encrypted, key, doc_id)
+    }
+
+    #[test]
+    fn an_encrypted_envelope_opens_to_itself() {
+        bolero::check!()
+            .with_arbitrary::<(Vec<([u8; 32], [u8; 32])>, Vec<u8>)>()
+            .for_each(|(ancestors, payload)| {
+                let original = arbitrary_envelope(ancestors, payload);
+                let (encrypted, key, doc_id) = encrypt(original.encode().as_bytes());
+                assert_eq!(Env::open(&encrypted, key, doc_id), Ok(original));
+            });
+    }
+
+    #[test]
+    fn a_body_that_is_not_an_envelope_does_not_open() {
+        // A count of one ancestor, with no ancestor after it.
+        let (encrypted, key, doc_id) = encrypt(&[1]);
         assert!(matches!(
-            Envelope::<[u8; 32], Vec<u8>>::open(&encrypted, key, doc_id),
+            Env::open(&encrypted, key, doc_id),
             Err(OpenEnvelopeError::Decode(_))
         ));
     }
