@@ -24,9 +24,12 @@ use keyhive_codec::{
     prefixed::{decode_list, encode_list},
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use keyhive_content::store::{CiphertextStore, CiphertextStoreExt};
+use keyhive_content::{
+    reference::ContentRef,
+    store::{CiphertextStore, CiphertextStoreExt},
+};
 use keyhive_crypto::{
-    content::reference::ContentRef, context::Context, identifier::Identifier, share_key::ShareKey,
+    context::Context, identifier::Identifier, share_key::ShareKey,
     signer::async_signer::AsyncSigner, verifiable::Verifiable, verified::VerifyError,
 };
 use keyline::contract::Keyline;

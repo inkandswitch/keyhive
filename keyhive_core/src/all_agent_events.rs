@@ -1,7 +1,8 @@
 //! Every event each principal can reach, gathered once and deduplicated.
 
 use crate::event::Event;
-use keyhive_crypto::{content::reference::ContentRef, digest::Digest, identifier::Identifier};
+use keyhive_content::reference::ContentRef;
+use keyhive_crypto::{digest::Digest, identifier::Identifier};
 use std::collections::{HashMap, HashSet};
 
 /// The digest an event is known by when it is sent.

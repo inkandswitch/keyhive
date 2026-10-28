@@ -1,7 +1,9 @@
-use crate::{application_secret::GroupSecretOrigin, encrypted::EncryptedContent};
+use crate::{
+    application_secret::GroupSecretOrigin, encrypted::EncryptedContent, reference::ContentRef,
+};
 use dupe::Dupe;
 use futures::lock::Mutex;
-use keyhive_crypto::{content::reference::ContentRef, digest::Digest};
+use keyhive_crypto::digest::Digest;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,

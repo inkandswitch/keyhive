@@ -3,7 +3,7 @@ use keyhive_codec::{
     prefixed::{decode_len, encode_len},
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use keyhive_crypto::content::reference::ContentRef;
+use keyhive_content::reference::ContentRef;
 use std::collections::HashSet;
 
 /// What a document holds that cannot be recomputed: its content heads. Its

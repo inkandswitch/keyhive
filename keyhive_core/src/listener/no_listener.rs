@@ -9,10 +9,8 @@ use beekem::operation::CgkaOperation;
 use derive_more::derive::Debug;
 use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
-use keyhive_crypto::{
-    content::reference::ContentRef,
-    verified::{self, Verified},
-};
+use keyhive_content::reference::ContentRef;
+use keyhive_crypto::verified::{self, Verified};
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
 

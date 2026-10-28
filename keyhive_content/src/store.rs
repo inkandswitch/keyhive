@@ -5,6 +5,7 @@ pub mod memory;
 use self::memory::MemoryCiphertextStore;
 use crate::{
     application_secret::GroupSecretOrigin, encrypted::EncryptedContent, envelope::Envelope,
+    reference::ContentRef,
 };
 use derive_where::derive_where;
 use dupe::Dupe;
@@ -14,10 +15,7 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
-use keyhive_crypto::{
-    content::reference::ContentRef, digest::Digest, identifier::Identifier,
-    symmetric_key::SymmetricKey,
-};
+use keyhive_crypto::{digest::Digest, identifier::Identifier, symmetric_key::SymmetricKey};
 use std::{
     boxed::Box,
     collections::{HashMap, HashSet},

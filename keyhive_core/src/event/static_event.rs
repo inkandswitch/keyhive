@@ -10,8 +10,8 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
+use keyhive_content::reference::ContentRef;
 use keyhive_crypto::{
-    content::reference::ContentRef,
     digest::Digest,
     signable::Kind,
     verified::{self, header},

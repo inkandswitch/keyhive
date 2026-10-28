@@ -28,10 +28,10 @@ use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_content::{
     encrypted::EncryptedContent,
+    reference::ContentRef,
     store::{memory::MemoryCiphertextStore, CausalDecryptionError, CausalDecryptionState},
 };
 use keyhive_crypto::{
-    content::reference::ContentRef,
     identifier::Identifier,
     share_key::ShareKey,
     signer::{memory::MemorySigner, SigningError},
