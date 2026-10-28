@@ -1,19 +1,27 @@
 //! Encrypted content, with its public metadata.
 //!
-//! Content is encrypted in chunks, so a block of any size streams through
-//! bounded memory and any byte range decrypts on its own:
+//! A block's body is encrypted in chunks, so a block of any size streams
+//! through bounded memory and any byte range of the body decrypts on its own:
 //!
 //! ```text
 //! "KHE" ‖ version ‖ content_ref ‖ pred_refs:32 ‖ group_secret_hash:32
 //!       ‖ group_secret_origin_hash:32
 //!       ‖ ( nonce_i:24 ‖ ciphertext_i )+                          to the end
 //!
+//! body    = count ‖ ( content_ref ‖ key:32 )* ‖ payload
 //! aad_i   = BLAKE3(doc_id ‖ header) ‖ i:u64 ‖ last:u8
 //! nonce_i = keyed BLAKE3(nonce_key, aad_i ‖ chunk_i)[..24]
 //! ```
 //!
-//! Every chunk but the last contains [`CHUNK_LEN`] plaintext bytes. The last
-//! contains fewer, and is empty only when the whole plaintext is. The nonce is
+//! Every body is an [`Envelope`](crate::envelope::Envelope): the keys of the
+//! block's ancestors, each content ref once in ascending order of its
+//! encoding, then the payload. A block with no ancestors has a count of zero.
+//! The payload starts after the ancestors, so a reader finds where a range of
+//! the payload lies only after decrypting the chunks that contain them,
+//! usually just the first.
+//!
+//! Every chunk but the last contains [`CHUNK_LEN`] bytes of the body. The last
+//! contains fewer, and is empty only when the whole body is. The nonce is
 //! synthetic: decryption recomputes it from the plaintext and rejects a
 //! mismatch, which commits each chunk to one key. Without that, one
 //! ciphertext could decrypt under two keys to two plaintexts, and a causal
@@ -23,7 +31,10 @@ use crate::{
     application_secret::{GroupSecret, GroupSecretOrigin},
     reference::ContentRef,
 };
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305, XNonce};
 use core::{convert::Infallible, marker::PhantomData};
 use keyhive_codec::{
@@ -62,7 +73,7 @@ const FULL_CHUNK: usize = CHUNK_LEN + CHUNK_OVERHEAD;
 /// A block of encrypted content, with the public header readers need to find
 /// its key.
 ///
-/// `T` is the type the plaintext is expected to be. The chunks are always
+/// `T` is the type the payload is expected to be. The chunks are always
 /// well formed (see the [module docs](self)): construction and decoding check
 /// their lengths.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -86,8 +97,12 @@ pub struct EncryptedContent<T, Cr: ContentRef> {
 }
 
 impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
-    /// Encrypt `plaintext` for the document `doc_id`, under a block's
-    /// application key.
+    /// Encrypt `body` for the document `doc_id`, under the block's
+    /// application key. The body must be an encoded
+    /// [`Envelope`](crate::envelope::Envelope) or readers refuse it. Writers
+    /// use
+    /// [`ApplicationSecret::try_encrypt`](crate::application_secret::ApplicationSecret::try_encrypt),
+    /// which encodes it.
     #[instrument(skip_all)]
     pub fn encrypt(
         key: &SymmetricKey,
@@ -96,22 +111,21 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         pred_refs: Digest<PredecessorRefs<Cr>>,
         group_secret_hash: Digest<GroupSecret>,
         group_secret_origin_hash: Digest<GroupSecretOrigin>,
-        plaintext: &[u8],
+        body: &[u8],
     ) -> Result<Self, chacha20poly1305::Error> {
         let mut content = EncryptedContent {
             content_ref,
             pred_refs,
             group_secret_hash,
             group_secret_origin_hash,
-            chunks: Vec::with_capacity(plaintext.len()),
+            chunks: Vec::with_capacity(body.len()),
             _plaintext_tag: PhantomData,
         };
         let keys = ChunkKeys::new(key, doc_id, &content.header());
         let mut chunks = (0u64..)
             .zip(
-                plaintext
-                    .chunks(CHUNK_LEN)
-                    .chain(plaintext.is_empty().then_some(&[][..])),
+                body.chunks(CHUNK_LEN)
+                    .chain(body.is_empty().then_some(&[][..])),
             )
             .peekable();
         while let Some((i, chunk)) = chunks.next() {
@@ -126,7 +140,9 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         Ok(content)
     }
 
-    /// Decrypt with the block's application key, for the document `doc_id`.
+    /// Decrypt the body with the block's application key, for the document
+    /// `doc_id`. [`Envelope::open`](crate::envelope::Envelope::open) also
+    /// decodes it.
     ///
     /// Each chunk must authenticate, and its nonce must be the synthetic nonce
     /// of what it decrypts to.
@@ -334,6 +350,24 @@ impl ChunkKeys {
 
     fn nonce(&self, aad: &[u8; 41], chunk: &[u8]) -> [u8; NONCE_LEN] {
         synthetic_nonce(&self.nonce_key, &[aad, chunk])
+    }
+}
+
+/// `count ‖ ( content_ref ‖ key )*`, each content ref once, in ascending
+/// order of their encodings, so the bytes do not depend on the order given.
+/// Where a ref is listed more than once, its last key is kept.
+pub(crate) fn encode_ancestors<'a, Cr: ContentRef + 'a>(
+    ancestors: impl IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
+    out: &mut Vec<u8>,
+) {
+    let sorted: BTreeMap<Vec<u8>, [u8; 32]> = ancestors
+        .into_iter()
+        .map(|(content_ref, key)| (content_ref.encode().into_bytes(), (*key).into()))
+        .collect();
+    encode_len(sorted.len(), out);
+    for (content_ref, key) in &sorted {
+        out.extend_from_slice(content_ref);
+        out.extend_from_slice(key);
     }
 }
 

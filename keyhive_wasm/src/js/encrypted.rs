@@ -1,6 +1,6 @@
 use super::{change_id::JsChangeId, document_id::JsDocumentId};
 use keyhive_codec::traits::{Decode, Encode};
-use keyhive_content::encrypted::EncryptedContent;
+use keyhive_content::{encrypted::EncryptedContent, envelope::Envelope};
 use keyhive_crypto::symmetric_key::SymmetricKey;
 use wasm_bindgen::prelude::*;
 
@@ -47,14 +47,15 @@ impl JsEncrypted {
     }
 
     /// Decrypt this content with an explicit 32-byte application secret key,
-    /// bypassing CGKA. The document is part of what every chunk authenticates.
+    /// bypassing CGKA, and return its payload. The document is part of what
+    /// every chunk authenticates.
     #[wasm_bindgen(js_name = decryptWithKey)]
     pub fn decrypt_with_key(&self, key: &[u8], doc_id: &JsDocumentId) -> Result<Vec<u8>, JsValue> {
         let key_arr: [u8; 32] = key
             .try_into()
             .map_err(|_| JsValue::from_str("application secret key must be 32 bytes"))?;
-        self.0
-            .try_decrypt(SymmetricKey::from(key_arr), doc_id.0.into())
+        Envelope::<JsChangeId, Vec<u8>>::open(&self.0, SymmetricKey::from(key_arr), doc_id.0.into())
+            .map(|envelope| envelope.plaintext)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }

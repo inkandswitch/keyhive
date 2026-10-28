@@ -46,7 +46,10 @@ async fn an_archive_round_trip_preserves_members_access_and_decryption() -> Resu
         );
     }
     assert_eq!(
-        restored.try_decrypt_content(design_doc, &ct).await?,
+        restored
+            .try_decrypt_content(design_doc, &ct)
+            .await?
+            .plaintext,
         b"before the archive".to_vec(),
         "and it can still read what it could read before"
     );
@@ -256,7 +259,10 @@ async fn an_instance_caught_up_by_syncing_can_read_what_it_missed() -> Result<()
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        restored.try_decrypt_content(design_doc, &ct).await?,
+        restored
+            .try_decrypt_content(design_doc, &ct)
+            .await?
+            .plaintext,
         b"hello world".to_vec(),
         "but after sync, it reads content written while it did not exist"
     );
@@ -286,7 +292,10 @@ async fn an_archive_merged_into_a_rebuild_reaches_a_readable_state() -> Result<(
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        restored.try_decrypt_content(design_doc, &ct).await?,
+        restored
+            .try_decrypt_content(design_doc, &ct)
+            .await?
+            .plaintext,
         b"written after the fork".to_vec(),
         "rebuilt from the earlier archive, merged with the later one, caught up by events"
     );
@@ -376,7 +385,10 @@ async fn an_invitation_waiting_for_its_secret_survives_an_archive() -> Result<()
     assert!(!restored.has_document(design_doc).await);
     ctx.share_prekey_secrets(&alice, &restored).await?;
     assert_eq!(
-        restored.try_decrypt_content(design_doc, &ct).await?,
+        restored
+            .try_decrypt_content(design_doc, &ct)
+            .await?
+            .plaintext,
         b"for alice".to_vec()
     );
     Ok(())

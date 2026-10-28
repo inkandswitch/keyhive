@@ -289,7 +289,8 @@ async fn a_member_decrypts_through_a_relay_known_by_contact_card() -> TestResult
     );
     assert_eq!(
         bob.try_decrypt_content(doc_id, encrypted.encrypted_content())
-            .await?,
+            .await?
+            .plaintext,
         b"from alice".to_vec(),
         "bob decrypts what alice wrote"
     );

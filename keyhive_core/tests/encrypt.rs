@@ -147,7 +147,8 @@ async fn test_dual_instance_log_based_sync() -> TestResult {
 
     let decrypted = bob
         .try_decrypt_content(doc_id, encrypted.encrypted_content())
-        .await?;
+        .await?
+        .plaintext;
     assert_eq!(decrypted, init_content);
 
     Ok(())

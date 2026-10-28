@@ -1621,7 +1621,7 @@ where
         Ok(())
     }
 
-    /// Encrypt `content` into `doc`.
+    /// Encrypt `content` into `doc`, with no ancestors' keys.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
         &self,
@@ -1636,12 +1636,10 @@ where
             .0)
     }
 
-    /// Encrypt `content` into `doc` in an [`Envelope`](keyhive_content::envelope::Envelope)
-    /// that lists each of `pred_refs` with the key this document has for it. Fails with
-    /// [`EnvelopeError::NoKeyForAncestor`] if it has none.
+    /// Encrypt `content` into `doc` with each of `pred_refs` and the key this document has
+    /// for it. Fails with [`EnvelopeError::NoKeyForAncestor`] if it has none.
     ///
-    /// Read it back with [`Keyhive::try_causal_decrypt_content`], which unwraps the envelope.
-    /// [`Keyhive::try_decrypt_content`] returns the serialized envelope instead.
+    /// [`Keyhive::try_causal_decrypt_content`] reads it and its ancestors back.
     #[cfg(any(test, feature = "test_utils"))]
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_in_envelope(
@@ -1670,9 +1668,9 @@ where
             .0)
     }
 
-    /// Encrypt `content` into `doc` in an [`Envelope`] that contains `ancestors`. Each entry
-    /// in `ancestors` is the ancestor's content ref and the key that opens it. A reader who
-    /// opens the result can then open each ancestor and traverse back from there with
+    /// Encrypt `content` into `doc` with `ancestors`. Each entry in `ancestors` is the
+    /// ancestor's content ref and the key that opens it. A reader who opens the result can
+    /// then open each ancestor and traverse back from there with
     /// [`CiphertextStoreExt::try_causal_decrypt_from_keys`].
     ///
     /// The ancestors are also the content's predecessors, in any order. If a content ref
@@ -1689,27 +1687,30 @@ where
         content: &[u8],
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
         let pred_refs: Vec<T> = ancestors.iter().map(|(pred, _)| pred.clone()).collect();
-        let envelope = Envelope {
-            plaintext: content.to_vec(),
-            ancestors: ancestors.iter().cloned().collect(),
-        };
-        self.try_encrypt_content_keyed(
-            doc,
-            content_ref,
-            &pred_refs,
-            &envelope.encode().into_bytes(),
-        )
-        .await
+        self.encrypt_keyed(doc, content_ref, &pred_refs, ancestors, content)
+            .await
     }
 
-    /// Encrypt `content` into `doc`. Returns the application secret it was
-    /// encrypted under.
+    /// Encrypt `content` into `doc`, with no ancestors' keys. Returns the application secret
+    /// it was encrypted under.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content_keyed(
         &self,
         doc: DocumentId,
         content_ref: &T,
         pred_refs: &[T],
+        content: &[u8],
+    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
+        self.encrypt_keyed(doc, content_ref, pred_refs, &[], content)
+            .await
+    }
+
+    async fn encrypt_keyed(
+        &self,
+        doc: DocumentId,
+        content_ref: &T,
+        pred_refs: &[T],
+        ancestors: &[(T, SymmetricKey)],
         content: &[u8],
     ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError> {
         let writing = self.prepare_to_write(doc).await?;
@@ -1724,6 +1725,7 @@ where
                     content_ref,
                     content,
                     pred_refs,
+                    ancestors,
                     &signer,
                     &mut *locked_csprng,
                 )
@@ -1806,7 +1808,7 @@ where
         &self,
         doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
-    ) -> Result<Vec<u8>, DecryptError> {
+    ) -> Result<Envelope<T, Vec<u8>>, DecryptError> {
         Ok(self.try_decrypt_content_keyed(doc, encrypted).await?.0)
     }
 
@@ -1831,19 +1833,19 @@ where
         }
     }
 
-    /// Decrypt `encrypted` out of `doc`. Returns the application secret that was
+    /// [`Keyhive::try_decrypt_content`], also returning the application secret that was
     /// used.
     pub async fn try_decrypt_content_keyed(
         &self,
         doc: DocumentId,
         encrypted: &EncryptedContent<P, T>,
-    ) -> Result<(Vec<u8>, SymmetricKey), DecryptError> {
+    ) -> Result<(Envelope<T, Vec<u8>>, SymmetricKey), DecryptError> {
         let Some(state) = self.member_document(doc).await? else {
             return Err(DecryptError::KeyNotFound); // invited, no keys yet
         };
         let mut locked = state.lock().await;
         let key = self.decryption_key(doc, &mut locked, encrypted).await?;
-        locked.try_decrypt_content_with(encrypted, key)
+        Ok((locked.try_decrypt_content_with(encrypted, key)?, key))
     }
 
     /// The key for `encrypted` in `doc`'s CGKA, fetching any membership answer

@@ -17,7 +17,7 @@ async fn a_member_added_before_a_write_can_derive_its_key() -> Result<()> {
     ctx.sync_all_unsent().await?;
 
     assert_eq!(
-        bob.try_decrypt_content(design_doc, &ct).await?,
+        bob.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"hello world".to_vec()
     );
     Ok(())

@@ -61,6 +61,29 @@ async fn a_reader_walks_back_through_the_ancestors_it_holds() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn content_reads_back_as_its_payload_however_it_was_written() -> Result<()> {
+    let (mut ctx, alice, bob, design_doc) = setup_writer_and_reader().await?;
+    // A leading zero is also an empty count of ancestors, so a raw body would read back
+    // without it.
+    let genesis = ctx.encrypt(&alice, design_doc, b"\0genesis").await?;
+    let head = ctx
+        .encrypt_in_envelope(&alice, design_doc, &[&genesis], b"head")
+        .await?;
+    ctx.sync_all_unsent().await?;
+    for ct in [&genesis, &head] {
+        ctx.give_content(&bob, ct).await?;
+    }
+
+    assert_eq!(
+        bob.try_decrypt_content(design_doc, &head).await?.plaintext,
+        b"head"
+    );
+    let walked = bob.try_causal_decrypt_content(design_doc, &head).await?;
+    assert_eq!(walked.recovered(), contents(&[b"\0genesis"]));
+    Ok(())
+}
+
 /// A later member reads earlier content by traversing back from a write made after they
 /// joined.
 #[tokio::test]

@@ -488,13 +488,15 @@ async fn own_cgka_graph_converges_with_creators_ops(bob_sorts_first: bool) -> Te
         .await?;
     assert_eq!(
         bob.try_decrypt_content(doc_id, from_alice.encrypted_content())
-            .await?,
+            .await?
+            .plaintext,
         b"from alice".to_vec()
     );
     assert_eq!(
         alice
             .try_decrypt_content(doc_id, from_bob.encrypted_content())
-            .await?,
+            .await?
+            .plaintext,
         b"from bob".to_vec()
     );
 
@@ -507,7 +509,8 @@ async fn own_cgka_graph_converges_with_creators_ops(bob_sorts_first: bool) -> Te
         .await?;
     assert_eq!(
         bob.try_decrypt_content(doc_id, after.encrypted_content())
-            .await?,
+            .await?
+            .plaintext,
         b"after".to_vec()
     );
     let alice_pcs = alice

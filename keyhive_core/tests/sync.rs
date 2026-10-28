@@ -207,7 +207,7 @@ async fn a_backlog_that_cannot_apply_does_not_block_new_events() -> Result<()> {
         "alice's events applied, and none of them joined the backlog"
     );
     assert_eq!(
-        server.try_decrypt_content(design_doc, &ct).await?,
+        server.try_decrypt_content(design_doc, &ct).await?.plaintext,
         b"written despite the backlog".to_vec(),
         "and the server can use what it was sent"
     );

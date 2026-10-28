@@ -2,9 +2,10 @@
 //! secret.
 
 use crate::{
-    encrypted::{EncryptedContent, PredecessorRefs},
+    encrypted::{encode_ancestors, EncryptedContent, PredecessorRefs},
     reference::ContentRef,
 };
+use alloc::vec::Vec;
 use keyhive_crypto::{
     context::Context,
     digest::Digest,
@@ -51,12 +52,21 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         self.key
     }
 
-    /// Encrypt `plaintext` for the document `doc_id`.
+    /// Encrypt `payload` for the document `doc_id`, with the keys of its
+    /// `ancestors` before it in the body (see the [`encrypted`] module docs).
+    /// Where a content ref is listed more than once, its last key is kept.
+    ///
+    /// [`encrypted`]: crate::encrypted
     pub fn try_encrypt<T>(
         &self,
         doc_id: Identifier,
-        plaintext: &[u8],
+        ancestors: &[(Cr, SymmetricKey)],
+        payload: &[u8],
     ) -> Result<EncryptedContent<T, Cr>, chacha20poly1305::Error> {
+        let mut body = Vec::new();
+        encode_ancestors(ancestors.iter().map(|(r, k)| (r, k)), &mut body);
+        body.reserve_exact(payload.len());
+        body.extend_from_slice(payload);
         EncryptedContent::encrypt(
             &self.key,
             doc_id,
@@ -64,7 +74,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
             self.pred_refs,
             self.group_secret_hash,
             self.group_secret_origin_hash,
-            plaintext,
+            &body,
         )
     }
 }

@@ -56,7 +56,6 @@ use dupe::Dupe;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use keyhive_codec::traits::{Decode, Encode};
-use keyhive_content::envelope::Envelope;
 use keyhive_core::{
     all_agent_events::EventDigest,
     crypto::digest::Digest,
@@ -257,6 +256,7 @@ impl JsKeyhive {
         })
     }
 
+    /// Decrypt content and return its payload.
     #[wasm_bindgen(js_name = tryDecrypt)]
     pub async fn try_decrypt(
         &self,
@@ -264,7 +264,11 @@ impl JsKeyhive {
         encrypted: &JsEncrypted,
     ) -> Result<Vec<u8>, JsDecryptError> {
         init_span!("JsKeyhive::try_decrypt");
-        Ok(self.0.try_decrypt_content(doc_id.0, &encrypted.0).await?)
+        Ok(self
+            .0
+            .try_decrypt_content(doc_id.0, &encrypted.0)
+            .await?
+            .plaintext)
     }
 
     /// Decrypt content and also return the 32-byte application secret key used.
@@ -275,15 +279,18 @@ impl JsKeyhive {
         encrypted: &JsEncrypted,
     ) -> Result<JsDecryptedKeyed, JsDecryptError> {
         init_span!("JsKeyhive::try_decrypt_keyed");
-        let (plaintext, key) = self
+        let (envelope, key) = self
             .0
             .try_decrypt_content_keyed(doc_id.0, &encrypted.0)
             .await?;
-        Ok(JsDecryptedKeyed::new(plaintext, key.as_slice().to_vec()))
+        Ok(JsDecryptedKeyed::new(
+            envelope.plaintext,
+            key.as_slice().to_vec(),
+        ))
     }
 
-    /// Encrypt `content` in an envelope that contains `ancestors`, so a reader
-    /// who opens it can open them too. The ancestors are also the content's
+    /// Encrypt `content` with the keys of its `ancestors`, so a reader who
+    /// opens it can open them too. The ancestors are also the content's
     /// predecessors, in any order. Read it back with `tryCausalDecrypt`.
     ///
     /// Returns the content with its own key, for a later write to contain.
@@ -310,14 +317,13 @@ impl JsKeyhive {
         })
     }
 
-    /// Decrypt `encrypted`, written by `tryEncryptWithAncestors`, with this
-    /// keyhive's key for it, then the ancestors its envelope lists, and theirs
-    /// in turn, as `tryCausalDecryptFrom` does. `encrypted` is the first block
-    /// in `complete()`.
+    /// Decrypt `encrypted` with this keyhive's key for it, then the ancestors
+    /// it lists, and theirs in turn, as `tryCausalDecryptFrom` does.
+    /// `encrypted` is the first block in `complete()`.
     ///
-    /// Throws a `DecryptError` if this keyhive cannot decrypt `encrypted` and
-    /// an `Error` if its plaintext is not an envelope. Failures among its
-    /// ancestors are reported in `failed()`, not thrown.
+    /// Throws a `DecryptError` if this keyhive cannot decrypt `encrypted` or
+    /// its body is not an envelope. Failures among its ancestors are reported
+    /// in `failed()`, not thrown.
     #[wasm_bindgen(js_name = tryCausalDecrypt)]
     pub async fn try_causal_decrypt(
         &self,
@@ -326,13 +332,11 @@ impl JsKeyhive {
         load: js_sys::Function,
     ) -> Result<JsCausalDecryption, JsValue> {
         init_span!("JsKeyhive::try_causal_decrypt");
-        let (plaintext, key) = self
+        let (envelope, key) = self
             .0
             .try_decrypt_content_keyed(doc_id.0, &encrypted.0)
             .await
             .map_err(JsDecryptError::from)?;
-        let envelope = Envelope::<JsChangeId, Vec<u8>>::decode(&plaintext)
-            .map_err(|e| JsError::new(&format!("the content is not an envelope: {e}")))?;
         let start: Vec<_> = envelope.ancestors.into_iter().collect();
         let mut decryption = causal_decrypt(doc_id, &start, load).await;
         decryption.complete.insert(

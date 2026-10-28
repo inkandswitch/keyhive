@@ -28,7 +28,10 @@ async fn the_chain_goes_back_past_the_secret_an_invitation_wraps() -> Result<()>
         (&second, b"under the second".to_vec()),
         (&third, b"under the third".to_vec()),
     ] {
-        assert_eq!(carol.try_decrypt_content(design_doc, ct).await?, expected);
+        assert_eq!(
+            carol.try_decrypt_content(design_doc, ct).await?.plaintext,
+            expected
+        );
     }
     Ok(())
 }
@@ -67,7 +70,7 @@ async fn a_later_update_encrypts_a_secret_no_invitation_wrapped() -> Result<()> 
     ctx.sync(&alice, &carol).await?;
 
     assert_eq!(
-        carol.try_decrypt_content(design_doc, &on_bob).await?,
+        carol.try_decrypt_content(design_doc, &on_bob).await?.plaintext,
         b"on bob".to_vec(),
         "carol derives alice's newest secret from the CGKA group and traverses the chain back to bob's"
     );
@@ -118,7 +121,9 @@ async fn an_update_propagates_an_ancestor_it_cannot_derive() -> Result<()> {
     ctx.give_content(&dave, &on_bob).await?;
 
     assert_eq!(
-        dave.try_decrypt_content(design_doc, &on_bob).await?,
+        dave.try_decrypt_content(design_doc, &on_bob)
+            .await?
+            .plaintext,
         b"on bob".to_vec(),
         "carol could not wrap bob's update, so dave reaches it only through alice's"
     );
