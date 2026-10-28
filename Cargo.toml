@@ -107,6 +107,50 @@ type_complexity = "allow"
 codegen-units = 1
 lto = "fat"
 
+# The npm package's Wasm. `nix build .#keyhive-js` and `wasm:bodge` pass
+# `--release-profile wasm-release` to wasm-bodge; native builds keep
+# `profile.release`.
+#
+# Keyhive's runtime is dominated by crypto, so optimize everything else for
+# size and keep the crypto crates at full speed. Measured on Node 24 against
+# opt-level 3 everywhere (sizes after `wasm-opt -O4`):
+#
+# | build                | raw     | gzip   | sign+verify | Keyhive workload |
+# |----------------------|---------|--------|-------------|------------------|
+# | 3                    | 2.17 MB | 770 KB | 1.00x       | 1.00x            |
+# | z                    | 1.22 MB | 480 KB | 1.33x       | 1.45x            |
+# | z, crypto at 3       | 1.26 MB | 495 KB | 1.03x       | 1.05x            |
+#
+# The per-package overrides survive fat LTO. If you add a crate on a hot
+# crypto path, give it an override too.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+
+[profile.wasm-release.package.blake3]
+opt-level = 3
+
+[profile.wasm-release.package.chacha20]
+opt-level = 3
+
+[profile.wasm-release.package.chacha20poly1305]
+opt-level = 3
+
+[profile.wasm-release.package.curve25519-dalek]
+opt-level = 3
+
+[profile.wasm-release.package.ed25519-dalek]
+opt-level = 3
+
+[profile.wasm-release.package.poly1305]
+opt-level = 3
+
+[profile.wasm-release.package.sha2]
+opt-level = 3
+
+[profile.wasm-release.package.x25519-dalek]
+opt-level = 3
+
 # Debug variant of the npm package, exposed as `@keyhive/keyhive/debug`.
 # `nix build .#keyhive-js` passes `--debug-profile wasm-debug` to wasm-bodge,
 # which skips wasm-opt for it (binaryen corrupts wasm-bindgen's DWARF).

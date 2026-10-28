@@ -46,6 +46,7 @@ rustPlatform.buildRustPackage {
       --crate-path "$PWD/${crate}" \
       --package-json "$PWD/${crate}/package.json" \
       --out-dir "$PWD/${crate}/dist" \
+      --release-profile wasm-release \
       --debug-profile wasm-debug \
       --panic abort
     # wasm-bodge invokes Cargo itself; don't permit silent lockfile changes.

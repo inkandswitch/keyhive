@@ -519,6 +519,7 @@
               --crate-path "$WORKSPACE_ROOT/keyhive_wasm" \
               --package-json "$WORKSPACE_ROOT/keyhive_wasm/package.json" \
               --out-dir "$WORKSPACE_ROOT/keyhive_wasm/dist" \
+              --release-profile wasm-release \
               --debug-profile wasm-debug \
               --panic abort \
               "$@"

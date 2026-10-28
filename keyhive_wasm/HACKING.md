@@ -16,8 +16,12 @@ build, plus a `./slim` subpath for manual initialisation. Run it with
 
 Every entry point also has a `./debug/*` twin, built from the `wasm-debug`
 Cargo profile (see the root `Cargo.toml`), which keeps DWARF for stepping
-through Rust in Chrome DevTools. It is about 28 MB of Wasm, versus about 2 MB
-for release; npm installs it but bundlers only pull it in when imported.
+through Rust in Chrome DevTools. It is about 28 MB of Wasm, versus about
+1.3 MB for release; npm installs it but bundlers only pull it in when imported.
+
+The release variant uses the `wasm-release` profile: `opt-level = "z"`
+except for the crypto crates, which stay at 3. See the root `Cargo.toml`
+for the size/speed measurements.
 
 We pass `--panic abort`: wasm-bodge's default unwind strategy needs a rustup
 nightly toolchain, which the nix shell does not provide.
