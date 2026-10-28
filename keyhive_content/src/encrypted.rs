@@ -19,7 +19,10 @@
 //! ciphertext could decrypt under two keys to two plaintexts, and a causal
 //! envelope containing the second key would show its readers a different history.
 
-use crate::application_secret::{GroupSecret, GroupSecretOrigin};
+use crate::{
+    application_secret::{GroupSecret, GroupSecretOrigin},
+    reference::ContentRef,
+};
 use alloc::vec::Vec;
 use chacha20poly1305::{AeadInPlace, KeyInit, XChaCha20Poly1305, XNonce};
 use core::{convert::Infallible, marker::PhantomData};
@@ -29,7 +32,6 @@ use keyhive_codec::{
     traits::{Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::{
-    content::reference::ContentRef,
     context::Context,
     digest::Digest,
     identifier::Identifier,

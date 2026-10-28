@@ -20,9 +20,9 @@ use future_form::FutureForm;
 use keyhive_content::{
     application_secret::{ApplicationSecret, GroupSecret},
     encrypted::{EncryptedContent, PredecessorRefs},
+    reference::ContentRef,
 };
 use keyhive_crypto::{
-    content::reference::ContentRef,
     digest::Digest,
     identifier::Identifier,
     share_key::{ShareKey, ShareSecretKey},

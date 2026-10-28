@@ -3,7 +3,8 @@
 use super::{cgka::CgkaListener, prekey::PrekeyListener};
 use crate::content::heads::ContentHeads;
 use future_form::FutureForm;
-use keyhive_crypto::{content::reference::ContentRef, verified::Verified};
+use keyhive_content::reference::ContentRef;
+use keyhive_crypto::verified::Verified;
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
 

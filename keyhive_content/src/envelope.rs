@@ -1,14 +1,13 @@
 //! The (plaintext) container for causal encryption.
 
+use crate::reference::ContentRef;
 use derivative::Derivative;
 use keyhive_codec::{
     error::DecodeError,
     prefixed::{decode_len, encode_len},
     traits::{Decode, Encode, StreamDecode},
 };
-use keyhive_crypto::{
-    content::reference::ContentRef, read_capability::ReadCap, symmetric_key::SymmetricKey,
-};
+use keyhive_crypto::{read_capability::ReadCap, symmetric_key::SymmetricKey};
 use std::{collections::HashMap, vec::Vec};
 #[cfg_attr(all(doc, feature = "mermaid_docs"), aquamarine::aquamarine)]
 /// A container for an arbitrary payload and the [`ReadCap`]s required to identify and decrypt its ancestors.

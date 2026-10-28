@@ -25,13 +25,13 @@ use keyhive_codec::traits::{Decode, Encode};
 use keyhive_content::{
     encrypted::{ContentDecryptError, EncryptedContent},
     envelope::Envelope,
+    reference::ContentRef,
     store::{
         CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt,
         ErrorReason,
     },
 };
 use keyhive_crypto::{
-    content::reference::ContentRef,
     identifier::Identifier,
     share_key::{ShareKey, ShareSecretKey},
     signer::async_signer::AsyncSigner,

@@ -25,11 +25,11 @@ use crate::{
 };
 use future_form::FutureForm;
 use keyhive_codec::traits::Decode;
-use keyhive_content::store::{CiphertextStore, CiphertextStoreExt};
-use keyhive_crypto::{
-    content::reference::ContentRef, identifier::Identifier, signer::async_signer::AsyncSigner,
-    verified::Signed,
+use keyhive_content::{
+    reference::ContentRef,
+    store::{CiphertextStore, CiphertextStoreExt},
 };
+use keyhive_crypto::{identifier::Identifier, signer::async_signer::AsyncSigner, verified::Signed};
 use keyline::{contract::Keyline, delegation::Delegation, power::Power};
 use rand::{CryptoRng, RngCore};
 use std::{collections::BTreeMap, sync::Arc};

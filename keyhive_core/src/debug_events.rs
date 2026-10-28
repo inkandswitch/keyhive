@@ -4,7 +4,7 @@ use crate::{
     principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
 use beekem::operation::CgkaChange;
-use keyhive_crypto::content::reference::ContentRef;
+use keyhive_content::reference::ContentRef;
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::collections::HashMap;
 

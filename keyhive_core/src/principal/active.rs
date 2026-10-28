@@ -28,8 +28,8 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
 };
+use keyhive_content::reference::ContentRef;
 use keyhive_crypto::{
-    content::reference::ContentRef,
     identifier::InvalidIdentifier,
     share_key::{ShareKey, ShareSecretKey},
     signer::async_signer::AsyncSigner,
