@@ -1,5 +1,5 @@
 use crate::{
-    cgka::Cgka,
+    cgka::{Cgka, NoImplicitRemoves},
     collections::Set,
     error::CgkaError,
     id::TreeId,
@@ -91,6 +91,7 @@ async fn an_operation_for_another_document_is_refused() {
             TreeId::from(&MemorySigner::generate(rng).0),
             owner.id,
             ShareKeyMap::new(),
+            NoImplicitRemoves,
         )
     };
     let mut here = tree_for(&mut rng);
@@ -165,8 +166,13 @@ async fn the_last_operation_issued_is_the_head_and_is_found_by_its_digest() {
     assert_eq!(cgka.op(&digest).map(AsRef::as_ref), Some(&add));
 }
 
-fn cgka_with_no_operations(owner: &Member) -> Cgka {
-    Cgka::new(TreeId::from(owner.id.id()), owner.id, ShareKeyMap::new())
+fn cgka_with_no_operations(owner: &Member) -> Cgka<NoImplicitRemoves> {
+    Cgka::new(
+        TreeId::from(owner.id.id()),
+        owner.id,
+        ShareKeyMap::new(),
+        NoImplicitRemoves,
+    )
 }
 
 #[test]
@@ -200,7 +206,7 @@ async fn a_cgka_merges_forks_before_and_after_its_first_operation() {
     );
 }
 
-fn hash_of(cgka: &Cgka) -> u64 {
+fn hash_of(cgka: &Cgka<NoImplicitRemoves>) -> u64 {
     let mut hasher = DefaultHasher::new();
     cgka.hash(&mut hasher);
     hasher.finish()
@@ -366,7 +372,9 @@ impl AsyncSigner<Local> for FailingSigner {
 
 /// A group of three whose tree has a root secret and a signer for member 0
 /// that always fails.
-async fn group_with_a_failing_signer(seed: u64) -> (Group, FailingSigner, StdRng) {
+async fn group_with_a_failing_signer(
+    seed: u64,
+) -> (Group<NoImplicitRemoves>, FailingSigner, StdRng) {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut group = Group::new(3, &mut rng).await;
     group.settle(0, &mut rng).await;
@@ -375,7 +383,11 @@ async fn group_with_a_failing_signer(seed: u64) -> (Group, FailingSigner, StdRng
 }
 
 /// Members 1 and 0 each rotate, then check that every replica agrees on tree and key.
-async fn assert_agreement_after_rotations(mut group: Group, rng: &mut StdRng, context: &str) {
+async fn assert_agreement_after_rotations(
+    mut group: Group<NoImplicitRemoves>,
+    rng: &mut StdRng,
+    context: &str,
+) {
     group.settle(1, rng).await;
     group.settle(0, rng).await;
     group.check(context);

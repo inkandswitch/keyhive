@@ -391,8 +391,12 @@ async fn own_cgka_graph_converges_with_creators_ops(bob_sorts_first: bool) -> Te
         .0
         .into();
 
-        let mut bob_tree =
-            keyhive_core::cgka::Cgka::new(doc_id, bob_active_id, beekem::keys::ShareKeyMap::new());
+        let mut bob_tree = keyhive_core::cgka::Cgka::new(
+            doc_id,
+            bob_active_id,
+            beekem::keys::ShareKeyMap::new(),
+            beekem::cgka::NoImplicitRemoves,
+        );
         let bob_add = bob_tree
             .add::<Sendable, _>(
                 bob_active_id,

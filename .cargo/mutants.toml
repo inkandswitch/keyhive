@@ -67,6 +67,12 @@ additional_cargo_args = ["--features", "test_utils"]
 # decryption replays without the insert lock). No deterministic test can
 # arrange that interleaving.
 #
+# `Keyhive::has_cgka_op` lets `receive_cgka_op` return early for an operation
+# the CGKA graph already has. Without it, the operation is verified and
+# authorized again with the same result, since the digest covers the
+# signature and authorization reads only what the operation fixes, and the
+# merge returns `false` without changing anything. Only the cost differs.
+#
 # `Keyhive::reconcile_locked` skips issuing the implied CGKA operations when
 # an insert changed no one's `Read`. Issuing them anyway changes only when they
 # are issued: the next write's reconciliation issues the same ones.
@@ -91,6 +97,7 @@ exclude_re = [
   "replace < with <= in changed_to",
   "replace < with <= in uniform_index",
   "replace == with != in Keyhive<[^>]*>::require_keyline_answers",
+  "replace Keyhive<[^>]*>::has_cgka_op -> bool with false",
   "replace \\|\\| with && in Cgka::apply_batch",
   "replace \\|\\| with && in Keyhive<[^>]*>::subject_views",
   "replace match guard readers == before with false in Keyhive<[^>]*>::reconcile_locked",

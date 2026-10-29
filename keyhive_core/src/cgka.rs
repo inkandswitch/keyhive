@@ -8,7 +8,7 @@ pub(crate) mod citations;
 
 use crate::principal::{document::id::DocumentId, individual::id::IndividualId};
 use beekem::{
-    cgka::MembershipView,
+    cgka::ImplicitRemovesProtocol,
     collections::Set,
     error::CgkaError,
     id::{MemberId, TreeId},
@@ -52,14 +52,20 @@ use tracing::instrument;
 /// This is a thin wrapper around [`beekem::cgka::Cgka`] that converts between
 /// keyhive_core domain IDs and beekem IDs at the API boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Cgka(beekem::cgka::Cgka);
+pub struct Cgka<M>(beekem::cgka::Cgka<M>);
 
-impl Cgka {
-    pub fn new(doc_id: DocumentId, owner_id: IndividualId, owner_sks: ShareKeyMap) -> Self {
+impl<M: ImplicitRemovesProtocol> Cgka<M> {
+    pub fn new(
+        doc_id: DocumentId,
+        owner_id: IndividualId,
+        owner_sks: ShareKeyMap,
+        implicit_removes_protocol: M,
+    ) -> Self {
         Cgka(beekem::cgka::Cgka::new(
             TreeId::from(doc_id),
             MemberId::from(owner_id),
             owner_sks,
+            implicit_removes_protocol,
         ))
     }
 
@@ -185,10 +191,14 @@ impl Cgka {
         self.0.remove_by_citations(citations, signer).await
     }
 
-    /// Remove members according to `view` from now on. Operations already
-    /// recorded are replayed under it before the CGKA's next use.
-    pub(crate) fn set_membership_view(&mut self, view: Arc<dyn MembershipView>) {
-        self.0.set_membership_view(view);
+    /// This `Cgka`, removing members according to `protocol` from now on.
+    /// Operations already recorded are replayed under it before the CGKA's
+    /// next use.
+    pub(crate) fn with_implicit_removes_protocol<P: ImplicitRemovesProtocol>(
+        self,
+        protocol: P,
+    ) -> Cgka<P> {
+        Cgka(self.0.with_implicit_removes_protocol(protocol))
     }
 
     /// The operations the next operation created here will have as its
@@ -225,13 +235,14 @@ impl Cgka {
 
     /// Rebuild the materialized CGKA group from its operations if some were recorded
     /// but not applied. Fails with `CgkaError::MembershipUnknown`, changing
-    /// nothing, if its membership view lacks an answer the rebuild needs.
+    /// nothing, if its implicit removes protocol lacks an answer the rebuild
+    /// needs.
     pub(crate) fn replay_if_pending(&mut self) -> Result<(), CgkaError> {
         self.0.replay_if_pending()
     }
 
     /// Every certificate set a replay of the whole history asks the
-    /// membership view about.
+    /// implicit removes protocol about.
     pub(crate) fn membership_sets(&self) -> Result<Vec<BTreeSet<CitationId>>, CgkaError> {
         self.0.membership_sets()
     }
