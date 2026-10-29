@@ -156,10 +156,10 @@ pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<
     /// It is normal for this to stop decryption if it encounters an already-decrypted
     /// ciphertext. There is no reason to decrypt it again if you already have the plaintext.
     ///
-    /// If the store fails to fetch an ancestor that a block lists, that block is reported
-    /// in [`cannot`][CausalDecryptionError::cannot] rather than in
-    /// [`complete`][CausalDecryptionState::complete], and it is not decrypted again when
-    /// another block lists it.
+    /// If the store fails to fetch an ancestor that a block lists, the ancestor is reported
+    /// in [`cannot`][CausalDecryptionError::cannot] and, with the key the block listed for
+    /// it, in [`next`][CausalDecryptionState::next], so a later walk can retry it. The block
+    /// itself is still read.
     fn try_causal_decrypt<'a>(
         &'a self,
         doc_id: Identifier,
@@ -241,12 +241,11 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                         continue;
                     }
                 };
-                let mut ancestor_unavailable = false;
                 for (ancestor_ref, ancestor_key) in ancestors {
                     match self.get_ciphertext(&ancestor_ref).await {
                         Err(e) => {
-                            cannot.insert(content_ref.clone(), ErrorReason::GetCiphertextError(e));
-                            ancestor_unavailable = true;
+                            cannot.insert(ancestor_ref.clone(), ErrorReason::GetCiphertextError(e));
+                            progress.next.insert(ancestor_ref, ancestor_key);
                         }
                         Ok(None) => {
                             progress.next.insert(ancestor_ref, ancestor_key);
@@ -255,9 +254,6 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                             to_decrypt.push((ancestor.dupe(), ancestor_key));
                         }
                     }
-                }
-                if ancestor_unavailable {
-                    continue;
                 }
 
                 progress.keys.insert(content_ref.clone(), opened_by);
@@ -725,8 +721,9 @@ mod tests {
             Result<Option<Arc<EncryptedContent<String, [u8; 32]>>>, &'static str>,
         > {
             Sendable::from_future(async move {
-                // Failing every fetch after the first few ends a walk that would
-                // otherwise revisit blocks forever, so the test can report it.
+                // Failing every fetch after the tenth ends a walk that would
+                // otherwise revisit blocks forever, so a regression fails
+                // instead of hanging.
                 let fetched = self
                     .fetches
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -756,8 +753,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_block_whose_ancestor_cannot_be_fetched_is_read_once_and_not_completed() -> TestResult
-    {
+    async fn an_ancestor_that_cannot_be_fetched_is_kept_for_a_retry_and_its_block_read_once(
+    ) -> TestResult {
         let mut csprng = OsRng;
         let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
         let (block_ref, unavailable_ref) = ([0u8; 32], [1u8; 32]);
@@ -796,10 +793,18 @@ mod tests {
         )
         .await
         else {
-            panic!("an ancestor could not be fetched");
+            panic!("the walk succeeded although an ancestor could not be fetched");
         };
-        assert!(err.progress.complete.is_empty());
-        assert_eq!(err.cannot.keys().collect::<Vec<_>>(), [&block_ref]);
+        assert_eq!(err.progress.complete, vec![(block_ref, "a".to_string())]);
+        assert_eq!(
+            err.progress.next.keys().collect::<Vec<_>>(),
+            [&unavailable_ref]
+        );
+        assert_eq!(err.cannot.len(), 1);
+        assert!(matches!(
+            err.cannot.get(&unavailable_ref),
+            Some(ErrorReason::GetCiphertextError("unavailable"))
+        ));
         assert_eq!(store.fetches.into_inner(), 2);
         Ok(())
     }
