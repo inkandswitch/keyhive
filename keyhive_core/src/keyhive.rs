@@ -3591,6 +3591,11 @@ where
         for doc in held {
             cgka_operations += doc.lock().await.cgka().ops_count() as u64;
         }
+        // A relay or a reader awaiting its invitation holds a document's
+        // CGKA graph unjoined. Its operations count too.
+        for cgka in self.unjoined.lock().await.values() {
+            cgka_operations += cgka.ops_count() as u64;
+        }
         // Groups are the Keyline subjects that are neither individuals nor
         // documents here. `stats` cannot report a store failure; it is
         // logged, and counts none.
