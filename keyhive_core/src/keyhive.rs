@@ -6,7 +6,7 @@ use crate::{
     certificate::{decode_stored, explanation, root_edges, CertificateError, KeylineStorageError},
     cgka::{
         certificate_sets::{CertificateSets, CitationSet},
-        citations::{citation_of, KeylineCgkaMembershipView, Members, SharedCitations},
+        citations::{citation_of, KeylineImplicitRemovesProtocol, Members, SharedCitations},
         AllCgkaOps, Cgka,
     },
     contact_card::ContactCard,
@@ -40,7 +40,7 @@ use crate::{
     util::content_addressed_map::CaMap,
 };
 use beekem::{
-    cgka::{MembershipView, NoMembershipView},
+    cgka::{ImplicitRemovesProtocol, NoImplicitRemoves},
     collections::Set,
     error::CgkaError,
     id::MemberId,
@@ -132,7 +132,7 @@ pub struct KeyhiveState<
     /// a relay, which is never added. Operations merge here in causal order
     /// and are served like a held document's. A `Cgka` moves to `documents`
     /// once an invitation merges.
-    unjoined: Mutex<HashMap<DocumentId, Cgka<KeylineCgkaMembershipView>>>,
+    unjoined: Mutex<HashMap<DocumentId, Cgka<KeylineImplicitRemovesProtocol>>>,
 
     /// What each CGKA operation's causal past cites. Used for authorizing
     /// CGKA operations that were generated from these certificates. Locked
@@ -395,16 +395,16 @@ where
         Ok(fresh)
     }
 
-    /// A view used for removing CGKA members of `doc` that a CGKA batch's certificate
+    /// The protocol for removing CGKA members of `doc` that a CGKA batch's certificate
     /// set (what it and the batches before it cite) does not entitle to remain in the
     /// CGKA group.
-    fn membership_view(&self, doc: Identifier) -> KeylineCgkaMembershipView {
-        KeylineCgkaMembershipView::new(doc, self.certificates.cited.dupe())
+    fn implicit_removes_protocol(&self, doc: Identifier) -> KeylineImplicitRemovesProtocol {
+        KeylineImplicitRemovesProtocol::new(doc, self.certificates.cited.dupe())
     }
 
     /// `resource`'s members over the certificates of `cited` this replica
     /// records, according to Keyline. It's cached by the subset and a
-    /// [`KeylineCgkaMembershipView`] reads the answer from the cache.
+    /// [`KeylineImplicitRemovesProtocol`] reads the answer from the cache.
     async fn members_over<Ids: Sync>(
         &self,
         cited: &Ids,
@@ -466,7 +466,7 @@ where
     async fn cache_replay_answers(
         &self,
         doc: Identifier,
-        cgka: &Cgka<KeylineCgkaMembershipView>,
+        cgka: &Cgka<KeylineImplicitRemovesProtocol>,
     ) -> Result<(), KeylineStorageError<K::Error>> {
         for set in cgka.membership_sets().unwrap_or_default() {
             self.members_over(&set, doc).await?;
@@ -477,8 +477,8 @@ where
     /// Run `f` on `cgka`, the CGKA for `doc`, first fetching from Keyline any
     /// membership answers `f` requires.
     ///
-    /// BeeKEM queries its membership view synchronously but Keyline answers
-    /// asynchronously so the view answers only from the cache in
+    /// BeeKEM queries its implicit removes protocol synchronously but Keyline
+    /// answers asynchronously so the protocol answers only from the cache in
     /// `CitedCertificates`. When a cached answer is missing, the CGKA fails with
     /// `CgkaError::MembershipUnknown` and makes no changes. This function fetches
     /// that answer and runs `f` again. A replay asks about every batch of the
@@ -491,8 +491,8 @@ where
     async fn require_keyline_answers<V, E: LacksKeylineAnswer>(
         &self,
         doc: Identifier,
-        cgka: &mut Cgka<KeylineCgkaMembershipView>,
-        mut f: impl FnMut(&mut Cgka<KeylineCgkaMembershipView>) -> Result<V, E>,
+        cgka: &mut Cgka<KeylineImplicitRemovesProtocol>,
+        mut f: impl FnMut(&mut Cgka<KeylineImplicitRemovesProtocol>) -> Result<V, E>,
     ) -> Result<Result<V, E>, KeylineStorageError<K::Error>> {
         // Keep every answer cached for `doc` until this returns.
         let _replaying = self.certificates.cited.replaying(doc);
@@ -559,8 +559,8 @@ where
     /// that cannot be applied is logged and skipped. Returns the
     /// CGKA and the operations left out because a predecessor is missing.
     ///
-    /// The operations are applied without a membership view and the CGKA then
-    /// replays its graph once with that view. The replay asks Keyline only for
+    /// The operations are applied without implicit removes and the CGKA then
+    /// replays its graph once with the document's implicit removes protocol. The replay asks Keyline only for
     /// what the cached non-members do not cover, so a fork or a reload of a graph
     /// already replayed does not require a new query. If Keyline cannot answer
     /// at that point, or the replay fails, that is logged and the replay waits
@@ -572,11 +572,11 @@ where
         me: IndividualId,
         secrets: &BTreeMap<ShareKey, ShareSecretKey>,
     ) -> (
-        Cgka<KeylineCgkaMembershipView>,
+        Cgka<KeylineImplicitRemovesProtocol>,
         Vec<Arc<Verified<CgkaOperation>>>,
     ) {
         let doc = Identifier::from(doc_id);
-        let mut cgka = Cgka::new(doc_id, me, ShareKeyMap::new(), NoMembershipView);
+        let mut cgka = Cgka::new(doc_id, me, ShareKeyMap::new(), NoImplicitRemoves);
         let mut has_progressed = true;
         while has_progressed {
             has_progressed = false;
@@ -595,7 +595,7 @@ where
             });
         }
         adopt_own_cgka_secrets(&mut cgka, me, secrets);
-        let mut cgka = cgka.with_membership_view(self.membership_view(doc));
+        let mut cgka = cgka.with_implicit_removes_protocol(self.implicit_removes_protocol(doc));
         let replayed = self
             .require_keyline_answers(doc, &mut cgka, Cgka::replay_if_pending)
             .await;
@@ -1320,7 +1320,7 @@ where
                 doc_id,
                 founders,
                 owner_sk,
-                self.membership_view(doc_kl),
+                self.implicit_removes_protocol(doc_kl),
                 initial_content_heads,
                 &signer,
                 &mut *csprng,
@@ -2982,7 +2982,7 @@ where
 
     /// Whether the CGKA graph for `doc_id` has the operation `digest`.
     async fn has_cgka_op(&self, doc_id: DocumentId, digest: Digest<CgkaOperation>) -> bool {
-        let has_digest = |cgka: &Cgka<KeylineCgkaMembershipView>| cgka.op(&digest).is_some();
+        let has_digest = |cgka: &Cgka<KeylineImplicitRemovesProtocol>| cgka.op(&digest).is_some();
         if let Some(state) = self.document_state(doc_id).await {
             return has_digest(state.lock().await.cgka());
         }
@@ -3027,7 +3027,12 @@ where
             let cgka = match unjoined.entry(doc_id) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) if stands_over => {
-                    let cgka = Cgka::new(doc_id, me, ShareKeyMap::new(), self.membership_view(doc));
+                    let cgka = Cgka::new(
+                        doc_id,
+                        me,
+                        ShareKeyMap::new(),
+                        self.implicit_removes_protocol(doc),
+                    );
                     entry.insert(cgka)
                 }
                 Entry::Vacant(_) => {
@@ -3341,7 +3346,7 @@ where
         }));
 
         // Each document's CGKA is rebuilt from its operations, with the
-        // certificates above recorded for its membership view. It becomes a
+        // certificates above recorded for its implicit removes protocol. It becomes a
         // held document if its invitation (or creation) has merged, and
         // otherwise stays unjoined: awaiting it, or relayed.
         let mut by_doc: HashMap<DocumentId, Vec<Arc<Verified<CgkaOperation>>>> = HashMap::new();
@@ -4068,7 +4073,7 @@ pub enum GenerateGroupError<E: core::error::Error + 'static> {
 }
 
 /// Every operation in `cgka`'s CGKA graph.
-fn cgka_ops_for(cgka: &Cgka<KeylineCgkaMembershipView>) -> Vec<Arc<Verified<CgkaOperation>>> {
+fn cgka_ops_for(cgka: &Cgka<KeylineImplicitRemovesProtocol>) -> Vec<Arc<Verified<CgkaOperation>>> {
     cgka.ops()
         .map(|batches| batches.into_iter().flatten().collect())
         .unwrap_or_default()
@@ -4090,7 +4095,7 @@ fn proves_key(proof: Option<&[u8]>, member: &MemberId, pk: &ShareKey) -> bool {
 /// that provided them merged, or when the `Cgka` was rebuilt or secrets were
 /// imported ([`adopt_own_cgka_secrets`]).
 fn merge_one<E: core::error::Error + 'static>(
-    cgka: &mut Cgka<KeylineCgkaMembershipView>,
+    cgka: &mut Cgka<KeylineImplicitRemovesProtocol>,
     op: Arc<Verified<CgkaOperation>>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
@@ -4123,7 +4128,7 @@ fn invites(op: &CgkaOperation, me: IndividualId) -> bool {
 /// Merge one operation. An invitation (an add of `me`) is merged with the
 /// secret for its prekey, from `secrets`. `true` if the CGKA graph did not
 /// have it.
-fn apply_one<E: core::error::Error + 'static, M: MembershipView>(
+fn apply_one<E: core::error::Error + 'static, M: ImplicitRemovesProtocol>(
     cgka: &mut Cgka<M>,
     op: Arc<Verified<CgkaOperation>>,
     me: IndividualId,
@@ -4147,7 +4152,7 @@ fn apply_one<E: core::error::Error + 'static, M: MembershipView>(
 /// Walks the whole CGKA graph, so it is for rebuilding a `Cgka` or after
 /// importing secrets, not for each merge ([`merge_one`] looks at the merged
 /// operation only).
-fn adopt_own_cgka_secrets<M: MembershipView>(
+fn adopt_own_cgka_secrets<M: ImplicitRemovesProtocol>(
     cgka: &mut Cgka<M>,
     me: IndividualId,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,
@@ -4163,7 +4168,7 @@ fn adopt_own_cgka_secrets<M: MembershipView>(
 
 /// Move into `cgka` the secrets in `secrets` for `keys`, where it does
 /// not have them yet.
-fn adopt_cgka_secrets<M: MembershipView, I: IntoIterator<Item = ShareKey>>(
+fn adopt_cgka_secrets<M: ImplicitRemovesProtocol, I: IntoIterator<Item = ShareKey>>(
     cgka: &mut Cgka<M>,
     keys: I,
     secrets: &BTreeMap<ShareKey, ShareSecretKey>,

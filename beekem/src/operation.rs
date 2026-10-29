@@ -37,7 +37,7 @@ use nonempty::NonEmpty;
 
 /// The identity of a membership citation cited by a [`CgkaOperation`].
 ///
-/// BeeKEM treats it as opaque. Used by [`crate::cgka::MembershipView`].
+/// BeeKEM treats it as opaque. Used by [`crate::cgka::ImplicitRemovesProtocol`].
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Ord, PartialOrd)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct CitationId(pub [u8; 32]);

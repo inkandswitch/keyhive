@@ -4,7 +4,7 @@
 //! blank nodes, concurrent adds).
 
 use beekem::{
-    cgka::{Cgka, NoMembershipView},
+    cgka::{Cgka, NoImplicitRemoves},
     id::TreeId,
     keys::ShareKeyMap,
     operation::CgkaOperation,
@@ -34,7 +34,7 @@ fn create_key_pairs(n: u32) {
 /// One tree that every operation is merged into, and each member's secrets
 /// for its leaf, from which any member's replica can be cloned.
 struct Fixture {
-    tree: Cgka<NoMembershipView>,
+    tree: Cgka<NoImplicitRemoves>,
     members: Vec<Member>,
     secrets: Vec<ShareKeyMap>,
     rng: StdRng,
@@ -48,7 +48,7 @@ impl Fixture {
         let doc_id = TreeId::from(&MemorySigner::generate(&mut rng).0);
         let members: Vec<Member> = (0..count).map(|_| member(&mut rng)).collect();
         let secrets: Vec<ShareKeyMap> = members.iter().map(leaf_secret).collect();
-        let mut tree = Cgka::new(doc_id, members[0].id, secrets[0].clone(), NoMembershipView);
+        let mut tree = Cgka::new(doc_id, members[0].id, secrets[0].clone(), NoImplicitRemoves);
         let adds = NonEmpty::from_vec(
             members
                 .iter()
@@ -116,7 +116,7 @@ impl Fixture {
     }
 
     /// Member `i`'s replica of the tree as it stands.
-    fn replica(&self, i: usize) -> Cgka<NoMembershipView> {
+    fn replica(&self, i: usize) -> Cgka<NoImplicitRemoves> {
         self.tree
             .with_new_owner(self.members[i].id, self.secrets[i].clone())
             .expect("the member is in the tree")
@@ -124,7 +124,7 @@ impl Fixture {
 
     /// An update by member `i` from the tree as it stands, without merging
     /// it, and the replica that made it. Member `i` keeps its new secret.
-    fn update_from(&mut self, i: usize) -> (Arc<Verified<CgkaOperation>>, Cgka<NoMembershipView>) {
+    fn update_from(&mut self, i: usize) -> (Arc<Verified<CgkaOperation>>, Cgka<NoImplicitRemoves>) {
         let mut replica = self.replica(i);
         let sk = ShareSecretKey::generate(&mut self.rng);
         let (_pcs_key, op, _key_pair) = block_on(replica.update::<Local, _, _>(
@@ -157,7 +157,7 @@ impl Fixture {
 
     /// The first member and member `paired`, after `paired` updates and the
     /// first merges it: the writer and the reader of the benchmarks.
-    fn writer_and_reader(mut self, paired: usize) -> (Writer, Cgka<NoMembershipView>) {
+    fn writer_and_reader(mut self, paired: usize) -> (Writer, Cgka<NoImplicitRemoves>) {
         let (op, reader) = self.update_from(paired);
         let mut tree = self.replica(0);
         tree.merge_concurrent_operation(op)
@@ -180,14 +180,14 @@ fn leaf_secret(m: &Member) -> ShareKeyMap {
 
 /// The member whose updates the reader follows.
 struct Writer {
-    tree: Cgka<NoMembershipView>,
+    tree: Cgka<NoImplicitRemoves>,
     signer: MemorySigner,
     rng: StdRng,
 }
 
 /// The writer updates 100 times; after each, the reader merges the update
 /// and decrypts the root.
-fn follow_100_updates(writer: &mut Writer, reader: &mut Cgka<NoMembershipView>) {
+fn follow_100_updates(writer: &mut Writer, reader: &mut Cgka<NoImplicitRemoves>) {
     for _ in 0..100 {
         let sk = ShareSecretKey::generate(&mut writer.rng);
         let (_pcs_key, op, _key_pair) = block_on(writer.tree.update::<Local, _, _>(

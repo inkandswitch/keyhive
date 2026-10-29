@@ -7,7 +7,7 @@
 //! delegations it cites. CGKA authorization and implicit removal are evaluated
 //! over those sets.
 
-use beekem::{cgka::MembershipView, id::MemberId, operation::CitationId};
+use beekem::{cgka::ImplicitRemovesProtocol, id::MemberId, operation::CitationId};
 use dupe::Dupe;
 use imbl::OrdMap;
 use keyhive_crypto::{digest::Digest, identifier::Identifier, verified::Verified};
@@ -72,7 +72,7 @@ impl Deref for Members {
 /// certificate set.
 pub(crate) type MembersKey = (Digest<CertificateSet>, Identifier);
 
-/// A digest of a [MembershipView] query: the certificate set, resource and CGKA
+/// A digest of an [ImplicitRemovesProtocol] query: the certificate set, resource and CGKA
 /// group members for the query.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct QueryHash([u8; 32]);
@@ -98,13 +98,13 @@ const ANSWERS_PER_RESOURCE: usize = 8;
 /// over the sets of them that are cited by CGKA operations and their causal
 /// predecessors.
 ///
-/// BeeKEM queries its [`MembershipView`] synchronously. The view implemented
-/// here answers from what
+/// BeeKEM queries its [`ImplicitRemovesProtocol`] synchronously. The protocol
+/// implemented here answers from what
 /// [`Keyline::members_for_subset`](keyline::contract::Keyline::members_for_subset)
 /// answered, cached here.
 ///
 /// A replay asks about every membership batch of a document's CGKA graph.
-/// The view's verdicts are kept for the keyhive's lifetime and a later replay
+/// The protocol's verdicts are kept for the keyhive's lifetime and a later replay
 /// doesn't require a Keyline answer for a batch it has seen. A verdict is small and
 /// usually empty. Keyline's full answers are kept only while a replay of their
 /// resource is in progress and otherwise only the most recent few for each
@@ -329,7 +329,8 @@ impl Drop for Replaying {
     }
 }
 
-/// The [`MembershipView`] for a document's CGKA, as determined by Keyline.
+/// The [`ImplicitRemovesProtocol`] for a document's CGKA, as determined by
+/// Keyline. Every replica of the CGKA must use it.
 ///
 /// Given a certificate set, it reports which of the CGKA group's members
 /// lack `Read` or higher standing over `resource` in that set. BeeKEM asks
@@ -337,12 +338,12 @@ impl Drop for Replaying {
 /// already cached in `CitedCertificates`. Returns `None` for a set with
 /// neither cached.
 #[derive(Clone)]
-pub(crate) struct KeylineCgkaMembershipView {
+pub(crate) struct KeylineImplicitRemovesProtocol {
     resource: Identifier,
     citations: SharedCitations,
 }
 
-impl KeylineCgkaMembershipView {
+impl KeylineImplicitRemovesProtocol {
     pub(crate) fn new(resource: Identifier, citations: SharedCitations) -> Self {
         Self {
             resource,
@@ -351,15 +352,15 @@ impl KeylineCgkaMembershipView {
     }
 }
 
-impl fmt::Debug for KeylineCgkaMembershipView {
+impl fmt::Debug for KeylineImplicitRemovesProtocol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("KeylineCgkaMembershipView")
+        f.debug_struct("KeylineImplicitRemovesProtocol")
             .field("resource", &self.resource)
             .finish_non_exhaustive()
     }
 }
 
-impl MembershipView for KeylineCgkaMembershipView {
+impl ImplicitRemovesProtocol for KeylineImplicitRemovesProtocol {
     fn non_members(
         &self,
         cited: &BTreeSet<CitationId>,

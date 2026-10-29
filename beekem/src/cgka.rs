@@ -41,27 +41,32 @@ use nonempty::NonEmpty;
 use tracing::{debug, instrument, warn};
 
 /// Decides which tree members a set of citations no longer entitles to stay in
-/// the tree.
-pub trait MembershipView: Clone + Debug {
+/// the tree. These removals are implicit. They are not listed in any
+/// operation and every replica derives them independently.
+///
+/// All replicas of a CGKA group must use the same protocol or their trees will
+/// diverge.
+pub trait ImplicitRemovesProtocol: Clone + Debug {
     /// The members of `leaves` that the citations in `cited` do not entitle
-    /// to be in the tree or `None` if the view has no answer for `cited` yet.
+    /// to be in the tree or `None` if the protocol has no answer for `cited`
+    /// yet.
     fn non_members(
         &self,
         cited: &BTreeSet<CitationId>,
-        leaves: &BTreeSet<MemberId>,
+        cgka_members: &BTreeSet<MemberId>,
     ) -> Option<BTreeSet<MemberId>>;
 }
 
-/// A view of a [`Cgka`] that never makes membership evaluations.
+/// An [`ImplicitRemovesProtocol`] that never removes members implicitly.
 /// Its `non_members` implementation always returns an empty set.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct NoMembershipView;
+pub struct NoImplicitRemoves;
 
-impl MembershipView for NoMembershipView {
+impl ImplicitRemovesProtocol for NoImplicitRemoves {
     fn non_members(
         &self,
         _cited: &BTreeSet<CitationId>,
-        _leaves: &BTreeSet<MemberId>,
+        _cgka_members: &BTreeSet<MemberId>,
     ) -> Option<BTreeSet<MemberId>> {
         Some(BTreeSet::new())
     }
@@ -102,7 +107,7 @@ pub struct Cgka<M> {
 
     /// For determining when members must be removed in light of new
     /// citations from an operation.
-    membership: M,
+    implicit_removes_protocol: M,
 }
 
 impl<M, N> PartialEq<Cgka<N>> for Cgka<M> {
@@ -116,7 +121,7 @@ impl<M, N> PartialEq<Cgka<N>> for Cgka<M> {
             pending_replay,
             root_secrets,
             unchained_updates,
-            membership: _,
+            implicit_removes_protocol: _,
         } = self;
         *doc_id == other.doc_id
             && *owner_id == other.owner_id
@@ -142,7 +147,7 @@ impl<M> Hash for Cgka<M> {
             pending_replay,
             root_secrets,
             unchained_updates,
-            membership: _,
+            implicit_removes_protocol: _,
         } = self;
         doc_id.hash(state);
         owner_id.hash(state);
@@ -162,8 +167,13 @@ impl<M> Hash for Cgka<M> {
     }
 }
 
-impl<M: MembershipView> Cgka<M> {
-    pub fn new(doc_id: TreeId, owner_id: MemberId, owner_sks: ShareKeyMap, membership: M) -> Self {
+impl<M: ImplicitRemovesProtocol> Cgka<M> {
+    pub fn new(
+        doc_id: TreeId,
+        owner_id: MemberId,
+        owner_sks: ShareKeyMap,
+        implicit_removes_protocol: M,
+    ) -> Self {
         Self {
             doc_id,
             owner_id,
@@ -173,14 +183,17 @@ impl<M: MembershipView> Cgka<M> {
             pending_replay: false,
             root_secrets: RootSecrets::default(),
             unchained_updates: Set::new(),
-            membership,
+            implicit_removes_protocol,
         }
     }
 
-    /// This `Cgka`, removing members according to `view` from now on.
+    /// This `Cgka`, removing members according to `protocol` from now on.
     /// Operations already recorded are replayed under it before the tree's
     /// next use.
-    pub fn with_membership_view<V: MembershipView>(self, view: V) -> Cgka<V> {
+    pub fn with_implicit_removes_protocol<P: ImplicitRemovesProtocol>(
+        self,
+        protocol: P,
+    ) -> Cgka<P> {
         let Cgka {
             doc_id,
             owner_id,
@@ -190,7 +203,7 @@ impl<M: MembershipView> Cgka<M> {
             pending_replay: _,
             root_secrets,
             unchained_updates,
-            membership: _,
+            implicit_removes_protocol: _,
         } = self;
         let pending_replay = !ops_graph.cgka_op_heads.is_empty();
         Cgka {
@@ -202,7 +215,7 @@ impl<M: MembershipView> Cgka<M> {
             pending_replay,
             root_secrets,
             unchained_updates,
-            membership: view,
+            implicit_removes_protocol: protocol,
         }
     }
 
@@ -214,13 +227,13 @@ impl<M: MembershipView> Cgka<M> {
         }
     }
 
-    /// The leaves the membership view says `cited` no longer entitle to be in
-    /// the tree. Fails with [`CgkaError::MembershipUnknown`] if the view has
-    /// no answer yet.
+    /// The leaves the implicit removes protocol says `cited` no longer entitle
+    /// to be in the tree. Fails with [`CgkaError::MembershipUnknown`] if the
+    /// protocol has no answer yet.
     fn non_members(&self, cited: &BTreeSet<CitationId>) -> Result<BTreeSet<MemberId>, CgkaError> {
         let leaves: BTreeSet<MemberId> = self.tree.member_ids().collect();
         let mut demoted = self
-            .membership
+            .implicit_removes_protocol
             .non_members(cited, &leaves)
             .ok_or_else(|| CgkaError::MembershipUnknown(cited.clone()))?;
         demoted.retain(|id| leaves.contains(id));
@@ -233,7 +246,7 @@ impl<M: MembershipView> Cgka<M> {
         Ok(demoted)
     }
 
-    /// Remove members if `op`'s citations set demoted them. If the view has
+    /// Remove members if `op`'s citations set demoted them. If the protocol has
     /// no answer for that set yet, the tree is rebuilt from its history before
     /// its next use instead, which would remove them then.
     fn handle_new_removals(&mut self, op: &CgkaOperation) {
@@ -615,8 +628,8 @@ impl<M: MembershipView> Cgka<M> {
     }
 
     /// Create a [`CgkaChange::Remove`] without explicitly listing
-    /// targets. Specific members to be removed are determined by
-    /// [`MembershipView`].
+    /// targets. Specific members to be removed are determined by the
+    /// [`ImplicitRemovesProtocol`].
     #[instrument(skip_all)]
     pub async fn remove_by_citations<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
@@ -628,9 +641,9 @@ impl<M: MembershipView> Cgka<M> {
             .await
     }
 
-    /// Sign and record a [`CgkaChange::Remove`]. If a [`MembershipView`]
-    /// is being used to determine which members to remove, make that
-    /// determination and remove those members here.
+    /// Sign and record a [`CgkaChange::Remove`]. If an
+    /// [`ImplicitRemovesProtocol`] is being used to determine which members to
+    /// remove, make that determination and remove those members here.
     async fn sign_and_complete_remove<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         removed: BTreeSet<RemovedMember>,
@@ -712,7 +725,8 @@ impl<M: MembershipView> Cgka<M> {
     /// recorded but not applied.
     ///
     /// Fails with [`CgkaError::MembershipUnknown`], changing nothing,
-    /// if the membership view lacks an answer required for the replay.
+    /// if the implicit removes protocol lacks an answer required for the
+    /// replay.
     pub fn replay_if_pending(&mut self) -> Result<(), CgkaError> {
         if self.pending_replay {
             self.replay_ops_graph()?;
@@ -833,8 +847,8 @@ impl<M: MembershipView> Cgka<M> {
         Ok(true)
     }
 
-    /// Every citation set a replay of the whole graph asks the membership
-    /// view about. For each batch containing an add or a remove, everything
+    /// Every citation set a replay of the whole graph asks the implicit
+    /// removes protocol about. For each batch containing an add or a remove, everything
     /// it and the batches before it cite. Empty for an empty graph.
     pub fn membership_sets(&self) -> Result<Vec<BTreeSet<CitationId>>, CgkaError> {
         if self.ops_graph.cgka_op_heads.is_empty() {
@@ -1216,7 +1230,7 @@ impl<M: MembershipView> Cgka<M> {
             self.doc_id,
             self.owner_id,
             self.owner_sks.clone(),
-            self.membership.clone(),
+            self.implicit_removes_protocol.clone(),
         );
         rebuilt_cgka.apply_batches(&batches)?;
         rebuilt_cgka.record_tree_root_secret();
@@ -1293,7 +1307,7 @@ impl<M: MembershipView> Cgka<M> {
     }
 }
 
-impl<M: MembershipView> Fork for Cgka<M> {
+impl<M: ImplicitRemovesProtocol> Fork for Cgka<M> {
     type Forked = Self;
 
     fn fork(&self) -> Self::Forked {
@@ -1301,7 +1315,7 @@ impl<M: MembershipView> Fork for Cgka<M> {
     }
 }
 
-impl<M: MembershipView> Merge for Cgka<M> {
+impl<M: ImplicitRemovesProtocol> Merge for Cgka<M> {
     fn merge(&mut self, fork: Self::Forked) {
         // Extend with the fork's unchained updates that are not chainable here.
         self.unchained_updates.extend(
@@ -1316,7 +1330,7 @@ impl<M: MembershipView> Merge for Cgka<M> {
         if !self.ops_graph.cgka_op_heads.is_empty() {
             match self.replay_ops_graph() {
                 Ok(()) => {}
-                // Replayed before the tree's next use, once the view can answer.
+                // Replayed before the tree's next use, once the protocol can answer.
                 Err(CgkaError::MembershipUnknown(_)) => self.pending_replay = true,
                 Err(e) => panic!("two valid graphs should always merge causal consistency: {e}"),
             }

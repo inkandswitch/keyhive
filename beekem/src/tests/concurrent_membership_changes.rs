@@ -1,7 +1,7 @@
 //! Tests concurrent membership changes.
 
 use crate::{
-    cgka::NoMembershipView,
+    cgka::NoImplicitRemoves,
     encrypted::EncryptedSecret,
     id::{MemberId, TreeId},
     keys::{NodeKey, ShareKeyMap},
@@ -356,7 +356,7 @@ struct Scenario {
 /// Deliver `undelivered` to `everyone`, retrying until every operation has
 /// applied. Panics if a round applies nothing.
 fn deliver_all(
-    group: &mut Group<NoMembershipView>,
+    group: &mut Group<NoImplicitRemoves>,
     undelivered: &mut Vec<Arc<Verified<CgkaOperation>>>,
     everyone: &[usize],
 ) {
@@ -380,7 +380,7 @@ const MAX_OPS: usize = 12;
 const JOINERS: usize = 3;
 
 struct ScenarioOutcome {
-    group: Group<NoMembershipView>,
+    group: Group<NoImplicitRemoves>,
     member_count: usize,
     /// Expected membership.
     expected: BTreeSet<MemberId>,

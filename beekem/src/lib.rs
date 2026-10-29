@@ -42,8 +42,8 @@ mod tests {
     mod concurrent_membership_changes;
     mod concurrent_updates;
     mod group_lifecycle;
+    mod implicit_removes_protocol;
     mod invitations;
-    mod membership_view;
     mod path_secrets;
     mod predecessor_secret_chain;
 }

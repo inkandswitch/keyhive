@@ -3,7 +3,7 @@
 
 use super::Cgka;
 use beekem::{
-    cgka::MembershipView,
+    cgka::ImplicitRemovesProtocol,
     id::TreeId,
     operation::{CgkaOperation, CitationId},
 };
@@ -138,7 +138,7 @@ impl CertificateSets {
     /// cite.
     ///
     /// Returns `None` if `cgka` is missing any of them.
-    pub(crate) fn predecessor_set<'a, M: MembershipView>(
+    pub(crate) fn predecessor_set<'a, M: ImplicitRemovesProtocol>(
         &mut self,
         cgka: &Cgka<M>,
         heads: impl IntoIterator<Item = &'a OpDigest>,
@@ -163,7 +163,7 @@ impl CertificateSets {
 impl DocumentSets {
     /// Every certificate the operation `digest` and its causal ancestors cite,
     /// from the cache or else from `cgka`. Returns `None` if neither has it.
-    fn certificate_set<M: MembershipView>(
+    fn certificate_set<M: ImplicitRemovesProtocol>(
         &mut self,
         cgka: &Cgka<M>,
         digest: OpDigest,

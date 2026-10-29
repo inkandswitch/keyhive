@@ -395,7 +395,7 @@ async fn own_cgka_graph_converges_with_creators_ops(bob_sorts_first: bool) -> Te
             doc_id,
             bob_active_id,
             beekem::keys::ShareKeyMap::new(),
-            beekem::cgka::NoMembershipView,
+            beekem::cgka::NoImplicitRemoves,
         );
         let bob_add = bob_tree
             .add::<Sendable, _>(

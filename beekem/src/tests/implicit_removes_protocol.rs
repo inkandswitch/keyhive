@@ -1,6 +1,6 @@
 use super::concurrent_membership_changes::{learn_from, new_path};
 use crate::{
-    cgka::{Cgka, MembershipView, NoMembershipView},
+    cgka::{Cgka, ImplicitRemovesProtocol, NoImplicitRemoves},
     error::CgkaError,
     id::MemberId,
     keys::ShareKeyMap,
@@ -20,11 +20,11 @@ use keyhive_crypto::verified::Verified;
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use std::sync::Mutex;
 
-/// A view in which each citation revokes a fixed set of members.
+/// A protocol in which each citation revokes a fixed set of members.
 #[derive(Debug, Clone)]
 struct Revocations(BTreeMap<CitationId, BTreeSet<MemberId>>);
 
-impl MembershipView for Revocations {
+impl ImplicitRemovesProtocol for Revocations {
     fn non_members(
         &self,
         cited: &BTreeSet<CitationId>,
@@ -53,7 +53,8 @@ async fn a_member_added_concurrently_with_its_adders_revocation_is_removed_and_e
     // Revoking `m` also revokes everyone whose access `m` granted, which here is `fresh`.
     let revoke_m = CitationId([1; 32]);
     let revoked = BTreeSet::from([group.id(m), fresh.id]);
-    let mut group = group.with_membership_view(Revocations(BTreeMap::from([(revoke_m, revoked)])));
+    let mut group =
+        group.with_implicit_removes_protocol(Revocations(BTreeMap::from([(revoke_m, revoked)])));
     group.settle(a, &mut rng).await;
 
     let remove_m = group
@@ -107,7 +108,7 @@ impl Fetched {
     }
 }
 
-impl MembershipView for Fetched {
+impl ImplicitRemovesProtocol for Fetched {
     fn non_members(
         &self,
         cited: &BTreeSet<CitationId>,
@@ -128,14 +129,14 @@ async fn a_replay_lacking_a_membership_answer_doesnt_make_changes_until_answered
     let group = Group::new(3, &mut rng).await;
     let (a, m) = (0, 2);
     let revoke_m = CitationId([1; 32]);
-    let view = Fetched {
+    let protocol = Fetched {
         revocations: Revocations(BTreeMap::from([(revoke_m, BTreeSet::from([group.id(m)]))])),
         fetched: Arc::new(Mutex::new(None)),
     };
-    let mut group = group.with_membership_view(view.clone());
+    let mut group = group.with_implicit_removes_protocol(protocol.clone());
     group.settle(a, &mut rng).await;
 
-    view.fetch_only([]);
+    protocol.fetch_only([]);
     group
         .remove_by_citations(a, BTreeSet::from([revoke_m]))
         .await;
@@ -150,7 +151,7 @@ async fn a_replay_lacking_a_membership_answer_doesnt_make_changes_until_answered
         "a replay without an answer changed the tree"
     );
 
-    view.fetch_only(group.replicas[a].membership_sets().unwrap());
+    protocol.fetch_only(group.replicas[a].membership_sets().unwrap());
     let members: BTreeSet<MemberId> = group.replicas[a]
         .member_ids()
         .expect("the sets a replay asks about are answered")
@@ -183,7 +184,7 @@ const REVOCATIONS: usize = 3;
 
 /// Deliver `undelivered` to each replica in its own shuffled order, retrying
 /// what is not yet causally ready.
-fn deliver_shuffled<M: MembershipView>(
+fn deliver_shuffled<M: ImplicitRemovesProtocol>(
     group: &mut Group<M>,
     undelivered: &mut Vec<Arc<Verified<CgkaOperation>>>,
     rng: &mut StdRng,
@@ -224,12 +225,12 @@ async fn run(
         .collect();
     let revocation = |i: usize| CitationId([1 + i as u8; 32]);
     let grant = CitationId([0xff; 32]);
-    let view = Revocations(
+    let protocol = Revocations(
         (0..REVOCATIONS)
             .map(|i| (revocation(i), revoked[i].clone()))
             .collect(),
     );
-    let mut group = group.with_membership_view(view.clone());
+    let mut group = group.with_implicit_removes_protocol(protocol.clone());
 
     let mut undelivered = Vec::new();
     for (position, step) in steps.iter().enumerate() {
@@ -267,11 +268,11 @@ async fn run(
     deliver_shuffled(&mut group, &mut undelivered, &mut rng);
     let final_rotation = group.rotate(0, &mut rng).await;
     group.broadcast(&final_rotation);
-    (group, view, joiners, final_rotation)
+    (group, protocol, joiners, final_rotation)
 }
 
 /// Every citation in the history of `replica`.
-fn cited<M: MembershipView>(replica: &Cgka<M>) -> BTreeSet<CitationId> {
+fn cited<M: ImplicitRemovesProtocol>(replica: &Cgka<M>) -> BTreeSet<CitationId> {
     replica
         .ops_graph
         .cgka_ops
@@ -292,22 +293,22 @@ fn for_random_runs(
         .with_iterations(200)
         .with_generator((gen::<u64>(), gen::<Vec<Step>>().with().len(3..=12usize)))
         .for_each(|(seed, steps)| {
-            let (group, view, joiners, final_rotation) = runtime.block_on(run(*seed, steps));
-            check(group, view, joiners, final_rotation);
+            let (group, protocol, joiners, final_rotation) = runtime.block_on(run(*seed, steps));
+            check(group, protocol, joiners, final_rotation);
         });
 }
 
 #[test]
 fn replicas_converge_and_remove_every_revoked_member_whatever_the_delivery_order() {
-    for_random_runs(|group, view, _, _| {
+    for_random_runs(|group, protocol, _, _| {
         let context = "after every operation reached every replica";
         group.check(context);
         group.assert_trees_match_replay(context);
         let replica = &group.replicas[0];
         let leaves: BTreeSet<MemberId> = replica.tree.member_ids().collect();
-        let revoked_leaves = view
+        let revoked_leaves = protocol
             .non_members(&cited(replica), &leaves)
-            .expect("the view answers every set");
+            .expect("the protocol answers every set");
         assert!(
             revoked_leaves.is_empty(),
             "{context}: a revoked member is still in the tree"
@@ -317,13 +318,13 @@ fn replicas_converge_and_remove_every_revoked_member_whatever_the_delivery_order
 
 #[test]
 fn revoked_members_learn_nothing_of_a_rotation_after_their_removal() {
-    for_random_runs(|group, view, joiners, final_rotation| {
+    for_random_runs(|group, protocol, joiners, final_rotation| {
         let replica = &group.replicas[0];
         let everyone: BTreeSet<MemberId> =
             group.members.iter().chain(&joiners).map(|m| m.id).collect();
-        let revoked = view
+        let revoked = protocol
             .non_members(&cited(replica), &everyone)
-            .expect("the view answers every set");
+            .expect("the protocol answers every set");
         let mut known = ShareKeyMap::new();
         for (member, member_replica) in group.members.iter().zip(&group.replicas) {
             if revoked.contains(&member.id) {
@@ -355,28 +356,32 @@ fn revoked_members_learn_nothing_of_a_rotation_after_their_removal() {
 }
 
 #[tokio::test]
-async fn a_view_changes_a_cgka_only_by_scheduling_a_replay_of_its_history() {
+async fn a_protocol_changes_a_cgka_only_by_scheduling_a_replay_of_its_history() {
     let mut rng = StdRng::seed_from_u64(0xd00b_4444);
     let group = Group::new(2, &mut rng).await;
-    let view = Revocations(BTreeMap::new());
+    let protocol = Revocations(BTreeMap::new());
 
     let empty = Cgka::new(
         group.replicas[0].doc_id,
         group.id(0),
         ShareKeyMap::new(),
-        NoMembershipView,
+        NoImplicitRemoves,
     );
-    let viewed = empty.clone().with_membership_view(view.clone());
-    assert_eq!(viewed, empty, "a view changed a CGKA with no history");
+    let switched = empty
+        .clone()
+        .with_implicit_removes_protocol(protocol.clone());
+    assert_eq!(switched, empty, "a protocol changed a CGKA with no history");
 
-    let viewed = group.replicas[0].clone().with_membership_view(view);
+    let switched = group.replicas[0]
+        .clone()
+        .with_implicit_removes_protocol(protocol);
     assert_ne!(
-        viewed, group.replicas[0],
-        "a view did not schedule a replay of the history"
+        switched, group.replicas[0],
+        "a protocol did not schedule a replay of the history"
     );
 }
 
-/// A view in which `revoke` removes `member` unless `regrant` is also cited.
+/// A protocol in which `revoke` removes `member` unless `regrant` is also cited.
 #[derive(Debug, Clone)]
 struct RevokedUnlessRegranted {
     revoke: CitationId,
@@ -384,7 +389,7 @@ struct RevokedUnlessRegranted {
     member: MemberId,
 }
 
-impl MembershipView for RevokedUnlessRegranted {
+impl ImplicitRemovesProtocol for RevokedUnlessRegranted {
     fn non_members(
         &self,
         cited: &BTreeSet<CitationId>,
@@ -405,7 +410,7 @@ async fn a_member_kept_by_a_concurrent_grant_can_read_the_next_update() {
     let revoke_c = CitationId([1; 32]);
     let regrant_c = CitationId([2; 32]);
     let member = group.id(c);
-    let mut group = group.with_membership_view(RevokedUnlessRegranted {
+    let mut group = group.with_implicit_removes_protocol(RevokedUnlessRegranted {
         revoke: revoke_c,
         regrant: regrant_c,
         member,
@@ -445,7 +450,7 @@ struct RevokedByBoth {
     member: MemberId,
 }
 
-impl MembershipView for RevokedByBoth {
+impl ImplicitRemovesProtocol for RevokedByBoth {
     fn non_members(
         &self,
         cited: &BTreeSet<CitationId>,
@@ -468,7 +473,7 @@ async fn a_member_its_updater_dropped_under_two_concurrent_revocations_can_read_
     let r2 = CitationId([2; 32]);
     let regrant_c = CitationId([3; 32]);
     let member = group.id(c);
-    let mut group = group.with_membership_view(RevokedByBoth {
+    let mut group = group.with_implicit_removes_protocol(RevokedByBoth {
         r1,
         r2,
         regrant: regrant_c,
@@ -505,7 +510,7 @@ async fn a_member_its_updater_dropped_under_two_concurrent_revocations_can_read_
 
 /// Checks that the replicas pass [`Group::check`] and keep all four members,
 /// and that `c` derives the root secret of `a`'s last update.
-fn assert_everyone_kept_and_c_reads_heal_from_a<M: MembershipView>(
+fn assert_everyone_kept_and_c_reads_heal_from_a<M: ImplicitRemovesProtocol>(
     group: &mut Group<M>,
     a: usize,
     c: usize,

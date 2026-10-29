@@ -1,7 +1,7 @@
 //! Path secrets contained in an update operation.
 
 use crate::{
-    cgka::NoMembershipView,
+    cgka::NoImplicitRemoves,
     encrypted::encrypt_secret,
     error::CgkaError,
     operation::{CgkaChange, CgkaOperation},
@@ -16,7 +16,7 @@ use rand::{rngs::StdRng, SeedableRng};
 /// recipients as a random secret that is not that node's correct
 /// secret for this rotation, signed by `author`.
 async fn forged_update(
-    group: &mut Group<NoMembershipView>,
+    group: &mut Group<NoImplicitRemoves>,
     author: usize,
     rng: &mut StdRng,
 ) -> Arc<Verified<CgkaOperation>> {

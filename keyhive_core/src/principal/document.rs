@@ -5,7 +5,7 @@ use self::archive::DocumentArchive;
 use super::individual::id::IndividualId;
 use crate::{
     certificate::{CertificateError, KeylineStorageError},
-    cgka::{citations::KeylineCgkaMembershipView, Cgka},
+    cgka::{citations::KeylineImplicitRemovesProtocol, Cgka},
     content::heads::ContentHeads,
     error::not_found::NotFound,
     keyhive::Keyhive,
@@ -68,7 +68,7 @@ pub struct DocumentState<T: ContentRef> {
     /// This replica's CGKA group. A replica has a document only as a
     /// member whose creation or invitation has merged. A relay has none of
     /// its operations and has no `DocumentState`.
-    cgka: Cgka<KeylineCgkaMembershipView>,
+    cgka: Cgka<KeylineImplicitRemovesProtocol>,
 }
 
 impl<T: ContentRef> DocumentState<T> {
@@ -76,7 +76,7 @@ impl<T: ContentRef> DocumentState<T> {
     /// content heads it knows.
     pub(crate) fn with_cgka(
         id: DocumentId,
-        cgka: Cgka<KeylineCgkaMembershipView>,
+        cgka: Cgka<KeylineImplicitRemovesProtocol>,
         content_heads: HashSet<T>,
         content_state: HashSet<T>,
     ) -> Self {
@@ -97,11 +97,11 @@ impl<T: ContentRef> DocumentState<T> {
         self.id
     }
 
-    pub(crate) fn cgka(&self) -> &Cgka<KeylineCgkaMembershipView> {
+    pub(crate) fn cgka(&self) -> &Cgka<KeylineImplicitRemovesProtocol> {
         &self.cgka
     }
 
-    pub(crate) fn cgka_mut(&mut self) -> &mut Cgka<KeylineCgkaMembershipView> {
+    pub(crate) fn cgka_mut(&mut self) -> &mut Cgka<KeylineImplicitRemovesProtocol> {
         &mut self.cgka
     }
 
@@ -119,8 +119,8 @@ impl<T: ContentRef> DocumentState<T> {
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     /// A new document's CGKA graph: `founders` added in order, each with the
     /// prekey operation that proves its key, then a rotation by the first,
-    /// its owner, whose prekey secret is `owner_sk`. `view` removes members
-    /// the cited certificates do not entitle. Returns the document and its
+    /// its owner, whose prekey secret is `owner_sk`. `implicit_removes_protocol`
+    /// removes members the cited certificates do not entitle. Returns the document and its
     /// genesis operations.
     pub(crate) async fn generate<
         F: FutureForm,
@@ -136,7 +136,7 @@ impl<T: ContentRef> DocumentState<T> {
             BTreeSet<CitationId>,
         )>,
         owner_sk: ShareSecretKey,
-        view: KeylineCgkaMembershipView,
+        implicit_removes_protocol: KeylineImplicitRemovesProtocol,
         initial_content_heads: NonEmpty<T>,
         signer: &S,
         csprng: &mut R,
@@ -144,7 +144,7 @@ impl<T: ContentRef> DocumentState<T> {
         let (owner, owner_pk, _, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
         owner_sks.insert(owner_pk, owner_sk);
-        let mut cgka = Cgka::new(id, owner, owner_sks, view);
+        let mut cgka = Cgka::new(id, owner, owner_sks, implicit_removes_protocol);
         let mut ops = cgka.add_multiple(founders, signer).await?;
         let (_pcs_key, update_op, _new_key_pair) =
             cgka.update(owner_pk, owner_sk, signer, csprng).await?;
