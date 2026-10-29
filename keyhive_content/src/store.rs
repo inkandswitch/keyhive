@@ -155,6 +155,11 @@ pub trait CiphertextStoreExt<F: FutureForm, Cr: ContentRef, T>: CiphertextStore<
     ///
     /// It is normal for this to stop decryption if it encounters an already-decrypted
     /// ciphertext. There is no reason to decrypt it again if you already have the plaintext.
+    ///
+    /// If the store fails to fetch an ancestor that a block lists, that block is reported
+    /// in [`cannot`][CausalDecryptionError::cannot] rather than in
+    /// [`complete`][CausalDecryptionState::complete], and it is not decrypted again when
+    /// another block lists it.
     fn try_causal_decrypt<'a>(
         &'a self,
         doc_id: Identifier,
@@ -236,12 +241,12 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                         continue;
                     }
                 };
+                let mut ancestor_unavailable = false;
                 for (ancestor_ref, ancestor_key) in ancestors {
                     match self.get_ciphertext(&ancestor_ref).await {
                         Err(e) => {
-                            seen.remove(&content_ref);
                             cannot.insert(content_ref.clone(), ErrorReason::GetCiphertextError(e));
-                            continue;
+                            ancestor_unavailable = true;
                         }
                         Ok(None) => {
                             progress.next.insert(ancestor_ref, ancestor_key);
@@ -250,6 +255,9 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                             to_decrypt.push((ancestor.dupe(), ancestor_key));
                         }
                     }
+                }
+                if ancestor_unavailable {
+                    continue;
                 }
 
                 progress.keys.insert(content_ref.clone(), opened_by);
@@ -696,6 +704,103 @@ mod tests {
         .await
         .expect("every start is read");
         assert_eq!(read.complete, vec![([0u8; 32], "only".to_string())]);
+        Ok(())
+    }
+
+    struct FailsToFetch {
+        inner: MemoryCiphertextStore<[u8; 32], String>,
+        unavailable: [u8; 32],
+        fetches: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CiphertextStore<Sendable, [u8; 32], String> for FailsToFetch {
+        type GetCiphertextError = &'static str;
+        type MarkDecryptedError = Infallible;
+
+        fn get_ciphertext<'a>(
+            &'a self,
+            id: &'a [u8; 32],
+        ) -> <Sendable as FutureForm>::Future<
+            'a,
+            Result<Option<Arc<EncryptedContent<String, [u8; 32]>>>, &'static str>,
+        > {
+            Sendable::from_future(async move {
+                // Failing every fetch after the first few ends a walk that would
+                // otherwise revisit blocks forever, so the test can report it.
+                let fetched = self
+                    .fetches
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if *id == self.unavailable || fetched >= 10 {
+                    return Err("unavailable");
+                }
+                Ok(self.inner.get_by_content_ref(id).await)
+            })
+        }
+
+        fn get_ciphertext_by_group_secret_origin<'a>(
+            &'a self,
+            _: &'a Digest<GroupSecretOrigin>,
+        ) -> <Sendable as FutureForm>::Future<
+            'a,
+            Result<Vec<Arc<EncryptedContent<String, [u8; 32]>>>, &'static str>,
+        > {
+            Sendable::from_future(async { Ok(Vec::new()) })
+        }
+
+        fn mark_decrypted<'a>(
+            &'a self,
+            _: &'a [u8; 32],
+        ) -> <Sendable as FutureForm>::Future<'a, Result<(), Infallible>> {
+            Sendable::from_future(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_block_whose_ancestor_cannot_be_fetched_is_read_once_and_not_completed() -> TestResult
+    {
+        let mut csprng = OsRng;
+        let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
+        let (block_ref, unavailable_ref) = ([0u8; 32], [1u8; 32]);
+        let key = SymmetricKey::generate(&mut csprng);
+        let group_secret: GroupSecret = ShareSecretKey::generate(&mut csprng).into();
+        let envelope = Envelope {
+            plaintext: "a".to_string(),
+            ancestors: HashMap::from_iter([
+                (block_ref, key),
+                (unavailable_ref, SymmetricKey::generate(&mut csprng)),
+            ]),
+        };
+        let block = Arc::new(
+            EncryptedContent::<String, [u8; 32]>::encrypt(
+                &key,
+                doc_id,
+                block_ref,
+                PredecessorRefs::digest(&[]),
+                group_secret.digest(),
+                [9u8; 32].into(),
+                &envelope.encode().into_bytes(),
+            )
+            .expect("a fresh key encrypts"),
+        );
+        let store = FailsToFetch {
+            inner: MemoryCiphertextStore::new(),
+            unavailable: unavailable_ref,
+            fetches: Default::default(),
+        };
+        store.inner.insert(block.dupe()).await;
+
+        let Err(err) = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt(
+            &store,
+            doc_id,
+            &mut vec![(block, key)],
+        )
+        .await
+        else {
+            panic!("an ancestor could not be fetched");
+        };
+        assert!(err.progress.complete.is_empty());
+        assert_eq!(err.cannot.keys().collect::<Vec<_>>(), [&block_ref]);
+        assert_eq!(store.fetches.into_inner(), 2);
         Ok(())
     }
 }
