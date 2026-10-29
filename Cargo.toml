@@ -106,7 +106,85 @@ doc_overindented_list_items = "allow"
 type_complexity = "allow"
 
 [profile.release]
-lto = true
+codegen-units = 1
+lto = "fat"
+
+# The npm package's Wasm. `nix build .#keyhive-js` and `wasm:bodge` pass
+# `--release-profile wasm-release` to wasm-bodge; native builds keep
+# `profile.release`.
+#
+# Keyhive's runtime is dominated by crypto, so optimize everything else for
+# size and keep the crypto crates at full speed. Measured on Node 24 against
+# opt-level 3 everywhere (sizes after `wasm-opt -O4`):
+#
+# | build                | raw     | gzip   | sign+verify | Keyhive workload |
+# |----------------------|---------|--------|-------------|------------------|
+# | 3                    | 2.17 MB | 770 KB | 1.00x       | 1.00x            |
+# | z                    | 1.22 MB | 480 KB | 1.33x       | 1.45x            |
+# | z, crypto at 3       | 1.26 MB | 495 KB | 1.03x       | 1.05x            |
+#
+# The per-package overrides survive fat LTO. If you add a crate on a hot
+# crypto path, give it an override too.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+
+[profile.wasm-release.package.blake3]
+opt-level = 3
+
+[profile.wasm-release.package.chacha20]
+opt-level = 3
+
+[profile.wasm-release.package.chacha20poly1305]
+opt-level = 3
+
+[profile.wasm-release.package.curve25519-dalek]
+opt-level = 3
+
+[profile.wasm-release.package.ed25519-dalek]
+opt-level = 3
+
+[profile.wasm-release.package.poly1305]
+opt-level = 3
+
+[profile.wasm-release.package.sha2]
+opt-level = 3
+
+[profile.wasm-release.package.x25519-dalek]
+opt-level = 3
+
+# Debug variant of the npm package, exposed as `@keyhive/keyhive/debug`.
+# `nix build .#keyhive-js` passes `--debug-profile wasm-debug` to wasm-bodge,
+# which skips wasm-opt for it (binaryen corrupts wasm-bindgen's DWARF).
+# Keeps DWARF so Chrome DevTools (with the C/C++ DevTools Support extension)
+# can step through Rust source.
+#
+# | knob             | wasm-debug | release | why different            |
+# |------------------|------------|---------|--------------------------|
+# | opt-level        | 1          | 3       | preserve locals/stepping |
+# | lto              | "thin"     | "fat"   | keep stack frames clear  |
+# | codegen-units    | 16         | 1       | faster rebuild cycle     |
+# | debug            | "limited"  | (off)   | DWARF for step-through   |
+# | strip            | "none"     | (auto)  | DWARF must survive       |
+# | debug-assertions | true       | false   | catch bugs while debugging |
+# | overflow-checks  | true       | false   | catch bugs while debugging |
+#
+# opt-level 1 keeps most locals visible without fusing lines; 0 would make
+# the curve arithmetic unusably slow in a browser (see the override below).
+[profile.wasm-debug]
+inherits = "release"
+codegen-units = 16
+debug = "limited"
+debug-assertions = true
+lto = "thin"
+opt-level = 1
+overflow-checks = true
+strip = "none"
+
+# Field arithmetic dominates every sign, verify, and key agreement. Nobody
+# debugging keyhive needs to step through it.
+[profile.wasm-debug.package.curve25519-dalek]
+opt-level = 3
 
 # Property tests: optimized (the conformance laws evaluate each generated set
 # many times), with debug assertions and overflow checks kept on, and no LTO.
