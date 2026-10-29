@@ -142,6 +142,23 @@ async fn a_reader_takes_the_cgka_ops_from_a_relay() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn a_relays_stats_count_the_cgka_ops_it_has() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let relay = ctx.individual("relay").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(relay.id(), design_doc, Relay).await?;
+    ctx.sync(&alice, &relay).await?;
+
+    let held = held_ops(&relay, design_doc)
+        .await
+        .map_or(0, |ops| ops.len());
+    assert!(held > 0, "the relay has the document's CGKA ops");
+    assert_eq!(relay.stats().await.cgka_operations, held as u64);
+    Ok(())
+}
+
 /// Membership served by a relay is enough for a member to take the key
 /// agreement from another member.
 #[tokio::test]
