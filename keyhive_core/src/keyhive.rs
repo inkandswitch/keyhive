@@ -915,6 +915,21 @@ where
         Ok(true)
     }
 
+    /// Whether every certificate `op` cites is in `doc`'s closure.
+    async fn cites_only_closure(
+        &self,
+        op: &CgkaOperation,
+        doc: Identifier,
+    ) -> Result<bool, KeylineStorageError<K::Error>> {
+        let closure: BTreeSet<CitationId> = self
+            .closure(doc)
+            .await?
+            .iter()
+            .map(|cert| citation_of(cert.id()))
+            .collect();
+        Ok(op.citations().iter().all(|c| closure.contains(c)))
+    }
+
     /// The certificate `citation` refers to, if the Keyline store has it.
     async fn stored_certificate(
         &self,
@@ -2749,8 +2764,9 @@ where
     /// Denied if a predecessor was already denied. Otherwise pending until every
     /// predecessor is in the CGKA graph, then denied if its citations are not
     /// in strictly ascending order, and otherwise pending until every cited
-    /// certificate is recorded. After that the verdict depends only on the
-    /// operation and its causal past, so it is final and deterministic.
+    /// certificate is recorded and in the document's closure. After that the
+    /// verdict depends only on the operation and its causal past, so it is
+    /// final and deterministic.
     ///
     /// Conditions:
     /// * Its signer has `Read` or higher in its signing set (i.e., the predecessor
@@ -2790,7 +2806,7 @@ where
         };
 
         let cited = op.citations();
-        if !self.record_citations(op).await? {
+        if !self.record_citations(op).await? || !self.cites_only_closure(op, doc).await? {
             return Ok(Err(Pending));
         }
 

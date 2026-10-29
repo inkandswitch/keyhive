@@ -1436,3 +1436,20 @@ async fn a_group_admin_can_remove_a_member_from_the_groups_documents() -> TestRe
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn an_operation_citing_a_certificate_outside_its_documents_closure_is_pending() -> TestResult
+{
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let mallory = ctx.individual("mallory").await?;
+    let doc = ctx.doc(&alice, "doc").await?;
+    let other = ctx.doc(&alice, "other").await?;
+    alice.add_member(mallory.id(), doc, Power::Read).await?;
+    let elsewhere = delegation_citation(&alice, kl(other), kl(alice.id())).await?;
+
+    let op = remove_op(&alice, doc, BTreeSet::from([elsewhere])).await;
+    let result = alice.receive_cgka_op(mallory.sign_cgka_op(op).await?).await;
+    assert!(is_pending(&result), "{result:?}");
+    Ok(())
+}
