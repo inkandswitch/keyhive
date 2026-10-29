@@ -232,6 +232,7 @@ pub trait Keyline<F: FutureForm> {
     fn effective_power(&self, subject: Identifier, audience: Identifier) -> Query<'_, F, Option<Power>, Self::Error>;
     fn members(&self, subject: Identifier) -> Query<'_, F, BTreeMap<Identifier, Power>, Self::Error>;
     fn is_live(&self, delegation: Digest<Delegation>) -> Query<'_, F, bool, Self::Error>;
+    fn conveyed_power(&self, delegation: Digest<Delegation>) -> Query<'_, F, Option<Power>, Self::Error>;
     fn subjects(&self) -> Query<'_, F, BTreeSet<Identifier>, Self::Error>;
     fn positive_power(&self, subject: Identifier, audience: Identifier) -> Query<'_, F, Option<Power>, Self::Error>;
     fn closure(&self, subject: Identifier) -> Query<'_, F, Vec<Certificate<Self::RetentionWatermark>>, Self::Error>;
@@ -253,6 +254,7 @@ pub trait Keyline<F: FutureForm> {
 | `effective_power`    | `audience`'s effective power over `subject`: max over live routes of min along each. `None` if unreachable.                     |
 | `members`            | Every `Identifier` other than `subject` itself with a live route to `subject`, with its effective power. The materialized view. |
 | `is_live`            | Whether `delegation` survives evaluation.                                                                                       |
+| `conveyed_power`     | The level a live delegation conveys to its audience over its subject: `cap(h)`. `None` if not live.                             |
 | `subjects`           | The subject of every delegation in the set, live or not: everything the set says something about. Monotone in the set.        |
 | `positive_power`     | `audience`'s power over `subject` with every revocation ignored. Monotone, so a `Some` never goes away; not, on its own, "still authorized". |
 | `closure`            | The subject's [closure](README.md#what-a-replica-must-hold), in id order: what sync sends.                                      |
@@ -317,6 +319,7 @@ Stratum 2 — live pass, negation over stratum 1 only
 - `effective_power(s, a)` is the maximum `l` with `level(s, a, ⊥, l)`; `Some(Admin)` when `a = s`.
 - `members(s)` is every `x ≠ s` with `route(s, x, ⊥)`, paired with its `effective_power`.
 - `is_live(h)` is `live(h)`.
+- `conveyed_power(h)` is `cap(h)` when `live(h)`, else `None`. For an uncovered `h`, `cap(h)` is `min(power, effective_power(s, issuer))`, which is how a backend using the `cap = power` shortcut answers it.
 
 Notes on the program:
 
@@ -575,7 +578,7 @@ _Negative._ A revocation naming an unknown digest is new and changes no answer. 
 - _The store._ `Keyhive` holds a `K: Keyline<F, RetentionWatermark = ContentHeads<T>>` together with the lock that serializes its writes, so that a fork shares both. Every membership read (`members`, transitive members, standing, `reachable_docs`) is a Keyline query, with no conversion at the boundary: `keyhive_core` identifies principals by `keyhive_crypto::identifier::Identifier`, as Keyline does.
 - _Creation._ `generate_group` and `generate_doc` sign the subject's root edges (`Admin` to each creator) with the fresh subject key, then discard it.
 - _Grants._ `add_member` checks the issuer's `effective_power` (refusing a delegation above it, `AddMemberError::Escalation`), signs a `Delegation` with the active signer (an `AsyncSigner`, so WebCrypto keys work), and inserts it.
-- _Revocation._ `revoke_member` revokes each `delegations_to(resource, member)`: every one if the issuer holds `Admin`, otherwise those it issued. Each revocation's `retain` holds the content heads of every held document the resource is or stands over, as the application last set them with `set_content_heads`; a document with none set is left out. A member with no delegation from the resource is refused (`NotADirectMember`): it reaches the resource through a group or document, which is what to revoke. With `retain_all_other_members`, the same batch re-issues from the revoker the delegations the removed member issued, at no more than the revoker's own power (_adoption_). A grant or adoption that would repeat a revoked delegation cites that revocation, and the latest revocation of each re-issue in turn.
+- _Revocation._ `revoke_member` revokes each `delegations_to(resource, member)`: every one if the issuer holds `Admin`, otherwise those it issued. Each revocation's `retain` holds the content heads of every held document the resource is or stands over, as the application last set them with `set_content_heads`; a document with none set is left out. A member with no delegation from the resource is refused (`NotADirectMember`): it reaches the resource through a group or document, which is what to revoke. With `retain_all_other_members`, the same batch re-issues from the revoker the delegations the removed member issued, at the level each conveyed, capped by the revoker's power (_adoption_). A grant or adoption that would repeat a revoked delegation cites that revocation, and the latest revocation of each re-issue in turn.
 - _Sync._ Events carry `Certificate<ContentHeads<T>>`; ingest is `verify`, then `insert`.
 - _BeeKEM._ A document's readers are its Keyline members at `Read` or above whose prekeys this replica holds. Every local write reconciles each held document's tree with its readers under the insert lock: an add for each new reader whose prekeys this replica holds, a remove for each lost reader the tree holds, each citing the certificate it routes through. A CGKA operation is accepted only from a principal with the standing it needs. A replica holds a document (a `DocumentState`) only once its creation or invitation has merged; until then, the operations of a document it can read merge into a tree awaiting the invitation, and an operation for a document it cannot read, or that arrives before its predecessors, waits in the pending queue. A relay is sent no CGKA operations: to it a document is a Keyline subject.
 

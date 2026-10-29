@@ -14,8 +14,12 @@ use keyhive_core::{
     principal::document::id::DocumentId,
     test_utils::{EventKind, Instance, TestContext, TestResult as Result},
 };
-use keyhive_crypto::digest::Digest;
-use keyline::power::Power::{Read, Relay};
+use keyhive_crypto::{digest::Digest, identifier::Identifier};
+use keyline::{
+    certificate::Certificate,
+    delegation::Delegation,
+    power::Power::{Admin, Read, Relay},
+};
 
 /// The digests of the CGKA operations `who` holds for `doc`, if any.
 async fn held_ops(who: &Instance, doc: DocumentId) -> Option<HashSet<Digest<CgkaOperation>>> {
@@ -285,5 +289,33 @@ async fn a_relay_promoted_to_reader_joins_from_what_it_holds() -> Result<()> {
     );
     ctx.give_content(&relay, &ct).await?;
     assert!(relay.can_decrypt_content(design_doc, &ct).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn adoption_from_a_removed_relay_conveys_no_more_than_relay() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let relay = ctx.individual("relay").await?;
+    let admitted = ctx.individual("admitted").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(relay.id(), design_doc, Relay).await?;
+    ctx.sync_all_unsent().await?;
+    let to_admitted = relay
+        .sign_certificate(&Delegation::new(
+            Identifier::from(admitted.id()),
+            Identifier::from(design_doc),
+            Admin,
+        ))
+        .await?;
+    alice
+        .receive_certificate(Certificate::Delegation(to_admitted.signed().clone()))
+        .await?;
+
+    alice.revoke_member(relay.id(), true, design_doc).await?;
+    assert_eq!(
+        alice.access_for_doc(admitted.id(), design_doc).await?,
+        Some(Relay)
+    );
     Ok(())
 }
