@@ -1,18 +1,21 @@
 //! Validating a CGKA update path.
 
 use beekem::{
+    encrypted::encrypt_secret,
     id::TreeId,
     operation::{CgkaChange, CgkaOperation},
     secret_store::SecretStore,
     tree::PathChange,
+    treemath::{LeafNodeIndex, TreeNodeIndex},
 };
 use keyhive_core::{
     crypto::digest::Digest,
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext},
 };
-use keyhive_crypto::share_key::ShareKey;
+use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use keyline::power::Power::Read;
+use rand::rngs::OsRng;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use testresult::TestResult;
 
@@ -71,11 +74,16 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
     let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
     let mut new_path = an_update(&alice, design_doc).await;
 
+    // One node, well formed so that it is not denied, at an index off the
+    // direct path of alice's leaf.
     let junk = own_prekey(&alice, design_doc).await;
-    new_path.path = vec![7u32, 9]
-        .into_iter()
-        .map(|i| (i, SecretStore::new(junk, junk, BTreeMap::new())))
-        .collect();
+    let leaf = TreeNodeIndex::from(LeafNodeIndex::new(new_path.leaf_idx));
+    let junk_sk = ShareSecretKey::generate(&mut OsRng);
+    let entry = encrypt_secret(TreeId::from(design_doc), junk_sk, &junk_sk, &junk)?;
+    new_path.path = vec![(
+        7,
+        SecretStore::new(junk, junk, BTreeMap::from([(leaf, entry)])),
+    )];
     let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),
         predecessors: cgka_heads(&bob, design_doc).await,

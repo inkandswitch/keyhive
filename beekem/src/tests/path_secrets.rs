@@ -2,15 +2,17 @@
 
 use crate::{
     cgka::NoImplicitRemoves,
+    collections::Set,
     encrypted::encrypt_secret,
     error::CgkaError,
     keys::ShareKeyMap,
     operation::{CgkaChange, CgkaOperation},
+    secret_store::SecretStore,
     test_utils::Group,
     tree::PathChange,
-    treemath::{LeafNodeIndex, TreeNodeIndex},
+    treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex},
 };
-use alloc::sync::Arc;
+use alloc::{collections::BTreeMap, sync::Arc};
 use future_form::Local;
 use keyhive_crypto::{share_key::ShareSecretKey, verified::Verified};
 use rand::{rngs::StdRng, SeedableRng};
@@ -231,4 +233,43 @@ async fn an_update_cut_short_keeping_its_leaf_key_converges_with_a_concurrent_on
 
     group.check("after an update cut short and a concurrent one");
     group.assert_trees_match_replay("after an update cut short and a concurrent one");
+}
+
+/// The path of an honest rotation in a group of four, which has two nodes.
+async fn honest_path(rng: &mut StdRng) -> PathChange {
+    let mut group = Group::<NoImplicitRemoves>::new(4, rng).await;
+    group.settle(0, rng).await;
+    let op = group.rotate(0, rng).await;
+    let CgkaChange::Update { new_path, .. } = &op.payload().change else {
+        unreachable!("a rotation is an update")
+    };
+    (**new_path).clone()
+}
+
+#[tokio::test]
+async fn a_path_node_without_an_entry_for_its_encrypting_child_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0003);
+    let mut path = honest_path(&mut rng).await;
+    let first = TreeNodeIndex::from(InnerNodeIndex::new(path.path[0].0));
+    path.path[1]
+        .1
+        .head_mut()
+        .sk
+        .remove(&first)
+        .expect("a node has an entry for the child that encrypted it");
+
+    assert!(!path.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_node_with_two_versions_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0004);
+    let mut path = honest_path(&mut rng).await;
+    let stranger = ShareSecretKey::generate(&mut rng).share_key();
+    path.path[0].1.merge(
+        &SecretStore::new(stranger, stranger, BTreeMap::new()),
+        &Set::new(),
+    );
+
+    assert!(!path.is_well_formed());
 }
