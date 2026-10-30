@@ -105,6 +105,11 @@ pub struct Cgka<M> {
     /// predecessor secrets chain.
     pub(crate) unchained_updates: Set<Digest<CgkaOperation>>,
 
+    /// Updates which omitted members, causing nodes to be blanked during
+    /// omission check. A concurrent operation in the same batch as one of
+    /// these is replayed rather than merged.
+    blanked_updates: Set<Digest<CgkaOperation>>,
+
     /// For determining when members must be removed in light of new
     /// citations from an operation.
     implicit_removes_protocol: M,
@@ -121,6 +126,9 @@ impl<M, N> PartialEq<Cgka<N>> for Cgka<M> {
             pending_replay,
             root_secrets,
             unchained_updates,
+            // A replay and a live merge of the same batch can record
+            // different updates here while building the same tree.
+            blanked_updates: _,
             implicit_removes_protocol: _,
         } = self;
         *doc_id == other.doc_id
@@ -147,6 +155,8 @@ impl<M> Hash for Cgka<M> {
             pending_replay,
             root_secrets,
             unchained_updates,
+            // Left out of equality, so left out here.
+            blanked_updates: _,
             implicit_removes_protocol: _,
         } = self;
         doc_id.hash(state);
@@ -183,6 +193,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             pending_replay: false,
             root_secrets: RootSecrets::default(),
             unchained_updates: Set::new(),
+            blanked_updates: Set::new(),
             implicit_removes_protocol,
         }
     }
@@ -203,6 +214,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             pending_replay: _,
             root_secrets,
             unchained_updates,
+            blanked_updates,
             implicit_removes_protocol: _,
         } = self;
         let pending_replay = !ops_graph.cgka_op_heads.is_empty();
@@ -215,6 +227,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             pending_replay,
             root_secrets,
             unchained_updates,
+            blanked_updates,
             implicit_removes_protocol: protocol,
         }
     }
@@ -747,10 +760,11 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
     /// Merges concurrent [`CgkaOperation`]. Returns `Ok(true)` if merge is successful.
     ///
     /// If we receive a concurrent add or remove, or a concurrent update that a
-    /// replay would place in the same batch as one, we add it to our ops graph
-    /// but don't apply it yet. Once anything is recorded this way, every later
-    /// concurrent operation is recorded too until the next replay. Any other
-    /// concurrent update is merged into the tree immediately.
+    /// replay would place in the same batch as one or as an update whose nodes
+    /// were blanked for omitting a member, we add it to our ops graph but don't
+    /// apply it yet. Once anything is recorded this way, every later concurrent
+    /// operation is recorded too until the next replay. Any other concurrent
+    /// update is merged into the tree immediately.
     ///
     /// Returns [`CgkaError::WrongDocument`] if `op` is for a different document.
     #[instrument(skip_all)]
@@ -768,9 +782,14 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         let predecessors = op.payload().predecessors();
         let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
         if is_concurrent {
+            // A replay applies every update in a batch before blanking any, so
+            // merging `op` after an update in its batch was blanked can build
+            // a different tree.
             self.pending_replay = self.pending_replay
                 || op.payload().is_membership_change()
-                || self.ops_graph.batch_has_membership_change(&predecessors)?;
+                || self.ops_graph.batch_has(&predecessors, |hash, op| {
+                    op.is_membership_change() || self.blanked_updates.contains(hash)
+                })?;
             if self.pending_replay {
                 self.record_op(&op)?;
             } else {
@@ -792,18 +811,19 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         self.ops_graph.contains_predecessors(preds)
     }
 
-    /// Apply `op`. If it is a [`CgkaChange::Update`], record the
-    /// corresponding root secret.
+    /// Apply `op`. If it is a [`CgkaChange::Update`], blank any node it wrote
+    /// that omits a member, then record the tree's root secret.
     #[instrument(skip_all)]
     pub(crate) fn apply_operation_and_record_root_secret(
         &mut self,
         op: Arc<Verified<CgkaOperation>>,
     ) -> Result<(), CgkaError> {
         let is_update = op.payload().is_update();
-        if !self.apply_operation_to_tree(op)? {
+        if !self.apply_operation_to_tree(op.clone())? {
             return Ok(());
         }
         if is_update {
+            self.blank_nodes_omitted_by(&op);
             // Record it while the tree still has it. Deriving it later would
             // mean rebuilding the tree from history.
             self.record_tree_root_secret();
@@ -877,9 +897,10 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         Ok(())
     }
 
-    /// Apply one [`CgkaBatch`], resolving concurrent membership changes in it.
-    /// If `cited` is provided, members it does not entitle are removed together
-    /// with the batch's removes.
+    /// Apply one [`CgkaBatch`], resolving concurrent membership changes in it,
+    /// then blank any node its updates wrote that omits a member. If `cited`
+    /// is provided, members it does not entitle are removed together with the
+    /// batch's removes.
     fn apply_batch(
         &mut self,
         batch: &CgkaBatch,
@@ -894,6 +915,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 let demoted = self.non_members(cited)?;
                 self.remove_demoted_members(demoted);
             }
+            self.blank_nodes_omitted_by_batch(batch);
             return Ok(());
         }
 
@@ -923,24 +945,34 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         }
         self.tree
             .sort_leaves_and_blank_paths_for_concurrent_membership_changes(added_ids, removed_ids);
-        // Blank any node written by an update in this batch that a member of
-        // the merged tree cannot decrypt because the node's encryptions omit
-        // a node on that member's path.
-        self.tree.blank_nodes_omitting_a_resolution_node(
-            batch
-                .iter()
-                .filter_map(|op| match &op.payload().change {
-                    CgkaChange::Update { new_path, .. } => Some(new_path),
-                    _ => None,
-                })
-                .flat_map(|new_path| {
-                    new_path
-                        .path
-                        .iter()
-                        .map(|(idx, _)| InnerNodeIndex::new(*idx))
-                }),
-        );
+        self.blank_nodes_omitted_by_batch(batch);
         Ok(())
+    }
+
+    /// Blank any node written by an update in `batch` that a member of the
+    /// merged tree cannot decrypt because the node's encryptions omit a node on
+    /// that member's path. This runs once the whole batch is applied so the
+    /// result does not depend on the order of its concurrent operations.
+    fn blank_nodes_omitted_by_batch(&mut self, batch: &CgkaBatch) {
+        for op in batch.iter() {
+            self.blank_nodes_omitted_by(op);
+        }
+    }
+
+    /// Blank any node `op` wrote that omits a node in its non-encrypting
+    /// child's resolution. Record `op` in [`Self::blanked_updates`] if
+    /// a node was blanked. No-op if `op` is not an update.
+    fn blank_nodes_omitted_by(&mut self, op: &Verified<CgkaOperation>) {
+        let CgkaChange::Update { new_path, .. } = &op.payload().change else {
+            return;
+        };
+        let nodes = new_path
+            .path
+            .iter()
+            .map(|(idx, _)| InnerNodeIndex::new(*idx));
+        if self.tree.blank_nodes_omitting_a_resolution_node(nodes) {
+            self.blanked_updates.insert(op.digest());
+        }
     }
 
     /// Decrypt the current tree's root secret as the owner.
@@ -1303,6 +1335,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         self.tree = other.tree.clone();
         self.owner_sks.extend(&other.owner_sks);
         self.merge_root_secrets(&other.root_secrets);
+        self.blanked_updates = other.blanked_updates.clone();
         self.pending_replay = other.pending_replay;
     }
 }

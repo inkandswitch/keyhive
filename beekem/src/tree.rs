@@ -630,16 +630,19 @@ impl BeeKem {
     }
 
     /// Blank each of `nodes` (and its path) that omits a resolution
-    /// node.
+    /// node. Returns whether any node was blanked.
     pub(crate) fn blank_nodes_omitting_a_resolution_node(
         &mut self,
         nodes: impl IntoIterator<Item = InnerNodeIndex>,
-    ) {
+    ) -> bool {
+        let mut blanked = false;
         for idx in nodes {
             if self.omits_a_resolution_node(idx) {
                 self.blank_path(idx);
+                blanked = true;
             }
         }
+        blanked
     }
 
     /// Whether the node at `idx` has a single version whose encryptions omit a
