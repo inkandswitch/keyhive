@@ -673,18 +673,17 @@ impl CgkaOperationGraph {
     }
 
     /// Whether a replay would put an operation with `predecessors` in the same
-    /// batch as an add or remove. `predecessors` must all be in the graph.
+    /// batch as an operation for which `matches` is true. `predecessors` must
+    /// all be in the graph and must not be empty. An operation without
+    /// predecessors is an add, which a caller checks for itself.
     ///
     /// Returns [`CgkaError::OperationNotFound`] if an operation it reaches is not
     /// in the graph, and [`CgkaError::DepthNotFound`] if one has no recorded depth.
-    pub(crate) fn batch_has_membership_change(
+    pub(crate) fn batch_has(
         &self,
         predecessors: &Set<Digest<CgkaOperation>>,
+        matches: impl Fn(&Digest<CgkaOperation>, &CgkaOperation) -> bool,
     ) -> Result<bool, CgkaError> {
-        if predecessors.is_empty() {
-            // A root must itself be an add.
-            return Ok(true);
-        }
         if self.heads_contained_in(predecessors) {
             // Every operation in the graph is a head or an ancestor of one. A
             // successor of every head is deeper than all of them and would be
@@ -708,7 +707,7 @@ impl CgkaOperationGraph {
                 .cgka_ops
                 .get(&hash)
                 .ok_or(CgkaError::OperationNotFound)?;
-            if op.payload().is_membership_change() {
+            if matches(&hash, op.payload()) {
                 return Ok(true);
             }
             for pred in &op.payload().predecessors {
@@ -1200,6 +1199,10 @@ mod causal_graph_tests {
         assert_eq!(graph, before, "a rejected operation changed the graph");
     }
 
+    fn is_membership_change(_: &Digest<CgkaOperation>, op: &CgkaOperation) -> bool {
+        op.is_membership_change()
+    }
+
     async fn signed_update(
         signer: &MemorySigner,
         doc_id: TreeId,
@@ -1222,23 +1225,6 @@ mod causal_graph_tests {
     }
 
     #[tokio::test]
-    async fn an_operation_with_no_predecessors_shares_a_batch_with_the_first_add() {
-        let signer = MemorySigner::generate(&mut rand::thread_rng());
-        let doc_id = TreeId::from(&signer.0);
-        let mut graph = CgkaOperationGraph::new();
-        graph
-            .add_op(&signed_add(&signer, doc_id, 0, &[]).await)
-            .expect("a root has no predecessors");
-
-        assert!(
-            graph
-                .batch_has_membership_change(&Set::new())
-                .expect("a valid graph"),
-            "a second root was not put in the batch of the first add"
-        );
-    }
-
-    #[tokio::test]
     async fn a_second_root_puts_later_operations_in_its_batch() {
         // first_add
         //    |       second_add
@@ -1255,7 +1241,7 @@ mod causal_graph_tests {
 
         assert!(
             graph
-                .batch_has_membership_change(&Set::from_iter([update.digest()]))
+                .batch_has(&Set::from_iter([update.digest()]), is_membership_change)
                 .expect("a valid graph"),
             "an operation after the update was not put in a batch with the second root"
         );
@@ -1280,7 +1266,7 @@ mod causal_graph_tests {
         graph.depths.clear();
         assert!(
             matches!(
-                graph.batch_has_membership_change(&Set::from_iter([update.digest()])),
+                graph.batch_has(&Set::from_iter([update.digest()]), is_membership_change),
                 Err(CgkaError::DepthNotFound)
             ),
             "a graph missing a depth was not reported"
@@ -1317,7 +1303,7 @@ mod causal_graph_tests {
 
         assert!(
             !graph
-                .batch_has_membership_change(&graph.cgka_op_heads)
+                .batch_has(&graph.cgka_op_heads, is_membership_change)
                 .expect("a valid graph"),
             "an operation after every head was put in a batch with an add"
         );
