@@ -2764,7 +2764,8 @@ where
     ///   higher in the add's certificate set.
     /// * A remove does not list any specific members. Its effect comes only
     ///   from the removals implied by its citations.
-    /// * An update rotates its signer's own key in the CGKA group.
+    /// * An update rotates its signer's own key in the CGKA group and its
+    ///   path is well-formed.
     async fn cgka_op_is_authorized(
         &self,
         signed_op: &Verified<CgkaOperation>,
@@ -2832,7 +2833,11 @@ where
 
         match &op.change {
             // The leaf an update rotates is its signer's.
-            CgkaChange::Update { .. } => {}
+            CgkaChange::Update { new_path, .. } => {
+                if !new_path.is_well_formed() {
+                    return Ok(Err(Denied));
+                }
+            }
             CgkaChange::Add {
                 added_id,
                 pk,

@@ -88,6 +88,21 @@ impl StreamDecode for PathChange {
 }
 
 impl PathChange {
+    /// Whether every node on the path has one version, with an entry under the
+    /// child it was encrypted from.
+    pub fn is_well_formed(&self) -> bool {
+        let leaf = TreeNodeIndex::from(LeafNodeIndex::new(self.leaf_idx));
+        let children = core::iter::once(leaf).chain(
+            self.path
+                .iter()
+                .map(|(idx, _)| TreeNodeIndex::from(InnerNodeIndex::new(*idx))),
+        );
+        self.path.iter().zip(children).all(|((_, node), child)| {
+            node.non_conflict_version()
+                .is_some_and(|version| version.sk.contains_key(&child))
+        })
+    }
+
     /// Attempt to decrypt the root secret using only the information in this path
     /// (without the complete tree state corresponding to this update) and the secrets
     /// in `sks`.
@@ -390,6 +405,7 @@ impl BeeKem {
             parent_idx = treemath::parent(child_idx);
         }
 
+        debug_assert!(new_path.is_well_formed());
         self.insert_leaf_at(leaf_idx, id, NodeKey::ShareKey(pk));
         for (idx, secret_store) in &new_path.path {
             self.insert_inner_node_at(InnerNodeIndex::new(*idx), secret_store.clone());
