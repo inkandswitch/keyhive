@@ -23,6 +23,8 @@ use keyhive_crypto::{digest::Digest, identifier::Identifier};
 pub struct Evaluation {
     pub live: BTreeSet<Digest<Delegation>>,
     pub levels: Levels,
+    /// Every delegation's cap, meaningful only for live ones.
+    pub cap: BTreeMap<Digest<Delegation>, Power>,
 }
 
 struct Facts {
@@ -194,5 +196,5 @@ pub fn evaluate<W>(set: &CertSet<W>) -> Evaluation {
     let levels = level(&f, &none, &|x| live.contains(x), &|x, d| {
         cap[x].min(d.power)
     });
-    Evaluation { live, levels }
+    Evaluation { live, levels, cap }
 }

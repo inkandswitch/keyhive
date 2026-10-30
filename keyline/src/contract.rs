@@ -159,6 +159,18 @@ pub trait Keyline<F: FutureForm> {
     /// audience has not revoked it. `false` for digests not in the set.
     fn is_live(&self, delegation: Digest<Delegation>) -> Query<'_, F, bool, Self::Error>;
 
+    /// The level `delegation` conveys to its audience over its subject, which
+    /// is its cap in stratum 2 of `design/keyline/implementation.md`. Returns
+    /// `None` if the delegation is not live or not in the set.
+    ///
+    /// It is at most the delegation's `power` and its issuer's effective power
+    /// over the subject. A revocation covering the delegation can lower it
+    /// further.
+    fn conveyed_power(
+        &self,
+        delegation: Digest<Delegation>,
+    ) -> Query<'_, F, Option<Power>, Self::Error>;
+
     /// `audience`'s power over `subject` in the positive graph: as
     /// [`Keyline::effective_power`], but with every revocation ignored.
     ///

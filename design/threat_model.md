@@ -88,7 +88,7 @@ A revokes B while B concurrently revokes A; or a revocation cuts off delegations
 - Revocation coverage is computed on the positive graph (every revocation ignored), so no revocation can disable another and the result does not depend on delivery order.
 - A third party's revocation breaks its target only on routes through the issuer's admin reach; the issuer or audience of a certificate may break it on every route. An edge above your admin reach never routes through it, so seniority needs no rule. `keyhive_core` signs a revocation only when its issuer holds `Admin`, or issued the delegation itself.
 - Concurrent revocations by peers both stand ([permanence][keyline permanence]); the role's parent repairs by rotation.
-- Cascades are implicit: a delegation dies when its issuer loses standing, and revives if the issuer regains it. `revoke_member` with `retain_all_other_members` re-issues the removed member's delegations from the revoker, at no more than the revoker's power (adoption), so the members they admitted keep their access.
+- Cascades are implicit: a delegation dies when its issuer loses standing, and revives if the issuer regains it. `revoke_member` with `retain_all_other_members` re-issues the removed member's delegations from the revoker, at the level each conveyed, capped by the revoker's power (adoption), so the members they admitted keep their access.
 - Revoked certificates are kept: the set only grows.
 
 ### T5. Back-dating

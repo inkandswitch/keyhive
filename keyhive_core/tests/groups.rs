@@ -2,6 +2,7 @@
 //! extend or cut one, asked of Keyline through `Keyhive`.
 
 use keyhive_core::{
+    content::heads::ContentHeads,
     principal::group::{id::GroupId, RevokeMemberError},
     test_utils::{Instance, TestContext, TestError, TestResult as Result},
 };
@@ -10,6 +11,7 @@ use keyline::{
     certificate::Certificate,
     delegation::Delegation,
     power::Power::{self, Admin, Edit, Read},
+    revocation::Revocation,
 };
 use std::collections::BTreeMap;
 
@@ -570,6 +572,48 @@ async fn adoption_reissues_past_an_earlier_revocation() -> Result<()> {
     assert_eq!(
         members(&alice, g1).await?.get(&carol.id().into()),
         Some(&Read)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn adoption_reissues_a_clamped_delegation_at_its_clamped_level() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let dan = ctx.individual("dan").await?;
+    let eve = ctx.individual("eve").await?;
+    let frank = ctx.individual("frank").await?;
+    let mods = ctx.group(&alice, "mods").await?;
+    let editors = ctx.group(&alice, "editors").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(mods, design_doc, Edit).await?;
+    alice.add_member(editors, design_doc, Edit).await?;
+    alice.add_member(dan.id(), mods, Admin).await?;
+    alice.add_member(eve.id(), design_doc, Read).await?;
+    ctx.sync_all_unsent().await?;
+    dan.add_member(eve.id(), mods, Edit).await?;
+    ctx.sync_all_unsent().await?;
+    let to_frank = eve
+        .add_member(frank.id(), design_doc, Edit)
+        .await?
+        .delegation;
+    ctx.sync_all_unsent().await?;
+    let clamp = dan
+        .sign_certificate(&Revocation::<ContentHeads<[u8; 32]>>::new(
+            to_frank.digest(),
+        ))
+        .await?;
+    alice
+        .receive_certificate(Certificate::Revocation(clamp.signed().clone()))
+        .await?;
+    // Frank's own level is now Edit, so only what eve's grant conveyed gives Read.
+    alice.add_member(frank.id(), editors, Edit).await?;
+
+    alice.revoke_member(eve.id(), true, design_doc).await?;
+    alice.revoke_member(frank.id(), false, editors).await?;
+    assert_eq!(
+        alice.access_for_doc(frank.id(), design_doc).await?,
+        Some(Read)
     );
     Ok(())
 }
