@@ -82,6 +82,32 @@ jobs:
           path: keyhive_wasm/playwright-report/
           retention-days: 7
 
+  # The exact derivation release-js.yml publishes from: wasm-bodge build,
+  # `npm pack`, then a smoke test of the packed tarball's entry points. Run
+  # here so a broken package fails the PR instead of the release.
+  js-package:
+    name: keyhive-js (npm tarball)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v21
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        with:
+          name: inkandswitch
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Build and smoke-test the npm package
+        run: nix build .#keyhive-js --no-update-lock-file --print-build-logs
+
   # Mutation testing, scoped to the PR's changed code (full-workspace runs
   # are hours; `nix run .#ci-mutants` does the deliberate full sweep
   # locally). A missed mutant in code you touched fails the job.

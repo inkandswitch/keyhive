@@ -144,6 +144,19 @@
           };
         };
 
+        # Tested npm tarball: `nix build .#keyhive-js`. The same derivation
+        # runs on PRs (ci.yml) and at release (release-js.yml).
+        keyhive-js = pkgs.callPackage ./nix/js-package.nix {
+          inherit wasm-bindgen-cli wasm-bodge;
+          rustPlatform = wasm-bodge-rustPlatform;
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+            outputHashes = {
+              "wasm-tracing-2.1.0" = "sha256-SrP7HdfzrA/FAgeKZzC/ltihvR6I3ETz+wg8kuPQGrg=";
+            };
+          };
+        };
+
         format-pkgs = with pkgs; [
           alejandra
           nixpkgs-fmt
@@ -272,15 +285,20 @@
 
           # Build with the `rust-version` from Cargo.toml (${msrv}) so the
           # advertised MSRV is real. `--all-targets` compiles the suites
-          # without running them. Cargo.lock is not committed, so resolution
-          # happens fresh: tell cargo to prefer dependency versions compatible
-          # with the MSRV rather than failing on a newer release.
+          # without running them. Library consumers resolve fresh rather than
+          # using our committed Cargo.lock, so do the same here: re-resolve,
+          # preferring dependency versions compatible with the MSRV, and put
+          # the committed lockfile back afterwards.
           ci-msrv = pkgs.writeShellApplication {
             name = "keyhive-ci-msrv";
-            runtimeInputs = [ msrv-toolchain ];
+            runtimeInputs = [ msrv-toolchain pkgs.coreutils ];
             text = ''
               export CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback
+              committed_lock="$(mktemp)"
+              cp Cargo.lock "$committed_lock"
+              trap 'mv "$committed_lock" Cargo.lock' EXIT
               set -x
+              cargo generate-lockfile
               cargo --version
               cargo check --workspace --all-targets --features test_utils
               cargo check --target wasm32-unknown-unknown -p keyhive_wasm
@@ -501,6 +519,8 @@
               --crate-path "$WORKSPACE_ROOT/keyhive_wasm" \
               --package-json "$WORKSPACE_ROOT/keyhive_wasm/package.json" \
               --out-dir "$WORKSPACE_ROOT/keyhive_wasm/dist" \
+              --release-profile wasm-release \
+              --debug-profile wasm-debug \
               --panic abort \
               "$@"
             # wasm-bodge rewrites package.json without a trailing newline.
@@ -547,6 +567,8 @@
         ];
 
       in {
+        packages.keyhive-js = keyhive-js;
+
         devShells.default = pkgs.mkShell {
           name = "keyhive";
 

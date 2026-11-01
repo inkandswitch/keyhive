@@ -62,13 +62,45 @@
       "import": "./dist/esm/wasm-base64.js",
       "require": "./dist/cjs/wasm-base64.cjs"
     },
-    "./iife": "./dist/iife/index.js"
+    "./iife": "./dist/iife/index.js",
+    "./debug": {
+      "types": "./dist/index.d.ts",
+      "workerd": {
+        "import": "./dist/esm/debug-workerd.js",
+        "require": "./dist/cjs/debug-web.cjs"
+      },
+      "node": {
+        "import": "./dist/esm/debug-node.js",
+        "require": "./dist/cjs/debug-node.cjs"
+      },
+      "browser": {
+        "import": "./dist/esm/debug-bundler.js",
+        "require": "./dist/cjs/debug-web.cjs"
+      },
+      "import": "./dist/esm/debug-web.js",
+      "require": "./dist/cjs/debug-web.cjs"
+    },
+    "./debug/slim": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/esm/debug-slim.js",
+      "require": "./dist/cjs/debug-slim.cjs"
+    },
+    "./debug/wasm": "./dist/keyhive-debug.wasm",
+    "./debug/wasm-base64": {
+      "import": "./dist/esm/debug-wasm-base64.js",
+      "require": "./dist/cjs/debug-wasm-base64.cjs"
+    },
+    "./debug/iife": "./dist/iife/debug.js"
   },
   "sideEffects": [
     "./dist/esm/bundler.js",
     "./dist/esm/node.js",
     "./dist/esm/web.js",
-    "./dist/esm/workerd.js"
+    "./dist/esm/workerd.js",
+    "./dist/esm/debug-bundler.js",
+    "./dist/esm/debug-node.js",
+    "./dist/esm/debug-web.js",
+    "./dist/esm/debug-workerd.js"
   ],
   "scripts": {
     "build": "wasm-bodge build --panic abort",
