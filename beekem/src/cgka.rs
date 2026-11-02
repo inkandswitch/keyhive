@@ -22,7 +22,7 @@ use crate::{
     pcs_key::PcsKey,
     root_secrets::{RootSecrets, VerifiedRootSecret},
     transact::{Fork, Merge},
-    tree::BeeKem,
+    tree::{ApplyPathOutcome, BeeKem},
     treemath::InnerNodeIndex,
 };
 use alloc::{boxed::Box, collections::BTreeSet, sync::Arc, vec::Vec};
@@ -105,9 +105,10 @@ pub struct Cgka<M> {
     /// predecessor secrets chain.
     pub(crate) unchained_updates: Set<Digest<CgkaOperation>>,
 
-    /// Updates which omitted members, causing nodes to be blanked during
-    /// omission check. A concurrent operation in the same batch as one of
-    /// these is replayed rather than merged.
+    /// Updates which caused nodes to be blanked, either because they omitted
+    /// members or because their path was not valid from their author's leaf.
+    /// A concurrent operation in the same batch as one of these is replayed
+    /// rather than merged.
     blanked_updates: Set<Digest<CgkaOperation>>,
 
     /// For determining when members must be removed in light of new
@@ -762,10 +763,10 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
     ///
     /// If we receive a concurrent add or remove, or a concurrent update that a
     /// replay would place in the same batch as one or as an update whose nodes
-    /// were blanked for omitting a member, we add it to our ops graph but don't
-    /// apply it yet. Once anything is recorded this way, every later concurrent
-    /// operation is recorded too until the next replay. Any other concurrent
-    /// update is merged into the tree immediately.
+    /// were blanked, we add it to our ops graph but don't apply it yet. Once
+    /// anything is recorded this way, every later concurrent operation is
+    /// recorded too until the next replay. Any other concurrent update is
+    /// merged into the tree immediately.
     ///
     /// Returns [`CgkaError::WrongDocument`] if `op` is for a different document.
     #[instrument(skip_all)]
@@ -861,7 +862,10 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 }
             }
             CgkaChange::Update { ref new_path, .. } => {
-                self.tree.apply_path(MemberId::from(op.issuer()), new_path);
+                let outcome = self.tree.apply_path(MemberId::from(op.issuer()), new_path);
+                if outcome == ApplyPathOutcome::BlankedPath {
+                    self.blanked_updates.insert(op.digest());
+                }
             }
         }
         self.record_op(&op)?;
@@ -901,7 +905,10 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
     /// Apply one [`CgkaBatch`], resolving concurrent membership changes in it,
     /// then blank any node its updates wrote that omits a member. If `cited`
     /// is provided, members it does not entitle are removed together with the
-    /// batch's removes.
+    /// batch's removes. In a batch of only updates, it also blanks the path of
+    /// each update that was not valid from its author's leaf. A batch with a
+    /// membership change does not need this, since every replica replays it in
+    /// the same order.
     fn apply_batch(
         &mut self,
         batch: &CgkaBatch,
@@ -911,6 +918,9 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         if batch.len() == 1 || batch.iter().all(|op| op.payload().is_update()) {
             for op in batch.iter() {
                 self.apply_operation_to_tree(op.clone())?;
+            }
+            if batch.len() > 1 {
+                self.blank_invalid_paths_in(batch);
             }
             if let Some(cited) = cited {
                 let demoted = self.non_members(cited)?;
@@ -948,6 +958,17 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             .sort_leaves_and_blank_paths_for_concurrent_membership_changes(added_ids, removed_ids);
         self.blank_nodes_omitted_by_batch(batch);
         Ok(())
+    }
+
+    /// Blank the direct path of each update in `batch` whose path is not valid
+    /// from its author's leaf.
+    fn blank_invalid_paths_in(&mut self, batch: &CgkaBatch) {
+        for op in batch.iter() {
+            if let CgkaChange::Update { new_path, .. } = &op.payload().change {
+                self.tree
+                    .blank_path_if_invalid(MemberId::from(op.issuer()), new_path);
+            }
+        }
     }
 
     /// Blank any node written by an update in `batch` that a member of the

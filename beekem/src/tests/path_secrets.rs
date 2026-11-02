@@ -171,3 +171,64 @@ async fn an_update_leaving_a_member_out_converges_with_a_concurrent_one_in_eithe
     group.check("after an update leaving d out and a concurrent one");
     group.assert_trees_match_replay("after an update leaving d out and a concurrent one");
 }
+
+#[tokio::test]
+async fn an_update_whose_path_is_cut_short_converges_with_concurrent_and_later_updates() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0008);
+    let mut group = Group::new(3, &mut rng).await;
+    group.settle(0, &mut rng).await;
+
+    let cut_short = tampered_update(&mut group, 0, &mut rng, |path, _, _| {
+        path.path.pop();
+    })
+    .await;
+    let by_c = group.rotate(2, &mut rng).await;
+    group.deliver(&cut_short, &[1]);
+    let by_b = group.rotate(1, &mut rng).await;
+    for op in [&cut_short, &by_c, &by_b] {
+        group.broadcast(op);
+    }
+    for replica in &mut group.replicas {
+        replica
+            .replay_if_pending()
+            .expect("no membership is unknown");
+    }
+
+    group.check("after an update cut short, a concurrent update and a later one");
+    group.assert_trees_match_replay(
+        "after an update cut short, a concurrent update and a later one",
+    );
+}
+
+#[tokio::test]
+async fn an_update_cut_short_keeping_its_leaf_key_converges_with_a_concurrent_one() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_000d);
+    let mut group = Group::new(2, &mut rng).await;
+    group.settle(0, &mut rng).await;
+    let leaf_pk = group.replicas[0].owner_leaf_key().expect("a member");
+
+    let cut_short = tampered_update(&mut group, 0, &mut rng, |path, _, _| {
+        path.path.pop();
+        path.leaf_pk = leaf_pk;
+        path.removed_keys.clear();
+    })
+    .await;
+    let by_b = group.rotate(1, &mut rng).await;
+    // A replay applies a batch in digest order, so this order is the
+    // reverse of the one `b`'s replica applies them in.
+    assert!(
+        cut_short.digest() < by_b.digest(),
+        "the seed no longer makes a replay apply the update cut short first"
+    );
+    group.deliver(&cut_short, &[0]);
+    group.broadcast(&by_b);
+    group.broadcast(&cut_short);
+    for replica in &mut group.replicas {
+        replica
+            .replay_if_pending()
+            .expect("no membership is unknown");
+    }
+
+    group.check("after an update cut short and a concurrent one");
+    group.assert_trees_match_replay("after an update cut short and a concurrent one");
+}
