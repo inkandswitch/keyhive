@@ -150,7 +150,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arbitrary",
  "beekem",
@@ -1075,10 +1075,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "keyhive_core"
-version = "0.8.0"
+name = "keyhive_content"
+version = "0.2.0"
 dependencies = [
  "aquamarine",
+ "arbitrary",
+ "blake3",
+ "bolero",
+ "chacha20poly1305",
+ "derivative",
+ "derive-where",
+ "dupe",
+ "ed25519-dalek",
+ "future_form",
+ "futures",
+ "keyhive_codec",
+ "keyhive_crypto",
+ "rand 0.8.8",
+ "test-utils",
+ "testresult",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "keyhive_core"
+version = "0.10.0"
+dependencies = [
  "arbitrary",
  "async-lock",
  "beekem",
@@ -1096,6 +1120,7 @@ dependencies = [
  "hex",
  "imbl",
  "keyhive_codec",
+ "keyhive_content",
  "keyhive_core",
  "keyhive_crypto",
  "keyline",
@@ -1120,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "keyhive_crypto"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arbitrary",
  "blake3",
@@ -1143,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "keyhive_wasm"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "base64-simd",
  "beekem",
@@ -1157,6 +1182,7 @@ dependencies = [
  "getrandom 0.2.17",
  "js-sys",
  "keyhive_codec",
+ "keyhive_content",
  "keyhive_core",
  "keyhive_crypto",
  "keyline",
@@ -1175,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "keyline"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arbitrary",
  "bijoux",
@@ -1193,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "keyline_memory"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-lock",
  "divan",
