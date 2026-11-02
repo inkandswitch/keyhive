@@ -25,6 +25,8 @@ use treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex, TreeSize};
 
 pub type InnerNode = SecretStore;
 
+const TREE_INDEX_LIMIT: u32 = 1 << 31;
+
 /// A PathChange represents an update along a path from a leaf to the root.
 /// This includes both the new public keys for each node and the keys that have
 /// been removed as part of this change.
@@ -88,19 +90,39 @@ impl StreamDecode for PathChange {
 }
 
 impl PathChange {
-    /// Whether every node on the path has one version, with an entry under the
-    /// child it was encrypted from.
+    /// Whether the path's structure is well-formed.
+    ///
+    /// Every node on the path has one version, encrypted by the new key of the
+    /// child below it, with an entry under that child. No new node key is one of
+    /// the keys the update removes or repeats any other new key. Every index is
+    /// below 2^31, past which it has no tree index.
+    ///
+    /// This does not check that the entries were encrypted with the leaf key or
+    /// that they decrypt to the node keys.
     pub fn is_well_formed(&self) -> bool {
-        let leaf = TreeNodeIndex::from(LeafNodeIndex::new(self.leaf_idx));
-        let children = core::iter::once(leaf).chain(
-            self.path
-                .iter()
-                .map(|(idx, _)| TreeNodeIndex::from(InnerNodeIndex::new(*idx))),
-        );
-        self.path.iter().zip(children).all(|((_, node), child)| {
-            node.non_conflict_version()
-                .is_some_and(|version| version.sk.contains_key(&child))
-        })
+        if self.leaf_idx >= TREE_INDEX_LIMIT
+            || self.path.iter().any(|(idx, _)| *idx >= TREE_INDEX_LIMIT)
+        {
+            return false;
+        }
+        let mut new_keys = BTreeSet::from([self.leaf_pk]);
+        let mut encrypter = self.leaf_pk;
+        let mut child = TreeNodeIndex::Leaf(LeafNodeIndex::new(self.leaf_idx));
+        for (idx, node) in &self.path {
+            let Some(version) = node.non_conflict_version() else {
+                return false;
+            };
+            if version.encrypter_pk != encrypter
+                || !version.sk.contains_key(&child)
+                || self.removed_keys.contains(&version.pk)
+                || !new_keys.insert(version.pk)
+            {
+                return false;
+            }
+            encrypter = version.pk;
+            child = TreeNodeIndex::Inner(InnerNodeIndex::new(*idx));
+        }
+        true
     }
 
     /// Attempt to decrypt the root secret using only the information in this path

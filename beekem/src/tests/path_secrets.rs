@@ -273,3 +273,59 @@ async fn a_path_node_with_two_versions_is_malformed() {
 
     assert!(!path.is_well_formed());
 }
+
+#[tokio::test]
+async fn a_path_node_whose_encrypter_is_not_the_child_below_it_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0006);
+    let honest = honest_path(&mut rng).await;
+    let sibling = TreeNodeIndex::from(LeafNodeIndex::new(1));
+    let mut at_first = honest.clone();
+    let version = at_first.path[0].1.head_mut();
+    version.encrypter_pk = version.sk[&sibling].paired_pk;
+    let mut at_second = honest.clone();
+    at_second.path[1].1.head_mut().encrypter_pk = honest.leaf_pk;
+
+    assert!(!at_first.is_well_formed());
+    assert!(!at_second.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_node_whose_key_the_update_removes_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0007);
+    let mut path = honest_path(&mut rng).await;
+    let root = path.path[1].1.versions().head.pk;
+    path.removed_keys.insert(root);
+
+    assert!(!path.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_node_whose_key_repeats_another_new_key_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0008);
+    let mut path = honest_path(&mut rng).await;
+    let mut repeats_leaf = path.clone();
+    repeats_leaf.path[1].1.head_mut().pk = path.leaf_pk;
+    path.path[1].1.head_mut().pk = path.path[0].1.versions().head.pk;
+
+    assert!(!repeats_leaf.is_well_formed());
+    assert!(!path.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_with_an_index_of_2_pow_31_or_more_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0005);
+    let honest = honest_path(&mut rng).await;
+    let mut leaf_beyond = honest.clone();
+    leaf_beyond.leaf_idx += 1 << 31;
+    let mut node_beyond = honest.clone();
+    node_beyond.path[0].0 += 1 << 31;
+    let mut root_beyond = honest.clone();
+    root_beyond.path[1].0 += 1 << 31;
+    let mut leaf_beyond_without_nodes = leaf_beyond.clone();
+    leaf_beyond_without_nodes.path.clear();
+
+    assert!(!leaf_beyond.is_well_formed());
+    assert!(!node_beyond.is_well_formed());
+    assert!(!root_beyond.is_well_formed());
+    assert!(!leaf_beyond_without_nodes.is_well_formed());
+}

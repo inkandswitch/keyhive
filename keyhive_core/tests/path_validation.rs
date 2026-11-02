@@ -82,7 +82,11 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
     let entry = encrypt_secret(TreeId::from(design_doc), junk_sk, &junk_sk, &junk)?;
     new_path.path = vec![(
         7,
-        SecretStore::new(junk, junk, BTreeMap::from([(leaf, entry)])),
+        SecretStore::new(
+            junk_sk.share_key(),
+            new_path.leaf_pk,
+            BTreeMap::from([(leaf, entry)]),
+        ),
     )];
     let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),

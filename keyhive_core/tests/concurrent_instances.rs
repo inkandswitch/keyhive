@@ -80,8 +80,10 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     let mut new_path = an_update(&alice, design_doc).await;
 
     // A peer can put whatever it likes in a signed `PathChange`, including a key that
-    // does not displace the one already at the leaf.
+    // does not displace the one already at the leaf. With no path nodes, no encrypter
+    // has to match that key, so the change is still well-formed.
     new_path.leaf_pk = own_prekey(&bob, design_doc).await;
+    new_path.path.clear();
     new_path.removed_keys = BTreeSet::new();
     let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),
