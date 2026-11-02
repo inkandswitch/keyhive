@@ -7,7 +7,7 @@ A dynamic group of peers needs to maintain shared encryption keys over time, sup
 ## Tree Structure
 
 BeeKEM uses a binary tree:
-* Each leaf holds a member's identity and DH public key
+* Each leaf holds a member's identity and DH public key or, after concurrent rotations by its instances, several keys
 * The root holds the group's shared encryption key (encrypted)
 * Each inner node holds a DH public key and encrypted secrets (which effectively function as the shared key for its subtree/subgroup)
 
@@ -29,7 +29,7 @@ When a sibling is blank (from an add/remove), you can't do a single DH exchange.
 
 BeeKEM's innovation is in how it handles concurrent operations without a central server to pick winners. When two members concurrently update overlapping path nodes, both DH public keys are retained as **conflict keys** at that node.
 
-A node with conflict keys is treated similarly to a blank node during subsequent updates: you encrypt for its resolution rather than using a single key. This prevents an adversary who compromised one fork from decrypting the other fork's path to root. Future updates by any member whose path passes through the conflicted node resolve the conflict by replacing all conflict keys with a single fresh key.
+An inner node with conflict keys is treated similarly to a blank node during subsequent updates: you encrypt for its resolution rather than using a single key. This prevents an adversary who compromised one fork from decrypting the other fork's path to root. Future updates by any member whose path passes through the conflicted node resolve the conflict by replacing all conflict keys with a single fresh key.
 
 When applying a concurrent path change, BeeKEM merges keys at each affected node (combining into conflict keys where needed) and merges secret stores (keeping all concurrent versions). Removes are applied last, blanking paths after all other concurrent operations merge.
 
@@ -51,7 +51,7 @@ Space is O(n log n) worst case for conflict key storage.
 
 * **Encrypter child**: the child node that last encrypted its parent's secret.
 * **Blank node**: a node set to empty. Either an inner node whose secret has been invalidated, an unoccupied leaf, or a removed member's leaf (functioning as a tombstone).
-* **Resolution of a node**: if the node has a single public key, the resolution is just that node. If the node is blank or contains conflict keys, the resolution is the set of its highest non-blank, non-conflict descendants. During encryption, resolution is taken on sibling nodes (not on the node being encrypted), so the worst case for a single resolution is n/2 (all leaves in one subtree).
+* **Resolution of a node**: if the node has a single public key, the resolution is just that node. If the node is blank or contains conflict keys, the resolution is the set of its highest descendants that are neither blank nor conflicted inner nodes. During encryption, resolution is taken on sibling nodes (not on the node being encrypted), so the worst case for a single resolution is n/2 (all leaves in one subtree).
 * **Path**: the sequence of inner nodes from a leaf's parent up to and including the root.
 * **Secret store**: the data stored at an inner node. It contains one or more *versions*, where each version holds a public key for the node, the encrypter child's public key, and a map of encrypted secrets keyed by tree node indices.
 
@@ -79,7 +79,7 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
 
    c. **Find the sibling's resolution.** Look at the sibling of the current child:
       * If the sibling has a single public key (the common case), the resolution is just that one node.
-      * If the sibling is blank or has conflict keys, recursively descend into the sibling's subtree to find the highest non-blank, non-conflict descendants.
+      * If the sibling is blank or has conflict keys, recursively descend into the sibling's subtree to find the highest descendants that are neither blank nor conflicted inner nodes.
 
    d. **Encrypt the new parent secret for each node in the sibling resolution.** For each resolved node, derive a symmetric key via DH between the child's secret key and the resolved node's public key, then use that symmetric key to encrypt the new parent secret (using XChaCha20-Poly1305 with a synthetic IV derived by BLAKE3 from the key, plaintext, and tree ID; see [`design/ciphersuite.md`](../design/ciphersuite.md)). Each encrypted secret also records which public key it was paired with during DH. This is needed later during decryption so that non-encrypter members can identify the correct secret key to use. Store all encrypted secrets in a map keyed by tree node index, plus an additional entry for the encrypter child's own index (a copy of the first entry, enabling the encrypter to decrypt this node later using the same DH pair).
 
@@ -142,7 +142,7 @@ When applying a path change from another member that was created concurrently:
 
 3. **If the path is valid**: Merge along the path:
 
-   a. **At the leaf**: merge the new public key with the existing one. If the existing key was in the "removed keys" list (meaning this update replaced it), the new key simply substitutes. Otherwise, both keys are retained as **conflict keys**.
+   a. **At the leaf**: merge the new public key with the existing one. If the existing key was in the "removed keys" list (meaning this update replaced it), the new key simply substitutes. Otherwise, both keys are retained as **conflict keys**. A leaf's conflict keys come from concurrent rotations by one member's instances. They stay until an update that has seen them replaces them, so replicas agree whatever order the rotations arrived in. A conflicted leaf stays in its parent's resolution, and encrypters encrypt to its lowest key.
 
    b. **At each inner node on the path**: if the node already has a secret store, merge the new store's versions into the existing one, removing any versions whose public keys appear in the removed keys list and appending the new versions. If the node was blank, just insert the new store.
 

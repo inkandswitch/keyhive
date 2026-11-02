@@ -14,7 +14,7 @@ use crate::{
     encrypted::{encrypt_secret_with, PairedKey},
     error::CgkaError,
     id::{MemberId, TreeId},
-    keys::{LeafKeyPair, NodeKey, ShareKeyMap},
+    keys::{LeafKeyPair, ShareKeyMap},
     operation::{
         CgkaBatch, CgkaChange, CgkaOperation, CgkaOperationGraph, CitationId, Invitation,
         InvitationSecret, PredecessorSecret, RemovedMember,
@@ -705,15 +705,16 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         }
     }
 
-    /// The [`ShareKey`] currently at the owner's leaf.
+    /// The [`ShareKey`] currently at the owner's leaf. If instances of the owner
+    /// rotated it concurrently, this is the lowest of their keys, which is the one
+    /// other members encrypt to.
     ///
     /// Returns [`None`] when the owner is not in the tree.
     pub fn owner_leaf_key(&self) -> Option<ShareKey> {
-        match self.tree.node_key_for_id(self.owner_id).ok()? {
-            NodeKey::ShareKey(pk) => Some(pk),
-            // `insert_leaf_at` keeps only the lowest key per leaf so this is purely defensive.
-            NodeKey::ConflictKeys(keys) => Some(keys.iter().copied().min()?),
-        }
+        self.tree
+            .node_key_for_id(self.owner_id)
+            .ok()
+            .map(|k| k.lowest())
     }
 
     /// The current group size
