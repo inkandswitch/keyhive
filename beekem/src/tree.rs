@@ -125,9 +125,10 @@ impl PathChange {
 /// that a passive adversary needs all of the historical secret keys at
 /// one of the leaves in order to read the latest root secret after a merge.
 ///
-/// Leaves are the exception. A leaf belongs to one identity, so a conflict there is
-/// between two instances of the same member, and it is resolved by keeping the lowest
-/// key so that every instance converges on the same one.
+/// A leaf keeps its concurrent keys in the same way. A leaf belongs to one identity,
+/// so a conflict there is between instances of the same member. Unlike a conflicted
+/// inner node, such a leaf stays in its parent's resolution, and every encrypter
+/// encrypts to its lowest key.
 ///
 /// Leaf nodes represent group members. Each member has a fixed identifier as well
 /// as a public key that is rotated over time. Each inner node stores one or more
@@ -143,7 +144,7 @@ impl PathChange {
 ///   encrypt the new parent secret.
 /// * In case of a blank or conflict sibling, the encrypting child encrypts the secret
 ///   for each of the nodes in its sibling's resolution (which is the set of the highest
-///   non-blank, non-conflict descendents of the sibling). This means a separate DH per
+///   descendants of the sibling that are neither blank nor conflicted inner nodes). This means a separate DH per
 ///   node in that resolution. These encryptions of the secret are stored in a map at
 ///   the parent.
 ///
@@ -232,7 +233,7 @@ impl BeeKem {
         }
         leaves_to_sort.sort_by_key(|a| a.id);
         for leaf in leaves_to_sort {
-            self.push_leaf(leaf.id, leaf.pk.into());
+            self.push_leaf(leaf.id, leaf.pk);
         }
     }
 
@@ -303,7 +304,7 @@ impl BeeKem {
         let mut seen_idxs = vec![child_idx];
         // We will return this at the end once we've decrypted the root secret.
         let mut maybe_last_secret_decrypted = None;
-        let mut child_node_key = NodeKey::from(leaf.pk);
+        let mut child_node_key = leaf.pk.clone();
         let mut parent_idx: TreeNodeIndex = treemath::parent(child_idx).into();
         while !self.is_root(child_idx) {
             // Find the next non-blank, non-conflict parent
@@ -416,7 +417,7 @@ impl BeeKem {
             let Some(leaf) = self.leaf(leaf_idx) else {
                 panic!("Leaf for present ID should not be None");
             };
-            let new_node_key = NodeKey::from(leaf.pk).merge(&new_leaf_pk, &new_path.removed_keys);
+            let new_node_key = leaf.pk.merge(&new_leaf_pk, &new_path.removed_keys);
             self.insert_leaf_at(leaf_idx, id, new_node_key);
             self.blank_path(treemath::parent(leaf_idx.into()));
             return;
@@ -426,7 +427,7 @@ impl BeeKem {
         self.insert_leaf_at(
             leaf_idx,
             id,
-            NodeKey::from(old_leaf.pk).merge(&new_leaf_pk, &new_path.removed_keys),
+            old_leaf.pk.merge(&new_leaf_pk, &new_path.removed_keys),
         );
 
         let removed_keys_set: Set<ShareKey> = Set::from_iter(new_path.removed_keys.iter().copied());
@@ -527,10 +528,7 @@ impl BeeKem {
             // a new DH shared secret to do the encryption for each node.
             let mut used_paired_sibling = false;
             for idx in sibling_resolution {
-                let next_pk = match self.node_key_for_index(idx)? {
-                    NodeKey::ShareKey(share_key) => share_key,
-                    NodeKey::ConflictKeys(_) => return Err(CgkaError::UnexpectedKeyConflict),
-                };
+                let next_pk = self.resolution_key(idx)?;
                 let encrypted_sk = crate::encrypted::encrypt_secret(
                     self.doc_id,
                     *new_parent_sk,
@@ -555,13 +553,33 @@ impl BeeKem {
                 .as_ref()
                 .ok_or(CgkaError::ShareKeyNotFound)?
                 .pk
-                .into(),
+                .clone(),
             TreeNodeIndex::Inner(i_idx) => self
                 .inner_node(i_idx)
                 .as_ref()
                 .ok_or(CgkaError::ShareKeyNotFound)?
                 .node_key(),
         })
+    }
+
+    /// The key an encrypter encrypts to for `idx` in a resolution, either a leaf's
+    /// lowest key or an inner node's single key.
+    ///
+    /// Returns [`CgkaError::UnexpectedKeyConflict`] for a conflicted inner node,
+    /// which a resolution never contains.
+    fn resolution_key(&self, idx: TreeNodeIndex) -> Result<ShareKey, CgkaError> {
+        match idx {
+            TreeNodeIndex::Leaf(leaf_idx) => Ok(self
+                .leaf(leaf_idx)
+                .as_ref()
+                .ok_or(CgkaError::ShareKeyNotFound)?
+                .pk
+                .lowest()),
+            TreeNodeIndex::Inner(_) => match self.node_key_for_index(idx)? {
+                NodeKey::ShareKey(pk) => Ok(pk),
+                NodeKey::ConflictKeys(_) => Err(CgkaError::UnexpectedKeyConflict),
+            },
+        }
     }
 
     fn leaf(&self, idx: LeafNodeIndex) -> &Option<LeafNode> {
@@ -596,16 +614,10 @@ impl BeeKem {
             .expect("Node should not be blank")
     }
 
-    /// Insert `pk` at `idx`, keeping only its lowest key.
-    ///
-    /// Two instances of one identity share a leaf and can rotate it concurrently. Distinct
-    /// instances converge by keeping the lowest key on merge.
+    /// Insert `pk` at `idx`. `pk` contains several keys when instances of the
+    /// member rotated the leaf concurrently.
     fn insert_leaf_at(&mut self, idx: LeafNodeIndex, id: MemberId, pk: NodeKey) {
-        let leaf = LeafNode {
-            id,
-            pk: pk.lowest(),
-        };
-        self.leaves[idx.usize()] = Some(leaf);
+        self.leaves[idx.usize()] = Some(LeafNode { id, pk });
     }
 
     fn insert_inner_node_at(&mut self, idx: InnerNodeIndex, secret_store: SecretStore) {
@@ -675,10 +687,8 @@ impl BeeKem {
         // is missing an encryption paired with its current share key.
         resolution.iter().any(|member_idx| {
             !version.sk.get(member_idx).is_some_and(|encrypted| {
-                match self.node_key_for_index(*member_idx) {
-                    Ok(NodeKey::ShareKey(pk)) => pk == encrypted.paired_pk,
-                    _ => false,
-                }
+                self.resolution_key(*member_idx)
+                    .is_ok_and(|pk| pk == encrypted.paired_pk)
             })
         })
     }
@@ -729,7 +739,7 @@ impl BeeKem {
         idx == treemath::root(self.tree_size)
     }
 
-    /// Highest non-blank, non-conflict descendants of a node
+    /// Highest descendants of a node that are neither blank nor conflicted inner nodes.
     fn append_resolution(&self, idx: TreeNodeIndex, acc: &mut Vec<TreeNodeIndex>) {
         if self.should_skip_for_resolution(idx) {
             if let TreeNodeIndex::Inner(i_idx) = idx {
@@ -747,7 +757,7 @@ impl BeeKem {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LeafNode {
     pub id: MemberId,
-    pub pk: ShareKey,
+    pub pk: NodeKey,
 }
 
 #[cfg(any(test, feature = "test_utils"))]
@@ -902,15 +912,15 @@ mod tests {
     }
 
     #[test]
-    fn a_member_decrypts_a_path_written_by_a_leaf_key_its_leaf_no_longer_contains() {
+    fn a_member_decrypts_a_path_written_by_the_higher_of_its_leaf_conflict_keys() {
         let mut rng = StdRng::seed_from_u64(0x0dd0_0002);
         let mut sks = ShareKeyMap::new();
         let (mut base, owner) = one_member_tree(&mut rng, &mut sks);
         let (other, other_pk) = join_new_member_to_share_key_map(&mut rng, &mut ShareKeyMap::new());
         base.push_leaf(other, other_pk.into());
 
-        // Two instances of the owner rotate its leaf concurrently. The leaf
-        // keeps only the lower key of the conflict, but the path above it was
+        // Two instances of the owner rotate its leaf concurrently. Others
+        // encrypt to the lower key of the conflict, but the path above it was
         // encrypted with the higher key.
         let (a, b) = (
             ShareSecretKey::generate(&mut rng),
@@ -945,8 +955,8 @@ mod tests {
         tree.apply_path(owner, &low_path);
         tree.apply_path(owner, &high_path);
         assert_eq!(
-            tree.node_key_for_id(owner).ok(),
-            Some(NodeKey::ShareKey(low.share_key()))
+            tree.node_key_for_id(owner).map(|keys| keys.keys()).ok(),
+            Some(vec![low.share_key(), high.share_key()])
         );
 
         // Instances share their leaf secrets, but each keeps the path
@@ -1294,7 +1304,7 @@ mod tests {
         tree.leaves[d_idx.usize()]
             .as_mut()
             .expect("d's leaf is occupied")
-            .pk = new_pk;
+            .pk = new_pk.into();
         let violations = tree.invariant_violations();
         assert!(
             violations.iter().any(|v| v.starts_with("inner node 1 ")),

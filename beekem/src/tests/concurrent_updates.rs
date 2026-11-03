@@ -1,7 +1,13 @@
 //! Tests concurrent updates.
 
-use crate::test_utils::{for_each_seed, Group};
-use alloc::vec;
+use crate::{
+    cgka::{Cgka, NoImplicitRemoves},
+    operation::CgkaOperation,
+    test_utils::{for_each_seed, Group},
+};
+use alloc::{sync::Arc, vec, vec::Vec};
+use future_form::Local;
+use keyhive_crypto::{share_key::ShareSecretKey, signer::memory::MemorySigner, verified::Verified};
 use rand::{rngs::StdRng, SeedableRng};
 
 #[tokio::test]
@@ -115,4 +121,45 @@ fn a_secret_neither_its_path_nor_the_chain_reaches_is_rebuilt() {
             "a rebuild from d's earlier leaf key should derive the secret"
         );
     });
+}
+
+/// Rotate `cgka`'s leaf to `sk`.
+async fn rotate_to(
+    cgka: &mut Cgka<NoImplicitRemoves>,
+    signer: &MemorySigner,
+    sk: ShareSecretKey,
+    rng: &mut StdRng,
+) -> Arc<Verified<CgkaOperation>> {
+    let (_, op, _) = cgka
+        .update::<Local, _, _>(sk.share_key(), sk, signer, rng)
+        .await
+        .expect("the owner can rotate");
+    Arc::new(op)
+}
+
+#[tokio::test]
+async fn one_identitys_concurrent_rotations_leave_every_replica_with_the_same_leaf_keys() {
+    let mut rng = StdRng::seed_from_u64(0x0cd0_1236);
+    let mut group = Group::new(3, &mut rng).await;
+    group.settle(0, &mut rng).await;
+    let mut sks: Vec<ShareSecretKey> = (0..3).map(|_| ShareSecretKey::generate(&mut rng)).collect();
+    sks.sort_by_key(|sk| sk.share_key());
+    let [lowest, middle, highest] = [sks[0], sks[1], sks[2]];
+
+    // A second instance of `b` rotates to the middle key while the first
+    // rotates to the lowest and then the highest. `c` receives the second
+    // instance's rotation first, `a` and `b` last.
+    let signer = group.members[1].signer.clone();
+    let mut second_instance = group.replicas[1].clone();
+    let by_second = rotate_to(&mut second_instance, &signer, middle, &mut rng).await;
+    let first = rotate_to(&mut group.replicas[1], &signer, lowest, &mut rng).await;
+    let then = rotate_to(&mut group.replicas[1], &signer, highest, &mut rng).await;
+    group.deliver(&by_second, &[2]);
+    for op in [&first, &then] {
+        group.deliver(op, &[0, 2]);
+    }
+    group.deliver(&by_second, &[0, 1]);
+
+    group.check("after one identity rotated its leaf from two instances");
+    group.assert_trees_match_replay("after one identity rotated its leaf from two instances");
 }

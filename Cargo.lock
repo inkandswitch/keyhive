@@ -1049,6 +1049,30 @@ name = "keyhive_core"
 version = "0.10.0"
 dependencies = [
  "arbitrary",
+ "blake3",
+ "bolero",
+ "chacha20poly1305",
+ "derivative",
+ "derive-where",
+ "dupe",
+ "ed25519-dalek",
+ "future_form",
+ "futures",
+ "keyhive_codec",
+ "keyhive_crypto",
+ "rand 0.8.8",
+ "test-utils",
+ "testresult",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "keyhive_core"
+version = "0.10.0"
+dependencies = [
+ "arbitrary",
  "async-lock",
  "beekem",
  "blake3",
