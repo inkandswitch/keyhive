@@ -579,7 +579,7 @@ where
         mut ops: Vec<Arc<Verified<CgkaOperation>>>,
         me: IndividualId,
         secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-        authorize: bool,
+        check_authorization: bool,
     ) -> Result<RebuiltCgka, KeylineStorageError<K::Error>> {
         let doc = Identifier::from(doc_id);
         let mut cgka = Cgka::new(doc_id, me, ShareKeyMap::new(), NoImplicitRemoves);
@@ -588,7 +588,7 @@ where
             has_progressed = false;
             let mut waiting = Vec::new();
             for op in ops {
-                if authorize {
+                if check_authorization {
                     let predecessors = op.payload().predecessors();
                     let predecessor_set = self
                         .certificate_sets
@@ -618,7 +618,7 @@ where
                         waiting.push(op);
                     }
                     Err(ReceiveCgkaOpError::CgkaError(error))
-                        if authorize && never_merges(&error) =>
+                        if check_authorization && never_merges(&error) =>
                     {
                         tracing::warn!(%doc_id, %error, "an archived operation does not apply");
                         self.certificate_sets.lock().await.deny(op.digest());
