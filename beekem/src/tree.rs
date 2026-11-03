@@ -27,6 +27,10 @@ pub type InnerNode = SecretStore;
 
 const TREE_INDEX_LIMIT: u32 = 1 << 31;
 
+/// A tree of 2^31 leaves has 32 levels, the max that can fit in a `u32` tree
+/// index.
+const MAX_PATH_LEN: usize = 31;
+
 /// A PathChange represents an update along a path from a leaf to the root.
 /// This includes both the new public keys for each node and the keys that have
 /// been removed as part of this change.
@@ -92,27 +96,30 @@ impl StreamDecode for PathChange {
 impl PathChange {
     /// Whether the path's structure is well-formed.
     ///
+    /// The path is not empty. Each node is the parent of the one below it,
+    /// starting from the leaf, and the last is the root of a tree of some size.
+    ///
     /// Every node on the path has one version, encrypted by the new key of the
     /// child below it, with an entry under that child. No new node key is one of
-    /// the keys the update removes or repeats any other new key. Every index is
-    /// below 2^31, past which it has no tree index.
+    /// the keys the update removes or repeats any other new key. The leaf index
+    /// is below 2^31, past which it has no tree index.
     ///
     /// This does not check that the entries were encrypted with the leaf key or
     /// that they decrypt to the node keys.
     pub fn is_well_formed(&self) -> bool {
-        if self.leaf_idx >= TREE_INDEX_LIMIT
-            || self.path.iter().any(|(idx, _)| *idx >= TREE_INDEX_LIMIT)
-        {
+        if self.leaf_idx >= TREE_INDEX_LIMIT || self.path.len() > MAX_PATH_LEN {
             return false;
         }
         let mut new_keys = BTreeSet::from([self.leaf_pk]);
         let mut encrypter = self.leaf_pk;
         let mut child = TreeNodeIndex::Leaf(LeafNodeIndex::new(self.leaf_idx));
         for (idx, node) in &self.path {
+            let parent = treemath::parent(child);
             let Some(version) = node.non_conflict_version() else {
                 return false;
             };
-            if version.encrypter_pk != encrypter
+            if *idx != parent.u32()
+                || version.encrypter_pk != encrypter
                 || !version.sk.contains_key(&child)
                 || self.removed_keys.contains(&version.pk)
                 || !new_keys.insert(version.pk)
@@ -120,9 +127,13 @@ impl PathChange {
                 return false;
             }
             encrypter = version.pk;
-            child = TreeNodeIndex::Inner(InnerNodeIndex::new(*idx));
+            child = TreeNodeIndex::Inner(parent);
         }
-        true
+        // The roots are the tree indices 2^k - 1, which are the inner indices
+        // 2^(k-1) - 1. An empty path has no last node, so it is malformed.
+        self.path
+            .last()
+            .is_some_and(|(idx, _)| (idx + 1).is_power_of_two())
     }
 
     /// Attempt to decrypt the root secret using only the information in this path

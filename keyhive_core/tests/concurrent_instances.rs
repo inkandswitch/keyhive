@@ -1,18 +1,22 @@
 //! Two instances of one keyhive identity.
 
 use beekem::{
+    encrypted::encrypt_secret,
     id::TreeId,
     operation::{CgkaChange, CgkaOperation},
+    secret_store::SecretStore,
     tree::PathChange,
+    treemath::{LeafNodeIndex, TreeNodeIndex},
 };
 use keyhive_core::{
     crypto::digest::Digest,
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext, TestResult as Result},
 };
-use keyhive_crypto::share_key::ShareKey;
+use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use keyline::power::Power::Read;
-use std::collections::{BTreeSet, HashSet};
+use rand::rngs::OsRng;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// One of `who`'s own prekeys it would use to join `doc`.
 async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
@@ -80,10 +84,18 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     let mut new_path = an_update(&alice, design_doc).await;
 
     // A peer can put whatever it likes in a signed `PathChange`, including a key that
-    // does not displace the one already at the leaf. With no path nodes, no encrypter
-    // has to match that key, so the change is still well-formed.
-    new_path.leaf_pk = own_prekey(&bob, design_doc).await;
-    new_path.path.clear();
+    // does not displace the one already at the leaf. The first node has to list that
+    // key as its encrypter, which takes no secret.
+    let forged_pk = own_prekey(&bob, design_doc).await;
+    let leaf = TreeNodeIndex::from(LeafNodeIndex::new(new_path.leaf_idx));
+    let node_sk = ShareSecretKey::generate(&mut OsRng);
+    let entry = encrypt_secret(TreeId::from(design_doc), node_sk, &node_sk, &forged_pk)?;
+    new_path.path[0].1 = SecretStore::new(
+        node_sk.share_key(),
+        forged_pk,
+        BTreeMap::from([(leaf, entry)]),
+    );
+    new_path.leaf_pk = forged_pk;
     new_path.removed_keys = BTreeSet::new();
     let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),

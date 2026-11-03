@@ -237,9 +237,14 @@ async fn an_update_cut_short_keeping_its_leaf_key_converges_with_a_concurrent_on
 
 /// The path of an honest rotation in a group of four, which has two nodes.
 async fn honest_path(rng: &mut StdRng) -> PathChange {
+    honest_path_of(0, rng).await
+}
+
+/// The path of `author`'s honest rotation in a group of four.
+async fn honest_path_of(author: usize, rng: &mut StdRng) -> PathChange {
     let mut group = Group::<NoImplicitRemoves>::new(4, rng).await;
     group.settle(0, rng).await;
-    let op = group.rotate(0, rng).await;
+    let op = group.rotate(author, rng).await;
     let CgkaChange::Update { new_path, .. } = &op.payload().change else {
         unreachable!("a rotation is an update")
     };
@@ -328,4 +333,45 @@ async fn a_path_with_an_index_of_2_pow_31_or_more_is_malformed() {
     assert!(!node_beyond.is_well_formed());
     assert!(!root_beyond.is_well_formed());
     assert!(!leaf_beyond_without_nodes.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_that_is_not_a_chain_from_the_leaf_to_a_root_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0009);
+    let honest = honest_path(&mut rng).await;
+    let mut empty = honest.clone();
+    empty.path.clear();
+    let mut skips_a_node = honest.clone();
+    skips_a_node.path.truncate(1);
+    skips_a_node.path[0].0 = honest.path[1].0;
+    // Leaf 2's parent is not a root at any tree size, unlike leaf 0's.
+    let mut stops_below_a_root = honest_path_of(2, &mut rng).await;
+    stops_below_a_root.path.truncate(1);
+
+    assert!(!empty.is_well_formed());
+    assert!(!skips_a_node.is_well_formed());
+    assert!(!stops_below_a_root.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_longer_than_the_tallest_tree_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_000a);
+    let mut path = honest_path(&mut rng).await;
+    let leaf = TreeNodeIndex::from(LeafNodeIndex::new(path.leaf_idx));
+    let entry = path.path[0].1.versions().head.sk[&leaf].clone();
+    // From leaf 0, the chain of parents is the inner indices 2^j - 1.
+    let mut child = leaf;
+    let mut encrypter = path.leaf_pk;
+    path.path = (0..32)
+        .map(|j| {
+            let idx = (1u32 << j) - 1;
+            let pk = ShareSecretKey::generate(&mut rng).share_key();
+            let node = SecretStore::new(pk, encrypter, BTreeMap::from([(child, entry.clone())]));
+            child = TreeNodeIndex::from(InnerNodeIndex::new(idx));
+            encrypter = pk;
+            (idx, node)
+        })
+        .collect();
+
+    assert!(!path.is_well_formed());
 }
