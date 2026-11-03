@@ -29,9 +29,9 @@ When a sibling is blank (from an add/remove), you can't do a single DH exchange.
 
 BeeKEM's innovation is in how it handles concurrent operations without a central server to pick winners. When two members concurrently update overlapping path nodes, both DH public keys are retained as **conflict keys** at that node.
 
-An inner node with conflict keys is treated similarly to a blank node during subsequent updates: you encrypt for its resolution rather than using a single key. This prevents an adversary who compromised one fork from decrypting the other fork's path to root. Future updates by any member whose path passes through the conflicted node resolve the conflict by replacing all conflict keys with a single fresh key.
+An inner node with conflict keys is treated similarly to a blank node during subsequent updates: you encrypt for its resolution rather than using a single key. This prevents an adversary who compromised one fork from decrypting the other fork's path to root. A later update whose path passes through the conflicted node, and which has seen every conflicting version, replaces them with a single fresh key.
 
-When applying a concurrent path change, BeeKEM merges keys at each affected node (combining into conflict keys where needed) and merges secret stores (keeping all concurrent versions). Removes are applied last, blanking paths after all other concurrent operations merge.
+When applying a concurrent path change, BeeKEM merges keys at each affected node (combining into conflict keys where needed) and merges secret stores (keeping all concurrent versions). Each version at a tree node is tagged with the operation that wrote it, and a path change removes exactly the versions whose origins are all in its causal past. So which versions an update removes depends only on which operations were applied, not on the order they arrived in. Removes are applied last, blanking paths after all other concurrent operations merge.
 
 ## Performance
 
@@ -69,7 +69,7 @@ A new BeeKEM tree is created empty, with every leaf and inner node blank. Member
 
 When a member rotates their leaf key, they encrypt a new secret at every ancestor up to the root.
 
-1. **Generate a new leaf keypair.** Place the new public key at the member's leaf. Store the secret key in the member's local key map.
+1. **Generate a new leaf keypair.** Store the secret key in the member's local key map. The new public key is written to the leaf in step 5.
 
 2. **Walk up the path from the leaf toward the root.** At each parent node:
 
@@ -87,11 +87,13 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
 
    f. **Record the encrypter child's public key** alongside the encrypted secrets. This is needed during decryption so that decrypters know which public key was used for the DH.
 
-   g. **Store the new secret store** (parent's public key, encrypted secret map, and encrypter child's public key) at the parent, replacing whatever was there.
+   g. **Add the new secret store** (parent's public key, encrypted secret map, and encrypter child's public key) to the path change. It is written to the parent in step 5.
 
 3. **After reaching the root**, record which leaf performed this encryption. The root now has a valid secret and any member can decrypt it.
 
-4. **Emit a path change** containing the leaf's new public key, the new secret store for every inner node on the path, and the list of old public keys that were replaced (the "removed keys"). The removed keys are important for merge; they tell other members which keys have been superseded.
+4. **Emit a path change** containing the leaf's new public key and the new secret store for every inner node on the path. It does not list the keys it replaces. A merge works those out from the causal graph (see "Merging a Concurrent Update" below).
+
+5. **Sign the path change, then write it into the tree** as any received update is written, tagged with its digest. It follows every head, so it replaces every version on its path.
 
 ## Decryption (Deriving the Root Secret)
 
@@ -122,9 +124,8 @@ After an add, there is no valid root key. Someone must perform an update (path e
 
 1. Verify the group has more than one member.
 2. Find the leaf index for the member being removed.
-3. Collect all public keys from the inner nodes on the removed member's path (these are the "removed keys", needed for merge bookkeeping).
-4. Blank the leaf and its entire path to the root.
-5. Trim contiguous blank leaves from the right edge of the tree.
+3. Blank the leaf and its entire path to the root.
+4. Trim contiguous blank leaves from the right edge of the tree.
 
 Like add, remove invalidates the root key.
 
@@ -138,13 +139,15 @@ When applying a path change from another member that was created concurrently:
 
 1. **Check if the path is still valid.** A path is valid if the originating member is still at the same leaf index and the path length matches. A mismatch (e.g., because a concurrent add reshuffled leaves or grew the tree) means the path is structurally incompatible and invalid.
 
-2. **If the path is invalid**: Only update the leaf's public key by merging the new key with the existing one. Blank the path (no inner node updates are meaningful since the tree structure changed).
+2. **If the path is invalid**: update only the leaf, as in 3a and 3b below, and blank the path (no inner node updates are meaningful since the tree structure changed).
 
 3. **If the path is valid**: Merge along the path:
 
-   a. **At the leaf**: merge the new public key with the existing one. If the existing key was in the "removed keys" list (meaning this update replaced it), the new key simply substitutes. Otherwise, both keys are retained as **conflict keys**. A leaf's conflict keys come from concurrent rotations by one member's instances. They stay until an update that has seen them replaces them, so replicas agree whatever order the rotations arrived in. A conflicted leaf stays in its parent's resolution, and encrypters encrypt to its lowest key.
+   a. **Find which versions it replaces.** Every version at a tree node is tagged with the operation that wrote it: an add for the key a leaf starts with, an update for its leaf key and the versions on its path. The versions this update replaces are those, at the leaf and at each node on the path, whose origins are all in its causal past. So an update cannot remove a concurrent update's keys, and a new key equal to an old one does not remove the old version unless its origin is in the past. If the update's predecessors include every head, every origin is in its past. Otherwise two searches alternate one step at a time. One goes backward from the update's predecessors through its causal past. The other goes backward from the heads missing from the update's predecessors, through the operations concurrent with it. The first to decide every origin gives the answer.
 
-   b. **At each inner node on the path**: if the node already has a secret store, merge the new store's versions into the existing one, removing any versions whose public keys appear in the removed keys list and appending the new versions. If the node was blank, just insert the new store.
+   b. **At the leaf**: drop the replaced versions and add the new public key. Any version left from a concurrent write is kept as a **conflict key**. A leaf's conflict keys come from concurrent rotations by one member's instances. They stay until an update that has seen them replaces them. A conflicted leaf stays in its parent's resolution, and encrypters encrypt to its lowest key.
+
+   c. **At each inner node on the path**: if the node already has versions, drop the replaced ones and add the new store's versions, tagged with this update. If the node was blank, just insert the new store. Two operations that wrote identical versions leave one version with both as origins, which stays until both are in some update's past.
 
 4. **Check the root.** If the root has a single version (no conflict), record the new encrypter. If the root now has multiple conflicting versions, clear the encrypter. The tree has no valid root key until someone does a fresh update.
 

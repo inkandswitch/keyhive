@@ -12,7 +12,7 @@ use keyhive_core::{
 };
 use keyhive_crypto::share_key::ShareKey;
 use keyline::power::Power::Read;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 
 /// One of `who`'s own prekeys it would use to join `doc`.
 async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
@@ -79,10 +79,8 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
     let mut new_path = an_update(&alice, design_doc).await;
 
-    // A peer can put whatever it likes in a signed `PathChange`, including a key that
-    // does not displace the one already at the leaf.
+    // A peer can put whatever key it likes in a signed `PathChange`'s `leaf_pk`.
     new_path.leaf_pk = own_prekey(&bob, design_doc).await;
-    new_path.removed_keys = BTreeSet::new();
     let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),
         predecessors: cgka_heads(&bob, design_doc).await,
@@ -201,5 +199,56 @@ async fn writes_made_during_a_partition_survive_the_merge() -> Result<()> {
             "{name} reads what the second instance wrote during the partition"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_update_covering_a_resealed_twin_gives_both_members_the_root_key() -> Result<()> {
+    use beekem::secret_store::SecretStore;
+    use keyhive_codec::traits::{Decode, Encode};
+
+    let mut ctx = TestContext::new().await;
+    let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
+    let (by_bob, _) = bob.force_pcs_update(design_doc).await?;
+    ctx.sync_all_unsent().await?;
+
+    // The same update signed again with one sealed byte changed: the same keys, a new digest.
+    let mut twin = by_bob.payload().clone();
+    let CgkaChange::Update { new_path, .. } = &mut twin.change else {
+        unreachable!("a rotation is an update")
+    };
+    let bytes = new_path.path[0].1.encode().as_bytes().to_vec();
+    let resealed = (0..bytes.len())
+        .find_map(|i| {
+            let mut flipped = bytes.clone();
+            flipped[i] ^= 1;
+            let node = SecretStore::decode(&flipped).ok()?;
+            (node != new_path.path[0].1 && node.pk == new_path.path[0].1.pk).then_some(node)
+        })
+        .expect("some sealed byte can change without changing the node's keys");
+    new_path.path[0].1 = resealed;
+    let twin = bob.sign_cgka_op(twin).await?;
+
+    // Alice's update covers Bob's, so it removes the keys the twin also contains.
+    alice.force_pcs_update(design_doc).await?;
+    ctx.sync_all_unsent().await?;
+    for who in [&alice, &bob] {
+        who.receive_cgka_op(twin.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    alice.force_pcs_update(design_doc).await?;
+    ctx.sync_all_unsent().await?;
+    let key = alice.try_pcs_key_hash(design_doc).await;
+    assert!(
+        key.is_some(),
+        "an update that has the twin in its past gives alice the root key"
+    );
+    assert_eq!(
+        bob.try_pcs_key_hash(design_doc).await,
+        key,
+        "bob derives the same root key as alice"
+    );
     Ok(())
 }

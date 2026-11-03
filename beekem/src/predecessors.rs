@@ -1,7 +1,14 @@
 //! The immediate causal predecessors of a CGKA operation.
 
-use crate::operation::{CgkaOperation, CgkaOperationGraph};
-use alloc::{collections::BTreeSet, vec::Vec};
+use crate::{
+    collections::Set,
+    error::CgkaError,
+    operation::{CgkaOperation, CgkaOperationGraph},
+};
+use alloc::{
+    collections::{binary_heap::PeekMut, BTreeMap, BTreeSet, BinaryHeap},
+    vec::Vec,
+};
 use keyhive_codec::{
     error::DecodeError,
     traits::{decode_exact, Decode, Encode, StreamDecode},
@@ -24,7 +31,102 @@ impl Predecessors {
 
     /// Whether this contains every head in `graph`.
     pub fn contains_heads_of(&self, graph: &CgkaOperationGraph) -> bool {
-        graph.cgka_op_heads.iter().all(|head| self.0.contains(head))
+        self.missing_heads(graph).next().is_none()
+    }
+
+    /// The heads of `graph` that are not among these predecessors. A head has
+    /// no children so these are exactly the heads outside the causal past of
+    /// an operation with these predecessors.
+    fn missing_heads<'a>(
+        &'a self,
+        graph: &'a CgkaOperationGraph,
+    ) -> impl Iterator<Item = Digest<CgkaOperation>> + 'a {
+        graph
+            .cgka_op_heads
+            .iter()
+            .filter(|head| !self.0.contains(head))
+            .copied()
+    }
+
+    /// The members of `targets` that an operation with these predecessors has
+    /// observed, i.e., the ones in its causal past, including the predecessors
+    /// themselves. Every target and predecessor must be in `graph`.
+    ///
+    /// If these predecessors contain every head of `graph`, every target has
+    /// been observed. Otherwise two searches alternate one step at a time. The
+    /// first to decide for every target returns the answer:
+    ///
+    /// 1) Begin from these predecessors and search back through the causal
+    ///    past, skipping anything shallower than every undecided target.
+    /// 2) Begin from the heads of `graph` missing from these predecessors,
+    ///    which are concurrent with the operation, and search back through the
+    ///    operations concurrent with it.
+    ///
+    /// The first search is normally faster when the targets are recent. The
+    /// second is normally faster when there is little concurrency with the
+    /// operation. Neither has to visit the whole past.
+    ///
+    /// Returns [`CgkaError::OperationNotFound`] if a target or an operation a
+    /// search reaches is not in `graph`, and [`CgkaError::DepthNotFound`] if
+    /// one has no recorded depth.
+    pub(crate) fn filter_in_causal_past(
+        &self,
+        targets: BTreeSet<Digest<CgkaOperation>>,
+        graph: &CgkaOperationGraph,
+    ) -> Result<BTreeSet<Digest<CgkaOperation>>, CgkaError> {
+        let missing_heads: Vec<_> = self.missing_heads(graph).collect();
+        if missing_heads.is_empty() {
+            // All targets are ancestors of an operation with these predecessors.
+            return Ok(targets);
+        }
+        let mut found = BTreeSet::new();
+        let mut pending = BTreeMap::new();
+        for target in targets {
+            if self.contains(&target) {
+                found.insert(target);
+            } else {
+                pending.insert(target, graph.depth(&target)?);
+            }
+        }
+        let mut past = PastSearch::from(self);
+        let mut concurrent = ConcurrentSearch::new(graph, missing_heads)?;
+        while !pending.is_empty() {
+            // If an operation is shallower than every remaining target, it
+            // can't have a target as an ancestor.
+            let min_pending_depth = pending.values().copied().min().unwrap_or(0);
+
+            // Take one step in `PastSearch`.
+            let Some(current) = past.next() else {
+                // Every remaining target is outside the past.
+                break;
+            };
+            if pending.remove(&current).is_some() {
+                found.insert(current);
+            }
+            for pred in graph
+                .predecessors_for(&current)
+                .ok_or(CgkaError::OperationNotFound)?
+            {
+                if graph.depth(pred)? >= min_pending_depth {
+                    past.push(*pred);
+                }
+            }
+
+            // Take one step in `ConcurrentSearch`.
+            match concurrent.next(graph, self, min_pending_depth)? {
+                None => {
+                    // Every remaining target is in the past.
+                    found.extend(pending.into_keys());
+                    break;
+                }
+                Some((current, in_past)) => {
+                    if pending.remove(&current).is_some() && in_past {
+                        found.insert(current);
+                    }
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// The predecessors, in ascending order.
@@ -81,5 +183,120 @@ impl StreamDecode for Predecessors {
     fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
         let (op_hashes, rest) = BTreeSet::decode_next(bytes)?;
         Ok((Self(op_hashes), rest))
+    }
+}
+
+/// A search back through an operation's causal past, starting from its
+/// predecessors. It keeps every operation ever queued so none is visited
+/// twice.
+struct PastSearch {
+    frontier: Vec<Digest<CgkaOperation>>,
+    queued: Set<Digest<CgkaOperation>>,
+}
+
+impl PastSearch {
+    fn from(predecessors: &Predecessors) -> Self {
+        let mut search = Self {
+            frontier: Vec::new(),
+            queued: Set::new(),
+        };
+        for pred in predecessors {
+            search.push(*pred);
+        }
+        search
+    }
+
+    fn push(&mut self, op_hash: Digest<CgkaOperation>) {
+        if self.queued.insert(op_hash) {
+            self.frontier.push(op_hash);
+        }
+    }
+
+    fn next(&mut self) -> Option<Digest<CgkaOperation>> {
+        self.frontier.pop()
+    }
+}
+
+/// A search through the operations concurrent with an operation, which are
+/// those outside its causal past, starting from the heads missing from its
+/// predecessors, deepest first.
+///
+/// An operation is in the past if it is one of the predecessors or one of its
+/// children is in the past. Every operation outside the past is reached from
+/// a missing head through operations outside it, and each operation pushed is
+/// shallower than the one just visited, so operations are visited deepest
+/// first. A child is deeper than its parent, so when an operation is visited
+/// each child outside the past has been marked outside, and any other child
+/// is in the past. The search continues only through operations outside the
+/// past.
+///
+/// A target outside the past that has not been visited has an operation on
+/// its chain from a missing head still in the queue which is at least as
+/// deep as itself. Once every queued operation is shallower than every
+/// undecided target, those targets are all in the past.
+struct ConcurrentSearch {
+    frontier: BinaryHeap<(u64, Digest<CgkaOperation>)>,
+    queued: Set<Digest<CgkaOperation>>,
+    outside: Set<Digest<CgkaOperation>>,
+}
+
+impl ConcurrentSearch {
+    fn new(
+        graph: &CgkaOperationGraph,
+        concurrent_heads: impl IntoIterator<Item = Digest<CgkaOperation>>,
+    ) -> Result<Self, CgkaError> {
+        let mut search = Self {
+            frontier: BinaryHeap::new(),
+            queued: Set::new(),
+            outside: Set::new(),
+        };
+        for head in concurrent_heads {
+            search.push(graph, head)?;
+        }
+        Ok(search)
+    }
+
+    fn push(
+        &mut self,
+        graph: &CgkaOperationGraph,
+        op_hash: Digest<CgkaOperation>,
+    ) -> Result<(), CgkaError> {
+        if self.queued.insert(op_hash) {
+            self.frontier.push((graph.depth(&op_hash)?, op_hash));
+        }
+        Ok(())
+    }
+
+    /// The next operation, and whether it is in the past of an operation with
+    /// `predecessors`. Returns `None` once every operation outside that past at
+    /// least `min_depth` deep has been visited.
+    fn next(
+        &mut self,
+        graph: &CgkaOperationGraph,
+        predecessors: &Predecessors,
+        min_depth: u64,
+    ) -> Result<Option<(Digest<CgkaOperation>, bool)>, CgkaError> {
+        let Some(deepest) = self
+            .frontier
+            .peek_mut()
+            .filter(|deepest| deepest.0 >= min_depth)
+        else {
+            return Ok(None);
+        };
+        let (_, current) = PeekMut::pop(deepest);
+        let in_past = predecessors.contains(&current)
+            || graph
+                .children_of(&current)
+                .any(|child| !self.outside.contains(child));
+        if !in_past {
+            self.outside.insert(current);
+            for pred in graph
+                .predecessors_for(&current)
+                .ok_or(CgkaError::OperationNotFound)?
+            {
+                self.push(graph, *pred)?;
+            }
+        }
+        Ok(Some((current, in_past)))
     }
 }

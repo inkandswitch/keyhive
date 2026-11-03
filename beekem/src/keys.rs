@@ -5,13 +5,9 @@ use crate::{
     error::CgkaError,
     id::TreeId,
     transact::{Fork, Merge},
+    versions::NodeVersions,
 };
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    string::ToString,
-    vec,
-    vec::Vec,
-};
+use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 
 /// A key pair at a BeeKEM leaf.
@@ -190,68 +186,37 @@ impl NodeKey {
         }
     }
 
-    /// Merge in a new [`NodeKey`].
-    ///
-    /// # Arguments
-    ///
-    /// * `new_key` — The new key to merge into the existing keys.
-    /// * `removed` — The keys removed as part of a [`PathChange`](crate::tree::PathChange).
-    ///               It's possible that `self` will be one of those,
-    ///               in which case a new key is substituted.
-    pub fn merge(&self, new_key: &NodeKey, removed: &BTreeSet<ShareKey>) -> Self {
-        match self {
-            NodeKey::ShareKey(key) => {
-                if removed.contains(key) {
-                    new_key.clone()
-                } else {
-                    let mut new_keys = new_key.keys();
-                    new_keys.push(*key);
-                    new_keys.sort();
-
-                    match new_keys.as_slice() {
-                        [] => unreachable!("No keys to merge"),
-                        [first] => NodeKey::ShareKey(*first),
-                        [first, second] => ConflictKeys {
-                            first: *first,
-                            second: *second,
-                            more: vec![],
-                        }
-                        .into(),
-                        [first, second, more @ ..] => ConflictKeys {
-                            first: *first,
-                            second: *second,
-                            more: more.to_vec(),
-                        }
-                        .into(),
-                    }
-                }
+    /// The node key with `keys`, which must be ascending and not empty.
+    pub(crate) fn from_ascending(keys: impl IntoIterator<Item = ShareKey>) -> Self {
+        let mut keys = keys.into_iter();
+        let first = keys.next().expect("a node has at least one key");
+        match keys.next() {
+            None => NodeKey::ShareKey(first),
+            Some(second) => ConflictKeys {
+                first,
+                second,
+                more: keys.collect(),
             }
-            NodeKey::ConflictKeys(keys) => {
-                let mut new_keys = new_key.keys();
-                for k in keys.iter() {
-                    if !removed.contains(k) {
-                        new_keys.push(*k);
-                    }
-                }
-                new_keys.sort_by_key(|pk| *pk);
-
-                match new_keys.as_slice() {
-                    [] => unreachable!("No keys to merge"),
-                    [first] => NodeKey::ShareKey(*first),
-                    [first, second] => ConflictKeys {
-                        first: *first,
-                        second: *second,
-                        more: vec![],
-                    }
-                    .into(),
-                    [first, second, more @ ..] => ConflictKeys {
-                        first: *first,
-                        second: *second,
-                        more: more.to_vec(),
-                    }
-                    .into(),
-                }
-            }
+            .into(),
         }
+    }
+}
+
+/// A value at a tree node that has a share key.
+pub trait HasShareKey {
+    /// The value's share key.
+    fn share_key(&self) -> ShareKey;
+}
+
+impl HasShareKey for ShareKey {
+    fn share_key(&self) -> ShareKey {
+        *self
+    }
+}
+
+impl<V: HasShareKey + Ord + Clone> NodeVersions<V> {
+    /// The node's share keys, one per version.
+    pub fn node_key(&self) -> NodeKey {
+        NodeKey::from_ascending(self.values().map(HasShareKey::share_key))
     }
 }

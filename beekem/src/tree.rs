@@ -8,6 +8,7 @@ use crate::{
     pcs_key::PcsKey,
     secret_store::SecretStore,
     treemath,
+    versions::{NodeVersions, VersionOrigin},
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -20,14 +21,17 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
+use nonempty::NonEmpty;
 use tracing::instrument;
 use treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex, TreeSize};
 
-pub type InnerNode = SecretStore;
+/// An inner node of the tree: its versions, each with the operations that
+/// wrote it.
+pub type InnerNode = NodeVersions<SecretStore>;
 
 /// A PathChange represents an update along a path from a leaf to the root.
-/// This includes both the new public keys for each node and the keys that have
-/// been removed as part of this change.
+/// This includes both the leaf's new public key and a new secret store for
+/// each inner node on the path.
 ///
 /// The leaf is the signer's: whoever signs the update rotates their own leaf.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -36,13 +40,12 @@ pub struct PathChange {
     pub leaf_idx: u32,
     /// The leaf's new key. An update rotates its leaf to one fresh key.
     pub leaf_pk: ShareKey,
-    // (u32 inner node index, new inner node)
-    pub path: Vec<(u32, InnerNode)>,
-    pub removed_keys: BTreeSet<ShareKey>,
+    /// Each inner node on the path with the secret store this update puts there.
+    pub path: Vec<(u32, SecretStore)>,
 }
 
-/// `leaf_idx ‖ leaf_pk ‖ count ‖ ( inner_idx ‖ inner_node )* ‖ removed_keys`,
-/// the path in its order and the removed keys as a count and then ascending.
+/// `leaf_idx ‖ leaf_pk ‖ count ‖ ( inner_idx ‖ secret_store )*`, the path in
+/// its order.
 impl Encode for PathChange {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.leaf_idx.encode_into(out);
@@ -52,7 +55,6 @@ impl Encode for PathChange {
             idx.encode_into(out);
             node.encode_into(out);
         }
-        self.removed_keys.encode_into(out);
     }
 }
 
@@ -70,17 +72,15 @@ impl StreamDecode for PathChange {
         let mut path = Vec::new();
         for _ in 0..count {
             let (idx, after) = u32::decode_next(rest)?;
-            let (node, after) = InnerNode::decode_next(after)?;
+            let (node, after) = SecretStore::decode_next(after)?;
             path.push((idx, node));
             rest = after;
         }
-        let (removed_keys, rest) = BTreeSet::decode_next(rest)?;
         Ok((
             PathChange {
                 leaf_idx,
                 leaf_pk,
                 path,
-                removed_keys,
             },
             rest,
         ))
@@ -94,8 +94,8 @@ impl PathChange {
     ///
     /// Starting from the root, work backwards down the path until we find an
     /// intersecting node for which we have its child's sibling secret. If one
-    /// is found, then decrypt back up the path toward the root. If not, or a node
-    /// above it has more than one version, then return `None`.
+    /// is found, then decrypt back up the path toward the root. If not, return
+    /// `None`.
     pub(crate) fn decrypt_root_secret(
         &self,
         doc_id: TreeId,
@@ -129,6 +129,12 @@ impl PathChange {
 /// so a conflict there is between instances of the same member. Unlike a conflicted
 /// inner node, such a leaf stays in its parent's resolution, and every encrypter
 /// encrypts to its lowest key.
+///
+/// Each version at a tree node is tagged with the operation that wrote it (see
+/// [`NodeVersions`]). An update removes the versions at its nodes whose origins are
+/// all in its causal past and keeps the others, so which versions it removes
+/// depends only on which operations were applied, not on the order a replica
+/// received them in.
 ///
 /// Leaf nodes represent group members. Each member has a fixed identifier as well
 /// as a public key that is rotated over time. Each inner node stores one or more
@@ -233,7 +239,7 @@ impl BeeKem {
         }
         leaves_to_sort.sort_by_key(|a| a.id);
         for leaf in leaves_to_sort {
-            self.push_leaf(leaf.id, leaf.pk);
+            self.place_leaf(leaf);
         }
     }
 
@@ -244,14 +250,29 @@ impl BeeKem {
         self.blank_path(treemath::parent(idx.into()));
     }
 
-    /// Add a new leaf to the first available [`LeafNodeIndex`] on the right and
-    /// blank that leaf's path to the root.
-    pub fn push_leaf(&mut self, id: MemberId, pk: NodeKey) -> u32 {
+    /// Add a leaf for `id` with key `pk`, written by the add `origin`, at the
+    /// first available [`LeafNodeIndex`] on the right, and blank that leaf's
+    /// path to the root. Returns the leaf's index, which is
+    /// [`Self::next_leaf_index`] before the call.
+    pub fn push_leaf(&mut self, id: MemberId, pk: ShareKey, origin: VersionOrigin) -> u32 {
+        self.place_leaf(LeafNode {
+            id,
+            versions: NodeVersions::written(NonEmpty::new(pk), origin),
+        })
+    }
+
+    /// The index the next leaf pushed will have.
+    pub fn next_leaf_index(&self) -> u32 {
+        self.next_leaf_idx.u32()
+    }
+
+    /// Place `leaf` as [`Self::push_leaf`] does, keeping its versions.
+    fn place_leaf(&mut self, leaf: LeafNode) -> u32 {
         self.maybe_grow_tree(self.next_leaf_idx.u32());
         let l_idx = self.next_leaf_idx;
         self.next_leaf_idx += 1;
-        self.insert_leaf_at(l_idx, id, pk);
-        self.id_to_leaf_idx.insert(id, l_idx);
+        self.id_to_leaf_idx.insert(leaf.id, l_idx);
+        self.leaves[l_idx.usize()] = Some(leaf);
         self.blank_path(treemath::parent(l_idx.into()));
         l_idx.u32()
     }
@@ -304,7 +325,7 @@ impl BeeKem {
         let mut seen_idxs = vec![child_idx];
         // We will return this at the end once we've decrypted the root secret.
         let mut maybe_last_secret_decrypted = None;
-        let mut child_node_key = leaf.pk.clone();
+        let mut child_node_key = leaf.versions.node_key();
         let mut parent_idx: TreeNodeIndex = treemath::parent(child_idx).into();
         while !self.is_root(child_idx) {
             // Find the next non-blank, non-conflict parent
@@ -326,8 +347,9 @@ impl BeeKem {
         maybe_last_secret_decrypted.ok_or(CgkaError::NoRootKey)
     }
 
-    /// Rotate key and encrypt new secrets along the provided [`MemberId`]'s path.
-    /// This will result in a new root key for the tree.
+    /// Rotate key and encrypt new secrets along the provided [`MemberId`]'s path,
+    /// adding the new secrets to `sks`. Applying the returned path with
+    /// [`Self::apply_path`] gives the tree a new root key.
     ///
     /// Starting from the owner's leaf, move up the tree toward the root (i.e., along the
     /// leaf's path). As you look at each parent node along the way, you need to populate
@@ -341,7 +363,7 @@ impl BeeKem {
     /// generated just for that purpose. The secret store for that parent will then
     /// only have an entry for you.
     pub fn encrypt_path<R: rand::CryptoRng + rand::RngCore>(
-        &mut self,
+        &self,
         id: MemberId,
         pk: ShareKey,
         sks: &mut ShareKeyMap,
@@ -353,24 +375,17 @@ impl BeeKem {
             leaf_idx: leaf_idx.u32(),
             leaf_pk: pk,
             path: Vec::new(),
-            removed_keys: self.node_key_for_id(id)?.keys().into_iter().collect(),
         };
-        // Wait to write into the tree until the whole path has been encrypted so an
-        // error along the way aborts the whole write. Once all encryptions have
-        // succeeded, we write the stores from `new_path` and the new secrets from `new_sks`.
+        // Wait to record the new secrets until the whole path has been encrypted
+        // so an error along the way records none of them.
         let mut new_sks: Vec<(ShareKey, ShareSecretKey)> = Vec::new();
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
-        // An encrypter will always have a single public key at each node as it
-        // encrypts up its path. At its leaf, it will have written the latest public
-        // key at the start. And as it moves up the path, it will generate a new public
-        // key for each ancestor up to the root.
+        // An encrypter has a single public key at each node as it encrypts up its
+        // path: `pk` at its leaf, and a fresh key at each ancestor up to the root.
         let mut child_pk = pk;
         let mut child_sk = *sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?;
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
-            if let Some(store) = self.inner_node(parent_idx) {
-                new_path.removed_keys.extend(store.node_key().keys());
-            }
             let new_parent_sk = ShareSecretKey::generate(csprng);
             let new_parent_pk = new_parent_sk.share_key();
             // Hold on to the secret so we can derive the root key later without
@@ -391,52 +406,73 @@ impl BeeKem {
             parent_idx = treemath::parent(child_idx);
         }
 
-        self.insert_leaf_at(leaf_idx, id, NodeKey::ShareKey(pk));
-        for (idx, secret_store) in &new_path.path {
-            self.insert_inner_node_at(InnerNodeIndex::new(*idx), secret_store.clone());
-        }
         for (new_pk, new_sk) in new_sks {
             sks.insert(new_pk, new_sk);
         }
         Ok(Some((child_sk.into(), new_path)))
     }
 
+    /// The origins of the versions at the nodes `id`'s [`PathChange`] would
+    /// write: its leaf, and its path nodes if the path is valid here. Empty if
+    /// `id` is not in the tree.
+    pub(crate) fn origins_at(
+        &self,
+        id: MemberId,
+        new_path: &PathChange,
+    ) -> BTreeSet<VersionOrigin> {
+        let Ok(leaf_idx) = self.leaf_index_for_id(id) else {
+            return BTreeSet::new();
+        };
+        let mut origins: BTreeSet<VersionOrigin> = self
+            .leaf(*leaf_idx)
+            .iter()
+            .flat_map(|leaf| leaf.versions.origins())
+            .collect();
+        if self.is_valid_path(*leaf_idx, new_path) {
+            for (idx, _) in &new_path.path {
+                if let Some(node) = self.inner_node(InnerNodeIndex::new(*idx)) {
+                    origins.extend(node.origins());
+                }
+            }
+        }
+        origins
+    }
+
     /// Applies `id`'s [`PathChange`], representing new public and encrypted
-    /// secret keys for each node on its path. `id` is the update's signer.
-    pub fn apply_path(&mut self, id: MemberId, new_path: &PathChange) {
+    /// secret keys for each node on its path. `id` is the update's signer and
+    /// `origin` is the update. At each node it writes, a version is removed when
+    /// all of its origins are in `observed`, the origins in the update's
+    /// causal past.
+    pub(crate) fn apply_path(
+        &mut self,
+        id: MemberId,
+        new_path: &PathChange,
+        origin: VersionOrigin,
+        observed: &BTreeSet<VersionOrigin>,
+    ) {
         // If this id has been concurrently removed, it might no longer be present
         // when we try to apply the concurrent update at that id.
-        if !self.id_to_leaf_idx.contains_key(&id) {
+        let Ok(&leaf_idx) = self.leaf_index_for_id(id) else {
             return;
-        }
-        let leaf_idx = *self.leaf_index_for_id(id).expect("Id should be present");
-        let new_leaf_pk = NodeKey::ShareKey(new_path.leaf_pk);
-        if !self.is_valid_path(leaf_idx, new_path) {
+        };
+        let is_valid_path = self.is_valid_path(leaf_idx, new_path);
+        self.leaves[leaf_idx.usize()]
+            .as_mut()
+            .expect("Leaf for present ID should not be None")
+            .versions
+            .merge(NonEmpty::new(new_path.leaf_pk), origin, observed);
+        if !is_valid_path {
             // Since this path is no longer valid, we can only update the leaf for
             // this id.
-            let Some(leaf) = self.leaf(leaf_idx) else {
-                panic!("Leaf for present ID should not be None");
-            };
-            let new_node_key = leaf.pk.merge(&new_leaf_pk, &new_path.removed_keys);
-            self.insert_leaf_at(leaf_idx, id, new_node_key);
             self.blank_path(treemath::parent(leaf_idx.into()));
             return;
         }
-
-        let old_leaf = self.leaf(leaf_idx).as_ref().unwrap();
-        self.insert_leaf_at(
-            leaf_idx,
-            id,
-            old_leaf.pk.merge(&new_leaf_pk, &new_path.removed_keys),
-        );
-
-        let removed_keys_set: Set<ShareKey> = Set::from_iter(new_path.removed_keys.iter().copied());
         for (idx, node) in &new_path.path {
-            let current_idx = InnerNodeIndex::new(*idx);
-            if let Some(current_node) = self.inner_node_mut(current_idx) {
-                current_node.merge(node, &removed_keys_set);
-            } else {
-                self.insert_inner_node_at(current_idx, node.clone());
+            let versions = NonEmpty::new(node.clone());
+            let slot = &mut self.inner_nodes[InnerNodeIndex::new(*idx).usize()];
+            match slot {
+                Some(current) => current.merge(versions, origin, observed),
+                None => *slot = Some(NodeVersions::written(versions, origin)),
             }
         }
     }
@@ -478,8 +514,10 @@ impl BeeKem {
                 if child_sks.contains_key(&parent_pk) {
                     return Ok(child_sks.get(&parent_pk).cloned());
                 }
-                let secret =
-                    parent.decrypt_secret(self.doc_id, child_node_key, child_sks, seen_idxs)?;
+                let secret = parent
+                    .non_conflict_version()
+                    .ok_or(CgkaError::UnexpectedKeyConflict)?
+                    .decrypt_secret(self.doc_id, child_node_key, child_sks, seen_idxs)?;
                 if secret.share_key() != parent_pk {
                     return Err(CgkaError::PathSecretMismatch);
                 }
@@ -490,11 +528,11 @@ impl BeeKem {
         Ok(maybe_secret)
     }
 
-    /// Build a new [`SecretStore`] for parent node.
+    /// Build the new [`SecretStore`] for a parent node.
     ///
     /// Encrypt the new parent [`ShareSecretKey`] for each member of your sibling
-    /// node's resolution. These are then stored in the new [`SecretStore`], indexed
-    /// by the tree index for each member of that resolution.
+    /// node's resolution. These are then stored in the new version, indexed by
+    /// the tree index for each member of that resolution.
     #[allow(clippy::type_complexity)]
     fn encrypt_new_secret_store_for_parent<R: rand::CryptoRng + rand::RngCore>(
         &self,
@@ -543,7 +581,11 @@ impl BeeKem {
             }
         };
 
-        Ok(SecretStore::new(new_parent_pk, child_pk, secret_map))
+        Ok(SecretStore {
+            pk: new_parent_pk,
+            sk: secret_map,
+            encrypter_pk: child_pk,
+        })
     }
 
     fn node_key_for_index(&self, idx: TreeNodeIndex) -> Result<NodeKey, CgkaError> {
@@ -552,8 +594,8 @@ impl BeeKem {
                 .leaf(l_idx)
                 .as_ref()
                 .ok_or(CgkaError::ShareKeyNotFound)?
-                .pk
-                .clone(),
+                .versions
+                .node_key(),
             TreeNodeIndex::Inner(i_idx) => self
                 .inner_node(i_idx)
                 .as_ref()
@@ -573,7 +615,8 @@ impl BeeKem {
                 .leaf(leaf_idx)
                 .as_ref()
                 .ok_or(CgkaError::ShareKeyNotFound)?
-                .pk
+                .versions
+                .node_key()
                 .lowest()),
             TreeNodeIndex::Inner(_) => match self.node_key_for_index(idx)? {
                 NodeKey::ShareKey(pk) => Ok(pk),
@@ -606,22 +649,6 @@ impl BeeKem {
         self.inner_nodes
             .get(idx.usize())
             .expect("Inner node index should be in bounds")
-    }
-
-    fn inner_node_mut(&mut self, idx: InnerNodeIndex) -> &mut Option<InnerNode> {
-        self.inner_nodes
-            .get_mut(idx.usize())
-            .expect("Node should not be blank")
-    }
-
-    /// Insert `pk` at `idx`. `pk` contains several keys when instances of the
-    /// member rotated the leaf concurrently.
-    fn insert_leaf_at(&mut self, idx: LeafNodeIndex, id: MemberId, pk: NodeKey) {
-        self.leaves[idx.usize()] = Some(LeafNode { id, pk });
-    }
-
-    fn insert_inner_node_at(&mut self, idx: InnerNodeIndex, secret_store: SecretStore) {
-        self.inner_nodes[idx.usize()] = Some(secret_store);
     }
 
     fn is_blank(&self, idx: TreeNodeIndex) -> bool {
@@ -665,7 +692,7 @@ impl BeeKem {
             .inner_nodes
             .get(idx.usize())
             .and_then(Option::as_ref)
-            .and_then(SecretStore::non_conflict_version)
+            .and_then(InnerNode::non_conflict_version)
         else {
             return false;
         };
@@ -757,7 +784,9 @@ impl BeeKem {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LeafNode {
     pub id: MemberId,
-    pub pk: NodeKey,
+    /// The leaf's key, or the keys of concurrent rotations by the member's
+    /// instances, each with the operations that wrote it.
+    pub versions: NodeVersions<ShareKey>,
 }
 
 #[cfg(any(test, feature = "test_utils"))]
@@ -839,10 +868,44 @@ impl BeeKem {
 }
 
 #[cfg(test)]
+impl BeeKem {
+    /// Each node holding versions, with each origin of a version there.
+    pub(crate) fn origins_by_node(&self) -> Vec<(TreeNodeIndex, VersionOrigin)> {
+        let leaves = self.leaves.iter().enumerate().flat_map(|(i, leaf)| {
+            let idx = TreeNodeIndex::Leaf(LeafNodeIndex::new(i as u32));
+            leaf.iter()
+                .flat_map(|leaf| leaf.versions.origins())
+                .map(move |origin| (idx, origin))
+        });
+        let inner = self.inner_nodes.iter().enumerate().flat_map(|(i, node)| {
+            let idx = TreeNodeIndex::Inner(InnerNodeIndex::new(i as u32));
+            node.iter()
+                .flat_map(NodeVersions::origins)
+                .map(move |origin| (idx, origin))
+        });
+        leaves.chain(inner).collect()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
+    use keyhive_crypto::digest::Digest;
     use rand::{rngs::StdRng, SeedableRng};
+
+    /// A stand-in for the digest of operation `n`. Every add in these tests is
+    /// operation 0.
+    fn origin(n: u8) -> VersionOrigin {
+        Digest::from([n; 32])
+    }
+
+    /// Apply `path` as operation `n`, signed by `id`, with every version at the
+    /// nodes it writes in its causal past.
+    fn apply_after_all(tree: &mut BeeKem, id: MemberId, path: &PathChange, n: u8) {
+        let observed = tree.origins_at(id, path);
+        tree.apply_path(id, path, origin(n), &observed);
+    }
 
     fn join_new_member_to_share_key_map(
         rng: &mut StdRng,
@@ -869,8 +932,8 @@ mod tests {
         let (mut base, _owner) = one_member_tree(&mut rng, &mut sks);
         let (x, x_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
         let (y, y_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
-        base.push_leaf(x, x_pk.into());
-        base.push_leaf(y, y_pk.into());
+        base.push_leaf(x, x_pk, origin(0));
+        base.push_leaf(y, y_pk, origin(0));
         let x_idx = base.id_to_leaf_idx[&x].u32();
         let y_idx = base.id_to_leaf_idx[&y].u32();
         let (joiner, joiner_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
@@ -878,9 +941,9 @@ mod tests {
         // Whether a member added and removed in one batch is in the tree when the
         // resolution runs depends on which change arrived first.
         let mut still_present = base.clone();
-        still_present.push_leaf(joiner, joiner_pk.into());
+        still_present.push_leaf(joiner, joiner_pk, origin(0));
         let mut already_gone = base.clone();
-        already_gone.push_leaf(joiner, joiner_pk.into());
+        already_gone.push_leaf(joiner, joiner_pk, origin(0));
         already_gone
             .remove_id(joiner)
             .expect("the joiner was just added");
@@ -895,13 +958,13 @@ mod tests {
         // Whether an added member is locally at a lower leaf then the ones freed
         // by the two removals depends on the order the changes arrived in.
         let mut placed_first = base.clone();
-        placed_first.push_leaf(joiner, joiner_pk.into());
+        placed_first.push_leaf(joiner, joiner_pk, origin(0));
         placed_first.remove_id(x).expect("x is present");
         placed_first.remove_id(y).expect("y is present");
         let mut placed_last = base.clone();
         placed_last.remove_id(x).expect("x is present");
         placed_last.remove_id(y).expect("y is present");
-        placed_last.push_leaf(joiner, joiner_pk.into());
+        placed_last.push_leaf(joiner, joiner_pk, origin(0));
         resolve(&mut placed_first, &[joiner], &[(x, x_idx), (y, y_idx)]);
         resolve(&mut placed_last, &[joiner], &[(x, x_idx), (y, y_idx)]);
         assert_eq!(
@@ -917,7 +980,7 @@ mod tests {
         let mut sks = ShareKeyMap::new();
         let (mut base, owner) = one_member_tree(&mut rng, &mut sks);
         let (other, other_pk) = join_new_member_to_share_key_map(&mut rng, &mut ShareKeyMap::new());
-        base.push_leaf(other, other_pk.into());
+        base.push_leaf(other, other_pk, origin(0));
 
         // Two instances of the owner rotate its leaf concurrently. Others
         // encrypt to the lower key of the conflict, but the path above it was
@@ -934,7 +997,6 @@ mod tests {
         let mut low_sks = sks.clone();
         low_sks.insert(low.share_key(), low);
         let (_, low_path) = base
-            .clone()
             .encrypt_path(owner, low.share_key(), &mut low_sks, &mut rng)
             .expect("encrypting a path")
             .expect("the owner is in the tree");
@@ -942,18 +1004,19 @@ mod tests {
         // no longer fits the tree and only its leaf applies.
         let (joiner, joiner_pk) =
             join_new_member_to_share_key_map(&mut rng, &mut ShareKeyMap::new());
-        base.push_leaf(joiner, joiner_pk.into());
+        base.push_leaf(joiner, joiner_pk, origin(0));
         let mut high_sks = sks.clone();
         high_sks.insert(high.share_key(), high);
         let (root_secret, high_path) = base
-            .clone()
             .encrypt_path(owner, high.share_key(), &mut high_sks, &mut rng)
             .expect("encrypting a path")
             .expect("the owner is in the tree");
 
+        // Each rotation saw only the adds.
         let mut tree = base;
-        tree.apply_path(owner, &low_path);
-        tree.apply_path(owner, &high_path);
+        let adds = BTreeSet::from([origin(0)]);
+        tree.apply_path(owner, &low_path, origin(1), &adds);
+        tree.apply_path(owner, &high_path, origin(2), &adds);
         assert_eq!(
             tree.node_key_for_id(owner).map(|keys| keys.keys()).ok(),
             Some(vec![low.share_key(), high.share_key()])
@@ -976,13 +1039,12 @@ mod tests {
         let doc_id = TreeId::from(&SigningKey::generate(rng));
         let (owner, owner_pk) = join_new_member_to_share_key_map(rng, sks);
         let mut tree = BeeKem::new(doc_id);
-        tree.push_leaf(owner, owner_pk.into());
+        tree.push_leaf(owner, owner_pk, origin(0));
         (tree, owner)
     }
 
     /// A four-leaf tree, its members in leaf order, and a genuine path published
-    /// by the member at leaf 0. The tree is a peer's copy, taken before
-    /// `encrypt_path` wrote that path into the publisher's own.
+    /// by the member at leaf 0 but not yet applied.
     fn seeded() -> (BeeKem, [MemberId; 4], PathChange) {
         fn member(rng: &mut StdRng) -> (MemberId, ShareKey, ShareSecretKey) {
             let id = MemberId::from(&SigningKey::generate(rng));
@@ -994,22 +1056,21 @@ mod tests {
         let doc_id = TreeId::from(&SigningKey::generate(&mut rng));
         let (owner, owner_pk, owner_sk) = member(&mut rng);
         let mut tree = BeeKem::new(doc_id);
-        tree.push_leaf(owner, owner_pk.into());
+        tree.push_leaf(owner, owner_pk, origin(0));
         let mut ids = [owner; 4];
         for id in ids.iter_mut().skip(1) {
             let (next, pk, _) = member(&mut rng);
-            tree.push_leaf(next, pk.into());
+            tree.push_leaf(next, pk, origin(0));
             *id = next;
         }
 
-        let peer = tree.clone();
         let mut sks = ShareKeyMap::new();
         sks.insert(owner_pk, owner_sk);
         let (_, path) = tree
             .encrypt_path(owner, owner_pk, &mut sks, &mut rng)
             .expect("encrypting a path")
             .expect("the owner is in the tree");
-        (peer, ids, path)
+        (tree, ids, path)
     }
 
     #[test]
@@ -1032,7 +1093,7 @@ mod tests {
     #[test]
     fn removals_of_one_member_at_two_leaves_blank_both_paths() {
         let (mut seeded_tree, [owner, _alice, _bob, carol], new_path) = seeded();
-        seeded_tree.apply_path(owner, &new_path);
+        apply_after_all(&mut seeded_tree, owner, &new_path, 1);
         // Leaf 0's path fills inner node 0, the parent of leaves 0 and 1.
         assert!(seeded_tree.inner_node(InnerNodeIndex::new(0)).is_some());
 
@@ -1090,14 +1151,8 @@ mod tests {
             .enumerate()
             .map(|(n, (_, store))| (past_the_end + n as u32, store.clone()))
             .collect();
-        forged.removed_keys = tree
-            .node_key_for_id(owner)
-            .expect("the owner is placed")
-            .keys()
-            .into_iter()
-            .collect();
 
-        tree.apply_path(owner, &forged);
+        apply_after_all(&mut tree, owner, &forged, 1);
 
         assert_eq!(
             tree.node_key_for_id(owner).expect("the owner is placed"),
@@ -1117,7 +1172,7 @@ mod tests {
         let (mut tree, [owner, alice, ..], owners_path) = seeded();
         let owners_key = tree.node_key_for_id(owner).expect("the owner is placed");
 
-        tree.apply_path(alice, &owners_path);
+        apply_after_all(&mut tree, alice, &owners_path, 1);
 
         assert_eq!(
             tree.node_key_for_id(owner).expect("the owner is placed"),
@@ -1143,7 +1198,7 @@ mod tests {
         );
 
         let mut accepted = tree.clone();
-        accepted.apply_path(owner, &genuine);
+        apply_after_all(&mut accepted, owner, &genuine, 1);
         assert!(accepted.has_root_key(), "a genuine path was not applied");
 
         // Inner node 2 is the parent of leaves 2 and 3. It should not be
@@ -1151,7 +1206,7 @@ mod tests {
         let mut forged = genuine;
         forged.path[0].0 = 2;
         let mut denied = tree;
-        denied.apply_path(owner, &forged);
+        apply_after_all(&mut denied, owner, &forged, 1);
         assert!(
             denied.inner_node(InnerNodeIndex::new(2)).is_none(),
             "a secret store was merged into another member's node"
@@ -1161,7 +1216,7 @@ mod tests {
     #[test]
     fn removing_every_member_empties_the_tree() {
         let (mut tree, ids, path) = seeded();
-        tree.apply_path(ids[0], &path);
+        apply_after_all(&mut tree, ids[0], &path, 1);
         assert!(
             tree.has_root_key(),
             "the fixture should start with a root key"
@@ -1187,15 +1242,17 @@ mod tests {
 
         let (joiner, joiner_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
         assert_eq!(
-            tree.push_leaf(joiner, joiner_pk.into()),
+            tree.push_leaf(joiner, joiner_pk, origin(0)),
             0,
             "an emptied tree did not free leaf index 0"
         );
         assert!(!tree.has_root_key(), "a leaf on its own is not a root key");
 
-        tree.encrypt_path(joiner, joiner_pk, &mut sks, &mut rng)
+        let (_, path) = tree
+            .encrypt_path(joiner, joiner_pk, &mut sks, &mut rng)
             .expect("encrypting a path")
             .expect("the joiner is in the tree");
+        apply_after_all(&mut tree, joiner, &path, 1);
         assert!(
             tree.has_root_key(),
             "encrypting a path produced no root key"
@@ -1229,7 +1286,7 @@ mod tests {
         let freed = tree.remove_id(owner).expect("removing the last member");
         let (joiner, joiner_pk) = join_new_member_to_share_key_map(&mut rng, &mut sks);
         assert_eq!(
-            tree.push_leaf(joiner, joiner_pk.into()),
+            tree.push_leaf(joiner, joiner_pk, origin(0)),
             freed,
             "the add did not reuse the freed leaf"
         );
@@ -1297,14 +1354,14 @@ mod tests {
     #[test]
     fn a_node_encrypted_to_a_key_its_resolution_no_longer_has_is_caught() {
         let (mut tree, [owner, .., d], path) = seeded();
-        tree.apply_path(owner, &path);
+        apply_after_all(&mut tree, owner, &path, 1);
         assert!(tree.invariant_violations().is_empty());
         let d_idx = *tree.leaf_index_for_id(d).expect("d has a leaf");
         let new_pk = ShareSecretKey::generate(&mut StdRng::seed_from_u64(1)).share_key();
         tree.leaves[d_idx.usize()]
             .as_mut()
             .expect("d's leaf is occupied")
-            .pk = new_pk.into();
+            .versions = NodeVersions::written(NonEmpty::new(new_pk), origin(2));
         let violations = tree.invariant_violations();
         assert!(
             violations.iter().any(|v| v.starts_with("inner node 1 ")),

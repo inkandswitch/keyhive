@@ -2,11 +2,15 @@
 
 use crate::{
     cgka::{Cgka, NoImplicitRemoves},
-    operation::CgkaOperation,
-    test_utils::{for_each_seed, Group},
+    encrypted::EncryptedSecret,
+    id::MemberId,
+    operation::{CgkaChange, CgkaOperation},
+    test_utils::{assert_chain_bookkeeping, causal_past, for_each_seed, Group},
+    treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex},
 };
-use alloc::{sync::Arc, vec, vec::Vec};
+use alloc::{collections::BTreeSet, format, sync::Arc, vec, vec::Vec};
 use future_form::Local;
+use keyhive_codec::traits::{Decode, Encode};
 use keyhive_crypto::{share_key::ShareSecretKey, signer::memory::MemorySigner, verified::Verified};
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -162,4 +166,369 @@ async fn one_identitys_concurrent_rotations_leave_every_replica_with_the_same_le
 
     group.check("after one identity rotated its leaf from two instances");
     group.assert_trees_match_replay("after one identity rotated its leaf from two instances");
+}
+
+/// `op` with its change edited by `edit` and signed again by `signer`.
+async fn resigned(
+    op: &Verified<CgkaOperation>,
+    signer: &MemorySigner,
+    edit: impl FnOnce(&mut CgkaChange),
+) -> Arc<Verified<CgkaOperation>> {
+    let mut payload = op.payload().clone();
+    edit(&mut payload.change);
+    Arc::new(
+        Verified::sign::<Local, _>(&payload, signer)
+            .await
+            .expect("signing succeeds"),
+    )
+}
+
+/// Flip one byte of `sealed`'s ciphertext. It still decodes and seals to the
+/// same key, so an update carrying it has the same keys and a new digest.
+fn reseal(sealed: &mut EncryptedSecret<ShareSecretKey>) {
+    let mut bytes = sealed.encode().as_bytes().to_vec();
+    bytes[10] ^= 1;
+    *sealed = EncryptedSecret::decode(&bytes).expect("a flipped ciphertext byte still decodes");
+}
+
+#[tokio::test]
+async fn replicas_converge_when_an_update_reuses_a_key_a_causally_unrelated_update_removes() {
+    let mut rng = StdRng::seed_from_u64(0x0cd0_1239);
+    let mut group = Group::new(4, &mut rng).await;
+    group.settle(0, &mut rng).await;
+
+    // `b`'s update, concurrent with `a`'s, writes the key `a` wrote at the
+    // node above them. `a`'s next update removes that key.
+    let by_a = group.rotate(0, &mut rng).await;
+    let CgkaChange::Update {
+        new_path: a_path, ..
+    } = &by_a.payload().change
+    else {
+        unreachable!("a rotation is an update")
+    };
+    let a_key = a_path.path[0].1.pk;
+    let above = TreeNodeIndex::Inner(InnerNodeIndex::new(a_path.path[0].0));
+    let signer = group.members[1].signer.clone();
+    let by_b = rotate_to(
+        &mut group.replicas[1].clone(),
+        &signer,
+        ShareSecretKey::generate(&mut rng),
+        &mut rng,
+    )
+    .await;
+    let by_b = resigned(&by_b, &signer, |change| {
+        let CgkaChange::Update { new_path, .. } = change else {
+            unreachable!("a rotation is an update")
+        };
+        new_path.path[0].1.pk = a_key;
+    })
+    .await;
+    group.deliver(&by_b, &[1]);
+    group.deliver(&by_a, &[1, 2, 3]);
+    let then_by_a = group.rotate(0, &mut rng).await;
+
+    // `b` and `c` apply `b`'s update before `a`'s second, `a` and `d` after it.
+    group.deliver(&by_b, &[2]);
+    group.deliver(&then_by_a, &[1, 2, 3]);
+    group.deliver(&by_b, &[0, 3]);
+
+    group.check("after an update reused a key a causally unrelated update removes");
+    group.assert_trees_match_replay(
+        "after an update reused a key a causally unrelated update removes",
+    );
+    // `a`'s second update saw its first one there but not `b`'s, so `b`'s
+    // version survives beside it although the two share a key.
+    for replica in &group.replicas {
+        let origins: BTreeSet<_> = replica
+            .tree
+            .origins_by_node()
+            .into_iter()
+            .filter(|(node, _)| *node == above)
+            .map(|(_, origin)| origin)
+            .collect();
+        assert_eq!(origins, BTreeSet::from([by_b.digest(), then_by_a.digest()]));
+    }
+}
+
+/// An update and a copy of it, re-signed by its author, that differ only in the secret
+/// sealed to `entry`. Both contain the same keys, and neither is causally after the other.
+async fn an_update_and_its_resealed_twin(
+    group: &mut Group<NoImplicitRemoves>,
+    author: usize,
+    entry: TreeNodeIndex,
+    rng: &mut StdRng,
+) -> (Arc<Verified<CgkaOperation>>, Arc<Verified<CgkaOperation>>) {
+    let update = group.rotate(author, rng).await;
+    let twin = resigned(&update, &group.members[author].signer, |change| {
+        let CgkaChange::Update { new_path, .. } = change else {
+            unreachable!("a rotation is an update")
+        };
+        reseal(
+            new_path.path[0]
+                .1
+                .sk
+                .get_mut(&entry)
+                .expect("the path's first node seals a secret to that child"),
+        );
+    })
+    .await;
+    (update, twin)
+}
+
+#[tokio::test]
+async fn a_resealed_twin_arriving_after_a_covering_update_leaves_replicas_matching_a_replay() {
+    let mut rng = StdRng::seed_from_u64(0x0cd0_1241);
+    let mut group = Group::new(4, &mut rng).await;
+    group.settle(0, &mut rng).await;
+
+    let (update, twin) = an_update_and_its_resealed_twin(
+        &mut group,
+        1,
+        TreeNodeIndex::Leaf(LeafNodeIndex::new(1)),
+        &mut rng,
+    )
+    .await;
+    group.broadcast(&update);
+    // `a`'s update covers `b`'s, so it removes the keys the twin also contains.
+    let by_a = group.rotate(0, &mut rng).await;
+    group.broadcast(&by_a);
+    group.broadcast(&twin);
+
+    group.check("after the twin arrives behind a covering update");
+    group.assert_trees_match_replay("after the twin arrives behind a covering update");
+    group.settle(2, &mut rng).await;
+    group.assert_key_agreement("after an update that has the twin in its past");
+}
+
+#[tokio::test]
+async fn a_rotation_keeping_the_leaf_key_converges_with_a_concurrent_rotation_by_another_instance()
+{
+    let mut rng = StdRng::seed_from_u64(0x0cd0_1237);
+    let mut group = Group::new(3, &mut rng).await;
+
+    // As in a document's genesis, `a` rotates with the prekey its add
+    // contained, while a second instance of `a` rotates to a fresh key. `b`
+    // receives the genesis rotation first, `c` the other.
+    let signer = group.members[0].signer.clone();
+    let prekey = group.members[0].sk;
+    let mut second_instance = group.replicas[0].clone();
+    let fresh = ShareSecretKey::generate(&mut rng);
+    let by_second = rotate_to(&mut second_instance, &signer, fresh, &mut rng).await;
+    let genesis = rotate_to(&mut group.replicas[0], &signer, prekey, &mut rng).await;
+    group.deliver(&genesis, &[1]);
+    group.deliver(&by_second, &[0, 1, 2]);
+    group.deliver(&genesis, &[2]);
+
+    group.check("after a rotation keeping the leaf key and a concurrent one by another instance");
+    group.assert_trees_match_replay(
+        "after a rotation keeping the leaf key and a concurrent one by another instance",
+    );
+}
+
+/// One author in [`replicas_converge_over_random_causal_delivery_orders`]: a member's
+/// signer and one replica of that member.
+struct Author {
+    signer: MemorySigner,
+    replica: Cgka<NoImplicitRemoves>,
+}
+
+/// Merge `op` into `replica`, and assert that the versions it removed are
+/// exactly those at the nodes it writes whose origins are in its causal past.
+fn merge_removing_only_its_past(
+    replica: &mut Cgka<NoImplicitRemoves>,
+    op: &Arc<Verified<CgkaOperation>>,
+) {
+    let CgkaChange::Update { new_path, .. } = &op.payload().change else {
+        unreachable!("these ops are rotations")
+    };
+    let issuer = MemberId::from(op.issuer());
+    // Only updates are applied, so every path is valid.
+    let written: Vec<TreeNodeIndex> = [TreeNodeIndex::Leaf(
+        *replica
+            .tree
+            .leaf_index_for_id(issuer)
+            .expect("the issuer is in the tree"),
+    )]
+    .into_iter()
+    .chain(
+        new_path
+            .path
+            .iter()
+            .map(|(idx, _)| TreeNodeIndex::Inner(InnerNodeIndex::new(*idx))),
+    )
+    .collect();
+    let past = causal_past(&replica.ops_graph, &op.payload().predecessors);
+    let before = replica.tree.origins_by_node();
+    replica
+        .merge_concurrent_operation(op.clone())
+        .expect("the op's predecessors are applied");
+    let after = replica.tree.origins_by_node();
+    for (node, origin) in before.iter().filter(|version| !after.contains(version)) {
+        assert!(
+            past.contains(origin) && written.contains(node),
+            "merging {} removed a version at {node:?} written by {origin}, which is not a node \
+             it writes or not in its past",
+            op.digest()
+        );
+    }
+    let kept = replica.tree.origins_at(issuer, new_path);
+    assert!(
+        kept.is_disjoint(&past),
+        "merging {} kept a version written in its past at a node it writes",
+        op.digest()
+    );
+}
+
+/// Apply to `replica` every op in `ops` it lacks, choosing at random among
+/// those whose predecessors it has, until `limit` are applied or none is left.
+fn deliver_in_random_causal_order(
+    replica: &mut Cgka<NoImplicitRemoves>,
+    ops: &[Arc<Verified<CgkaOperation>>],
+    limit: usize,
+    rng: &mut StdRng,
+) {
+    use rand::seq::IteratorRandom;
+    for _ in 0..limit {
+        let Some(op) = ops
+            .iter()
+            .filter(|op| {
+                !replica.ops_graph.contains_op_hash(&op.digest())
+                    && replica.contains_all(op.payload().predecessors())
+            })
+            .choose(rng)
+        else {
+            return;
+        };
+        merge_removing_only_its_past(replica, op);
+    }
+}
+
+/// A rotation by `author`, edited at random so that it reuses another op's key
+/// at a node they share, or is a resealed twin of one of `author`'s earlier
+/// ops. The author's replica applies it.
+async fn a_rotation_that_may_misbehave(
+    author: &mut Author,
+    published: &[Arc<Verified<CgkaOperation>>],
+    rng: &mut StdRng,
+) -> Arc<Verified<CgkaOperation>> {
+    use rand::{seq::SliceRandom, Rng};
+    let paths: Vec<_> = published
+        .iter()
+        .filter_map(|op| match &op.payload().change {
+            CgkaChange::Update { new_path, .. } => Some(new_path.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let own: Vec<_> = published
+        .iter()
+        .filter(|op| {
+            MemberId::from(op.issuer()) == MemberId::from(&author.signer.0)
+                && author.replica.ops_graph.contains_op_hash(&op.digest())
+        })
+        .collect();
+    let choice = rng.gen_range(0..3);
+    if choice == 2 {
+        if let Some(original) = own.choose(rng) {
+            let twin = resigned(original, &author.signer, |change| {
+                let CgkaChange::Update { new_path, .. } = change else {
+                    unreachable!("an author's ops are rotations")
+                };
+                if let Some(sealed) = new_path
+                    .path
+                    .first_mut()
+                    .and_then(|(_, node)| node.sk.values_mut().next())
+                {
+                    reseal(sealed);
+                }
+            })
+            .await;
+            author
+                .replica
+                .merge_concurrent_operation(twin.clone())
+                .expect("the twin's predecessors are applied");
+            return twin;
+        }
+    }
+    let sk = ShareSecretKey::generate(rng);
+    let op = rotate_to(&mut author.replica.clone(), &author.signer, sk, rng).await;
+    let op = resigned(&op, &author.signer, |change| {
+        let CgkaChange::Update { new_path, .. } = change else {
+            unreachable!("a rotation is an update")
+        };
+        if choice == 1 {
+            let shared: Vec<_> = new_path
+                .path
+                .iter()
+                .enumerate()
+                .flat_map(|(i, (idx, _))| {
+                    paths.iter().flat_map(move |path| {
+                        path.path
+                            .iter()
+                            .filter(move |(other_idx, _)| other_idx == idx)
+                            .map(move |(_, node)| (i, node.pk))
+                    })
+                })
+                .collect();
+            if let Some((i, pk)) = shared.choose(rng) {
+                new_path.path[*i].1.pk = *pk;
+            }
+        }
+    })
+    .await;
+    author
+        .replica
+        .merge_concurrent_operation(op.clone())
+        .expect("the author has the rotation's predecessors");
+    op
+}
+
+#[test]
+fn replicas_converge_over_random_causal_delivery_orders() {
+    for_each_seed(|mut rng| async move {
+        use rand::Rng;
+        let mut group = Group::new(3, &mut rng).await;
+        group.settle(0, &mut rng).await;
+        let start = group.replicas.clone();
+
+        // Each member, and a second instance of `a`, rotates after receiving
+        // some of the ops published so far.
+        let mut authors: Vec<Author> = (0..3)
+            .map(|i| Author {
+                signer: group.members[i].signer.clone(),
+                replica: start[i].clone(),
+            })
+            .chain([Author {
+                signer: group.members[0].signer.clone(),
+                replica: start[0].clone(),
+            }])
+            .collect();
+        let mut published = Vec::new();
+        for _ in 0..10 {
+            let author = &mut authors[rng.gen_range(0..4)];
+            let limit = rng.gen_range(0..=published.len());
+            deliver_in_random_causal_order(&mut author.replica, &published, limit, &mut rng);
+            let op = a_rotation_that_may_misbehave(author, &published, &mut rng).await;
+            published.push(op);
+        }
+
+        let mut replicas: Vec<_> = authors.into_iter().map(|a| a.replica).collect();
+        replicas.extend(start.iter().cloned());
+        for replica in &mut replicas {
+            deliver_in_random_causal_order(replica, &published, usize::MAX, &mut rng);
+        }
+        // A rotation that reuses another op's key at a shared node leaves that
+        // node's parent encrypted to a key the node no longer contains.
+        // `Group::check` reports that as a corrupt tree whatever the merge
+        // rule, so this test compares the trees and checks chain bookkeeping
+        // instead.
+        for (i, replica) in replicas.iter().enumerate() {
+            assert_chain_bookkeeping(replica, &format!("replica {i}"));
+            assert!(
+                replica.tree == replicas[0].tree,
+                "replica {i} applied the same ops as replica 0 and has a different tree"
+            );
+        }
+        group.replicas = replicas;
+        group.assert_trees_match_replay("after every replica applied every op");
+    });
 }

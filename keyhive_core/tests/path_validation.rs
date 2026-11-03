@@ -74,7 +74,16 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
     let junk = own_prekey(&alice, design_doc).await;
     new_path.path = vec![7u32, 9]
         .into_iter()
-        .map(|i| (i, SecretStore::new(junk, junk, BTreeMap::new())))
+        .map(|i| {
+            (
+                i,
+                SecretStore {
+                    pk: junk,
+                    sk: BTreeMap::new(),
+                    encrypter_pk: junk,
+                },
+            )
+        })
         .collect();
     let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),

@@ -35,8 +35,7 @@ async fn forged_update(
     let CgkaChange::Update { new_path, .. } = &mut payload.change else {
         unreachable!("an update")
     };
-    for (_, node) in new_path.path.iter_mut() {
-        let version = node.head_mut();
+    for (_, version) in new_path.path.iter_mut() {
         let encrypter_sk = *copy
             .owner_sks
             .get(&version.encrypter_pk)

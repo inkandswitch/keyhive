@@ -271,7 +271,7 @@ async fn rotation_before_merge_scenario(seed: u64) -> bool {
     group.deliver(&rot_a, &[1, 2]);
 
     // A membership change forces the merge without re-encrypting any path, so
-    // the rotation above is the only writer to `d`'s ancestors.
+    // the rotation above is the only origin of the versions at `d`'s ancestors.
     let e = member(&mut rng);
     group.names.insert(e.id, "e".to_string());
     let add_e = group.add(2, e.id, e.pk).await;
@@ -518,17 +518,15 @@ pub(super) fn learn_from(
     loop {
         let before = known.len();
         for path in paths {
-            for (_, node) in &path.path {
-                for version in node.versions() {
-                    if known.contains_key(&version.pk) {
-                        continue;
-                    }
-                    let secret = version.sk.values().find_map(|encrypted| {
-                        try_decrypt(doc_id, &known, version.encrypter_pk, encrypted)
-                    });
-                    if let Some(sk) = secret {
-                        known.insert(version.pk, sk);
-                    }
+            for (_, version) in &path.path {
+                if known.contains_key(&version.pk) {
+                    continue;
+                }
+                let secret = version.sk.values().find_map(|encrypted| {
+                    try_decrypt(doc_id, &known, version.encrypter_pk, encrypted)
+                });
+                if let Some(sk) = secret {
+                    known.insert(version.pk, sk);
                 }
             }
         }
@@ -585,25 +583,23 @@ fn removed_members_learn_nothing_from_a_rotation_that_excludes_them() {
                     &paths,
                 );
                 assert!(
-                    new_path(op).path.iter().any(|(_, node)| node
-                        .versions()
+                    new_path(op)
+                        .path
                         .iter()
-                        .any(|v| theirs.contains_key(&v.pk))),
+                        .any(|(_, node)| theirs.contains_key(&node.pk)),
                     "{} could not decrypt a rotation by {} that included them",
                     name_for(j),
                     name_for(*author),
                 );
             }
-            for (idx, node) in &new_path(op).path {
-                for version in node.versions() {
-                    assert!(
-                        !learned.contains_key(&version.pk),
-                        "removed members {:?} learned the secret at inner node {idx} of a \
-                         rotation by {} from a tree they did not belong to",
-                        excluded.iter().map(|&i| name_for(i)).collect::<Vec<_>>(),
-                        name_for(*author),
-                    );
-                }
+            for (idx, version) in &new_path(op).path {
+                assert!(
+                    !learned.contains_key(&version.pk),
+                    "removed members {:?} learned the secret at inner node {idx} of a \
+                     rotation by {} from a tree they did not belong to",
+                    excluded.iter().map(|&i| name_for(i)).collect::<Vec<_>>(),
+                    name_for(*author),
+                );
             }
         }
     });
@@ -662,7 +658,7 @@ async fn a_removal_beats_a_concurrent_add_of_the_same_member() {
     let next_keys: Vec<ShareKey> = new_path(&next)
         .path
         .iter()
-        .flat_map(|(_, node)| node.versions().iter().map(|v| v.pk))
+        .map(|(_, node)| node.pk)
         .collect();
     assert!(
         next_keys.iter().any(|pk| learned_by_c.contains_key(pk)),

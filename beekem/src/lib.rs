@@ -33,6 +33,7 @@ pub mod secret_store;
 pub mod transact;
 pub mod tree;
 pub mod treemath;
+pub mod versions;
 
 #[cfg(any(test, feature = "test_utils"))]
 pub mod test_utils;
