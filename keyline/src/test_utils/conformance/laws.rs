@@ -83,9 +83,9 @@ where
         });
 }
 
-/// With revocations, `members` and `is_live` agree with the value form: admin
-/// reach, coverage, the live set as a least fixed point with revocation by the
-/// audience, and clamped powers.
+/// With revocations, `members`, `is_live` and `conveyed_power` agree with the value
+/// form: admin reach, coverage, the live set as a least fixed point with
+/// revocation by the audience, and clamped powers.
 pub fn matches_naive_oracle_with_revocations<C: Backend>()
 where
     C::Watermark: TestWatermark,
@@ -108,6 +108,15 @@ where
                     k.is_live(&d.digest()),
                     expected.live.contains(&d.digest()),
                     "is_live({d:?})"
+                );
+                let conveyed = expected
+                    .live
+                    .contains(&d.digest())
+                    .then(|| expected.cap[&d.digest()]);
+                assert_eq!(
+                    k.conveyed_power(&d.digest()),
+                    conveyed,
+                    "conveyed_power({d:?})"
                 );
             }
         });
@@ -329,6 +338,43 @@ where
                     .map(|r| r.digest())
                     .collect();
                 assert_eq!(k.revocations_of(&target), expected);
+            }
+        });
+}
+
+/// `conveyed_power` is what one delegation contributes to its audience's level.
+/// For a live delegation it is no more than its `power`, its issuer's level,
+/// or its audience's level. When every delegation to an audience is about one
+/// subject, the audience's level over that subject is the greatest level those
+/// delegations convey.
+pub fn conveyed_power_is_what_a_delegation_contributes<C: Backend>()
+where
+    C::Watermark: TestWatermark,
+{
+    bolero::check!()
+        .with_arbitrary::<CertSet<C::Watermark>>()
+        .for_each(|set| {
+            let k: Harness<C> = build(set.certs.iter().cloned());
+            for d in set.delegations() {
+                let conveyed = k.conveyed_power(&d.digest());
+                if let Some(l) = conveyed {
+                    assert!(l <= d.power, "{d:?}");
+                    assert!(Some(l) <= k.effective_power(d.subject, d.issuer), "{d:?}");
+                    assert!(Some(l) <= k.effective_power(d.subject, d.audience), "{d:?}");
+                }
+            }
+            for s in ids() {
+                for a in ids().filter(|a| *a != s) {
+                    if set.delegations().any(|d| d.audience == a && d.subject != s) {
+                        continue;
+                    }
+                    let greatest = set
+                        .delegations()
+                        .filter(|d| d.audience == a)
+                        .filter_map(|d| k.conveyed_power(&d.digest()))
+                        .max();
+                    assert_eq!(k.effective_power(s, a), greatest, "({s}, {a})");
+                }
             }
         });
 }
