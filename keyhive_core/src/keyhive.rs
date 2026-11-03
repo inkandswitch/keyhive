@@ -555,45 +555,88 @@ where
     }
 
     /// Build a CGKA from `ops`. Apply them in causal order, then adopt the
-    /// the secrets `me` holds for its key in the CGKA group. An operation
-    /// that cannot be applied is logged and skipped. Returns the
-    /// CGKA and the operations left out because a predecessor is missing.
+    /// secrets `me` holds for its key in the CGKA group.
+    ///
+    /// If `authorize` is true, each operation is first authorized. A denied
+    /// operation is recorded as denied so every operation built on it can be
+    /// denied as well. Any other operation that cannot be applied is logged
+    /// and skipped.
+    ///
+    /// Returns the CGKA, the operations whose authorization is pending although
+    /// every predecessor was applied, and the operations left out because a
+    /// predecessor is missing.
     ///
     /// The operations are applied without implicit removes and the CGKA then
-    /// replays its graph once with the document's implicit removes protocol. The replay asks Keyline only for
-    /// what the cached non-members do not cover, so a fork or a reload of a graph
-    /// already replayed does not require a new query. If Keyline cannot answer
-    /// at that point, or the replay fails, that is logged and the replay waits
-    /// for the CGKA's next use.
+    /// replays its graph once with the document's implicit removes protocol.
+    /// The replay asks Keyline only for what the cached non-members do not
+    /// cover, so a fork or a reload of a graph already replayed does not
+    /// require a new query. If Keyline cannot answer at that point, or the
+    /// replay fails, that is logged and the replay waits for the CGKA's next
+    /// use.
     async fn cgka_from_ops(
         &self,
         doc_id: DocumentId,
         mut ops: Vec<Arc<Verified<CgkaOperation>>>,
         me: IndividualId,
         secrets: &BTreeMap<ShareKey, ShareSecretKey>,
-    ) -> (
-        Cgka<KeylineImplicitRemovesProtocol>,
-        Vec<Arc<Verified<CgkaOperation>>>,
-    ) {
+        check_authorization: bool,
+    ) -> Result<RebuiltCgka, KeylineStorageError<K::Error>> {
         let doc = Identifier::from(doc_id);
         let mut cgka = Cgka::new(doc_id, me, ShareKeyMap::new(), NoImplicitRemoves);
         let mut has_progressed = true;
         while has_progressed {
             has_progressed = false;
-            ops.retain(|op| {
-                match apply_one::<core::convert::Infallible, _>(&mut cgka, op.dupe(), me, secrets) {
-                    Ok(_) => {
-                        has_progressed = true;
-                        false
-                    }
-                    Err(ReceiveCgkaOpError::CgkaError(CgkaError::OutOfOrderOperation)) => true,
-                    Err(error) => {
-                        tracing::warn!(%doc_id, %error, "an archived operation does not apply");
-                        false
+            let mut waiting = Vec::new();
+            for op in ops {
+                if check_authorization {
+                    let predecessors = op.payload().predecessors();
+                    let predecessor_set = self
+                        .certificate_sets
+                        .lock()
+                        .await
+                        .predecessor_set(&cgka, &predecessors);
+                    match self
+                        .cgka_op_is_authorized_over(&op, doc_id, predecessor_set)
+                        .await?
+                    {
+                        Ok(()) => {}
+                        Err(CgkaUnauthorized::Pending) => {
+                            waiting.push(op);
+                            continue;
+                        }
+                        Err(CgkaUnauthorized::Denied) => {
+                            tracing::warn!(%doc_id, op = %op.digest(), "an archived operation is not authorized");
+                            self.certificate_sets.lock().await.deny(op.digest());
+                            has_progressed = true;
+                            continue;
+                        }
                     }
                 }
-            });
+                match apply_one::<core::convert::Infallible, _>(&mut cgka, op.dupe(), me, secrets) {
+                    Ok(_) => has_progressed = true,
+                    Err(ReceiveCgkaOpError::CgkaError(CgkaError::OutOfOrderOperation)) => {
+                        waiting.push(op);
+                    }
+                    Err(ReceiveCgkaOpError::CgkaError(error))
+                        if check_authorization && never_merges(&error) =>
+                    {
+                        tracing::warn!(%doc_id, %error, "an archived operation does not apply");
+                        self.certificate_sets.lock().await.deny(op.digest());
+                        has_progressed = true;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%doc_id, %error, "an archived operation does not apply");
+                    }
+                }
+            }
+            ops = waiting;
         }
+        let (authorization_pending, unapplied) = ops.into_iter().partition(|op| {
+            op.payload()
+                .predecessors()
+                .iter()
+                .all(|p| cgka.op(p).is_some())
+        });
         adopt_own_cgka_secrets(&mut cgka, me, secrets);
         let mut cgka = cgka.with_implicit_removes_protocol(self.implicit_removes_protocol(doc));
         let replayed = self
@@ -608,7 +651,11 @@ where
                 tracing::warn!(%doc_id, %error, "Keyline could not answer for an archived CGKA graph");
             }
         }
-        (cgka, ops)
+        Ok(RebuiltCgka {
+            cgka,
+            authorization_pending,
+            unapplied,
+        })
     }
 
     /// Before writing to `doc_id`, issue the CGKA operations this
@@ -2742,8 +2789,23 @@ where
         Ok(())
     }
 
+    /// Whether `signed_op` is authorized on this document against its CGKA
+    /// graph.
+    async fn cgka_op_is_authorized(
+        &self,
+        signed_op: &Verified<CgkaOperation>,
+        doc_id: DocumentId,
+    ) -> Result<Result<(), CgkaUnauthorized>, KeylineStorageError<K::Error>> {
+        let predecessors = signed_op.payload().predecessors();
+        let predecessor_set = self.predecessor_set(doc_id, &predecessors).await;
+        self.cgka_op_is_authorized_over(signed_op, doc_id, predecessor_set)
+            .await
+    }
+
     /// Whether `signed_op` is authorized on this document, evaluated over that
-    /// op's certificate sets.
+    /// op's certificate sets. `predecessor_set` is everything its predecessors
+    /// and their causal ancestors cite or `None` if any are missing from the
+    /// CGKA graph.
     ///
     /// Denied if a predecessor was already denied. Otherwise pending until every
     /// predecessor is in the CGKA graph, then denied if its citations are not
@@ -2764,10 +2826,11 @@ where
     /// * A remove does not list any specific members. Its effect comes only
     ///   from the removals implied by its citations.
     /// * An update rotates its signer's own key in the CGKA group.
-    async fn cgka_op_is_authorized(
+    async fn cgka_op_is_authorized_over(
         &self,
         signed_op: &Verified<CgkaOperation>,
         doc_id: DocumentId,
+        predecessor_set: Option<CitationSet>,
     ) -> Result<Result<(), CgkaUnauthorized>, KeylineStorageError<K::Error>> {
         use CgkaUnauthorized::{Denied, Pending};
 
@@ -2784,7 +2847,7 @@ where
         if any_denied {
             return Ok(Err(Denied));
         }
-        let Some(predecessor_set) = self.predecessor_set(doc_id, &predecessors).await else {
+        let Some(predecessor_set) = predecessor_set else {
             return Ok(Err(Pending));
         };
 
@@ -3248,8 +3311,9 @@ where
 
     /// Rebuild a replica from its archive. The certificates are inserted into
     /// `keyline` (a no-op for those it already holds), and each document's
-    /// `Cgka` is rebuilt from its archived operations. As with [`Self::generate`],
-    /// `keyline` becomes this keyhive's own.
+    /// `Cgka` is rebuilt from valid archived operations. As with
+    /// [`Self::generate`], `keyline` becomes this keyhive's own. Fails if
+    /// Keyline cannot answer.
     #[instrument(skip_all)]
     pub async fn try_from_archive(
         archive: &Archive<T>,
@@ -3271,12 +3335,15 @@ where
             listener,
             certificates,
             csprng,
+            true,
         )
         .await
     }
 
     /// [`Self::try_from_archive`] over certificates shared with another keyhive:
-    /// a fork and its trunk.
+    /// a fork and its trunk. Without `authorize`, the archived CGKA operations
+    /// are applied unchecked, which a fork can do because its trunk checked
+    /// them when they arrived.
     async fn from_archive_sharing(
         archive: &Archive<T>,
         signer: S,
@@ -3284,6 +3351,7 @@ where
         listener: L,
         shared: Arc<Certificates<K>>,
         csprng: Arc<Mutex<R>>,
+        authorize: bool,
     ) -> Result<Self, TryFromArchiveError<K::Error>> {
         let signer_id = IndividualId::try_from(signer.verifying_key())?;
         if signer_id != archive.id() {
@@ -3380,7 +3448,22 @@ where
                 .filter(|op| invites(op.payload(), me))
                 .map(|op| op.digest())
                 .collect();
-            let (cgka, mut unapplied) = hive.cgka_from_ops(doc_id, ops, me, &secrets).await;
+            let RebuiltCgka {
+                cgka,
+                authorization_pending,
+                mut unapplied,
+            } = hive
+                .cgka_from_ops(doc_id, ops, me, &secrets, authorize)
+                .await?;
+            for op in authorization_pending {
+                deferred.insert(op.digest());
+                hive.pending_events
+                    .lock()
+                    .await
+                    .push(Arc::new(StaticEvent::CgkaOperation(Box::new(
+                        op.signed().as_ref().clone(),
+                    ))));
+            }
             // Operations that descend from a deferred operation are deferred with it.
             let mut has_progressed = true;
             while has_progressed {
@@ -3821,6 +3904,7 @@ where
             Log::new(),
             self.certificates.dupe(),
             self.csprng.clone(),
+            false,
         )
         .await
         .expect("an archive with no certificates verifies and inserts nothing")
@@ -4369,6 +4453,18 @@ pub enum CgkaSyncError<E: core::error::Error + 'static> {
     /// The CGKA refused an operation or signing one failed.
     #[error(transparent)]
     Cgka(#[from] CgkaError),
+}
+
+/// A CGKA rebuilt from archived operations by [`Keyhive::cgka_from_ops`].
+struct RebuiltCgka {
+    cgka: Cgka<KeylineImplicitRemovesProtocol>,
+
+    /// Operations whose predecessors were all applied but whose authorization
+    /// is pending.
+    authorization_pending: Vec<Arc<Verified<CgkaOperation>>>,
+
+    /// Operations left out because a predecessor is missing.
+    unapplied: Vec<Arc<Verified<CgkaOperation>>>,
 }
 
 /// Why [`Keyhive::cgka_op_is_authorized`] denies a CGKA op.
@@ -5051,6 +5147,185 @@ mod tests {
         assert_eq!(
             keyline_members(&loaded, doc_id).await,
             keyline_members(&hive, doc_id).await
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_archived_operation_that_receiving_denies_is_denied_on_reload() -> TestResult {
+        let hive = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let bob_id = introduce(&hive, &bob).await;
+        let doc_id = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        hive.add_member(Identifier::from(bob_id), doc_id, Power::Read)
+            .await?;
+        let heads = hive
+            .document_state(doc_id)
+            .await
+            .ok_or("the document is held")?
+            .lock()
+            .await
+            .cgka()
+            .heads()
+            .iter()
+            .copied()
+            .collect();
+        let remove = |predecessors, removed| CgkaOperation {
+            doc_id: doc_id.into(),
+            predecessors,
+            change: CgkaChange::Remove {
+                citations: BTreeSet::new(),
+                removed,
+            },
+        };
+        let listing_bob = hive
+            .sign_cgka_op(remove(
+                heads,
+                BTreeSet::from([beekem::operation::RemovedMember {
+                    id: beekem::id::MemberId::from(bob_id),
+                    leaf_idx: 1,
+                }]),
+            ))
+            .await?;
+        let built_on_it = hive
+            .sign_cgka_op(remove(
+                BTreeSet::from([listing_bob.digest()]),
+                BTreeSet::new(),
+            ))
+            .await?;
+
+        let mut archive = hive.into_archive().await?;
+        let listing_bob_digest = listing_bob.digest();
+        archive.cgka_ops.push(listing_bob);
+        let signer = hive.active.signer.clone();
+        let loaded: TestKeyhive = Keyhive::try_from_archive(
+            &archive,
+            signer,
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            MemoryKeyline::new(),
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await?;
+
+        assert!(
+            !loaded.has_cgka_op(doc_id, listing_bob_digest).await,
+            "a reload applied an operation that receiving it denies"
+        );
+        let result = loaded.receive_cgka_op(built_on_it).await;
+        assert!(
+            matches!(result, Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(_))),
+            "{result:?}"
+        );
+        Ok(())
+    }
+
+    /// A remove with no predecessors, signed by `doc_id`'s creator. It is
+    /// authorized, since it cites the document's creation, but a root that is
+    /// not an add never merges.
+    async fn an_authorized_root_that_never_merges(
+        hive: &TestKeyhive,
+        doc_id: DocumentId,
+    ) -> TestResult<verified::Signed<CgkaOperation>> {
+        let creation_citations = hive
+            .cgka_ops_for_doc(&doc_id)
+            .await
+            .ok_or("the document is held")?
+            .iter()
+            .find(|op| op.payload().predecessors().is_empty())
+            .ok_or("the document has a root")?
+            .payload()
+            .citations()
+            .clone();
+        Ok(hive
+            .sign_cgka_op(CgkaOperation {
+                doc_id: doc_id.into(),
+                predecessors: BTreeSet::new(),
+                change: CgkaChange::Remove {
+                    citations: creation_citations,
+                    removed: BTreeSet::new(),
+                },
+            })
+            .await?)
+    }
+
+    #[tokio::test]
+    async fn a_rebuild_without_authorization_denies_nothing() -> TestResult {
+        let hive = make_keyhive().await;
+        let doc_id = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let invalid_root = Arc::new(
+            an_authorized_root_that_never_merges(&hive, doc_id)
+                .await?
+                .verify()?,
+        );
+
+        hive.cgka_from_ops(
+            doc_id,
+            vec![invalid_root.dupe()],
+            hive.active.id(),
+            &BTreeMap::new(),
+            false,
+        )
+        .await?;
+
+        assert!(
+            !hive
+                .certificate_sets
+                .lock()
+                .await
+                .is_denied(&invalid_root.digest()),
+            "a rebuild that checks no authorization recorded a denial"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_archived_operation_built_on_one_that_never_merges_is_denied_in_any_order(
+    ) -> TestResult {
+        let hive = make_keyhive().await;
+        let doc_id = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let doc_ops = hive
+            .cgka_ops_for_doc(&doc_id)
+            .await
+            .ok_or("the document is held")?;
+        let invalid_root = an_authorized_root_that_never_merges(&hive, doc_id).await?;
+        let built_on_it = hive
+            .sign_cgka_op(CgkaOperation {
+                doc_id: doc_id.into(),
+                predecessors: BTreeSet::from([invalid_root.digest()]),
+                change: CgkaChange::Remove {
+                    citations: BTreeSet::new(),
+                    removed: BTreeSet::new(),
+                },
+            })
+            .await?;
+
+        // With none of the document's own operations archived, nothing else
+        // applies, so only the denial can lead to a second pass.
+        let mut archive = hive.into_archive().await?;
+        let doc_op_digests: HashSet<_> = doc_ops.iter().map(|op| op.digest()).collect();
+        archive
+            .cgka_ops
+            .retain(|op| !doc_op_digests.contains(&op.digest()));
+        archive.cgka_ops.extend([built_on_it.clone(), invalid_root]);
+        let signer = hive.active.signer.clone();
+        let loaded: TestKeyhive = Keyhive::try_from_archive(
+            &archive,
+            signer,
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            MemoryKeyline::new(),
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await?;
+
+        assert!(
+            loaded
+                .certificate_sets
+                .lock()
+                .await
+                .is_denied(&built_on_it.digest()),
+            "an operation listed before the one it was built on was not denied"
         );
         Ok(())
     }
