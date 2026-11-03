@@ -71,7 +71,7 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
     let inviter_pk = inviter_sk.share_key();
     let create_add_with_invitation_wrapping = |secret: PcsKey| CgkaOperation {
         doc_id,
-        predecessors: BTreeSet::new(),
+        predecessors: Default::default(),
         change: CgkaChange::Add {
             added_id: bob_id,
             pk: bob_pk,

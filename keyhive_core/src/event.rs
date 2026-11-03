@@ -154,7 +154,7 @@ mod tests {
         let cgka_op_1 = Verified::sign_sync(
             &CgkaOperation {
                 doc_id: TreeId::from(doc_id1),
-                predecessors: BTreeSet::new(),
+                predecessors: Default::default(),
                 change: CgkaChange::Add {
                     added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
                     pk: ShareKey::generate(&mut csprng),
@@ -170,7 +170,7 @@ mod tests {
         let cgka_op_2 = Verified::sign_sync(
             &CgkaOperation {
                 doc_id: TreeId::from(doc_id2),
-                predecessors: BTreeSet::new(),
+                predecessors: Default::default(),
                 change: CgkaChange::Remove {
                     citations: BTreeSet::new(),
                     removed: BTreeSet::new(),
@@ -182,7 +182,7 @@ mod tests {
         let cgka_op_3 = Verified::sign_sync(
             &CgkaOperation {
                 doc_id: TreeId::from(doc_id1),
-                predecessors: BTreeSet::new(),
+                predecessors: Default::default(),
                 change: CgkaChange::Add {
                     added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
                     pk: ShareKey::generate(&mut csprng),

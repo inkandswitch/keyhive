@@ -20,6 +20,7 @@ use crate::{
         InvitationSecret, PredecessorSecret, RemovedMember,
     },
     pcs_key::PcsKey,
+    predecessors::Predecessors,
     root_secrets::{RootSecrets, VerifiedRootSecret},
     transact::{Fork, Merge},
     tree::BeeKem,
@@ -434,7 +435,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         let leaf_index = self.tree.push_leaf(id, pk.into());
         let op = CgkaOperation {
             doc_id: self.doc_id,
-            predecessors: self.ops_graph.cgka_op_heads.iter().copied().collect(),
+            predecessors: Predecessors::heads_of(&self.ops_graph),
             change: CgkaChange::Add {
                 added_id: id,
                 pk,
@@ -652,7 +653,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
     ) -> Result<Verified<CgkaOperation>, CgkaError> {
         let op = CgkaOperation {
             doc_id: self.doc_id,
-            predecessors: self.ops_graph.cgka_op_heads.iter().copied().collect(),
+            predecessors: Predecessors::heads_of(&self.ops_graph),
             change: CgkaChange::Remove { citations, removed },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
@@ -690,7 +691,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestors);
             let op = CgkaOperation {
                 doc_id: self.doc_id,
-                predecessors: self.ops_graph.cgka_op_heads.iter().copied().collect(),
+                predecessors: Predecessors::heads_of(&self.ops_graph),
                 change: CgkaChange::Update {
                     new_path: Box::new(new_path),
                     predecessor_secrets,
@@ -767,11 +768,11 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         }
         self.ops_graph.check_can_add(op.payload())?;
         let predecessors = op.payload().predecessors();
-        let is_concurrent = !self.ops_graph.heads_contained_in(&predecessors);
+        let is_concurrent = !predecessors.contains_heads_of(&self.ops_graph);
         if is_concurrent {
             self.pending_replay = self.pending_replay
                 || op.payload().is_membership_change()
-                || self.ops_graph.batch_has_membership_change(&predecessors)?;
+                || self.ops_graph.batch_has_membership_change(predecessors)?;
             if self.pending_replay {
                 self.record_op(&op)?;
             } else {
@@ -789,8 +790,12 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         self.ops_graph.batches()
     }
 
-    pub fn contains_predecessors(&self, preds: &Set<Digest<CgkaOperation>>) -> bool {
-        self.ops_graph.contains_predecessors(preds)
+    /// Whether every one of `op_hashes` is in the operation graph.
+    pub fn contains_all<'a>(
+        &self,
+        op_hashes: impl IntoIterator<Item = &'a Digest<CgkaOperation>>,
+    ) -> bool {
+        self.ops_graph.contains_all(op_hashes)
     }
 
     /// Apply `op`. If it is a [`CgkaChange::Update`], record the

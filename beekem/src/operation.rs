@@ -8,6 +8,7 @@ use crate::{
     id::{MemberId, TreeId},
     keys::NodeKey,
     pcs_key::PcsKey,
+    predecessors::Predecessors,
     transact::{Fork, Merge},
     tree::PathChange,
 };
@@ -264,7 +265,7 @@ pub struct CgkaOperation {
     pub doc_id: TreeId,
 
     /// The zero or more immediate causal predecessors of this operation.
-    pub predecessors: BTreeSet<Digest<CgkaOperation>>,
+    pub predecessors: Predecessors,
 
     pub change: CgkaChange,
 }
@@ -320,8 +321,8 @@ static NO_CITATIONS: BTreeSet<CitationId> = BTreeSet::new();
 
 impl CgkaOperation {
     /// The zero or more immediate causal predecessors of this operation.
-    pub fn predecessors(&self) -> Set<Digest<CgkaOperation>> {
-        Set::from_iter(self.predecessors.iter().copied())
+    pub fn predecessors(&self) -> &Predecessors {
+        &self.predecessors
     }
 
     /// The membership citations for this operation. Empty for an update.
@@ -367,7 +368,7 @@ impl Decode for CgkaOperation {
 impl StreamDecode for CgkaOperation {
     fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
         let (doc_id, rest) = TreeId::decode_next(bytes)?;
-        let (predecessors, rest) = BTreeSet::decode_next(rest)?;
+        let (predecessors, rest) = Predecessors::decode_next(rest)?;
         let (change, rest) = CgkaChange::decode_next(rest)?;
         Ok((
             CgkaOperation {
@@ -608,8 +609,14 @@ impl CgkaOperationGraph {
         }
     }
 
-    pub fn contains_predecessors(&self, preds: &Set<Digest<CgkaOperation>>) -> bool {
-        preds.iter().all(|hash| self.cgka_ops.contains_key(hash))
+    /// Whether every one of `op_hashes` is in the graph.
+    pub fn contains_all<'a>(
+        &self,
+        op_hashes: impl IntoIterator<Item = &'a Digest<CgkaOperation>>,
+    ) -> bool {
+        op_hashes
+            .into_iter()
+            .all(|hash| self.cgka_ops.contains_key(hash))
     }
 
     /// Whether the causal graph has a single head.
@@ -627,7 +634,7 @@ impl CgkaOperationGraph {
         if predecessors.is_empty() && !matches!(op.change, CgkaChange::Add { .. }) {
             return Err(CgkaError::InvalidOperation);
         }
-        if !self.contains_predecessors(&predecessors) {
+        if !self.contains_all(predecessors) {
             return Err(CgkaError::OutOfOrderOperation);
         }
         Ok(())
@@ -664,7 +671,7 @@ impl CgkaOperationGraph {
             return Ok(Set::new());
         }
         let newly_chainable = self
-            .nearest_update_ancestors(&op.payload().predecessors())
+            .nearest_update_ancestors(op.payload().predecessors())
             .into_iter()
             .filter(|update| self.latest_updates.remove(update))
             .collect();
@@ -679,13 +686,13 @@ impl CgkaOperationGraph {
     /// in the graph, and [`CgkaError::DepthNotFound`] if one has no recorded depth.
     pub(crate) fn batch_has_membership_change(
         &self,
-        predecessors: &Set<Digest<CgkaOperation>>,
+        predecessors: &Predecessors,
     ) -> Result<bool, CgkaError> {
         if predecessors.is_empty() {
             // A root must itself be an add.
             return Ok(true);
         }
-        if self.heads_contained_in(predecessors) {
+        if predecessors.contains_heads_of(self) {
             // Every operation in the graph is a head or an ancestor of one. A
             // successor of every head is deeper than all of them and would be
             // in its own batch.
@@ -722,13 +729,13 @@ impl CgkaOperationGraph {
 
     /// The nearest [`CgkaChange::Update`] operations at or before the provided
     /// heads, skipping operations of other kinds.
-    pub(crate) fn nearest_update_ancestors(
+    pub(crate) fn nearest_update_ancestors<'a>(
         &self,
-        heads: &Set<Digest<CgkaOperation>>,
+        heads: impl IntoIterator<Item = &'a Digest<CgkaOperation>>,
     ) -> Set<Digest<CgkaOperation>> {
         let mut updates = Set::new();
         let mut seen = Set::new();
-        let mut frontier = Vec::from_iter(heads.iter().copied());
+        let mut frontier = Vec::from_iter(heads.into_iter().copied());
         while let Some(op_hash) = frontier.pop() {
             if !seen.insert(op_hash) {
                 continue;
@@ -771,14 +778,7 @@ impl CgkaOperationGraph {
         false
     }
 
-    pub fn heads_contained_in(&self, heads: &Set<Digest<CgkaOperation>>) -> bool {
-        self.cgka_op_heads.iter().all(|h| heads.contains(h))
-    }
-
-    pub fn predecessors_for(
-        &self,
-        op_hash: &Digest<CgkaOperation>,
-    ) -> Option<&BTreeSet<Digest<CgkaOperation>>> {
+    pub fn predecessors_for(&self, op_hash: &Digest<CgkaOperation>) -> Option<&Predecessors> {
         self.cgka_ops
             .get(op_hash)
             .map(|op| &op.payload().predecessors)
@@ -964,7 +964,7 @@ mod causal_graph_tests {
         );
         assert_eq!(
             trunk.predecessors_for(&on_fork_hash),
-            Some(&BTreeSet::from([root.digest()])),
+            Some(&Predecessors::from([root.digest()])),
             "the merged operation lost its predecessors"
         );
         assert_eq!(
@@ -1232,7 +1232,7 @@ mod causal_graph_tests {
 
         assert!(
             graph
-                .batch_has_membership_change(&Set::new())
+                .batch_has_membership_change(&Predecessors::default())
                 .expect("a valid graph"),
             "a second root was not put in the batch of the first add"
         );
@@ -1255,7 +1255,7 @@ mod causal_graph_tests {
 
         assert!(
             graph
-                .batch_has_membership_change(&Set::from_iter([update.digest()]))
+                .batch_has_membership_change(&Predecessors::from([update.digest()]))
                 .expect("a valid graph"),
             "an operation after the update was not put in a batch with the second root"
         );
@@ -1280,7 +1280,7 @@ mod causal_graph_tests {
         graph.depths.clear();
         assert!(
             matches!(
-                graph.batch_has_membership_change(&Set::from_iter([update.digest()])),
+                graph.batch_has_membership_change(&Predecessors::from([update.digest()])),
                 Err(CgkaError::DepthNotFound)
             ),
             "a graph missing a depth was not reported"
@@ -1317,7 +1317,7 @@ mod causal_graph_tests {
 
         assert!(
             !graph
-                .batch_has_membership_change(&graph.cgka_op_heads)
+                .batch_has_membership_change(&Predecessors::heads_of(&graph))
                 .expect("a valid graph"),
             "an operation after every head was put in a batch with an add"
         );
@@ -1379,7 +1379,7 @@ mod causal_graph_tests {
         }
 
         assert_eq!(
-            graph.nearest_update_ancestors(&Set::from_iter([later_add.digest()])),
+            graph.nearest_update_ancestors(&[later_add.digest()]),
             Set::from_iter([later.digest()]),
             "the traversal should skip the adds and stop at the first update"
         );
@@ -1411,10 +1411,7 @@ mod causal_graph_tests {
             graph.add_op(op).expect("predecessors are added first");
         }
 
-        assert_eq!(
-            graph.nearest_update_ancestors(&Set::from_iter([add.digest()])),
-            Set::new()
-        );
+        assert_eq!(graph.nearest_update_ancestors(&[add.digest()]), Set::new());
     }
 
     #[tokio::test]
