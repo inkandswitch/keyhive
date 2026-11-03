@@ -27,7 +27,8 @@
 //! - _Uncovered caps are `power`._ An uncovered edge's cap would be
 //!   `min(power, issuer's plain level)`. Every search, final or in a context,
 //!   reaches the issuer at or below that level, so `power` alone gives the
-//!   same `min`.
+//!   same `min`. `conveyed_power` returns the cap itself, so it computes
+//!   that `min` for an uncovered edge.
 //!
 //! Stratum 1 is global, so the first query after an insert costs what the
 //! whole replica costs, not what the queried subject costs; later queries
@@ -265,6 +266,24 @@ impl<W> State<W> {
     #[instrument(level = "trace", skip(self), fields(%delegation))]
     pub fn is_live(&self, delegation: &Digest<Delegation>) -> bool {
         self.delegations.contains_key(delegation) && self.evaluation().live.contains(delegation)
+    }
+
+    /// The level `delegation` conveys, which is its cap. Returns `None` if it
+    /// is not live. `caps` stores only covered edges, so an uncovered edge's
+    /// cap is computed here as the lesser of its `power` and its issuer's
+    /// effective power.
+    #[instrument(level = "trace", skip(self), fields(%delegation))]
+    pub fn conveyed_power(&self, delegation: &Digest<Delegation>) -> Option<Power> {
+        let v = self.delegations.get(delegation)?;
+        let Evaluation { live, cap, .. } = self.evaluation();
+        if !live.contains(delegation) {
+            return None;
+        }
+        let d = v.payload();
+        match cap.get(delegation) {
+            Some(cap) => Some(*cap),
+            None => Some(self.effective_power(d.subject, v.issuer())?.min(d.power)),
+        }
     }
 
     /// `audience`'s level over `subject` in the positive graph.
@@ -577,7 +596,8 @@ impl<W> State<W> {
     }
 
     /// Stratum 2, level: the least fixed point of covered-edge caps, rising
-    /// from `Relay`. Uncovered edges are absent; their cap is `power`.
+    /// from `Relay`. Uncovered edges are absent, and a search uses their
+    /// `power` in place of a cap.
     ///
     /// A live covered edge conveys at least `Relay`: being live means its
     /// issuer has a grounded derivation that avoids `covered(h)`. Each round
@@ -821,7 +841,7 @@ struct Params<'a> {
     exclude: Option<&'a Set<Identifier>>,
     /// Edges the search may step along; `None` means every edge (stratum 1).
     live: Option<&'a Set<Digest<Delegation>>>,
-    /// Caps on covered edges; absent edges convey their `power`.
+    /// Caps on covered edges. A search uses an absent edge's `power`.
     cap: Option<&'a Map<Digest<Delegation>, Power>>,
 }
 

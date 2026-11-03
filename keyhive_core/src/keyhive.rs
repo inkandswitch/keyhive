@@ -1116,14 +1116,12 @@ where
         Ok(retain)
     }
 
-    /// Adoption: the delegations that keep `removed`'s admissions alive once
-    /// `removed` is revoked from `subject`. Each live delegation `removed`
-    /// issued about `subject` is re-issued from `revoker` with the same
-    /// audience, at its power but no more than the `held` power the revoker
-    /// has over `subject`.
-    ///
-    /// The members they admitted then keep their standing, and so does
-    /// everything those members admitted in turn.
+    /// The delegations that let the members `removed` admitted to `subject` keep
+    /// their access once `removed` is revoked (adoption). Each live delegation
+    /// `removed` issued about `subject` is re-issued from `revoker` to the same
+    /// audience, at the lower of [`Keyline::conveyed_power`] and `held`, the
+    /// revoker's power. Call this before inserting the revocations, which make
+    /// those delegations dead.
     async fn adopt(
         &self,
         subject: Identifier,
@@ -1151,17 +1149,17 @@ where
             {
                 continue;
             }
-            let live = self
+            let Some(conveyed) = self
                 .keyline()
-                .is_live(signed.digest())
+                .conveyed_power(signed.digest())
                 .await
                 .map_err(KeylineStorageError::new)?
-                .value;
-            if !live {
+                .value
+            else {
                 continue;
-            }
+            };
 
-            let adoption = Delegation::new(admitted.audience, subject, admitted.power.min(held));
+            let adoption = Delegation::new(admitted.audience, subject, conveyed.min(held));
             adopted.push(self.unrevoked(revoker, adoption).await?);
         }
         Ok(adopted)
@@ -1481,8 +1479,9 @@ where
 
     /// Revoke `to_revoke`'s membership in `resource`.
     ///
-    /// With `retain_all_other_members`, the members `to_revoke` had admitted keep their
-    /// access, because their delegations are re-issued under the revoker.
+    /// With `retain_all_other_members`, each live delegation `to_revoke` issued about
+    /// `resource` is re-issued from the revoker at the level it conveyed, capped by the
+    /// revoker's own power, so the members `to_revoke` admitted keep that access.
     ///
     /// Each revocation records the content heads of every held document `resource` is
     /// or stands over, as last set with [`Self::set_content_heads`], so the content layer

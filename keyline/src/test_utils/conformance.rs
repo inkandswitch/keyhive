@@ -258,6 +258,10 @@ impl<C: Backend> Harness<C> {
         self.answer(self.store.is_live(*delegation))
     }
 
+    pub fn conveyed_power(&self, delegation: &Digest<Delegation>) -> Option<Power> {
+        self.answer(self.store.conveyed_power(*delegation))
+    }
+
     pub fn positive_power(&self, subject: Identifier, audience: Identifier) -> Option<Power> {
         self.answer(self.store.positive_power(subject, audience))
     }
@@ -367,6 +371,7 @@ macro_rules! __keyline_conformance_laws {
             retain_is_inert,
             digest_identifies_the_set,
             queries_are_consistent,
+            conveyed_power_is_what_a_delegation_contributes,
             positive_power_matches_stratum_one,
             positive_power_is_monotone,
             listings_match_the_set,

@@ -21,8 +21,6 @@ keyline = { workspace = true, features = ["std"] }
 # The in-memory Keyline store, for the test helpers.
 keyline_memory = { workspace = true, features = ["std"], optional = true }
 
-# Encoding
-
 # Crypto
 blake3 = { workspace = true, features = ["std"] }
 chacha20poly1305 = { workspace = true }
@@ -36,7 +34,6 @@ thiserror = { workspace = true }
 
 # Utilities
 async-lock = { workspace = true }
-derivative = { workspace = true }
 derive_more = { workspace = true, features = ["std"] }
 derive-where = { workspace = true }
 dupe = { workspace = true }
@@ -80,7 +77,6 @@ tracing-subscriber = { workspace = true, features = ["ansi", "env-filter"] }
 default = []
 arbitrary = ["dep:arbitrary", "keyline/arbitrary"]
 debug_events = ["prettytable-rs"]
-mermaid_docs = ["keyhive_content/mermaid_docs"]
 test_utils = ["beekem/test_utils", "dep:keyline_memory", "proptest", "proptest-derive"]
 
 [[bench]]

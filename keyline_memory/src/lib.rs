@@ -177,6 +177,13 @@ impl<F: FutureForm, W: Encode + Decode> Keyline<F> for MemoryKeyline<W> {
         F::from_future(self.read(move |s| s.is_live(&delegation)))
     }
 
+    fn conveyed_power(
+        &self,
+        delegation: Digest<Delegation>,
+    ) -> Query<'_, F, Option<Power>, Infallible> {
+        F::from_future(self.read(move |s| s.conveyed_power(&delegation)))
+    }
+
     fn positive_power(
         &self,
         subject: Identifier,

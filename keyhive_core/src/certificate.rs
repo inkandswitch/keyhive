@@ -660,6 +660,13 @@ mod tests {
             Keyline::<Sendable>::is_live(&self.0, delegation)
         }
 
+        fn conveyed_power(
+            &self,
+            delegation: Digest<Delegation>,
+        ) -> Query<'_, Sendable, Option<Power>, Self::Error> {
+            Keyline::<Sendable>::conveyed_power(&self.0, delegation)
+        }
+
         fn positive_power(
             &self,
             subject: Identifier,
