@@ -622,6 +622,7 @@ where
                     {
                         tracing::warn!(%doc_id, %error, "an archived operation does not apply");
                         self.certificate_sets.lock().await.deny(op.digest());
+                        has_progressed = true;
                     }
                     Err(error) => {
                         tracing::warn!(%doc_id, %error, "an archived operation does not apply");
@@ -5216,6 +5217,72 @@ mod tests {
         assert!(
             matches!(result, Err(ReceiveCgkaOpError::UnauthorizedCgkaOp(_))),
             "{result:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_archived_operation_built_on_one_that_never_merges_is_denied_in_any_order(
+    ) -> TestResult {
+        let hive = make_keyhive().await;
+        let doc_id = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let doc_ops = hive
+            .cgka_ops_for_doc(&doc_id)
+            .await
+            .ok_or("the document is held")?;
+        let creation_citations = doc_ops
+            .iter()
+            .find(|op| op.payload().predecessors().is_empty())
+            .ok_or("the document has a root")?
+            .payload()
+            .citations()
+            .clone();
+        let remove = |predecessors, citations| CgkaOperation {
+            doc_id: doc_id.into(),
+            predecessors,
+            change: CgkaChange::Remove {
+                citations,
+                removed: BTreeSet::new(),
+            },
+        };
+        // Authorized, since it cites the document's creation, but a root that
+        // is not an add never merges.
+        let invalid_root = hive
+            .sign_cgka_op(remove(BTreeSet::new(), creation_citations))
+            .await?;
+        let built_on_it = hive
+            .sign_cgka_op(remove(
+                BTreeSet::from([invalid_root.digest()]),
+                BTreeSet::new(),
+            ))
+            .await?;
+
+        // With none of the document's own operations archived, nothing else
+        // applies, so only the denial can lead to a second pass.
+        let mut archive = hive.into_archive().await?;
+        let doc_op_digests: HashSet<_> = doc_ops.iter().map(|op| op.digest()).collect();
+        archive
+            .cgka_ops
+            .retain(|op| !doc_op_digests.contains(&op.digest()));
+        archive.cgka_ops.extend([built_on_it.clone(), invalid_root]);
+        let signer = hive.active.signer.clone();
+        let loaded: TestKeyhive = Keyhive::try_from_archive(
+            &archive,
+            signer,
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            MemoryKeyline::new(),
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await?;
+
+        assert!(
+            loaded
+                .certificate_sets
+                .lock()
+                .await
+                .is_denied(&built_on_it.digest()),
+            "an operation listed before the one it was built on was not denied"
         );
         Ok(())
     }
