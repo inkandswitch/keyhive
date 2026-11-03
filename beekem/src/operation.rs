@@ -13,7 +13,7 @@ use crate::{
 };
 use alloc::{
     boxed::Box,
-    collections::{BTreeSet, BinaryHeap},
+    collections::{BTreeMap, BTreeSet, BinaryHeap},
     sync::Arc,
     vec::Vec,
 };
@@ -312,7 +312,7 @@ pub enum CgkaChange {
 /// frame without its signature: who signed it and what it changes.
 impl Kinded for CgkaOperation {
     const KIND: Kind = Kind::CGKA_OPERATION;
-    const VERSION: u8 = 0;
+    const VERSION: u8 = 1;
 }
 
 /// An update cites nothing.
@@ -503,6 +503,9 @@ pub struct CgkaOperationGraph {
     /// An operation with no predecessors has depth 0.
     depths: Map<Digest<CgkaOperation>, u64>,
 
+    /// The operations that have each operation as a predecessor.
+    children: Map<Digest<CgkaOperation>, Set<Digest<CgkaOperation>>>,
+
     /// The latest update on each branch. These are updates that no later update
     /// has as a nearest update ancestor yet. Every other update is chainable,
     /// meaning a later update could have wrapped its root secret.
@@ -522,8 +525,8 @@ impl Hash for CgkaOperationGraph {
             .collect::<BTreeSet<_>>()
             .hash(state);
 
-        // `depths`, `latest_updates` and `citations` are derived from the
-        // operations hashed above.
+        // `depths`, `children`, `latest_updates` and `citations` are derived
+        // from the operations hashed above.
     }
 }
 
@@ -556,6 +559,9 @@ impl Merge for CgkaOperationGraph {
                 .any(|op| op.payload().predecessors.contains(head))
         });
         self.depths.extend(fork.depths);
+        for (parent, children) in fork.children {
+            self.children.entry(parent).or_default().extend(children);
+        }
         self.citations.extend(fork.citations);
     }
 }
@@ -566,6 +572,7 @@ impl CgkaOperationGraph {
             cgka_ops: CaMap::new(),
             cgka_op_heads: Set::new(),
             depths: Map::new(),
+            children: Map::new(),
             latest_updates: Set::new(),
             citations: BTreeSet::new(),
         }
@@ -655,6 +662,7 @@ impl CgkaOperationGraph {
         self.cgka_ops.insert(op.clone().into());
         for pred in op_predecessors {
             self.cgka_op_heads.remove(pred);
+            self.children.entry(*pred).or_default().insert(op_hash);
         }
         self.cgka_op_heads.insert(op_hash);
         self.depths.insert(op_hash, depth);
@@ -718,6 +726,85 @@ impl CgkaOperationGraph {
             }
         }
         Ok(false)
+    }
+
+    /// The members of `targets` that are in the causal past of an operation
+    /// whose predecessors are `predecessors`. Every target and predecessor must
+    /// be in the graph.
+    ///
+    /// If `predecessors` contains every head, every operation in the graph is
+    /// in that past. Otherwise two searches take turns, one step each, and
+    /// either can finish the answer:
+    /// - back from `predecessors` through that past, which is short when the
+    ///   targets are recent or the past is shallow, as for an update made from
+    ///   a stale replica;
+    /// - back from the heads missing from `predecessors` through the operations
+    ///   outside that past, which is short when little is concurrent with the
+    ///   operation, as for an honest update whose path holds a version written
+    ///   long ago.
+    ///
+    /// Returns [`CgkaError::OperationNotFound`] if a target, or an operation a
+    /// search reaches, is not in the graph, and [`CgkaError::DepthNotFound`] if
+    /// one has no recorded depth.
+    pub(crate) fn ancestors_among(
+        &self,
+        predecessors: &BTreeSet<Digest<CgkaOperation>>,
+        targets: BTreeSet<Digest<CgkaOperation>>,
+    ) -> Result<BTreeSet<Digest<CgkaOperation>>, CgkaError> {
+        let unseen_heads: Vec<_> = self
+            .cgka_op_heads
+            .iter()
+            .filter(|head| !predecessors.contains(head))
+            .copied()
+            .collect();
+        if unseen_heads.is_empty() {
+            return Ok(targets);
+        }
+        let mut found = BTreeSet::new();
+        let mut pending = BTreeMap::new();
+        for target in targets {
+            if predecessors.contains(&target) {
+                found.insert(target);
+            } else {
+                pending.insert(target, self.depth(&target)?);
+            }
+        }
+        let mut past = PastSearch::from(predecessors);
+        let mut outside = OutsideSearch::new(self, unseen_heads)?;
+        while !pending.is_empty() {
+            // An operation shallower than every remaining target cannot lead
+            // back to one.
+            let floor = pending.values().copied().min().unwrap_or(0);
+            let Some(current) = past.next() else {
+                // Every remaining target is outside the past.
+                break;
+            };
+            if pending.remove(&current).is_some() {
+                found.insert(current);
+            }
+            for pred in self
+                .predecessors_for(&current)
+                .ok_or(CgkaError::OperationNotFound)?
+            {
+                if self.depth(pred)? >= floor {
+                    past.push(*pred);
+                }
+            }
+
+            match outside.next(self, predecessors)? {
+                None => {
+                    // Every remaining target is in the past.
+                    found.extend(pending.into_keys());
+                    break;
+                }
+                Some((current, in_past)) => {
+                    if pending.remove(&current).is_some() && in_past {
+                        found.insert(current);
+                    }
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// The nearest [`CgkaChange::Update`] operations at or before the provided
@@ -889,6 +976,111 @@ impl CgkaOperationGraph {
     }
 }
 
+/// A search back through an operation's causal past, from its predecessors.
+/// It keeps every operation ever queued, so none is visited twice.
+struct PastSearch {
+    frontier: Vec<Digest<CgkaOperation>>,
+    queued: Set<Digest<CgkaOperation>>,
+}
+
+impl PastSearch {
+    fn from(predecessors: &BTreeSet<Digest<CgkaOperation>>) -> Self {
+        let mut search = Self {
+            frontier: Vec::new(),
+            queued: Set::new(),
+        };
+        for pred in predecessors {
+            search.push(*pred);
+        }
+        search
+    }
+
+    fn push(&mut self, op_hash: Digest<CgkaOperation>) {
+        if self.queued.insert(op_hash) {
+            self.frontier.push(op_hash);
+        }
+    }
+
+    fn next(&mut self) -> Option<Digest<CgkaOperation>> {
+        self.frontier.pop()
+    }
+}
+
+/// A search for the operations outside an operation's causal past, back from
+/// the heads its predecessors omit, deepest first.
+///
+/// An operation is in the past if it is a predecessor or one of its children
+/// is in the past. Every operation outside the past is reached from an
+/// omitted head through operations outside it, and each operation pushed is
+/// shallower than the one just visited, so operations are visited deepest
+/// first. A child is deeper than its parent, so when an operation is visited
+/// each child outside the past has been marked outside, and any other child
+/// is in the past. The search continues only through operations outside the
+/// past.
+struct OutsideSearch {
+    frontier: BinaryHeap<(u64, Digest<CgkaOperation>)>,
+    queued: Set<Digest<CgkaOperation>>,
+    outside: Set<Digest<CgkaOperation>>,
+}
+
+impl OutsideSearch {
+    fn new(
+        graph: &CgkaOperationGraph,
+        heads: impl IntoIterator<Item = Digest<CgkaOperation>>,
+    ) -> Result<Self, CgkaError> {
+        let mut search = Self {
+            frontier: BinaryHeap::new(),
+            queued: Set::new(),
+            outside: Set::new(),
+        };
+        for head in heads {
+            search.push(graph, head)?;
+        }
+        Ok(search)
+    }
+
+    fn push(
+        &mut self,
+        graph: &CgkaOperationGraph,
+        op_hash: Digest<CgkaOperation>,
+    ) -> Result<(), CgkaError> {
+        if self.queued.insert(op_hash) {
+            self.frontier.push((graph.depth(&op_hash)?, op_hash));
+        }
+        Ok(())
+    }
+
+    /// The next operation, and whether it is in the past of an operation with
+    /// `predecessors`. `None` once every operation outside that past has been
+    /// visited.
+    fn next(
+        &mut self,
+        graph: &CgkaOperationGraph,
+        predecessors: &BTreeSet<Digest<CgkaOperation>>,
+    ) -> Result<Option<(Digest<CgkaOperation>, bool)>, CgkaError> {
+        let Some((_, current)) = self.frontier.pop() else {
+            return Ok(None);
+        };
+        let in_past = predecessors.contains(&current)
+            || graph
+                .children
+                .get(&current)
+                .into_iter()
+                .flatten()
+                .any(|child| !self.outside.contains(child));
+        if !in_past {
+            self.outside.insert(current);
+            for pred in graph
+                .predecessors_for(&current)
+                .ok_or(CgkaError::OperationNotFound)?
+            {
+                self.push(graph, *pred)?;
+            }
+        }
+        Ok(Some((current, in_past)))
+    }
+}
+
 #[cfg(test)]
 mod causal_graph_tests {
     use super::*;
@@ -1047,6 +1239,79 @@ mod causal_graph_tests {
             .iter()
             .map(|batch| batch.iter().map(|op| names[&op.digest()]).collect())
             .collect()
+    }
+
+    #[test]
+    fn a_search_finds_exactly_the_targets_in_the_causal_past() {
+        use rand::{seq::IteratorRandom, Rng};
+        crate::test_utils::for_each_seed(|mut rng| async move {
+            let signer = MemorySigner::generate(&mut rng);
+            let doc_id = TreeId::from(&signer.0);
+            let mut ops: Vec<Verified<CgkaOperation>> = Vec::new();
+            for leaf_index in 0..24 {
+                let count = rng.gen_range(1..=3).min(ops.len());
+                let preds: Vec<_> = ops.iter().choose_multiple(&mut rng, count);
+                let op = signed_add(&signer, doc_id, leaf_index, &preds).await;
+                ops.push(op);
+            }
+            // The later half reaches the graph by a merge. Each operation goes to
+            // either side or both, where its predecessors are, so both sides
+            // add children to the same operations.
+            let mut graph = CgkaOperationGraph::new();
+            for op in &ops[..12] {
+                graph.add_op(op).expect("predecessors come first");
+            }
+            let mut fork = graph.fork();
+            for op in &ops[12..] {
+                let preds = op.payload().predecessors();
+                let to_graph = rng.gen_bool(0.5) && graph.contains_predecessors(&preds);
+                let to_fork =
+                    (!to_graph || rng.gen_bool(0.5)) && fork.contains_predecessors(&preds);
+                if to_graph {
+                    graph.add_op(op).expect("its predecessors are in the graph");
+                }
+                if to_fork {
+                    fork.add_op(op).expect("its predecessors are in the fork");
+                }
+            }
+            graph.merge(fork);
+            let mut in_order = CgkaOperationGraph::new();
+            for op in ops.iter().filter(|op| graph.contains_op_hash(&op.digest())) {
+                in_order.add_op(op).expect("predecessors come first");
+            }
+            assert!(
+                graph == in_order,
+                "the merged graph differs from one built in order"
+            );
+
+            let all: BTreeSet<_> = graph.cgka_ops.keys().copied().collect();
+            for _ in 0..8 {
+                let count = rng.gen_range(1..=3);
+                let preds: BTreeSet<_> = all
+                    .iter()
+                    .copied()
+                    .choose_multiple(&mut rng, count)
+                    .into_iter()
+                    .collect();
+                let count = rng.gen_range(1..=6);
+                let targets: BTreeSet<_> = all
+                    .iter()
+                    .copied()
+                    .choose_multiple(&mut rng, count)
+                    .into_iter()
+                    .collect();
+                let past = crate::test_utils::causal_past(&graph, &preds);
+                assert_eq!(
+                    graph
+                        .ancestors_among(&preds, targets.clone())
+                        .expect("every op is in the graph"),
+                    targets
+                        .intersection(&past)
+                        .copied()
+                        .collect::<BTreeSet<_>>()
+                );
+            }
+        });
     }
 
     #[tokio::test]

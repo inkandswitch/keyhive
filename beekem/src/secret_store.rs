@@ -1,17 +1,15 @@
 //! Secret store for inner tree nodes.
 
 use crate::{
-    collections::Set,
     encrypted::EncryptedSecret,
     error::CgkaError,
     id::TreeId,
-    keys::{share_secret_key_from_decrypted_secret, ConflictKeys, NodeKey, ShareKeyMap},
+    keys::{share_secret_key_from_decrypted_secret, HasShareKey, NodeKey, ShareKeyMap},
     treemath::TreeNodeIndex,
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     string::ToString,
-    vec,
     vec::Vec,
 };
 use keyhive_codec::{
@@ -66,7 +64,7 @@ impl SecretStore {
         }
     }
 
-    #[cfg(test)]
+    /// The versions, in ascending order.
     pub(crate) fn versions(&self) -> &NonEmpty<SecretStoreVersion> {
         &self.versions
     }
@@ -75,42 +73,8 @@ impl SecretStore {
         self.versions.len() > 1
     }
 
-    /// The node's single version. Returns `None` if this is a conflict node.
-    pub(crate) fn non_conflict_version(&self) -> Option<&SecretStoreVersion> {
-        (!self.has_conflict()).then_some(&self.versions.head)
-    }
-
     pub fn node_key(&self) -> NodeKey {
-        match self.versions.tail.as_slice() {
-            [] => NodeKey::ShareKey(self.versions.head.pk),
-            [second] => ConflictKeys {
-                first: self.versions.head.pk,
-                second: second.pk,
-                more: vec![],
-            }
-            .into(),
-            [second, more @ ..] => ConflictKeys {
-                first: self.versions.head.pk,
-                second: second.pk,
-                more: more.iter().map(|v| v.pk).collect(),
-            }
-            .into(),
-        }
-    }
-
-    pub fn decrypt_secret(
-        &self,
-        doc_id: TreeId,
-        child_node_key: &NodeKey,
-        child_sks: &mut ShareKeyMap,
-        seen_idxs: &[TreeNodeIndex],
-    ) -> Result<ShareSecretKey, CgkaError> {
-        if self.has_conflict() {
-            return Err(CgkaError::UnexpectedKeyConflict);
-        }
-        self.versions
-            .head
-            .decrypt_secret(doc_id, child_node_key, child_sks, seen_idxs)
+        NodeKey::from_ascending(self.versions.iter().map(|version| version.pk))
     }
 
     /// Decrypt this node's secret with the secret of its child's sibling, found
@@ -157,19 +121,8 @@ impl SecretStore {
             .and_then(share_secret_key_from_decrypted_secret)
     }
 
-    /// Drop the versions corresponding to `removed_keys` and then merge `other`.
-    pub fn merge(&mut self, other: &SecretStore, removed_keys: &Set<ShareKey>) {
-        let mut versions = other.versions.clone();
-        versions.extend(
-            self.versions
-                .iter()
-                .filter(|version| !removed_keys.contains(&version.pk))
-                .cloned(),
-        );
-        self.versions = Self::sorted(versions);
-    }
-
     /// Sort `versions` and drop duplicates.
+    #[cfg(any(test, feature = "arbitrary"))]
     fn sorted(versions: NonEmpty<SecretStoreVersion>) -> NonEmpty<SecretStoreVersion> {
         let mut sorted: Vec<SecretStoreVersion> = versions.into_iter().collect();
         sorted.sort();
@@ -242,6 +195,12 @@ impl StreamDecode for SecretStoreVersion {
             },
             rest,
         ))
+    }
+}
+
+impl HasShareKey for SecretStoreVersion {
+    fn share_key(&self) -> ShareKey {
+        self.pk
     }
 }
 

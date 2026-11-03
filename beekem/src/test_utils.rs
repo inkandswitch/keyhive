@@ -464,6 +464,22 @@ pub(crate) fn for_each_seed<F: core::future::Future<Output = ()>>(
         .for_each(|seed| runtime.block_on(test(StdRng::seed_from_u64(seed))));
 }
 
+/// Every operation in the causal past of one whose predecessors are `predecessors`.
+#[cfg(test)]
+pub(crate) fn causal_past(
+    graph: &crate::operation::CgkaOperationGraph,
+    predecessors: &BTreeSet<Digest<CgkaOperation>>,
+) -> BTreeSet<Digest<CgkaOperation>> {
+    let mut past = BTreeSet::new();
+    let mut frontier: Vec<_> = predecessors.iter().copied().collect();
+    while let Some(op_hash) = frontier.pop() {
+        if past.insert(op_hash) {
+            frontier.extend(graph.predecessors_for(&op_hash).into_iter().flatten());
+        }
+    }
+    past
+}
+
 /// Assert that `cgka`'s chainable and unchained updates match what its graph
 /// and recorded secrets imply: an update is chainable if a later update has it
 /// as a nearest update ancestor and unchained unless a recorded update's entry

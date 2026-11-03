@@ -271,7 +271,7 @@ async fn rotation_before_merge_scenario(seed: u64) -> bool {
     group.deliver(&rot_a, &[1, 2]);
 
     // A membership change forces the merge without re-encrypting any path, so
-    // the rotation above is the only writer to `d`'s ancestors.
+    // the rotation above is the only origin of the versions at `d`'s ancestors.
     let e = member(&mut rng);
     group.names.insert(e.id, "e".to_string());
     let add_e = group.add(2, e.id, e.pk).await;

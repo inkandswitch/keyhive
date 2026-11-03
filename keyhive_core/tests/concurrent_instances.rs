@@ -82,7 +82,6 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     // A peer can put whatever it likes in a signed `PathChange`, including a key that
     // does not displace the one already at the leaf.
     new_path.leaf_pk = own_prekey(&bob, design_doc).await;
-    new_path.removed_keys = BTreeSet::new();
     let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),
         predecessors: cgka_heads(&bob, design_doc).await,
@@ -201,5 +200,66 @@ async fn writes_made_during_a_partition_survive_the_merge() -> Result<()> {
             "{name} reads what the second instance wrote during the partition"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_resealed_twin_of_a_covered_update_leaves_live_state_matching_a_rebuild() -> Result<()> {
+    use beekem::secret_store::SecretStore;
+    use keyhive_codec::traits::{Decode, Encode};
+
+    let mut ctx = TestContext::new().await;
+    let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
+    let (by_bob, _) = bob.force_pcs_update(design_doc).await?;
+    ctx.sync_all_unsent().await?;
+
+    // The same update signed again with one sealed byte changed: the same keys, a new digest.
+    let mut twin = by_bob.payload().clone();
+    let CgkaChange::Update { new_path, .. } = &mut twin.change else {
+        unreachable!("a rotation is an update")
+    };
+    let bytes = new_path.path[0].1.encode().as_bytes().to_vec();
+    let resealed = (0..bytes.len())
+        .find_map(|i| {
+            let mut flipped = bytes.clone();
+            flipped[i] ^= 1;
+            let node = SecretStore::decode(&flipped).ok()?;
+            (node != new_path.path[0].1 && node.node_key() == new_path.path[0].1.node_key())
+                .then_some(node)
+        })
+        .expect("some sealed byte can change without changing the node's keys");
+    new_path.path[0].1 = resealed;
+    let twin = bob.sign_cgka_op(twin).await?;
+
+    // Alice's update covers Bob's, so it removes the keys the twin also contains.
+    alice.force_pcs_update(design_doc).await?;
+    ctx.sync_all_unsent().await?;
+    for who in [&alice, &bob] {
+        who.receive_cgka_op(twin.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    let restored = ctx
+        .rebuild_from_archive(&alice.into_archive().await?, "alice-restored")
+        .await?;
+    assert_eq!(
+        alice.try_pcs_key_hash(design_doc).await,
+        restored.try_pcs_key_hash(design_doc).await,
+        "alice, live, is in the same state as a rebuild of her history"
+    );
+
+    alice.force_pcs_update(design_doc).await?;
+    ctx.sync_all_unsent().await?;
+    let key = alice.try_pcs_key_hash(design_doc).await;
+    assert!(
+        key.is_some(),
+        "an update that has the twin in its past gives alice the root key"
+    );
+    assert_eq!(
+        bob.try_pcs_key_hash(design_doc).await,
+        key,
+        "bob derives the same root key as alice"
+    );
     Ok(())
 }
