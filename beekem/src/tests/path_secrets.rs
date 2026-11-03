@@ -353,25 +353,31 @@ async fn a_path_that_is_not_a_chain_from_the_leaf_to_a_root_is_malformed() {
     assert!(!stops_below_a_root.is_well_formed());
 }
 
-#[tokio::test]
-async fn a_path_longer_than_the_tallest_tree_is_malformed() {
-    let mut rng = StdRng::seed_from_u64(0x9a7b_000a);
-    let mut path = honest_path(&mut rng).await;
+/// A chain of `len` nodes up from leaf 0, well-formed apart from its length:
+/// the inner indices 2^j - 1, each the root of a tree of some size.
+async fn chain_from_leaf_zero(len: u32, rng: &mut StdRng) -> PathChange {
+    let mut path = honest_path(rng).await;
     let leaf = TreeNodeIndex::from(LeafNodeIndex::new(path.leaf_idx));
     let entry = path.path[0].1.versions().head.sk[&leaf].clone();
-    // From leaf 0, the chain of parents is the inner indices 2^j - 1.
     let mut child = leaf;
     let mut encrypter = path.leaf_pk;
-    path.path = (0..32)
+    path.path = (0..len)
         .map(|j| {
             let idx = (1u32 << j) - 1;
-            let pk = ShareSecretKey::generate(&mut rng).share_key();
+            let pk = ShareSecretKey::generate(rng).share_key();
             let node = SecretStore::new(pk, encrypter, BTreeMap::from([(child, entry.clone())]));
             child = TreeNodeIndex::from(InnerNodeIndex::new(idx));
             encrypter = pk;
             (idx, node)
         })
         .collect();
+    path
+}
 
-    assert!(!path.is_well_formed());
+/// The tallest tree, of 2^31 leaves, has 31 inner levels.
+#[tokio::test]
+async fn a_path_may_be_as_long_as_the_tallest_tree_and_no_longer() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_000a);
+    assert!(chain_from_leaf_zero(31, &mut rng).await.is_well_formed());
+    assert!(!chain_from_leaf_zero(32, &mut rng).await.is_well_formed());
 }
