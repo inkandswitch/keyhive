@@ -8,6 +8,7 @@ use crate::{
         CgkaChange, CgkaOperation, CitationId, Invitation, InvitationSecret, PredecessorSecret,
         RemovedMember,
     },
+    predecessors::Predecessors,
     secret_store::{SecretStore, SecretStoreVersion},
     tree::PathChange,
     treemath::TreeNodeIndex,
@@ -88,6 +89,11 @@ fn invitation_laws() {
 #[test]
 fn predecessor_secret_laws() {
     laws::<PredecessorSecret>();
+}
+
+#[test]
+fn predecessors_laws() {
+    laws::<Predecessors>();
 }
 
 #[test]

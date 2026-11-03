@@ -482,3 +482,15 @@ async fn a_member_who_lacks_its_leaf_secret_rotates_its_leaf_to_write() {
     assert!(rotation.is_some(), "writing rotated");
     assert_ne!(stranded.owner_leaf_key(), leaf, "the leaf was replaced");
 }
+
+#[tokio::test]
+async fn a_cgka_contains_all_of_its_operations_and_none_it_lacks() {
+    let mut rng = StdRng::seed_from_u64(0x11fe_000c);
+    let group = Group::<NoImplicitRemoves>::new(2, &mut rng).await;
+    let cgka = &group.replicas[0];
+    let heads: alloc::vec::Vec<_> = cgka.ops_graph.cgka_op_heads.iter().copied().collect();
+    let unknown = keyhive_crypto::digest::Digest::from([9u8; 32]);
+
+    assert!(cgka.contains_all(&heads));
+    assert!(!cgka.contains_all(heads.iter().chain([&unknown])));
+}

@@ -332,3 +332,50 @@ impl AllCgkaOps {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use beekem::{cgka::NoImplicitRemoves, predecessors::Predecessors};
+    use ed25519_dalek::SigningKey;
+    use keyhive_crypto::signer::memory::MemorySigner;
+    use rand::rngs::OsRng;
+
+    #[test]
+    fn an_invitation_whose_predecessor_is_missing_changes_nothing() -> testresult::TestResult {
+        let mut csprng = OsRng;
+        let signer = MemorySigner::generate(&mut csprng);
+        let doc_id = DocumentId::generate(&mut csprng);
+        let owner = IndividualId::from(MemberId::from(&SigningKey::generate(&mut csprng)));
+        let mut cgka = Cgka::new(doc_id, owner, ShareKeyMap::new(), NoImplicitRemoves);
+        let invitee_sk = ShareSecretKey::generate(&mut csprng);
+        let invite = Verified::sign_sync(
+            &CgkaOperation {
+                doc_id: TreeId::from(doc_id),
+                predecessors: Predecessors::from([Digest::from([9u8; 32])]),
+                change: CgkaChange::Add {
+                    added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
+                    pk: invitee_sk.share_key(),
+                    leaf_index: 0,
+                    invitation: None,
+                    key_proof: None,
+                    citations: BTreeSet::new(),
+                },
+            },
+            &signer,
+        )?;
+        let before = cgka.clone();
+
+        let result = cgka.merge_invite(Arc::new(invite), &invitee_sk);
+
+        assert!(
+            matches!(result, Err(CgkaError::OutOfOrderOperation)),
+            "{result:?}"
+        );
+        assert_eq!(
+            cgka, before,
+            "the owner changed for an invitation that did not merge"
+        );
+        Ok(())
+    }
+}
