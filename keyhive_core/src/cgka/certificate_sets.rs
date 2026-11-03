@@ -193,7 +193,7 @@ impl DocumentSets {
                 self.add_set(next, set, checkpoint_every);
             } else {
                 stack.push((next, true));
-                stack.extend(op.predecessors().into_iter().map(|p| (p, false)));
+                stack.extend(op.predecessors().iter().map(|p| (*p, false)));
             }
         }
         self.sets.get(&digest).map(Dupe::dupe)

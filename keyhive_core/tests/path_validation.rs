@@ -3,23 +3,23 @@
 use beekem::{
     id::TreeId,
     operation::{CgkaChange, CgkaOperation},
+    predecessors::Predecessors,
     tree::PathChange,
 };
 use keyhive_core::{
-    crypto::digest::Digest,
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext},
 };
 use keyline::power::Power::Read;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use testresult::TestResult;
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
-async fn cgka_heads(observer: &Instance, doc: DocumentId) -> BTreeSet<Digest<CgkaOperation>> {
+async fn cgka_heads(observer: &Instance, doc: DocumentId) -> Predecessors {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap();
     let referenced: HashSet<_> = ops
         .iter()
-        .flat_map(|op| op.payload().predecessors())
+        .flat_map(|op| op.payload().predecessors().iter().copied())
         .collect();
     ops.iter()
         .map(|op| op.digest())

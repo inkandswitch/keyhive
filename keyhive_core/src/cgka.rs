@@ -263,8 +263,12 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         self.0.ops()
     }
 
-    pub fn contains_predecessors(&self, preds: &HashSet<Digest<CgkaOperation>>) -> bool {
-        self.0.contains_predecessors(preds)
+    /// Whether every one of `op_hashes` is in the CGKA graph.
+    pub fn contains_all<'a>(
+        &self,
+        op_hashes: impl IntoIterator<Item = &'a Digest<CgkaOperation>>,
+    ) -> bool {
+        self.0.contains_all(op_hashes)
     }
 
     /// Merge an add whose key's secret `sk` this replica has (an invitation
@@ -282,7 +286,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         if self.op(&op.digest()).is_some() {
             return Ok(false);
         }
-        if !self.contains_predecessors(&op.payload().predecessors()) {
+        if !self.contains_all(op.payload().predecessors()) {
             return Err(CgkaError::OutOfOrderOperation);
         }
         // Check if we should replay first, so that a replay lacking a membership answer

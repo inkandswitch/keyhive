@@ -4,6 +4,7 @@ use beekem::{
     id::{MemberId, TreeId},
     operation::{CgkaChange, CgkaOperation, CitationId, RemovedMember},
     secret_store::SecretStore,
+    predecessors::Predecessors,
     tree::PathChange,
 };
 use future_form::{FutureForm, Sendable};
@@ -50,14 +51,14 @@ use std::{
 use testresult::TestResult;
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
-async fn cgka_heads(observer: &Hive, doc: DocumentId) -> BTreeSet<Digest<CgkaOperation>> {
+async fn cgka_heads(observer: &Hive, doc: DocumentId) -> Predecessors {
     let ops = observer
         .cgka_ops_for_doc(&doc)
         .await
         .expect("the observer has the document");
     let referenced: HashSet<_> = ops
         .iter()
-        .flat_map(|op| op.payload().predecessors())
+        .flat_map(|op| op.payload().predecessors().iter().copied())
         .collect();
     ops.iter()
         .map(|op| op.digest())
@@ -511,7 +512,7 @@ async fn an_operation_whose_predecessor_is_missing_is_pending() -> TestResult {
     let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
     let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        predecessors: BTreeSet::from([Digest::from([9u8; 32])]),
+        predecessors: Predecessors::from([Digest::from([9u8; 32])]),
         change: CgkaChange::Update {
             new_path: intercepted_path(&alice).await,
             predecessor_secrets: Vec::new(),
@@ -680,7 +681,7 @@ async fn root_add_of(
         delegation_citation(alice, kl(group_id), kl(signer.id())).await?,
     ]);
     let mut op = proven_add(alice, doc_id, signer, citations).await;
-    op.predecessors.clear();
+    op.predecessors = Predecessors::default();
     Ok(signer.sign_cgka_op(op).await?)
 }
 
@@ -940,7 +941,7 @@ async fn an_operation_built_on_a_denied_one_is_denied() -> TestResult {
 
     let child = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        predecessors: BTreeSet::from([denied.digest()]),
+        predecessors: Predecessors::from([denied.digest()]),
         change: CgkaChange::Remove {
             citations: BTreeSet::new(),
             removed: BTreeSet::new(),
@@ -960,7 +961,7 @@ async fn a_remove_the_cgka_refuses(
 ) -> TestResult<Signed<CgkaOperation>> {
     let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        predecessors: BTreeSet::new(),
+        predecessors: Predecessors::default(),
         change: CgkaChange::Remove {
             citations: creators_own_add(alice, doc_id)
                 .await
@@ -996,7 +997,7 @@ async fn an_operation_built_on_one_that_failed_to_merge_is_denied() -> TestResul
 
     let child = CgkaOperation {
         doc_id: TreeId::from(doc_id),
-        predecessors: BTreeSet::from([refused.digest()]),
+        predecessors: Predecessors::from([refused.digest()]),
         change: CgkaChange::Remove {
             citations: BTreeSet::new(),
             removed: BTreeSet::new(),

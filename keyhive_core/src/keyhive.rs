@@ -41,12 +41,12 @@ use crate::{
 };
 use beekem::{
     cgka::{ImplicitRemovesProtocol, NoImplicitRemoves},
-    collections::Set,
     error::CgkaError,
     id::MemberId,
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaChange, CgkaOperation, CitationId},
     pcs_key::PcsKey,
+    predecessors::Predecessors,
 };
 use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
@@ -2940,7 +2940,7 @@ where
     async fn predecessor_set(
         &self,
         doc_id: DocumentId,
-        heads: &Set<Digest<CgkaOperation>>,
+        heads: &Predecessors,
     ) -> Option<CitationSet> {
         if heads.is_empty() {
             return Some(CitationSet::default());
@@ -3497,7 +3497,7 @@ where
                     "an archived operation's predecessors are missing or did not apply"
                 );
             }
-            if invitations.is_empty() || !cgka.contains_predecessors(&invitations) {
+            if invitations.is_empty() || !cgka.contains_all(&invitations) {
                 unjoined.insert(doc_id, cgka);
                 continue;
             }
@@ -4708,7 +4708,8 @@ mod tests {
             .ok_or("the CGKA graph lacks its head")?
             .payload()
             .predecessors()
-            .into_iter()
+            .iter()
+            .copied()
             .collect::<Vec<_>>();
         let [left, right] = predecessors[..] else {
             return Err("the last update merges both branches".into());
@@ -6103,7 +6104,7 @@ mod tests {
             let cgka = Verified::sign_sync(
                 &CgkaOperation {
                     doc_id: TreeId::from(doc),
-                    predecessors: BTreeSet::new(),
+                    predecessors: Default::default(),
                     change: CgkaChange::Add {
                         added_id: MemberId::from(&signer.0),
                         pk: share_key(),
