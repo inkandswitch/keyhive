@@ -5221,6 +5221,65 @@ mod tests {
         Ok(())
     }
 
+    /// A remove with no predecessors, signed by `doc_id`'s creator. It is
+    /// authorized, since it cites the document's creation, but a root that is
+    /// not an add never merges.
+    async fn an_authorized_root_that_never_merges(
+        hive: &TestKeyhive,
+        doc_id: DocumentId,
+    ) -> TestResult<verified::Signed<CgkaOperation>> {
+        let creation_citations = hive
+            .cgka_ops_for_doc(&doc_id)
+            .await
+            .ok_or("the document is held")?
+            .iter()
+            .find(|op| op.payload().predecessors().is_empty())
+            .ok_or("the document has a root")?
+            .payload()
+            .citations()
+            .clone();
+        Ok(hive
+            .sign_cgka_op(CgkaOperation {
+                doc_id: doc_id.into(),
+                predecessors: BTreeSet::new(),
+                change: CgkaChange::Remove {
+                    citations: creation_citations,
+                    removed: BTreeSet::new(),
+                },
+            })
+            .await?)
+    }
+
+    #[tokio::test]
+    async fn a_rebuild_without_authorization_denies_nothing() -> TestResult {
+        let hive = make_keyhive().await;
+        let doc_id = hive.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let invalid_root = Arc::new(
+            an_authorized_root_that_never_merges(&hive, doc_id)
+                .await?
+                .verify()?,
+        );
+
+        hive.cgka_from_ops(
+            doc_id,
+            vec![invalid_root.dupe()],
+            hive.active.id(),
+            &BTreeMap::new(),
+            false,
+        )
+        .await?;
+
+        assert!(
+            !hive
+                .certificate_sets
+                .lock()
+                .await
+                .is_denied(&invalid_root.digest()),
+            "a rebuild that checks no authorization recorded a denial"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn an_archived_operation_built_on_one_that_never_merges_is_denied_in_any_order(
     ) -> TestResult {
@@ -5230,31 +5289,16 @@ mod tests {
             .cgka_ops_for_doc(&doc_id)
             .await
             .ok_or("the document is held")?;
-        let creation_citations = doc_ops
-            .iter()
-            .find(|op| op.payload().predecessors().is_empty())
-            .ok_or("the document has a root")?
-            .payload()
-            .citations()
-            .clone();
-        let remove = |predecessors, citations| CgkaOperation {
-            doc_id: doc_id.into(),
-            predecessors,
-            change: CgkaChange::Remove {
-                citations,
-                removed: BTreeSet::new(),
-            },
-        };
-        // Authorized, since it cites the document's creation, but a root that
-        // is not an add never merges.
-        let invalid_root = hive
-            .sign_cgka_op(remove(BTreeSet::new(), creation_citations))
-            .await?;
+        let invalid_root = an_authorized_root_that_never_merges(&hive, doc_id).await?;
         let built_on_it = hive
-            .sign_cgka_op(remove(
-                BTreeSet::from([invalid_root.digest()]),
-                BTreeSet::new(),
-            ))
+            .sign_cgka_op(CgkaOperation {
+                doc_id: doc_id.into(),
+                predecessors: BTreeSet::from([invalid_root.digest()]),
+                change: CgkaChange::Remove {
+                    citations: BTreeSet::new(),
+                    removed: BTreeSet::new(),
+                },
+            })
             .await?;
 
         // With none of the document's own operations archived, nothing else
