@@ -6,7 +6,6 @@ use crate::{
     encrypted::EncryptedSecret,
     error::CgkaError,
     id::{MemberId, TreeId},
-    keys::NodeKey,
     pcs_key::PcsKey,
     predecessors::Predecessors,
     transact::{Fork, Merge},
@@ -313,7 +312,7 @@ pub enum CgkaChange {
 /// frame without its signature: who signed it and what it changes.
 impl Kinded for CgkaOperation {
     const KIND: Kind = Kind::CGKA_OPERATION;
-    const VERSION: u8 = 0;
+    const VERSION: u8 = 1;
 }
 
 /// An update cites nothing.
@@ -590,10 +589,10 @@ impl CgkaOperationGraph {
             && !self.latest_updates.contains(op_hash)
     }
 
-    /// The sole share key at the root of the update `op_hash`'s path.
+    /// The share key at the root of the update `op_hash`'s path.
     ///
     /// Returns `None` if we do not have the operation, it is not an update, or
-    /// its path does not end in a single share key.
+    /// its path is empty.
     pub(crate) fn update_root_share_key(
         &self,
         op_hash: &Digest<CgkaOperation>,
@@ -603,10 +602,7 @@ impl CgkaOperationGraph {
             return None;
         };
         let (_, root_node) = new_path.path.last()?;
-        match root_node.node_key() {
-            NodeKey::ShareKey(root_pk) => Some(root_pk),
-            NodeKey::ConflictKeys(_) => None,
-        }
+        Some(root_node.pk)
     }
 
     /// Whether every one of `op_hashes` is in the graph.
@@ -898,7 +894,11 @@ mod causal_graph_tests {
     };
 
     fn member_id() -> MemberId {
-        MemberId::from(&MemorySigner::generate(&mut rand::thread_rng()).0)
+        member_id_from(&mut rand::thread_rng())
+    }
+
+    fn member_id_from<R: rand::CryptoRng + rand::RngCore>(rng: &mut R) -> MemberId {
+        MemberId::from(&MemorySigner::generate(rng).0)
     }
 
     async fn signed_add(
@@ -907,10 +907,30 @@ mod causal_graph_tests {
         leaf_index: u32,
         predecessors: &[&Verified<CgkaOperation>],
     ) -> Verified<CgkaOperation> {
-        signed_add_of(signer, doc_id, member_id(), leaf_index, predecessors).await
+        signed_add_from(
+            &mut rand::thread_rng(),
+            signer,
+            doc_id,
+            leaf_index,
+            predecessors,
+        )
+        .await
     }
 
-    async fn signed_add_of(
+    /// An add of a new member, with its member and key drawn from `rng`.
+    async fn signed_add_from<R: rand::CryptoRng + rand::RngCore>(
+        rng: &mut R,
+        signer: &MemorySigner,
+        doc_id: TreeId,
+        leaf_index: u32,
+        predecessors: &[&Verified<CgkaOperation>],
+    ) -> Verified<CgkaOperation> {
+        let added_id = member_id_from(rng);
+        signed_add_of(rng, signer, doc_id, added_id, leaf_index, predecessors).await
+    }
+
+    async fn signed_add_of<R: rand::CryptoRng + rand::RngCore>(
+        rng: &mut R,
         signer: &MemorySigner,
         doc_id: TreeId,
         added_id: MemberId,
@@ -922,7 +942,7 @@ mod causal_graph_tests {
             predecessors: predecessors.iter().map(|op| op.digest()).collect(),
             change: CgkaChange::Add {
                 added_id,
-                pk: ShareSecretKey::generate(&mut rand::thread_rng()).share_key(),
+                pk: ShareSecretKey::generate(rng).share_key(),
                 leaf_index,
                 invitation: None,
                 key_proof: None,
@@ -1405,11 +1425,12 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
+        let mut rng = rand::thread_rng();
         let founder = member_id();
         let joiner = member_id();
-        let root = signed_add_of(&signer, doc_id, founder, 0, &[]).await;
+        let root = signed_add_of(&mut rng, &signer, doc_id, founder, 0, &[]).await;
         let before = signed_update(&signer, doc_id, &[&root]).await;
-        let join = signed_add_of(&signer, doc_id, joiner, 1, &[&before]).await;
+        let join = signed_add_of(&mut rng, &signer, doc_id, joiner, 1, &[&before]).await;
         let after = signed_update(&signer, doc_id, &[&join]).await;
         for op in [&root, &before, &join, &after] {
             graph.add_op(op).expect("predecessors are added first");

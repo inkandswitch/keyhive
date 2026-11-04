@@ -4,15 +4,12 @@ use crate::{
     encrypted::{EncryptedSecret, Sealable},
     error::CgkaError,
     id::TreeId,
+    node_versions::NodeVersions,
     transact::{Fork, Merge},
 };
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    string::ToString,
-    vec,
-    vec::Vec,
-};
+use alloc::{collections::BTreeMap, string::ToString, vec, vec::Vec};
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
+use nonempty::NonEmpty;
 use zeroize::Zeroizing;
 
 /// A key pair at a BeeKEM leaf.
@@ -91,17 +88,17 @@ impl core::hash::Hash for ShareKeyMap {
     }
 }
 
-/// A node key can be either a single share key or a set of conflict keys.
+/// Node keys can be either a single share key or a set of conflict keys.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub enum NodeKey {
+pub enum NodeKeys {
     ShareKey(ShareKey),
     ConflictKeys(ConflictKeys),
 }
 
-impl From<ShareKey> for NodeKey {
+impl From<ShareKey> for NodeKeys {
     fn from(item: ShareKey) -> Self {
-        NodeKey::ShareKey(item)
+        NodeKeys::ShareKey(item)
     }
 }
 
@@ -135,9 +132,9 @@ impl ConflictKeys {
     }
 }
 
-impl From<ConflictKeys> for NodeKey {
+impl From<ConflictKeys> for NodeKeys {
     fn from(keys: ConflictKeys) -> Self {
-        NodeKey::ConflictKeys(keys)
+        NodeKeys::ConflictKeys(keys)
     }
 }
 
@@ -149,7 +146,7 @@ impl From<ConflictKeys> for Vec<ShareKey> {
     }
 }
 
-impl NodeKey {
+impl NodeKeys {
     pub fn keys(&self) -> Vec<ShareKey> {
         match self {
             Self::ShareKey(pk) => vec![*pk],
@@ -183,68 +180,41 @@ impl NodeKey {
         }
     }
 
-    /// Merge in a new [`NodeKey`].
-    ///
-    /// # Arguments
-    ///
-    /// * `new_key` — The new key to merge into the existing keys.
-    /// * `removed` — The keys removed as part of a [`PathChange`](crate::tree::PathChange).
-    ///               It's possible that `self` will be one of those,
-    ///               in which case a new key is substituted.
-    pub fn merge(&self, new_key: &NodeKey, removed: &BTreeSet<ShareKey>) -> Self {
-        match self {
-            NodeKey::ShareKey(key) => {
-                if removed.contains(key) {
-                    new_key.clone()
-                } else {
-                    let mut new_keys = new_key.keys();
-                    new_keys.push(*key);
-                    new_keys.sort();
-
-                    match new_keys.as_slice() {
-                        [] => unreachable!("No keys to merge"),
-                        [first] => NodeKey::ShareKey(*first),
-                        [first, second] => ConflictKeys {
-                            first: *first,
-                            second: *second,
-                            more: vec![],
-                        }
-                        .into(),
-                        [first, second, more @ ..] => ConflictKeys {
-                            first: *first,
-                            second: *second,
-                            more: more.to_vec(),
-                        }
-                        .into(),
-                    }
-                }
+    /// The `NodeKeys` with `keys`, which must be ascending.
+    pub(crate) fn from_ascending(keys: NonEmpty<ShareKey>) -> Self {
+        let NonEmpty { head: first, tail } = keys;
+        let mut keys = tail.into_iter();
+        match keys.next() {
+            None => NodeKeys::ShareKey(first),
+            Some(second) => ConflictKeys {
+                first,
+                second,
+                more: keys.collect(),
             }
-            NodeKey::ConflictKeys(keys) => {
-                let mut new_keys = new_key.keys();
-                for k in keys.iter() {
-                    if !removed.contains(k) {
-                        new_keys.push(*k);
-                    }
-                }
-                new_keys.sort_by_key(|pk| *pk);
-
-                match new_keys.as_slice() {
-                    [] => unreachable!("No keys to merge"),
-                    [first] => NodeKey::ShareKey(*first),
-                    [first, second] => ConflictKeys {
-                        first: *first,
-                        second: *second,
-                        more: vec![],
-                    }
-                    .into(),
-                    [first, second, more @ ..] => ConflictKeys {
-                        first: *first,
-                        second: *second,
-                        more: more.to_vec(),
-                    }
-                    .into(),
-                }
-            }
+            .into(),
         }
+    }
+}
+
+/// A value at a tree node that has a share key.
+pub trait HasShareKey {
+    /// The value's share key.
+    fn share_key(&self) -> ShareKey;
+}
+
+impl HasShareKey for ShareKey {
+    fn share_key(&self) -> ShareKey {
+        *self
+    }
+}
+
+impl<V: HasShareKey + Ord + Clone> NodeVersions<V> {
+    /// The node's share keys, one per version.
+    pub fn node_keys(&self) -> NodeKeys {
+        let versions = self.values();
+        NodeKeys::from_ascending(NonEmpty {
+            head: versions.head.share_key(),
+            tail: versions.tail.iter().map(HasShareKey::share_key).collect(),
+        })
     }
 }

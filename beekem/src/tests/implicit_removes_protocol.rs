@@ -84,13 +84,11 @@ async fn a_member_added_concurrently_with_its_adders_revocation_is_removed_and_e
         .map(|op| new_path(op))
         .collect();
     let learned = learn_from(group.replicas[m].doc_id, adversary, &paths);
-    for (idx, node) in &new_path(&heal).path {
-        for version in node.versions() {
-            assert!(
-                !learned.contains_key(&version.pk),
-                "{context}: m and fresh learned the secret at inner node {idx} of the heal"
-            );
-        }
+    for (idx, version) in &new_path(&heal).path {
+        assert!(
+            !learned.contains_key(&version.pk),
+            "{context}: m and fresh learned the secret at inner node {idx} of the heal"
+        );
     }
 }
 
@@ -344,13 +342,11 @@ fn revoked_members_learn_nothing_of_a_rotation_after_their_removal() {
             })
             .collect();
         let learned = learn_from(replica.doc_id, known, &paths);
-        for (idx, node) in &new_path(&final_rotation).path {
-            for version in node.versions() {
-                assert!(
-                    !learned.contains_key(&version.pk),
-                    "revoked members learned inner node {idx} of the final rotation"
-                );
-            }
+        for (idx, version) in &new_path(&final_rotation).path {
+            assert!(
+                !learned.contains_key(&version.pk),
+                "revoked members learned inner node {idx} of the final rotation"
+            );
         }
     });
 }

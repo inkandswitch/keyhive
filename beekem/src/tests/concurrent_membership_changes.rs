@@ -4,7 +4,7 @@ use crate::{
     cgka::NoImplicitRemoves,
     encrypted::EncryptedSecret,
     id::{MemberId, TreeId},
-    keys::{NodeKey, ShareKeyMap},
+    keys::{NodeKeys, ShareKeyMap},
     operation::{CgkaChange, CgkaOperation},
     test_utils::{member, name_for, Group, Member, NO_CITATIONS},
     tree::PathChange,
@@ -281,10 +281,10 @@ async fn rotation_before_merge_scenario(seed: u64) -> bool {
     group.check(&merged);
     group.assert_members(&merged, &["a", "b", "c", "d", "e"]);
 
-    let d_leaf_key = group.replicas[0].tree.node_key_for_id(d.id);
+    let d_leaf_key = group.replicas[0].tree.node_keys_for_id(d.id);
     let (winning_pk, winning_sk) = match d_leaf_key {
-        Ok(NodeKey::ShareKey(k)) if k == pk_from_a => (pk_from_a, d.sk),
-        Ok(NodeKey::ShareKey(k)) if k == pk_from_b => (pk_from_b, sk_from_b),
+        Ok(NodeKeys::ShareKey(k)) if k == pk_from_a => (pk_from_a, d.sk),
+        Ok(NodeKeys::ShareKey(k)) if k == pk_from_b => (pk_from_b, sk_from_b),
         other => panic!("{merged}: `d`'s leaf holds {other:?}, not one of its two added prekeys"),
     };
     let winner_is_a = winning_pk == pk_from_a;
@@ -518,17 +518,15 @@ pub(super) fn learn_from(
     loop {
         let before = known.len();
         for path in paths {
-            for (_, node) in &path.path {
-                for version in node.versions() {
-                    if known.contains_key(&version.pk) {
-                        continue;
-                    }
-                    let secret = version.sk.values().find_map(|encrypted| {
-                        try_decrypt(doc_id, &known, version.encrypter_pk, encrypted)
-                    });
-                    if let Some(sk) = secret {
-                        known.insert(version.pk, sk);
-                    }
+            for (_, version) in &path.path {
+                if known.contains_key(&version.pk) {
+                    continue;
+                }
+                let secret = version.sk.values().find_map(|encrypted| {
+                    try_decrypt(doc_id, &known, version.encrypter_pk, encrypted)
+                });
+                if let Some(sk) = secret {
+                    known.insert(version.pk, sk);
                 }
             }
         }
@@ -585,25 +583,23 @@ fn removed_members_learn_nothing_from_a_rotation_that_excludes_them() {
                     &paths,
                 );
                 assert!(
-                    new_path(op).path.iter().any(|(_, node)| node
-                        .versions()
+                    new_path(op)
+                        .path
                         .iter()
-                        .any(|v| theirs.contains_key(&v.pk))),
+                        .any(|(_, node)| theirs.contains_key(&node.pk)),
                     "{} could not decrypt a rotation by {} that included them",
                     name_for(j),
                     name_for(*author),
                 );
             }
-            for (idx, node) in &new_path(op).path {
-                for version in node.versions() {
-                    assert!(
-                        !learned.contains_key(&version.pk),
-                        "removed members {:?} learned the secret at inner node {idx} of a \
-                         rotation by {} from a tree they did not belong to",
-                        excluded.iter().map(|&i| name_for(i)).collect::<Vec<_>>(),
-                        name_for(*author),
-                    );
-                }
+            for (idx, version) in &new_path(op).path {
+                assert!(
+                    !learned.contains_key(&version.pk),
+                    "removed members {:?} learned the secret at inner node {idx} of a \
+                     rotation by {} from a tree they did not belong to",
+                    excluded.iter().map(|&i| name_for(i)).collect::<Vec<_>>(),
+                    name_for(*author),
+                );
             }
         }
     });
@@ -662,7 +658,7 @@ async fn a_removal_beats_a_concurrent_add_of_the_same_member() {
     let next_keys: Vec<ShareKey> = new_path(&next)
         .path
         .iter()
-        .flat_map(|(_, node)| node.versions().iter().map(|v| v.pk))
+        .map(|(_, node)| node.pk)
         .collect();
     assert!(
         next_keys.iter().any(|pk| learned_by_c.contains_key(pk)),
