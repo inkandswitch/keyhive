@@ -324,11 +324,6 @@ impl BeeKem {
         })
     }
 
-    /// The index the next leaf added will have.
-    pub fn next_leaf_index(&self) -> u32 {
-        self.next_leaf_idx.u32()
-    }
-
     /// Place `leaf` at the first available [`LeafNodeIndex`] on the right and
     /// blank that leaf's path to the root. Returns the leaf's index.
     fn push_leaf_node(&mut self, leaf: LeafNode) -> u32 {

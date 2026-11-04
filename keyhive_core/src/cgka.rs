@@ -356,7 +356,6 @@ mod tests {
                 change: CgkaChange::Add {
                     added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
                     pk: invitee_sk.share_key(),
-                    leaf_index: 0,
                     invitation: None,
                     key_proof: None,
                     citations: BTreeSet::new(),

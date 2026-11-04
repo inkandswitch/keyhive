@@ -446,25 +446,19 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 id
             );
         }
-        let leaf_index = self.tree.next_leaf_index();
         let op = CgkaOperation {
             doc_id: self.doc_id,
             predecessors: Predecessors::heads_of(&self.ops_graph),
             change: CgkaChange::Add {
                 added_id: id,
                 pk,
-                leaf_index,
                 invitation: invitation.map(Box::new),
                 key_proof,
                 citations: citations.into_iter().collect(),
             },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
-        let placed_leaf_index = self.tree.add_leaf(id, pk, signed_op.digest());
-        debug_assert_eq!(
-            placed_leaf_index, leaf_index,
-            "the add's leaf is at the index it was signed with"
-        );
+        self.tree.add_leaf(id, pk, signed_op.digest());
         self.handle_new_removals(signed_op.payload());
         Ok(Some(signed_op))
     }
