@@ -70,7 +70,7 @@ A new BeeKEM tree is created empty, with every leaf and inner node blank. Member
 
 When a member rotates their leaf key, they encrypt a new secret at every ancestor up to the root.
 
-1. **Generate a new leaf keypair.** Place the new public key at the member's leaf. Store the secret key in the member's local key map.
+1. **Generate a new leaf keypair.** Store the secret key in the member's local key map. The new public key is written to the leaf in step 5.
 
 2. **Walk up the path from the leaf toward the root.** At each parent node:
 
@@ -86,11 +86,13 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
 
    e. **Handle the empty resolution case.** If the sibling's entire subtree is blank (no members), generate a throwaway keypair and use it for the DH. The encrypted secret is stored keyed by the child's own index only (so the encrypter can still decrypt it later).
 
-   f. **Store the new secret store** (parent's public key, encrypted secret map, and encrypter child's public key) at the parent, replacing whatever was there.
+   f. **Add the new path node** (parent's public key and encrypted secret map) to the path change. It is written to the parent, with its encrypter's key, in step 5.
 
-3. **After reaching the root**, record which leaf performed this encryption. The root now has a valid secret and any member can decrypt it.
+3. **After reaching the root**, record which leaf performed this encryption.
 
 4. **Emit a path change** containing the leaf's new public key, a path node for every inner node on the path, and the list of old public keys that were replaced (the "removed keys"). The removed keys are important for merge; they tell other members which keys have been superseded.
+
+5. **Sign the path change, then write it into the tree** as any received update is written. It lists every key on its path as removed, so it replaces every version there. The tree then has a valid root secret that any member can decrypt.
 
 ## Decryption (Deriving the Root Secret)
 
