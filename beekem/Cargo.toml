@@ -12,13 +12,14 @@ rust-version.workspace = true
 [dependencies]
 blake3 = { workspace = true }
 chacha20poly1305 = { workspace = true }
-ed25519-dalek = { workspace = true, features = ["rand_core"] }
+ed25519-dalek = { workspace = true, features = ["rand_core", "zeroize"] }
 future_form = { workspace = true }
 keyhive_codec = { workspace = true }
 keyhive_crypto = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }
+zeroize = { workspace = true }
 
 # std-only dependencies
 dupe = { workspace = true, optional = true }

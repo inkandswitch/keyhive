@@ -34,7 +34,7 @@ fn sealed(n: u8) -> EncryptedSecret<ShareSecretKey> {
     let mut rng = StdRng::seed_from_u64(u64::from(n) + 1000);
     encrypt_secret(
         TreeId::from(&SigningKey::from_bytes(&[n; 32])),
-        ShareSecretKey::generate(&mut rng),
+        &ShareSecretKey::generate(&mut rng),
         &ShareSecretKey::generate(&mut rng),
         &key(n),
     )

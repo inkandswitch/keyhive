@@ -82,13 +82,11 @@ impl JsSigner {
 
     #[wasm_bindgen(js_name = memorySignerFromBytes)]
     pub fn memory_signer_from_bytes(bytes: &[u8]) -> Result<Self, CannotParseEd25519SigningKey> {
-        let arr: [u8; 32] = bytes
-            .to_vec()
-            .try_into()
-            .map_err(|_| CannotParseEd25519SigningKey)?;
-
+        // Borrowed, not copied into a Vec or an array: neither copy would be
+        // wiped, and `from_bytes` takes a reference.
+        let bytes = <&[u8; 32]>::try_from(bytes).map_err(|_| CannotParseEd25519SigningKey)?;
         Ok(JsSigner(JsSignerOptions::Memory(SigningKey::from_bytes(
-            &arr,
+            bytes,
         ))))
     }
 

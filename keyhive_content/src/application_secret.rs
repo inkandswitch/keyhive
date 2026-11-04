@@ -3,7 +3,7 @@
 
 use crate::{
     ancestor_key::AncestorKey,
-    encrypted::{encode_ancestors, EncryptedContent, PredecessorRefs},
+    encrypted::{encode_body, EncryptedContent, PredecessorRefs},
     reference::ContentRef,
 };
 use alloc::vec::Vec;
@@ -16,6 +16,7 @@ use keyhive_crypto::{
     symmetric_key::SymmetricKey,
 };
 use tracing::instrument;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A block's application key, with its ciphertext's header fields.
 ///
@@ -48,9 +49,15 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         }
     }
 
-    /// Getter for the underlying symmetric key.
+    /// The underlying symmetric key, borrowed. Treat as secret.
+    pub fn key_ref(&self) -> &SymmetricKey {
+        &self.key
+    }
+
+    /// A copy of the underlying symmetric key, which is wiped when dropped
+    /// too. Prefer [`Self::key_ref`] unless an owned key is needed.
     pub fn key(&self) -> SymmetricKey {
-        self.key
+        self.key.clone()
     }
 
     /// Encrypt `payload` for the document `doc_id`, with the keys of its
@@ -75,13 +82,10 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         if PredecessorRefs::digest(&refs) != self.pred_refs {
             return Err(TryEncryptError::AncestorsAreNotPredecessors);
         }
-        let mut body = Vec::new();
-        encode_ancestors(
+        let body = encode_body(
             ancestors.iter().map(|a| (a.content_ref(), a.key_ref())),
-            &mut body,
+            payload,
         );
-        body.reserve_exact(payload.len());
-        body.extend_from_slice(payload);
         let encrypted = EncryptedContent::encrypt(
             &self.key,
             doc_id,
@@ -94,7 +98,7 @@ impl<Cr: ContentRef> ApplicationSecret<Cr> {
         .map_err(|_| TryEncryptError::Encryption)?;
         Ok((
             encrypted,
-            AncestorKey::new(self.content_ref.clone(), doc_id, self.key),
+            AncestorKey::new(self.content_ref.clone(), doc_id, self.key.clone()),
         ))
     }
 }
@@ -115,8 +119,9 @@ pub enum TryEncryptError {
     Encryption,
 }
 
-/// A CGKA group secret, which application secrets are derived from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A CGKA group secret, which application secrets are derived from. Wiped when
+/// dropped, through its [`ShareSecretKey`]; equality takes constant time.
+#[derive(Debug, Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct GroupSecret(pub ShareSecretKey);
 
 impl GroupSecret {
@@ -161,6 +166,15 @@ impl From<ShareSecretKey> for GroupSecret {
         GroupSecret(share_secret_key)
     }
 }
+
+// Fails to compile unless the secret is marked `ZeroizeOnDrop` and has a
+// destructor, which a `Copy` type cannot have. Its key's `Box` gives it one
+// today; the check keeps that true if the bytes are ever held inline.
+const _: () = assert!(core::mem::needs_drop::<GroupSecret>());
+const _: fn() = || {
+    fn wiped_on_drop<T: ZeroizeOnDrop>() {}
+    wiped_on_drop::<GroupSecret>();
+};
 
 /// The CGKA operation that generated a group secret. A block's header contains its
 /// hash, which identifies the secret the block's key was derived from. Only
@@ -241,7 +255,7 @@ mod tests {
         let (encrypted, own) = secret(&[[3; 32]])
             .try_encrypt::<Vec<u8>>(doc(1), &[ancestor(3, doc(1))], b"payload")
             .expect("the ancestors are the predecessors");
-        assert!(encrypted.try_decrypt(own.key(), own.doc_id()).is_ok());
+        assert!(encrypted.try_decrypt(own.key_ref(), own.doc_id()).is_ok());
         assert_eq!(own.content_ref(), &encrypted.content_ref);
     }
 }

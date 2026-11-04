@@ -426,7 +426,7 @@ impl BeeKem {
         // key at the start. And as it moves up the path, it will generate a new public
         // key for each ancestor up to the root.
         let mut child_pk = pk;
-        let mut child_sk = *sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?;
+        let mut child_sk = sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?.clone();
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
             if let Some(store) = self.inner_node(parent_idx) {
@@ -436,7 +436,7 @@ impl BeeKem {
             let new_parent_pk = new_parent_sk.share_key();
             // Hold on to the secret so we can derive the root key later without
             // having to decrypt our own path.
-            new_sks.push((new_parent_pk, new_parent_sk));
+            new_sks.push((new_parent_pk, new_parent_sk.clone()));
             let secret_store = self.encrypt_new_secret_store_for_parent(
                 child_idx,
                 child_pk,
@@ -562,7 +562,7 @@ impl BeeKem {
                 if secret.share_key() != parent_pk {
                     return Err(CgkaError::PathSecretMismatch);
                 }
-                child_sks.insert(parent_pk, secret);
+                child_sks.insert(parent_pk, secret.clone());
                 Some(secret)
             }
         };
@@ -595,12 +595,8 @@ impl BeeKem {
             // just to do DH with when encrypting the new parent secret.
             let paired_sk = ShareSecretKey::generate(csprng);
             let paired_pk = paired_sk.share_key();
-            let encrypted_sk = crate::encrypted::encrypt_secret(
-                self.doc_id,
-                *new_parent_sk,
-                child_sk,
-                &paired_pk,
-            )?;
+            let encrypted_sk =
+                crate::encrypted::encrypt_secret(self.doc_id, new_parent_sk, child_sk, &paired_pk)?;
             secret_map.insert(child_idx, encrypted_sk);
         } else {
             // Encrypt the secret for every node in the sibling resolution, using
@@ -610,7 +606,7 @@ impl BeeKem {
                 let next_pk = self.resolution_key(idx)?;
                 let encrypted_sk = crate::encrypted::encrypt_secret(
                     self.doc_id,
-                    *new_parent_sk,
+                    new_parent_sk,
                     child_sk,
                     &next_pk,
                 )?;
@@ -932,8 +928,9 @@ mod tests {
     ) -> (MemberId, ShareKey) {
         let id = MemberId::from(&SigningKey::generate(rng));
         let sk = ShareSecretKey::generate(rng);
-        sks.insert(sk.share_key(), sk);
-        (id, sk.share_key())
+        let pk = sk.share_key();
+        sks.insert(pk, sk);
+        (id, pk)
     }
 
     /// Resolve `tree` for a membership change with `added` and `removed`.
@@ -1014,7 +1011,7 @@ mod tests {
             (b, a)
         };
         let mut low_sks = sks.clone();
-        low_sks.insert(low.share_key(), low);
+        low_sks.insert(low.share_key(), low.clone());
         let (_, low_path) = base
             .clone()
             .encrypt_path(owner, low.share_key(), &mut low_sks, &mut rng)
@@ -1026,7 +1023,7 @@ mod tests {
             join_new_member_to_share_key_map(&mut rng, &mut ShareKeyMap::new());
         base.push_leaf(joiner, joiner_pk.into());
         let mut high_sks = sks.clone();
-        high_sks.insert(high.share_key(), high);
+        high_sks.insert(high.share_key(), high.clone());
         let (root_secret, high_path) = base
             .clone()
             .encrypt_path(owner, high.share_key(), &mut high_sks, &mut rng)
@@ -1048,7 +1045,7 @@ mod tests {
         instance_sks.insert(high.share_key(), high);
         let decrypted = tree.decrypt_tree_secret(owner, &mut instance_sks);
         assert_eq!(
-            decrypted.as_ref().ok().copied().map(PcsKey::from),
+            decrypted.as_ref().ok().cloned().map(PcsKey::from),
             Some(root_secret),
             "{decrypted:?}"
         );

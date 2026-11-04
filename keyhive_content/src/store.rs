@@ -163,7 +163,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
 
                 let content_ref = ciphertext.content_ref.clone();
 
-                let opened = match Envelope::<Cr, Vec<u8>>::open(&ciphertext, key, doc_id) {
+                let opened = match Envelope::<Cr, Vec<u8>>::open(&ciphertext, &key, doc_id) {
                     Ok((envelope, opened_by)) => T::decode(&envelope.plaintext)
                         .map(|plaintext| (plaintext, envelope.ancestors, opened_by))
                         .map_err(ErrorReason::DeserializationFailed),
@@ -228,9 +228,9 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
             let mut cannot = HashMap::new();
             for (content_ref, key) in start {
                 match self.get_ciphertext(content_ref).await {
-                    Ok(Some(encrypted)) => to_decrypt.push((encrypted, *key)),
+                    Ok(Some(encrypted)) => to_decrypt.push((encrypted, key.clone())),
                     Ok(None) => {
-                        not_served.insert(content_ref.clone(), *key);
+                        not_served.insert(content_ref.clone(), key.clone());
                     }
                     Err(e) => {
                         cannot.insert(content_ref.clone(), ErrorReason::GetCiphertextError(e));
@@ -531,7 +531,7 @@ mod tests {
             "two".to_string(),
             two_ref,
             origin,
-            HashMap::from_iter([(one_ref, wrong_key)]),
+            HashMap::from_iter([(one_ref, wrong_key.clone())]),
             doc_id,
             &mut csprng,
         );
@@ -573,7 +573,7 @@ mod tests {
             "read".to_string(),
             read_ref,
             origin,
-            HashMap::from_iter([(parent_ref, parent_key)]),
+            HashMap::from_iter([(parent_ref, parent_key.clone())]),
             doc_id,
             &mut csprng,
         );
@@ -591,8 +591,8 @@ mod tests {
 
         let start = [
             (read_ref, read_key),
-            (absent_ref, absent_key),
-            (refused_ref, wrong_key),
+            (absent_ref, absent_key.clone()),
+            (refused_ref, wrong_key.clone()),
         ];
         let Err(err) = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt_from_keys(
             &store, doc_id, &start,
@@ -700,7 +700,7 @@ mod tests {
         let envelope = Envelope {
             plaintext: "a".to_string(),
             ancestors: HashMap::from_iter([
-                (block_ref, key),
+                (block_ref, key.clone()),
                 (unavailable_ref, SymmetricKey::generate(&mut csprng)),
             ]),
         };

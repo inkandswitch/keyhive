@@ -61,7 +61,9 @@ use keyhive_core::{
     crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
-    principal::{document::DecryptError, individual::ReceivePrekeyOpError},
+    principal::{
+        active::archive::encode_key_pairs, document::DecryptError, individual::ReceivePrekeyOpError,
+    },
 };
 use nonempty::NonEmpty;
 use rand::rngs::OsRng;
@@ -258,7 +260,7 @@ impl JsKeyhive {
             .await?;
         Ok(JsEncryptedKeyed {
             inner,
-            application_secret: key.as_slice().to_vec(),
+            application_secret: key,
         })
     }
 
@@ -289,10 +291,7 @@ impl JsKeyhive {
             .0
             .try_decrypt_content_keyed(doc_id.0, &encrypted.0)
             .await?;
-        Ok(JsDecryptedKeyed::new(
-            envelope.plaintext,
-            key.as_slice().to_vec(),
-        ))
+        Ok(JsDecryptedKeyed::new(envelope.plaintext, key))
     }
 
     /// Decrypt `encrypted` with this keyhive's key for it, then the ancestors
@@ -414,7 +413,10 @@ impl JsKeyhive {
     /// one-entry export (the format `importPrekeySecrets` accepts).
     /// The returned bytes are secret key material: do not log or persist unencrypted.
     #[wasm_bindgen(js_name = forcePcsUpdate)]
-    pub async fn force_pcs_update(&self, doc_id: &JsDocumentId) -> Result<Box<[u8]>, JsValue> {
+    pub async fn force_pcs_update(
+        &self,
+        doc_id: &JsDocumentId,
+    ) -> Result<js_sys::Uint8Array, JsValue> {
         init_span!("JsKeyhive::force_pcs_update");
         let (_op, new_key_pair) = self
             .0
@@ -422,10 +424,8 @@ impl JsKeyhive {
             .await
             .map_err(EncryptContentError::<JsChangeId>::from)
             .map_err(JsEncryptError::from)?;
-        Ok(BTreeMap::from([new_key_pair])
-            .encode()
-            .into_bytes()
-            .into_boxed_slice())
+        let export = encode_key_pairs(&BTreeMap::from([new_key_pair]));
+        Ok(js_sys::Uint8Array::from(export.as_slice()))
     }
 
     #[wasm_bindgen(js_name = tryPcsKeyHash)]
@@ -687,11 +687,13 @@ impl JsKeyhive {
     }
 
     /// This keyhive's prekey secrets, for backup or for another instance of
-    /// the same identity. The bytes are unencrypted secret key material.
+    /// the same identity. The bytes are unencrypted secret key material. They
+    /// are copied straight into a JS array, which Keyhive cannot wipe: call
+    /// `fill(0)` on it when done. The Wasm buffer they came from is wiped.
     #[wasm_bindgen(js_name = exportPrekeySecrets)]
-    pub async fn export_prekey_secrets(&self) -> Box<[u8]> {
+    pub async fn export_prekey_secrets(&self) -> js_sys::Uint8Array {
         init_span!("JsKeyhive::export_prekey_secrets");
-        self.0.export_prekey_secrets().await.into_boxed_slice()
+        js_sys::Uint8Array::from(self.0.export_prekey_secrets().await.as_slice())
     }
 
     /// Add the secrets from `exportPrekeySecrets`. Refused if any secret does

@@ -15,6 +15,7 @@ use keyhive_crypto::{
     symmetric_key::SymmetricKey,
 };
 use tracing::instrument;
+use zeroize::Zeroizing;
 
 const NONCE_LEN: usize = 24;
 const AEAD_TAG_LEN: usize = 16;
@@ -30,16 +31,16 @@ pub trait Sealable {
     /// The context its key is derived under, from the X25519 exchange.
     const CONTEXT: Context;
 
-    /// The secret's bytes, as sealed.
-    fn secret_bytes(&self) -> [u8; 32];
+    /// The secret's bytes, as sealed. Borrowed: a copy would not be wiped.
+    fn secret_bytes(&self) -> &[u8];
 }
 
 /// A BeeKEM node's secret, sealed to a node of its sibling's resolution.
 impl Sealable for ShareSecretKey {
     const CONTEXT: Context = Context::CGKA_NODE_SECRET_KEY;
 
-    fn secret_bytes(&self) -> [u8; 32] {
-        self.to_bytes()
+    fn secret_bytes(&self) -> &[u8] {
+        self.as_slice()
     }
 }
 
@@ -48,8 +49,8 @@ impl Sealable for ShareSecretKey {
 impl Sealable for PcsKey {
     const CONTEXT: Context = Context::CGKA_INVITATION_KEY;
 
-    fn secret_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes()
+    fn secret_bytes(&self) -> &[u8] {
+        self.0.as_slice()
     }
 }
 
@@ -62,7 +63,6 @@ impl Sealable for PcsKey {
 /// synthetic nonce ([`SymmetricKey::try_open`]). A ciphertext therefore opens
 /// only as a `T`, only in the tree, and between the two keys, it was sealed
 /// for, and under only one key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EncryptedSecret<T> {
     /// `nonce ‖ ciphertext ‖ tag`, from [`SymmetricKey::try_seal`].
     sealed: Vec<u8>,
@@ -74,6 +74,54 @@ pub struct EncryptedSecret<T> {
     _plaintext_tag: PhantomData<T>,
 }
 
+// By hand: `#[derive]` would also require `T: Ord + Hash`, but `T` only names
+// the secret type sealed inside, and secret keys implement neither.
+impl<T> Clone for EncryptedSecret<T> {
+    fn clone(&self) -> Self {
+        EncryptedSecret {
+            sealed: self.sealed.clone(),
+            paired_pk: self.paired_pk,
+            _plaintext_tag: PhantomData,
+        }
+    }
+}
+
+impl<T> PartialEq for EncryptedSecret<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.sealed == other.sealed && self.paired_pk == other.paired_pk
+    }
+}
+
+impl<T> Eq for EncryptedSecret<T> {}
+
+impl<T> PartialOrd for EncryptedSecret<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for EncryptedSecret<T> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        (&self.sealed, &self.paired_pk).cmp(&(&other.sealed, &other.paired_pk))
+    }
+}
+
+impl<T> core::hash::Hash for EncryptedSecret<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.sealed.hash(state);
+        self.paired_pk.hash(state);
+    }
+}
+
+impl<T> core::fmt::Debug for EncryptedSecret<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EncryptedSecret")
+            .field("sealed", &self.sealed)
+            .field("paired_pk", &self.paired_pk)
+            .finish()
+    }
+}
+
 impl<T: Sealable> EncryptedSecret<T> {
     /// Open with the encrypter's secret key.
     #[instrument(skip_all)]
@@ -81,7 +129,7 @@ impl<T: Sealable> EncryptedSecret<T> {
         &self,
         doc_id: TreeId,
         encrypter_sk: &ShareSecretKey,
-    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+    ) -> Result<Zeroizing<Vec<u8>>, chacha20poly1305::Error> {
         encrypter_sk
             .derive_symmetric_key(&self.paired_pk, T::CONTEXT)
             .try_open(
@@ -98,7 +146,7 @@ impl<T: Sealable> EncryptedSecret<T> {
         doc_id: TreeId,
         paired_sk: &ShareSecretKey,
         encrypter_pk: &ShareKey,
-    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+    ) -> Result<Zeroizing<Vec<u8>>, chacha20poly1305::Error> {
         paired_sk
             .derive_symmetric_key(encrypter_pk, T::CONTEXT)
             .try_open(
@@ -189,7 +237,7 @@ impl<T> StreamDecode for EncryptedSecret<T> {
 /// Seal `secret` for the holder of `paired_pk`'s secret.
 pub fn encrypt_secret<T: Sealable>(
     doc_id: TreeId,
-    secret: T,
+    secret: &T,
     sk: &ShareSecretKey,
     paired_pk: &ShareKey,
 ) -> Result<EncryptedSecret<T>, CgkaError> {
@@ -200,7 +248,7 @@ pub fn encrypt_secret<T: Sealable>(
 pub fn encrypt_secret_with<T: Sealable>(
     paired: &PairedKey<T>,
     doc_id: TreeId,
-    secret: T,
+    secret: &T,
 ) -> Result<EncryptedSecret<T>, CgkaError> {
     let PairedKey {
         key,
@@ -210,7 +258,7 @@ pub fn encrypt_secret_with<T: Sealable>(
     } = paired;
     let sealed = key
         .try_seal(
-            &secret.secret_bytes(),
+            secret.secret_bytes(),
             &node_secret_aad(doc_id, encrypter_pk, paired_pk),
         )
         .map_err(CgkaError::Encryption)?;
@@ -224,7 +272,11 @@ pub fn encrypt_secret_with<T: Sealable>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "std")]
+    use core::hash::{Hash, Hasher};
     use ed25519_dalek::SigningKey;
+    #[cfg(feature = "std")]
+    use std::collections::hash_map::DefaultHasher;
 
     fn doc(n: u8) -> TreeId {
         TreeId::from(&SigningKey::from_bytes(&[n; 32]))
@@ -232,6 +284,52 @@ mod tests {
 
     fn share_sk(n: u8) -> ShareSecretKey {
         ShareSecretKey::force_from_bytes([n; 32])
+    }
+
+    fn sealed_to(sealed: &[u8], pk_seed: u8) -> EncryptedSecret<ShareSecretKey> {
+        EncryptedSecret {
+            sealed: sealed.to_vec(),
+            paired_pk: share_sk(pk_seed).share_key(),
+            _plaintext_tag: PhantomData,
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn hash_of(secret: &EncryptedSecret<ShareSecretKey>) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        secret.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// The hand-written `PartialEq`, `Ord` and `Hash` (`T` has no `Ord` or
+    /// `Hash` to derive them from) agree with the fields: equal exactly when
+    /// both fields are, ordered by `sealed` then `paired_pk`, and hashed from
+    /// both, so equal values hash alike and values differing in either field
+    /// hash apart.
+    #[cfg(feature = "std")]
+    #[test]
+    fn equality_order_and_hash_follow_both_fields() {
+        bolero::check!()
+            .with_type::<(Vec<u8>, u8, Vec<u8>, u8)>()
+            .for_each(|(sealed_a, pk_a, sealed_b, pk_b)| {
+                let (a, b) = (sealed_to(sealed_a, *pk_a), sealed_to(sealed_b, *pk_b));
+                let same_fields = sealed_a == sealed_b && pk_a == pk_b;
+                assert_eq!(a == b, same_fields);
+
+                // Differing in one field alone is enough to differ.
+                let other_pk = sealed_to(sealed_a, pk_a.wrapping_add(1));
+                let other_sealed = sealed_to(&[sealed_a.as_slice(), &[0]].concat(), *pk_a);
+                assert_ne!(a, other_pk);
+                assert_ne!(a, other_sealed);
+                assert_ne!(hash_of(&a), hash_of(&other_pk));
+                assert_ne!(hash_of(&a), hash_of(&other_sealed));
+                assert_eq!(
+                    a.cmp(&b),
+                    (sealed_a, a.paired_pk).cmp(&(sealed_b, b.paired_pk))
+                );
+                assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));
+                assert_eq!(hash_of(&a) == hash_of(&b), same_fields);
+            });
     }
 
     /// Node secrets and invitations' root secrets are sealed under keys from
@@ -245,7 +343,7 @@ mod tests {
         };
 
         let node_secret =
-            encrypt_secret(doc(1), share_sk(1), &encrypter, &paired.share_key()).expect("seals");
+            encrypt_secret(doc(1), &share_sk(1), &encrypter, &paired.share_key()).expect("seals");
         assert!(node_secret
             .try_paired_decrypt(doc(1), &paired, &encrypter.share_key())
             .is_ok());
@@ -260,7 +358,7 @@ mod tests {
 
         let invitation = encrypt_secret(
             doc(1),
-            PcsKey::new(share_sk(1)),
+            &PcsKey::new(share_sk(1)),
             &encrypter,
             &paired.share_key(),
         )
@@ -282,8 +380,8 @@ mod tests {
     fn a_node_secret_opens_only_in_its_tree() {
         let (secret, encrypter, paired) = (share_sk(1), share_sk(2), share_sk(3));
         let sealed =
-            encrypt_secret(doc(1), secret, &encrypter, &paired.share_key()).expect("seals");
-        let plaintext = Vec::<u8>::from(&secret);
+            encrypt_secret(doc(1), &secret, &encrypter, &paired.share_key()).expect("seals");
+        let plaintext = Zeroizing::new(secret.as_slice().to_vec());
         for (tree, expected) in [
             (doc(1), Ok(plaintext)),
             (doc(2), Err(chacha20poly1305::Error)),

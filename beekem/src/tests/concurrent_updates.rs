@@ -68,7 +68,7 @@ fn a_concurrent_updates_secret_is_decrypted_from_its_own_path() {
                 );
                 assert_eq!(
                     cgka.root_secret_from_update_path(&op_hash),
-                    Some(secret),
+                    Some(secret.clone()),
                     "replica {reader} should decrypt the secret from the update's own path"
                 );
             }
@@ -144,7 +144,8 @@ async fn one_identitys_concurrent_rotations_leave_every_replica_with_the_same_le
     group.settle(0, &mut rng).await;
     let mut sks: Vec<ShareSecretKey> = (0..3).map(|_| ShareSecretKey::generate(&mut rng)).collect();
     sks.sort_by_key(|sk| sk.share_key());
-    let [lowest, middle, highest] = [sks[0], sks[1], sks[2]];
+    let [lowest, middle, highest]: [ShareSecretKey; 3] =
+        sks.try_into().expect("three keys were generated");
 
     // A second instance of `b` rotates to the middle key while the first
     // rotates to the lowest and then the highest. `c` receives the second

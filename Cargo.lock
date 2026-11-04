@@ -154,6 +154,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -1042,6 +1043,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -1085,6 +1087,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -1104,10 +1107,12 @@ dependencies = [
  "keyhive_codec",
  "rand 0.8.8",
  "signature",
+ "subtle",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]

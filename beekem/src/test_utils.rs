@@ -70,7 +70,7 @@ impl Group<NoImplicitRemoves> {
             .iter()
             .map(|m| {
                 let mut sks = ShareKeyMap::new();
-                sks.insert(m.pk, m.sk);
+                sks.insert(m.pk, m.sk.clone());
                 Cgka::new(doc_id, m.id, sks, NoImplicitRemoves)
             })
             .collect();
@@ -388,8 +388,8 @@ impl<M: ImplicitRemovesProtocol> Group<M> {
             });
             match agreed {
                 None => agreed = Some(key),
-                Some(first) => assert!(
-                    key == first,
+                Some(ref first) => assert!(
+                    key == *first,
                     "{context}: {name} derived a different root key"
                 ),
             }
@@ -495,8 +495,10 @@ pub(crate) fn assert_chain_bookkeeping<M: ImplicitRemovesProtocol>(cgka: &Cgka<M
     let chained: BTreeSet<_> = cgka
         .root_secrets
         .iter()
-        .flat_map(|(op_hash, secret)| cgka.decrypt_predecessor_secrets(&op_hash, &secret, |_| true))
-        .filter(|(update, secret)| VerifiedRootSecret::verify(graph, *update, *secret).is_some())
+        .flat_map(|(op_hash, secret)| cgka.decrypt_predecessor_secrets(op_hash, secret, |_| true))
+        .filter(|(update, secret)| {
+            VerifiedRootSecret::verify(graph, *update, secret.clone()).is_some()
+        })
         .map(|(update, _)| update)
         .collect();
     let unchained: BTreeSet<_> = chainable.difference(&chained).copied().collect();

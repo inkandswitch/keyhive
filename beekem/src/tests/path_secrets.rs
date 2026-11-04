@@ -29,15 +29,15 @@ async fn forged_update(
     tampered_update(group, author, rng, |new_path, sks, rng| {
         for (_, node) in new_path.path.iter_mut() {
             let version = node.head_mut();
-            let encrypter_sk = *sks
+            let encrypter_sk = sks
                 .get(&version.encrypter_pk)
                 .expect("the author has its path secrets");
             let incorrect_secret = ShareSecretKey::generate(rng);
             for encrypted in version.sk.values_mut() {
                 *encrypted = encrypt_secret(
                     doc_id,
-                    incorrect_secret,
-                    &encrypter_sk,
+                    &incorrect_secret,
+                    encrypter_sk,
                     &encrypted.paired_pk,
                 )
                 .expect("encryption succeeds");

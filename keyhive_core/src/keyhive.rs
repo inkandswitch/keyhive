@@ -88,6 +88,7 @@ use std::{
 
 use thiserror::Error;
 use tracing::instrument;
+use zeroize::Zeroizing;
 
 /// The main object for a replica: a shared handle to its [`KeyhiveState`].
 ///
@@ -1356,13 +1357,14 @@ where
             (active.signer.clone(), active.id(), owner_pk)
         };
         let owner_pk = owner_pk.ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
-        let owner_sk = *self
+        let owner_sk = self
             .active
             .key_pairs
             .lock()
             .await
             .get(&owner_pk)
-            .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?;
+            .ok_or(GenerateDocError::OwnerHoldsNoPrekeySecret)?
+            .clone();
 
         // The owner's add has no predecessors, so it cites the whole closure,
         // root edges included, and every later add has it as an ancestor.
@@ -1898,7 +1900,7 @@ where
         };
         let mut locked = state.lock().await;
         let key = self.decryption_key(doc, &mut locked, encrypted).await?;
-        Ok((locked.try_decrypt_content_with(encrypted, key)?, key))
+        Ok((locked.try_decrypt_content_with(encrypted, &key)?, key))
     }
 
     /// The key for `encrypted` in `doc`'s CGKA, fetching any membership answer
@@ -1978,8 +1980,8 @@ where
             self.settle_for_write(doc, &mut locked).await?;
             locked.pcs_update(&signer, &mut *locked_csprng).await?
         };
-        let (pk, sk) = new_key_pair;
-        self.active.insert_rotated_secret(pk, sk).await;
+        let (pk, sk) = &new_key_pair;
+        self.active.insert_rotated_secret(*pk, sk.clone()).await;
         Ok((op, new_key_pair))
     }
 
@@ -3061,7 +3063,7 @@ where
             let pairs = self.active.key_pairs.lock().await;
             own_cgka_keys(&op, me)
                 .into_iter()
-                .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, *sk)))
+                .filter_map(|pk| pairs.get(&pk).map(|sk| (pk, sk.clone())))
                 .collect()
         };
         let merged = {
@@ -3189,7 +3191,7 @@ where
         let Some(prekey) = self.active.pick_prekey(doc_id).await else {
             return Ok(false);
         };
-        let sk = { self.active.key_pairs.lock().await.get(&prekey).copied() };
+        let sk = { self.active.key_pairs.lock().await.get(&prekey).cloned() };
         let (Some(sk), Some(key_proof)) = (sk, self.key_proof(me, &prekey).await) else {
             return Ok(false);
         };
@@ -3270,9 +3272,10 @@ where
     ///
     /// # Security
     ///
-    /// The returned bytes contain unencrypted secret key material.
-    /// Callers are responsible for protecting this data at rest and in transit.
-    pub async fn export_prekey_secrets(&self) -> Vec<u8> {
+    /// The returned bytes contain unencrypted secret key material, wiped when
+    /// dropped. Callers are responsible for protecting any copy they make, at
+    /// rest and in transit.
+    pub async fn export_prekey_secrets(&self) -> Zeroizing<Vec<u8>> {
         self.active.export_prekey_secrets().await
     }
 
@@ -3292,6 +3295,9 @@ where
     /// Everything this replica cannot recompute, for persistence. Fails if
     /// the certificate set cannot be read: an archive without it would lose
     /// every group and grant.
+    ///
+    /// The archive holds secret keys: store it with
+    /// [`Archive::encode_zeroizing`].
     #[instrument(skip_all)]
     pub async fn into_archive(&self) -> Result<Archive<T>, KeylineStorageError<K::Error>> {
         let mut archive = self.archive_state().await;
@@ -3549,7 +3555,7 @@ where
                     doc.remember_key(AncestorKey::from_trusted_storage(
                         content_ref.clone(),
                         doc_id.into(),
-                        *key,
+                        key.clone(),
                     ));
                 }
             }
@@ -4309,7 +4315,7 @@ fn adopt_cgka_secrets<M: ImplicitRemovesProtocol, I: IntoIterator<Item = ShareKe
     for pk in keys {
         if !cgka.owner_sks().contains_key(&pk) {
             if let Some(sk) = secrets.get(&pk) {
-                cgka.owner_sks_mut().insert(pk, *sk);
+                cgka.owner_sks_mut().insert(pk, sk.clone());
             }
         }
     }
