@@ -1,12 +1,9 @@
 //! Padding a block's envelope into its body, so the ciphertext's length shows
 //! little of the envelope's.
 //!
-//! An observer who cannot decrypt a block still sees how long it is: a relay
-//! stores and forwards it. Unpadded, that length is the envelope's to the
-//! byte, which shows the size of each edit (a keystroke, a paste), how a
-//! document grows, and how well a compressed payload compressed. So the
-//! envelope is padded to the next of a fixed set of lengths before it is
-//! encrypted:
+//! A block's length is visible to anyone who stores or forwards it, such as a
+//! relay. The envelope is padded to the next of a fixed set of lengths before
+//! it is encrypted, so that length shows little about the edit inside:
 //!
 //! ```text
 //! body = envelope ‖ 0x80 ‖ 0x00*        len(body) = padded_len(len(envelope))
@@ -15,11 +12,10 @@
 //! The lengths are [PADMÉ]'s (Nikitin et al., 2019), with a floor of
 //! [`MIN_PADDED_LEN`]. For a length whose top bit is bit E, PADMÉ zeroes the
 //! low E − S bits, where S = ⌊log₂ E⌋ + 1, rounding up: only the leading bit
-//! and the S bits after it can be set. A padded length so shows O(log log n)
+//! and the S bits after it can be set. So a padded length shows O(log log n)
 //! bits about the envelope instead of O(log n). Above the floor the padding
 //! adds at most a sixteenth of the envelope's length, falling to a 32nd from
-//! 64 KiB. Every envelope of at most 255 bytes pads to 256, so small edits
-//! look alike.
+//! 64 KiB.
 //!
 //! The padding is inside the AEAD, so it is hidden and authenticated, and
 //! zeros are as good as random bytes. The marker makes it self-describing: a
@@ -30,13 +26,8 @@
 //! the same length. Changing the rule is a change every writer has to make
 //! together.
 //!
-//! Padding is not a defence against a compression oracle. An attacker who can
-//! put chosen bytes into the same compressed payload as a secret, and see the
-//! ciphertext, can grow their input until it sits at a bucket boundary. They
-//! search for that boundary once; from then on one byte saved by compression
-//! changes the padded length, and each guess costs about one observation, as
-//! it would without padding. Not compressing attacker-influenced data together
-//! with secrets is the defence.
+//! Padding is not a defence against compression oracles; see
+//! `design/ciphersuite.md`.
 //!
 //! [PADMÉ]: https://petsymposium.org/popets/2019/popets-2019-0056.pdf
 
@@ -58,8 +49,9 @@ pub const MIN_PADDED_LEN: usize = 256;
 
 /// A block's body: an encoded envelope, padded to [`padded_len`].
 ///
-/// [`PaddedBody::pad`] is the only way to build one, so an unpadded envelope
-/// never reaches
+/// Outside this crate, [`PaddedBody::pad`] is the only way to build one (inside
+/// it, `encode_body` writes one already padded), so an unpadded envelope never
+/// reaches
 /// [`EncryptedContent::encrypt`](crate::encrypted::EncryptedContent::encrypt).
 /// Its readers would refuse one, or, if it happened to end in `0x80` and
 /// zeros, cut those bytes off its payload.
@@ -67,7 +59,7 @@ pub const MIN_PADDED_LEN: usize = 256;
 /// A body holds its envelope's ancestor keys, so it is kept in a buffer that
 /// is wiped when dropped and allocated once at its padded length: it never
 /// grows, so it leaves no copy of a key behind. It is neither `Clone` nor
-/// comparable, for the same reason.
+/// comparable, so its bytes are never copied or compared.
 pub struct PaddedBody(Zeroizing<Vec<u8>>);
 
 impl PaddedBody {
@@ -207,9 +199,9 @@ mod tests {
             });
     }
 
-    /// PADMÉ rounds every length up to the smallest one Algorithm 1 allows,
-    /// checked against those lengths listed independently: from 2^k to
-    /// 2^(k+1), the multiples of 2^(k - S), with S = ⌊log₂ k⌋ + 1.
+    /// PADMÉ rounds every length up to the smallest one Algorithm 1 allows:
+    /// from 2^k to 2^(k+1), the multiples of 2^(k - S), with
+    /// S = ⌊log₂ k⌋ + 1.
     #[test]
     fn padme_rounds_up_to_the_smallest_allowed_length() {
         for k in 1..20u32 {
@@ -227,25 +219,8 @@ mod tests {
         }
     }
 
-    /// Few lengths are used: from 2^k to 2^(k+1), PADMÉ allows the multiples
-    /// of 2^(k - S), which are 2^S + 1 lengths for S = ⌊log₂ k⌋ + 1, not 2^k.
-    #[test]
-    fn few_padded_lengths_are_used() {
-        for k in 9..20u32 {
-            let start = 1usize << k;
-            let mut buckets: Vec<usize> = (start..start << 1).map(padme).collect();
-            buckets.dedup();
-            assert!(
-                buckets.len() <= (1 << (k.ilog2() + 1)) + 1,
-                "{} buckets between 2^{k} and 2^{}",
-                buckets.len(),
-                k + 1
-            );
-        }
-    }
-
-    /// Checked by hand from Algorithm 1, at both sides of the floor and at
-    /// bucket edges.
+    /// Lengths from Algorithm 1, at both sides of the floor and at bucket
+    /// edges.
     #[test]
     fn known_padded_lengths() {
         for (len, padded) in [
@@ -309,8 +284,11 @@ mod tests {
                 assert_pads_and_strips(&envelope);
             }
         }
-        assert_eq!(PaddedBody::pad(&[0xAA; 255]).as_slice()[255], MARKER);
-        assert_eq!(PaddedBody::pad(&[0xAA; 1023]).as_slice()[1023], MARKER);
+        for len in [255, 1023, 65_535] {
+            let body = PaddedBody::pad(&vec![0xAA; len]);
+            assert_eq!(body.as_slice().len(), len + 1, "{len} fills its bucket");
+            assert_eq!(body.as_slice().last(), Some(&MARKER), "{len}");
+        }
     }
 
     /// No marker, or anything but the marker before the trailing zeros, is

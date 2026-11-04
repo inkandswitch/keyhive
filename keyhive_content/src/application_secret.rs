@@ -261,6 +261,10 @@ mod tests {
     /// of a payload is as long as its body's bucket plus the chunks'
     /// overhead, so payloads whose bodies share a bucket are
     /// indistinguishable by length.
+    ///
+    /// Each draw is also paired with the longest payload in its bucket, whose
+    /// envelope (a one-byte count, then the payload) leaves room for only the
+    /// marker. That payload must look the same, and one byte more must not.
     #[test]
     fn a_write_shows_only_its_padded_length() {
         bolero::check!()
@@ -269,6 +273,13 @@ mod tests {
                 let (padded_a, _, len_a) = write_of_len(usize::from(*a));
                 let (padded_b, _, len_b) = write_of_len(usize::from(*b));
                 assert_eq!(padded_a == padded_b, len_a == len_b);
+
+                let longest = padded_a - 2;
+                let (padded_longest, _, len_longest) = write_of_len(longest);
+                assert_eq!((padded_longest, len_longest), (padded_a, len_a));
+                let (padded_next, _, len_next) = write_of_len(longest + 1);
+                assert!(padded_next > padded_a, "{longest} + 1 opens a new bucket");
+                assert!(len_next > len_a);
             });
     }
 

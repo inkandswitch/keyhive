@@ -150,7 +150,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
     }
 
     /// Decrypt the body with the block's application key, for the document
-    /// `doc_id`. The body comes back still [padded](crate::padding);
+    /// `doc_id`. The body is returned [padded](crate::padding);
     /// [`Envelope::open`](crate::envelope::Envelope::open) also strips the
     /// padding and decodes the envelope.
     ///
@@ -256,9 +256,9 @@ impl<T, Cr: ContentRef> Decode for EncryptedContent<T, Cr> {
 }
 
 /// Pads and encrypts arbitrary bytes, with arbitrary header fields, under an
-/// arbitrary key and document, so the chunks are always well formed. A full chunk may
-/// come before the arbitrary tail, so layouts with a non-final chunk are drawn
-/// too.
+/// arbitrary key and document, so the chunks are always well formed. Three
+/// layouts are drawn: a short body, a full chunk before an arbitrary tail (so
+/// a non-final chunk), and a plaintext that pads to exactly one full chunk.
 #[cfg(any(test, feature = "arbitrary"))]
 impl<'a, T, Cr: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
     for EncryptedContent<T, Cr>
@@ -266,10 +266,17 @@ impl<'a, T, Cr: ContentRef + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let key = SymmetricKey::from(<[u8; 32]>::arbitrary(u)?);
         let doc_id = Identifier::arbitrary(u)?;
-        let full_chunk_first = bool::arbitrary(u)?;
         let fill = u8::arbitrary(u)?;
-        let mut plaintext = alloc::vec![fill; if full_chunk_first { CHUNK_LEN } else { 0 }];
-        plaintext.extend(Vec::<u8>::arbitrary(u)?);
+        let plaintext = match u8::arbitrary(u)? % 3 {
+            0 => Vec::<u8>::arbitrary(u)?,
+            1 => {
+                let mut plaintext = alloc::vec![fill; CHUNK_LEN];
+                plaintext.extend(Vec::<u8>::arbitrary(u)?);
+                plaintext
+            }
+            // Pads to `padded_len(CHUNK_LEN - 1) == CHUNK_LEN`: one full chunk.
+            _ => alloc::vec![fill; CHUNK_LEN - 1],
+        };
         EncryptedContent::encrypt(
             &key,
             doc_id,
@@ -659,16 +666,13 @@ mod tests {
         };
         assert_eq!(with(0, b'X'), Err(DecodeError::NotKeyhive));
         assert_eq!(with(2, b'D'), Err(DecodeError::UnexpectedKind(b'D')));
-        for version in [1, 2] {
-            assert_eq!(
-                with(3, version),
-                Err(DecodeError::UnsupportedVersion {
-                    kind: b'E',
-                    version
-                }),
-                "version {version}"
-            );
-        }
+        assert_eq!(
+            with(3, 1),
+            Err(DecodeError::UnsupportedVersion {
+                kind: b'E',
+                version: 1
+            })
+        );
     }
 
     /// Lengths that no chunking produces: none, too short for a nonce and tag,

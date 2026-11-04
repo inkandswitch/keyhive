@@ -117,9 +117,8 @@ Two members issue concurrent path updates; an attacker who compromised one fork 
 
 An observer without plaintext learns document IDs, membership, operation counts, coarse sizes, and timing.
 
-- Mitigated for content sizes. Each block's body is padded inside the AEAD to a [PADMÉ] length with a 256-byte floor (see [`ciphersuite.md`](./ciphersuite.md#content)), so a block's length shows the size class of its body, O(log log n) bits, not its exact size: small edits look alike, and larger ones show only a coarse size. Operation counts, CGKA operation sizes, and timing are still visible.
+- Mitigated for content sizes. Each block's body is padded inside the AEAD to a [PADMÉ] length with a 256-byte floor (see [`ciphersuite.md`](./ciphersuite.md#content)), so a block's length shows the size class of its body, O(log log n) bits, not its exact size. Operation counts, CGKA operation sizes, and timing are still visible.
 - Not a defence against compression oracles. An attacker who can put chosen bytes into a payload that is compressed together with a secret, and see the ciphertext, can still learn about the secret: they search once for a bucket boundary, and from there each guess costs about one observation, as without padding. Applications should not compress attacker-influenced data together with secrets.
-- Blocks written before the padding carry the same format version as padded ones. Current readers refuse them, or, if a payload happens to end in `0x80` and zeros, strip those bytes; readers from before the padding take a padded block's padding for payload. Older and newer clients should not share documents.
 - Accepted otherwise. Relays must see membership to evaluate capabilities. Timing is visible to the transport. Cover traffic is an application or transport concern.
 
 [PADMÉ]: https://petsymposium.org/popets/2019/popets-2019-0056.pdf

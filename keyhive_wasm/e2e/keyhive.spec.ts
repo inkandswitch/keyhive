@@ -373,6 +373,9 @@ test.describe("Keyhive", async () => {
     expect(out.plaintext).toStrictEqual([1, 2, 3]);
     expect(out.otherDocRefused).toBe(true);
     expect(out.lengths[0]).toBe(out.lengths[1]);
+    // Header (3 + 1 + a 33-byte change id + 3 × 32) + the 256-byte floor + one
+    // chunk's nonce and tag.
+    expect(out.lengths[0]).toBe(133 + 256 + 40);
   });
 
   test("a causal decryption reads the ancestors an async load returns", async ({ page }) => {
