@@ -117,6 +117,19 @@ impl PathChange {
     }
 }
 
+/// The outcome of applying an updates path in [`BeeKem::apply_path`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyPathOutcome {
+    /// The path was valid from the signer's leaf and is now in the tree.
+    Applied,
+    /// The path was not valid from the signer's leaf. Only the leaf was
+    /// updated and the signer's direct path was blanked.
+    BlankedPath,
+    /// The signer has no leaf, e.g., after a concurrent remove. There was
+    /// no change.
+    NoLeafToUpdate,
+}
+
 /// BeeKEM is our variant of the [TreeKEM] protocol (used in [MLS]) and inspired by
 /// [Matthew Weidner's Causal TreeKEM][Causal TreeKEM]. The distinctive
 /// feature of BeeKEM is that when merging concurrent updates, we keep all concurrent
@@ -403,11 +416,15 @@ impl BeeKem {
 
     /// Applies `id`'s [`PathChange`], representing new public and encrypted
     /// secret keys for each node on its path. `id` is the update's signer.
-    pub fn apply_path(&mut self, id: MemberId, new_path: &PathChange) {
+    ///
+    /// If `new_path` is not a valid path from `id`'s leaf, only the leaf is
+    /// updated and `id`'s direct path is blanked. This is a no-op if `id` has
+    /// no leaf.
+    pub fn apply_path(&mut self, id: MemberId, new_path: &PathChange) -> ApplyPathOutcome {
         // If this id has been concurrently removed, it might no longer be present
         // when we try to apply the concurrent update at that id.
         if !self.id_to_leaf_idx.contains_key(&id) {
-            return;
+            return ApplyPathOutcome::NoLeafToUpdate;
         }
         let leaf_idx = *self.leaf_index_for_id(id).expect("Id should be present");
         let new_leaf_pk = NodeKey::ShareKey(new_path.leaf_pk);
@@ -420,7 +437,7 @@ impl BeeKem {
             let new_node_key = leaf.pk.merge(&new_leaf_pk, &new_path.removed_keys);
             self.insert_leaf_at(leaf_idx, id, new_node_key);
             self.blank_path(treemath::parent(leaf_idx.into()));
-            return;
+            return ApplyPathOutcome::BlankedPath;
         }
 
         let old_leaf = self.leaf(leaf_idx).as_ref().unwrap();
@@ -438,6 +455,19 @@ impl BeeKem {
             } else {
                 self.insert_inner_node_at(current_idx, node.clone());
             }
+        }
+        ApplyPathOutcome::Applied
+    }
+
+    /// Blank `id`'s direct path if `new_path` is not a valid path from `id`'s
+    /// leaf, as [`Self::apply_path`] does when it applies `new_path`. Does
+    /// nothing if `id` has no leaf.
+    pub(crate) fn blank_path_if_invalid(&mut self, id: MemberId, new_path: &PathChange) {
+        let Some(&leaf_idx) = self.id_to_leaf_idx.get(&id) else {
+            return;
+        };
+        if !self.is_valid_path(leaf_idx, new_path) {
+            self.blank_path(treemath::parent(leaf_idx.into()));
         }
     }
 
@@ -1146,7 +1176,10 @@ mod tests {
         );
 
         let mut accepted = tree.clone();
-        accepted.apply_path(owner, &genuine);
+        assert_eq!(
+            accepted.apply_path(owner, &genuine),
+            ApplyPathOutcome::Applied
+        );
         assert!(accepted.has_root_key(), "a genuine path was not applied");
 
         // Inner node 2 is the parent of leaves 2 and 3. It should not be
@@ -1154,7 +1187,10 @@ mod tests {
         let mut forged = genuine;
         forged.path[0].0 = 2;
         let mut denied = tree;
-        denied.apply_path(owner, &forged);
+        assert_eq!(
+            denied.apply_path(owner, &forged),
+            ApplyPathOutcome::BlankedPath
+        );
         assert!(
             denied.inner_node(InnerNodeIndex::new(2)).is_none(),
             "a secret store was merged into another member's node"
