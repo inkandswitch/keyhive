@@ -915,19 +915,43 @@ where
         Ok(true)
     }
 
-    /// Whether every certificate `op` cites is in `doc`'s closure.
-    async fn cites_only_closure(
+    /// Make sure every certificate `op` cites is in `doc`'s closure and
+    /// record in [`CitedCertificates`] any that are not yet recorded there.
+    /// Returns `false` and doesn't record anything if a cited certificate is
+    /// not in the closure.
+    async fn record_closure_citations(
         &self,
         op: &CgkaOperation,
         doc: Identifier,
     ) -> Result<bool, KeylineStorageError<K::Error>> {
-        let closure: BTreeSet<CitationId> = self
+        let closure: HashMap<CitationId, Certificate<ContentHeads<T>>> = self
             .closure(doc)
             .await?
-            .iter()
-            .map(|cert| citation_of(cert.id()))
+            .into_iter()
+            .map(|cert| (citation_of(cert.id()), cert))
             .collect();
-        Ok(op.citations().iter().all(|c| closure.contains(c)))
+
+        let mut unrecorded = Vec::new();
+        {
+            let recorded = self.certificates.cited.lock();
+            for citation in op.citations() {
+                let Some(cert) = closure.get(citation) else {
+                    return Ok(false);
+                };
+                if !recorded.contains(citation) {
+                    unrecorded.push(cert);
+                }
+            }
+        }
+
+        // The store verified them on insert. Verifying again is the only way
+        // back to a `Verified` delegation, which authorization reads.
+        let verified: Vec<_> = unrecorded
+            .into_iter()
+            .filter_map(|cert| cert.clone().verify().ok())
+            .collect();
+        self.certificates.cited.lock().insert_multiple(&verified);
+        Ok(true)
     }
 
     /// The certificate `citation` refers to, if the Keyline store has it.
@@ -2806,7 +2830,7 @@ where
         };
 
         let cited = op.citations();
-        if !self.record_citations(op).await? || !self.cites_only_closure(op, doc).await? {
+        if !self.record_closure_citations(op, doc).await? {
             return Ok(Err(Pending));
         }
 
