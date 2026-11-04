@@ -69,7 +69,7 @@ A new BeeKEM tree is created empty, with every leaf and inner node blank. Member
 
 When a member rotates their leaf key, they encrypt a new secret at every ancestor up to the root.
 
-1. **Generate a new leaf keypair.** Place the new public key at the member's leaf. Store the secret key in the member's local key map.
+1. **Generate a new leaf keypair.** Store the secret key in the member's local key map. The new public key is written to the leaf in step 5.
 
 2. **Walk up the path from the leaf toward the root.** At each parent node:
 
@@ -87,11 +87,13 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
 
    f. **Record the encrypter child's public key** alongside the encrypted secrets. This is needed during decryption so that decrypters know which public key was used for the DH.
 
-   g. **Store the new secret store** (parent's public key, encrypted secret map, and encrypter child's public key) at the parent, replacing whatever was there.
+   g. **Add the new secret store** (parent's public key, encrypted secret map, and encrypter child's public key) to the path change. It is written to the parent in step 5.
 
-3. **After reaching the root**, record which leaf performed this encryption. The root now has a valid secret and any member can decrypt it.
+3. **After reaching the root**, record which leaf performed this encryption.
 
 4. **Emit a path change** containing the leaf's new public key, the new secret store for every inner node on the path, and the list of old public keys that were replaced (the "removed keys"). The removed keys are important for merge; they tell other members which keys have been superseded.
+
+5. **Sign the path change, then write it into the tree** as any received update is written, tagged with its digest. It lists every key on its path as removed, so it replaces every version there. The tree then has a valid root secret that any member can decrypt.
 
 ## Decryption (Deriving the Root Secret)
 
@@ -189,6 +191,8 @@ A secret store contains the three components of an inner node described in an ea
 * **A public key** for the node corresponding to the encrypted secret.
 * **The map from tree node indices to encrypted secrets.**
 * **The encrypter child's public key.**
+
+Each version also records the digests of the operations that generated it.
 
 An inner node "has a conflict" when it has more than one version.
 

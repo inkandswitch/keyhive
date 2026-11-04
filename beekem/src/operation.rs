@@ -503,6 +503,9 @@ pub struct CgkaOperationGraph {
     /// An operation with no predecessors has depth 0.
     depths: Map<Digest<CgkaOperation>, u64>,
 
+    /// The operations that have each operation as a predecessor.
+    children: Map<Digest<CgkaOperation>, Set<Digest<CgkaOperation>>>,
+
     /// The latest update on each branch. These are updates that no later update
     /// has as a nearest update ancestor yet. Every other update is chainable,
     /// meaning a later update could have wrapped its root secret.
@@ -522,8 +525,8 @@ impl Hash for CgkaOperationGraph {
             .collect::<BTreeSet<_>>()
             .hash(state);
 
-        // `depths`, `latest_updates` and `citations` are derived from the
-        // operations hashed above.
+        // `depths`, `children`, `latest_updates` and `citations` are derived
+        // from the operations hashed above.
     }
 }
 
@@ -556,6 +559,9 @@ impl Merge for CgkaOperationGraph {
                 .any(|op| op.payload().predecessors.contains(head))
         });
         self.depths.extend(fork.depths);
+        for (parent, children) in fork.children {
+            self.children.entry(parent).or_default().extend(children);
+        }
         self.citations.extend(fork.citations);
     }
 }
@@ -566,6 +572,7 @@ impl CgkaOperationGraph {
             cgka_ops: CaMap::new(),
             cgka_op_heads: Set::new(),
             depths: Map::new(),
+            children: Map::new(),
             latest_updates: Set::new(),
             citations: BTreeSet::new(),
         }
@@ -658,6 +665,7 @@ impl CgkaOperationGraph {
         self.cgka_ops.insert(op.clone().into());
         for pred in op_predecessors {
             self.cgka_op_heads.remove(pred);
+            self.children.entry(*pred).or_default().insert(op_hash);
         }
         self.cgka_op_heads.insert(op_hash);
         self.depths.insert(op_hash, depth);
@@ -1066,6 +1074,59 @@ mod causal_graph_tests {
             .iter()
             .map(|batch| batch.iter().map(|op| names[&op.digest()]).collect())
             .collect()
+    }
+
+    /// 24 random adds, and a graph of them in which the first 12 are shared
+    /// and each later one is added to the graph, a fork, or both, if that
+    /// side has its predecessors. The fork is then merged back, so both sides
+    /// add children to the same operations. An operation whose predecessors
+    /// neither side has is left out.
+    async fn merged_random_graph(
+        rng: &mut rand::rngs::StdRng,
+    ) -> (Vec<Verified<CgkaOperation>>, CgkaOperationGraph) {
+        use rand::{seq::IteratorRandom, Rng};
+        let signer = MemorySigner::generate(rng);
+        let doc_id = TreeId::from(&signer.0);
+        let mut ops: Vec<Verified<CgkaOperation>> = Vec::new();
+        for leaf_index in 0..24 {
+            let count = rng.gen_range(1..=3).min(ops.len());
+            let preds: Vec<_> = ops.iter().choose_multiple(rng, count);
+            let op = signed_add_from(rng, &signer, doc_id, leaf_index, &preds).await;
+            ops.push(op);
+        }
+        let mut graph = CgkaOperationGraph::new();
+        for op in &ops[..12] {
+            graph.add_op(op).expect("predecessors come first");
+        }
+        let mut fork = graph.fork();
+        for op in &ops[12..] {
+            let preds = op.payload().predecessors();
+            let to_graph = rng.gen_bool(0.5) && graph.contains_all(preds);
+            let to_fork = (!to_graph || rng.gen_bool(0.5)) && fork.contains_all(preds);
+            if to_graph {
+                graph.add_op(op).expect("its predecessors are in the graph");
+            }
+            if to_fork {
+                fork.add_op(op).expect("its predecessors are in the fork");
+            }
+        }
+        graph.merge(fork);
+        (ops, graph)
+    }
+
+    #[test]
+    fn a_merged_graph_equals_one_built_in_order() {
+        crate::test_utils::for_each_seed(|mut rng| async move {
+            let (ops, graph) = merged_random_graph(&mut rng).await;
+            let mut in_order = CgkaOperationGraph::new();
+            for op in ops.iter().filter(|op| graph.contains_op_hash(&op.digest())) {
+                in_order.add_op(op).expect("predecessors come first");
+            }
+            assert_eq!(
+                graph, in_order,
+                "the merged graph differs from one built in order"
+            );
+        });
     }
 
     #[tokio::test]

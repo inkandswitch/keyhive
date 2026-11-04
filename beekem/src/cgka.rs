@@ -446,7 +446,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 id
             );
         }
-        let leaf_index = self.tree.add_leaf(id, pk);
+        let leaf_index = self.tree.next_leaf_index();
         let op = CgkaOperation {
             doc_id: self.doc_id,
             predecessors: Predecessors::heads_of(&self.ops_graph),
@@ -460,6 +460,11 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
+        let placed_leaf_index = self.tree.add_leaf(id, pk, signed_op.digest());
+        debug_assert_eq!(
+            placed_leaf_index, leaf_index,
+            "the add's leaf is at the index it was signed with"
+        );
         self.handle_new_removals(signed_op.payload());
         Ok(Some(signed_op))
     }
@@ -542,11 +547,13 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         }
     }
 
-    /// Sign `op`, which the caller has already applied to the tree, and record
-    /// it. If signing or recording fails, the tree must be reset. We replace it
-    /// with a fresh tree if `op` is the first operation, and otherwise rebuild
-    /// it from the graph. If that rebuild fails, we set `pending_replay` to
-    /// `true` so the tree will be rebuilt before its next use.
+    /// Sign `op` and record it. A remove is applied to the tree before this is
+    /// called, and an add or update after, so that the versions it adds can be
+    /// tagged with its digest. If signing or recording a remove fails, the tree
+    /// is reset since the remove has already changed it. We replace it with a
+    /// fresh tree if `op` is the first operation, and otherwise rebuild it from
+    /// the graph. If that rebuild fails, we set `pending_replay` to `true` so
+    /// the tree will be rebuilt before its next use.
     async fn sign_and_record<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         op: CgkaOperation,
@@ -556,7 +563,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             Ok(signed_op) => self.record_op(&signed_op).map(|()| signed_op),
             Err(e) => Err(e.into()),
         };
-        if recorded.is_err() {
+        if recorded.is_err() && matches!(op.change, CgkaChange::Remove { .. }) {
             if self.ops_graph.cgka_op_heads.is_empty() {
                 self.tree = BeeKem::new(self.doc_id);
             } else if let Err(e) = self.replay_ops_graph() {
@@ -695,8 +702,8 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             return Err(CgkaError::IdentifierNotFound);
         }
         self.owner_sks.insert(new_pk, new_sk);
-        // Get our reachable ancestors before `encrypt_path` changes the tree so the
-        // tree's root still corresponds to the current heads.
+        // Get our reachable ancestors before the update is applied to the tree so
+        // the tree's root still corresponds to the current heads.
         let ancestors = self.reachable_ancestor_secrets();
         let maybe_key_and_path =
             self.tree
@@ -707,12 +714,14 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 doc_id: self.doc_id,
                 predecessors: Predecessors::heads_of(&self.ops_graph),
                 change: CgkaChange::Update {
-                    new_path: Box::new(new_path),
+                    new_path: Box::new(new_path.clone()),
                     predecessor_secrets,
                 },
             };
 
             let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
+            self.tree
+                .apply_path(self.owner_id, &new_path, signed_op.digest());
             self.record_root_secret_for(pcs_key, signed_op.digest());
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
@@ -855,7 +864,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             CgkaChange::Add { added_id, pk, .. } => {
                 // A concurrent history might have added the same member.
                 if !self.tree.contains_id(&added_id) {
-                    self.tree.add_leaf(added_id, pk);
+                    self.tree.add_leaf(added_id, pk, op.digest());
                 }
             }
             CgkaChange::Remove { ref removed, .. } => {
@@ -867,7 +876,9 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 }
             }
             CgkaChange::Update { ref new_path, .. } => {
-                let outcome = self.tree.apply_path(MemberId::from(op.issuer()), new_path);
+                let outcome =
+                    self.tree
+                        .apply_path(MemberId::from(op.issuer()), new_path, op.digest());
                 if outcome == ApplyPathOutcome::BlankedPath {
                     self.blanked_updates.insert(op.digest());
                 }
