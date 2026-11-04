@@ -26,57 +26,65 @@ pub struct SecretStore {
     pub encrypter_pk: ShareKey,
 }
 
-/// `pk || sk || encrypter_pk`, with `sk` in ascending index order.
-impl Encode for SecretStore {
+/// What an update writes at one inner node of its path. This includes the
+/// node's new key and its secret, encrypted for the resolution of the
+/// non-encrypting child.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct PathNode {
+    /// The node's new key.
+    pub pk: ShareKey,
+    /// The node's secret, encrypted for each node in the resolution, by tree
+    /// index.
+    pub sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
+}
+
+/// `pk || sk`, with `sk` in ascending index order.
+impl Encode for PathNode {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.pk.encode_into(out);
         self.sk.encode_into(out);
-        self.encrypter_pk.encode_into(out);
     }
 }
 
-impl Decode for SecretStore {
+impl Decode for PathNode {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         decode_exact(bytes)
     }
 }
 
-impl StreamDecode for SecretStore {
+impl StreamDecode for PathNode {
     fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
         let (pk, rest) = ShareKey::decode_next(bytes)?;
         let (sk, rest) = BTreeMap::decode_next(rest)?;
-        let (encrypter_pk, rest) = ShareKey::decode_next(rest)?;
-        Ok((
-            SecretStore {
-                pk,
-                sk,
-                encrypter_pk,
-            },
-            rest,
-        ))
+        Ok((PathNode { pk, sk }, rest))
     }
 }
 
-impl HasShareKey for SecretStore {
-    fn share_key(&self) -> ShareKey {
-        self.pk
+impl PathNode {
+    /// The secret store for this node in a tree, encrypted by `encrypter_pk`.
+    pub(crate) fn secret_store(&self, encrypter_pk: ShareKey) -> SecretStore {
+        SecretStore {
+            pk: self.pk,
+            sk: self.sk.clone(),
+            encrypter_pk,
+        }
     }
-}
 
-impl SecretStore {
-    /// Decrypt this node's secret with the secret of its child's sibling, found
-    /// in `sks`. If the sibling was blank or in conflict, the key is from its
-    /// resolution.
+    /// Decrypt this node's secret, encrypted by `encrypter_pk`, with the secret
+    /// of its child's sibling, found in `sks`. If the sibling was blank or in
+    /// conflict, the key is from its resolution.
     ///
     /// Returns `None` if none of its encryptions is to a key in `sks`.
     pub(crate) fn decrypt_with_sibling_secret(
         &self,
         doc_id: TreeId,
+        encrypter_pk: ShareKey,
         sks: &ShareKeyMap,
     ) -> Option<ShareSecretKey> {
         self.sk.values().find_map(|encrypted| {
             let plaintext = sks
-                .try_decrypt_encryption(doc_id, self.encrypter_pk, encrypted)
+                .try_decrypt_encryption(doc_id, encrypter_pk, encrypted)
                 .ok()?;
             share_secret_key_from_decrypted_secret(plaintext)
         })
@@ -96,7 +104,15 @@ impl SecretStore {
             .find_map(|encrypted| encrypted.try_encrypter_decrypt(doc_id, child_sk).ok())
             .and_then(share_secret_key_from_decrypted_secret)
     }
+}
 
+impl HasShareKey for SecretStore {
+    fn share_key(&self) -> ShareKey {
+        self.pk
+    }
+}
+
+impl SecretStore {
     pub fn decrypt_secret(
         &self,
         doc_id: TreeId,

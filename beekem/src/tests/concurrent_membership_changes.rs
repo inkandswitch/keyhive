@@ -518,13 +518,14 @@ pub(super) fn learn_from(
     loop {
         let before = known.len();
         for path in paths {
-            for (_, version) in &path.path {
+            for (_, version, encrypter_pk) in path.nodes_with_encrypters() {
                 if known.contains_key(&version.pk) {
                     continue;
                 }
-                let secret = version.sk.values().find_map(|encrypted| {
-                    try_decrypt(doc_id, &known, version.encrypter_pk, encrypted)
-                });
+                let secret = version
+                    .sk
+                    .values()
+                    .find_map(|encrypted| try_decrypt(doc_id, &known, encrypter_pk, encrypted));
                 if let Some(sk) = secret {
                     known.insert(version.pk, sk);
                 }

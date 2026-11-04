@@ -27,7 +27,7 @@ use keyhive_core::{
 };
 use keyhive_crypto::{
     identifier::Identifier,
-    share_key::{ShareKey, ShareSecretKey},
+    share_key::ShareKey,
     signer::{async_signer::AsyncSigner, memory::MemorySigner, SigningError},
     verifiable::Verifiable,
     verified::{Signed, Verified},
@@ -526,9 +526,8 @@ async fn an_operation_whose_predecessor_is_missing_is_pending() -> TestResult {
 async fn an_update_whose_path_is_malformed_is_denied() -> TestResult {
     let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
     let mut new_path = update_path(&alice, doc_id).await;
-    let stranger = ShareSecretKey::generate(&mut OsRng).share_key();
-    // The first node must be encrypted by the leaf key.
-    new_path.path[0].1.encrypter_pk = stranger;
+    // A node's new key may not repeat the leaf's.
+    new_path.path[0].1.pk = new_path.leaf_pk;
     let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
         predecessors: cgka_heads(&alice, doc_id).await,

@@ -9,7 +9,7 @@ use crate::{
         RemovedMember,
     },
     predecessors::Predecessors,
-    secret_store::SecretStore,
+    secret_store::PathNode,
     tree::PathChange,
     treemath::TreeNodeIndex,
 };
@@ -72,7 +72,7 @@ fn encrypted_secret_laws() {
 
 #[test]
 fn secret_store_laws() {
-    laws::<SecretStore>();
+    laws::<PathNode>();
 }
 
 #[test]
@@ -102,31 +102,29 @@ fn cgka_operation_laws() {
     laws::<CgkaOperation>();
 }
 
-fn secret_store(seed: u8) -> SecretStore {
-    SecretStore {
+fn path_node(seed: u8) -> PathNode {
+    PathNode {
         pk: key(seed),
         sk: BTreeMap::from([(
             TreeNodeIndex::decode(&[seed]).expect("one byte"),
             sealed(seed),
         )]),
-        encrypter_pk: key(seed.wrapping_add(1)),
     }
 }
 
 #[test]
 fn a_secret_map_must_ascend_by_tree_index() {
-    let store = secret_store(3);
-    let entry = store.sk.values().next().expect("one entry").clone();
+    let node = path_node(3);
+    let entry = node.sk.values().next().expect("one entry").clone();
     let mut bytes = Vec::new();
-    store.pk.encode_into(&mut bytes);
+    node.pk.encode_into(&mut bytes);
     // Count 2: index 5, then index 4.
     bytes.push(2);
     for index in [5, 4] {
         bytes.push(index);
         entry.encode_into(&mut bytes);
     }
-    store.encrypter_pk.encode_into(&mut bytes);
-    assert_eq!(SecretStore::decode(&bytes), Err(DecodeError::UnsortedKeys));
+    assert_eq!(PathNode::decode(&bytes), Err(DecodeError::UnsortedKeys));
 }
 
 /// Every sealed secret holds at least its 24-byte nonce and 16-byte tag.
@@ -248,10 +246,9 @@ fn a_remove_encodes_in_its_documented_layout() {
 #[test]
 fn an_update_encodes_in_its_documented_layout() {
     use layout::*;
-    let node = SecretStore {
+    let node = PathNode {
         pk: share_key(6),
         sk: BTreeMap::new(),
-        encrypter_pk: share_key(3),
     };
     let op = CgkaOperation {
         doc_id: doc(),
@@ -276,7 +273,6 @@ fn an_update_encodes_in_its_documented_layout() {
         &[1, 1],
         share_key(6).as_bytes(),
         &[0],
-        share_key(3).as_bytes(),
         &[1],
         share_key(8).as_bytes(),
         &[1],
