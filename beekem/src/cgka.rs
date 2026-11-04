@@ -446,7 +446,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 id
             );
         }
-        let leaf_index = self.tree.add_leaf(id, pk);
+        let leaf_index = self.tree.next_leaf_index();
         let op = CgkaOperation {
             doc_id: self.doc_id,
             predecessors: Predecessors::heads_of(&self.ops_graph),
@@ -460,6 +460,11 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
+        let placed_leaf_index = self.tree.add_leaf(id, pk);
+        debug_assert_eq!(
+            placed_leaf_index, leaf_index,
+            "the add's leaf is at the index it was signed with"
+        );
         self.handle_new_removals(signed_op.payload());
         Ok(Some(signed_op))
     }
@@ -542,32 +547,16 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         }
     }
 
-    /// Sign `op`, which the caller has already applied to the tree, and record
-    /// it. If signing or recording fails, the tree must be reset. We replace it
-    /// with a fresh tree if `op` is the first operation, and otherwise rebuild
-    /// it from the graph. If that rebuild fails, we set `pending_replay` to
-    /// `true` so the tree will be rebuilt before its next use.
+    /// Sign `op` and record it. The caller applies `op` to the tree only after
+    /// this succeeds, so a failure leaves the tree unchanged.
     async fn sign_and_record<F: FutureForm, S: AsyncSigner<F>>(
         &mut self,
         op: CgkaOperation,
         signer: &S,
     ) -> Result<Verified<CgkaOperation>, CgkaError> {
-        let recorded = match Verified::sign::<F, S>(&op, signer).await {
-            Ok(signed_op) => self.record_op(&signed_op).map(|()| signed_op),
-            Err(e) => Err(e.into()),
-        };
-        if recorded.is_err() {
-            if self.ops_graph.cgka_op_heads.is_empty() {
-                self.tree = BeeKem::new(self.doc_id);
-            } else if let Err(e) = self.replay_ops_graph() {
-                warn!(
-                    ?e,
-                    "could not rebuild the tree after an operation failed to sign or record"
-                );
-                self.pending_replay = true;
-            }
-        }
-        recorded
+        let signed_op = Verified::sign::<F, S>(&op, signer).await?;
+        self.record_op(&signed_op)?;
+        Ok(signed_op)
     }
 
     /// Add `op` to the operation graph and, if it includes an invitation for us,
@@ -635,7 +624,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         if !self.tree.contains_id(&id) {
             return Ok(None);
         }
-        let leaf_idx = self.tree.remove_id(id)?;
+        let leaf_idx = self.tree.leaf_index_for_id(id)?.u32();
         let removed = RemovedMember { id, leaf_idx };
         self.sign_and_complete_remove(BTreeSet::from([removed]), citations, signer)
             .await
@@ -668,9 +657,15 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         let op = CgkaOperation {
             doc_id: self.doc_id,
             predecessors: Predecessors::heads_of(&self.ops_graph),
-            change: CgkaChange::Remove { citations, removed },
+            change: CgkaChange::Remove {
+                citations,
+                removed: removed.clone(),
+            },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
+        for RemovedMember { id, .. } in removed {
+            self.tree.remove_id(id)?;
+        }
         self.handle_new_removals(signed_op.payload());
         Ok(signed_op)
     }
@@ -695,8 +690,8 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             return Err(CgkaError::IdentifierNotFound);
         }
         self.owner_sks.insert(new_pk, new_sk.clone());
-        // Get our reachable ancestors before `encrypt_path` changes the tree so the
-        // tree's root still corresponds to the current heads.
+        // Get our reachable ancestors before the update is applied to the tree so
+        // the tree's root still corresponds to the current heads.
         let ancestors = self.reachable_ancestor_secrets();
         let maybe_key_and_path =
             self.tree
@@ -707,12 +702,13 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 doc_id: self.doc_id,
                 predecessors: Predecessors::heads_of(&self.ops_graph),
                 change: CgkaChange::Update {
-                    new_path: Box::new(new_path),
+                    new_path: Box::new(new_path.clone()),
                     predecessor_secrets,
                 },
             };
 
             let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
+            self.tree.apply_path(self.owner_id, &new_path);
             self.record_root_secret_for(pcs_key.clone(), signed_op.digest());
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
