@@ -10,7 +10,6 @@ use crate::{
     envelope::{Envelope, OpenEnvelopeError},
     reference::ContentRef,
 };
-use derive_where::derive_where;
 use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
@@ -368,7 +367,6 @@ impl<F: FutureForm, Cr: ContentRef + Debug, T: Debug, S: CiphertextStore<F, Cr, 
 }
 
 #[derive(Error)]
-#[derive_where(Debug)]
 pub enum ErrorReason<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> {
     #[error("GetCiphertextError: {0}")]
     GetCiphertextError(S::GetCiphertextError),
@@ -384,6 +382,27 @@ pub enum ErrorReason<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr,
 
     #[error("Cannot find ciphertext for ref")]
     CannotFindCiphertext(Cr),
+}
+
+/// Written by hand so `F`, `T` and `S` need not be `Debug`; the type of every
+/// field already is, and the key in `DecryptionFailed` prints redacted.
+impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> Debug
+    for ErrorReason<F, Cr, T, S>
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::GetCiphertextError(e) => f.debug_tuple("GetCiphertextError").field(e).finish(),
+            Self::MarkDecryptedError(e) => f.debug_tuple("MarkDecryptedError").field(e).finish(),
+            Self::DeserializationFailed(e) => {
+                f.debug_tuple("DeserializationFailed").field(e).finish()
+            }
+            Self::DecryptionFailed(key) => f.debug_tuple("DecryptionFailed").field(key).finish(),
+            Self::CannotFindCiphertext(content_ref) => f
+                .debug_tuple("CannotFindCiphertext")
+                .field(content_ref)
+                .finish(),
+        }
+    }
 }
 
 #[cfg(test)]

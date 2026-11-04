@@ -36,7 +36,6 @@ thiserror = { workspace = true }
 # Utilities
 async-lock = { workspace = true }
 derive_more = { workspace = true, features = ["std"] }
-derive-where = { workspace = true }
 dupe = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true, features = ["async-await", "executor", "std"] }
