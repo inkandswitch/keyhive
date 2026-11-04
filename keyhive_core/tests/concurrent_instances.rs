@@ -4,12 +4,12 @@ use beekem::{
     encrypted::encrypt_secret,
     id::TreeId,
     operation::{CgkaChange, CgkaOperation},
+    predecessors::Predecessors,
     secret_store::SecretStore,
     tree::PathChange,
     treemath::{LeafNodeIndex, TreeNodeIndex},
 };
 use keyhive_core::{
-    crypto::digest::Digest,
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext, TestResult as Result},
 };
@@ -29,11 +29,11 @@ async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
 }
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
-async fn cgka_heads(observer: &Instance, doc: DocumentId) -> BTreeSet<Digest<CgkaOperation>> {
+async fn cgka_heads(observer: &Instance, doc: DocumentId) -> Predecessors {
     let ops = observer.cgka_ops_for_doc(&doc).await.unwrap();
     let referenced: HashSet<_> = ops
         .iter()
-        .flat_map(|op| op.payload().predecessors())
+        .flat_map(|op| op.payload().predecessors().iter().copied())
         .collect();
     ops.iter()
         .map(|op| op.digest())

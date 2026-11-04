@@ -41,12 +41,12 @@ use crate::{
 };
 use beekem::{
     cgka::{ImplicitRemovesProtocol, NoImplicitRemoves},
-    collections::Set,
     error::CgkaError,
     id::MemberId,
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaChange, CgkaOperation, CitationId},
     pcs_key::PcsKey,
+    predecessors::Predecessors,
 };
 use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
@@ -594,7 +594,7 @@ where
                         .certificate_sets
                         .lock()
                         .await
-                        .predecessor_set(&cgka, &predecessors);
+                        .predecessor_set(&cgka, predecessors);
                     match self
                         .cgka_op_is_authorized_over(&op, doc_id, predecessor_set)
                         .await?
@@ -2797,7 +2797,7 @@ where
         doc_id: DocumentId,
     ) -> Result<Result<(), CgkaUnauthorized>, KeylineStorageError<K::Error>> {
         let predecessors = signed_op.payload().predecessors();
-        let predecessor_set = self.predecessor_set(doc_id, &predecessors).await;
+        let predecessor_set = self.predecessor_set(doc_id, predecessors).await;
         self.cgka_op_is_authorized_over(signed_op, doc_id, predecessor_set)
             .await
     }
@@ -2940,7 +2940,7 @@ where
     async fn predecessor_set(
         &self,
         doc_id: DocumentId,
-        heads: &Set<Digest<CgkaOperation>>,
+        heads: &Predecessors,
     ) -> Option<CitationSet> {
         if heads.is_empty() {
             return Some(CitationSet::default());
@@ -3497,7 +3497,7 @@ where
                     "an archived operation's predecessors are missing or did not apply"
                 );
             }
-            if invitations.is_empty() || !cgka.contains_predecessors(&invitations) {
+            if invitations.is_empty() || !cgka.contains_all(&invitations) {
                 unjoined.insert(doc_id, cgka);
                 continue;
             }
@@ -4708,7 +4708,8 @@ mod tests {
             .ok_or("the CGKA graph lacks its head")?
             .payload()
             .predecessors()
-            .into_iter()
+            .iter()
+            .copied()
             .collect::<Vec<_>>();
         let [left, right] = predecessors[..] else {
             return Err("the last update merges both branches".into());
@@ -5194,7 +5195,7 @@ mod tests {
             .await?;
         let built_on_it = hive
             .sign_cgka_op(remove(
-                BTreeSet::from([listing_bob.digest()]),
+                Predecessors::from([listing_bob.digest()]),
                 BTreeSet::new(),
             ))
             .await?;
@@ -5245,7 +5246,7 @@ mod tests {
         Ok(hive
             .sign_cgka_op(CgkaOperation {
                 doc_id: doc_id.into(),
-                predecessors: BTreeSet::new(),
+                predecessors: Predecessors::default(),
                 change: CgkaChange::Remove {
                     citations: creation_citations,
                     removed: BTreeSet::new(),
@@ -5297,7 +5298,7 @@ mod tests {
         let built_on_it = hive
             .sign_cgka_op(CgkaOperation {
                 doc_id: doc_id.into(),
-                predecessors: BTreeSet::from([invalid_root.digest()]),
+                predecessors: Predecessors::from([invalid_root.digest()]),
                 change: CgkaChange::Remove {
                     citations: BTreeSet::new(),
                     removed: BTreeSet::new(),
@@ -6103,7 +6104,7 @@ mod tests {
             let cgka = Verified::sign_sync(
                 &CgkaOperation {
                     doc_id: TreeId::from(doc),
-                    predecessors: BTreeSet::new(),
+                    predecessors: Default::default(),
                     change: CgkaChange::Add {
                         added_id: MemberId::from(&signer.0),
                         pk: share_key(),

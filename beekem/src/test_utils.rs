@@ -480,7 +480,7 @@ pub(crate) fn assert_chain_bookkeeping<M: ImplicitRemovesProtocol>(cgka: &Cgka<M
         .iter()
         .flat_map(|update| {
             let predecessors = graph.cgka_ops.get(update).unwrap().payload().predecessors();
-            graph.nearest_update_ancestors(&predecessors)
+            graph.nearest_update_ancestors(predecessors)
         })
         .collect();
     for update in &updates {
