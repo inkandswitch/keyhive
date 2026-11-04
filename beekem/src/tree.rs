@@ -179,7 +179,7 @@ impl PathChange {
     }
 }
 
-/// The outcome of applying an updates path in [`BeeKem::apply_path`].
+/// The outcome of applying an update's path to the tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyPathOutcome {
     /// The path was valid from the signer's leaf and is now in the tree.
