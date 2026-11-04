@@ -518,7 +518,7 @@ pub(super) fn learn_from(
     loop {
         let before = known.len();
         for path in paths {
-            for (_, version) in &path.path {
+            for (_, version) in path.secret_stores() {
                 if known.contains_key(&version.pk) {
                     continue;
                 }

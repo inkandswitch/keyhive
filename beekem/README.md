@@ -54,6 +54,7 @@ Space is O(n log n) worst case for conflict key storage.
 * **Resolution of a node**: if the node has a single public key, the resolution is just that node. If the node is blank or contains conflict keys, the resolution is the set of its highest descendants that are neither blank nor conflicted inner nodes. During encryption, resolution is taken on sibling nodes (not on the node being encrypted), so the worst case for a single resolution is n/2 (all leaves in one subtree).
 * **Path**: the sequence of inner nodes from a leaf's parent up to and including the root.
 * **Secret store**: what an update stores at an inner node on its path: a public key for the node, the encrypter child's public key, and a map of encrypted secrets keyed by tree node indices. An inner node has one or more secret stores, called its "versions".
+* **Path node**: what an update sends for each inner node on its path (the node's public key and the map of encrypted secrets).
 
 ## The Tree
 
@@ -85,13 +86,11 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
 
    e. **Handle the empty resolution case.** If the sibling's entire subtree is blank (no members), generate a throwaway keypair and use it for the DH. The encrypted secret is stored keyed by the child's own index only (so the encrypter can still decrypt it later).
 
-   f. **Record the encrypter child's public key** alongside the encrypted secrets. This is needed during decryption so that decrypters know which public key was used for the DH.
-
-   g. **Store the new secret store** (parent's public key, encrypted secret map, and encrypter child's public key) at the parent, replacing whatever was there.
+   f. **Store the new secret store** (parent's public key, encrypted secret map, and encrypter child's public key) at the parent, replacing whatever was there.
 
 3. **After reaching the root**, record which leaf performed this encryption. The root now has a valid secret and any member can decrypt it.
 
-4. **Emit a path change** containing the leaf's new public key, the new secret store for every inner node on the path, and the list of old public keys that were replaced (the "removed keys"). The removed keys are important for merge; they tell other members which keys have been superseded.
+4. **Emit a path change** containing the leaf's new public key, a path node for every inner node on the path, and the list of old public keys that were replaced (the "removed keys"). The removed keys are important for merge; they tell other members which keys have been superseded.
 
 ## Decryption (Deriving the Root Secret)
 
@@ -143,7 +142,7 @@ When applying a path change from another member that was created concurrently:
 
    a. **At the leaf**: merge the new public key with the existing one. If the existing key was in the "removed keys" list (meaning this update replaced it), the new key simply substitutes. Otherwise, both keys are retained as **conflict keys**. A leaf's conflict keys come from concurrent rotations by one member's instances. They stay until an update that has seen them replaces them, so replicas agree whatever order the rotations arrived in. A conflicted leaf stays in its parent's resolution, and encrypters encrypt to its lowest key.
 
-   b. **At each inner node on the path**: if the node is not blank, remove its versions whose public keys are in the removed keys list, then add the update's secret store as a new version. If the node was blank, the update's secret store becomes its only version.
+   b. **At each inner node on the path**: if the node is not blank, remove its versions whose public keys are in the removed keys list, then add the update's path node, with its encrypter's key, as a new version. If the node was blank, that becomes its only version.
 
 4. **Check the root.** If the root has a single version (no conflict), record the new encrypter. If the root now has multiple conflicting versions, clear the encrypter. The tree has no valid root key until someone does a fresh update.
 
