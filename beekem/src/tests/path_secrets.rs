@@ -2,15 +2,17 @@
 
 use crate::{
     cgka::NoImplicitRemoves,
+    collections::Set,
     encrypted::encrypt_secret,
     error::CgkaError,
     keys::ShareKeyMap,
     operation::{CgkaChange, CgkaOperation},
+    secret_store::SecretStore,
     test_utils::Group,
     tree::PathChange,
-    treemath::{LeafNodeIndex, TreeNodeIndex},
+    treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex},
 };
-use alloc::sync::Arc;
+use alloc::{collections::BTreeMap, sync::Arc};
 use future_form::Local;
 use keyhive_crypto::{share_key::ShareSecretKey, verified::Verified};
 use rand::{rngs::StdRng, SeedableRng};
@@ -231,4 +233,151 @@ async fn an_update_cut_short_keeping_its_leaf_key_converges_with_a_concurrent_on
 
     group.check("after an update cut short and a concurrent one");
     group.assert_trees_match_replay("after an update cut short and a concurrent one");
+}
+
+/// The path of an honest rotation in a group of four, which has two nodes.
+async fn honest_path(rng: &mut StdRng) -> PathChange {
+    honest_path_of(0, rng).await
+}
+
+/// The path of `author`'s honest rotation in a group of four.
+async fn honest_path_of(author: usize, rng: &mut StdRng) -> PathChange {
+    let mut group = Group::<NoImplicitRemoves>::new(4, rng).await;
+    group.settle(0, rng).await;
+    let op = group.rotate(author, rng).await;
+    let CgkaChange::Update { new_path, .. } = &op.payload().change else {
+        unreachable!("a rotation is an update")
+    };
+    (**new_path).clone()
+}
+
+#[tokio::test]
+async fn a_path_node_without_an_entry_for_its_encrypting_child_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0003);
+    let mut path = honest_path(&mut rng).await;
+    let first = TreeNodeIndex::from(InnerNodeIndex::new(path.path[0].0));
+    path.path[1]
+        .1
+        .head_mut()
+        .sk
+        .remove(&first)
+        .expect("a node has an entry for the child that encrypted it");
+
+    assert!(!path.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_node_with_two_versions_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0004);
+    let mut path = honest_path(&mut rng).await;
+    let stranger = ShareSecretKey::generate(&mut rng).share_key();
+    path.path[0].1.merge(
+        &SecretStore::new(stranger, stranger, BTreeMap::new()),
+        &Set::new(),
+    );
+
+    assert!(!path.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_node_whose_encrypter_is_not_the_child_below_it_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0006);
+    let honest = honest_path(&mut rng).await;
+    let sibling = TreeNodeIndex::from(LeafNodeIndex::new(1));
+    let mut at_first = honest.clone();
+    let version = at_first.path[0].1.head_mut();
+    version.encrypter_pk = version.sk[&sibling].paired_pk;
+    let mut at_second = honest.clone();
+    at_second.path[1].1.head_mut().encrypter_pk = honest.leaf_pk;
+
+    assert!(!at_first.is_well_formed());
+    assert!(!at_second.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_node_whose_key_the_update_removes_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0007);
+    let mut path = honest_path(&mut rng).await;
+    let root = path.path[1].1.versions().head.pk;
+    path.removed_keys.insert(root);
+
+    assert!(!path.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_node_whose_key_repeats_another_new_key_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0008);
+    let mut path = honest_path(&mut rng).await;
+    let mut repeats_leaf = path.clone();
+    repeats_leaf.path[1].1.head_mut().pk = path.leaf_pk;
+    path.path[1].1.head_mut().pk = path.path[0].1.versions().head.pk;
+
+    assert!(!repeats_leaf.is_well_formed());
+    assert!(!path.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_with_an_index_of_2_pow_31_or_more_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0005);
+    let honest = honest_path(&mut rng).await;
+    let mut leaf_beyond = honest.clone();
+    leaf_beyond.leaf_idx += 1 << 31;
+    let mut node_beyond = honest.clone();
+    node_beyond.path[0].0 += 1 << 31;
+    let mut root_beyond = honest.clone();
+    root_beyond.path[1].0 += 1 << 31;
+    let mut leaf_beyond_without_nodes = leaf_beyond.clone();
+    leaf_beyond_without_nodes.path.clear();
+
+    assert!(!leaf_beyond.is_well_formed());
+    assert!(!node_beyond.is_well_formed());
+    assert!(!root_beyond.is_well_formed());
+    assert!(!leaf_beyond_without_nodes.is_well_formed());
+}
+
+#[tokio::test]
+async fn a_path_that_is_not_a_chain_from_the_leaf_to_a_root_is_malformed() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0009);
+    let honest = honest_path(&mut rng).await;
+    let mut empty = honest.clone();
+    empty.path.clear();
+    let mut skips_a_node = honest.clone();
+    skips_a_node.path.truncate(1);
+    skips_a_node.path[0].0 = honest.path[1].0;
+    // Leaf 2's parent is not a root at any tree size, unlike leaf 0's.
+    let mut stops_below_a_root = honest_path_of(2, &mut rng).await;
+    stops_below_a_root.path.truncate(1);
+
+    assert!(!empty.is_well_formed());
+    assert!(!skips_a_node.is_well_formed());
+    assert!(!stops_below_a_root.is_well_formed());
+}
+
+/// A chain of `len` nodes up from leaf 0, well-formed apart from its length:
+/// the inner indices 2^j - 1, each the root of a tree of some size.
+async fn chain_from_leaf_zero(len: u32, rng: &mut StdRng) -> PathChange {
+    let mut path = honest_path(rng).await;
+    let leaf = TreeNodeIndex::from(LeafNodeIndex::new(path.leaf_idx));
+    let entry = path.path[0].1.versions().head.sk[&leaf].clone();
+    let mut child = leaf;
+    let mut encrypter = path.leaf_pk;
+    path.path = (0..len)
+        .map(|j| {
+            let idx = (1u32 << j) - 1;
+            let pk = ShareSecretKey::generate(rng).share_key();
+            let node = SecretStore::new(pk, encrypter, BTreeMap::from([(child, entry.clone())]));
+            child = TreeNodeIndex::from(InnerNodeIndex::new(idx));
+            encrypter = pk;
+            (idx, node)
+        })
+        .collect();
+    path
+}
+
+/// The tallest tree, of 2^31 leaves, has 31 inner levels.
+#[tokio::test]
+async fn a_path_may_be_as_long_as_the_tallest_tree_and_no_longer() {
+    let mut rng = StdRng::seed_from_u64(0x9a7b_000a);
+    assert!(chain_from_leaf_zero(31, &mut rng).await.is_well_formed());
+    assert!(!chain_from_leaf_zero(32, &mut rng).await.is_well_formed());
 }

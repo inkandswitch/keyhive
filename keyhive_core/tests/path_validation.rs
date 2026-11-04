@@ -3,7 +3,6 @@
 use beekem::{
     id::TreeId,
     operation::{CgkaChange, CgkaOperation},
-    secret_store::SecretStore,
     tree::PathChange,
 };
 use keyhive_core::{
@@ -11,20 +10,9 @@ use keyhive_core::{
     principal::document::id::DocumentId,
     test_utils::{Instance, TestContext},
 };
-use keyhive_crypto::share_key::ShareKey;
 use keyline::power::Power::Read;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use testresult::TestResult;
-
-/// One of `who`'s own prekeys it would use to join `doc`.
-async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
-    who.get_individual(who.id())
-        .await
-        .expect("an instance holds its own prekeys")
-        .pick_prekey(doc)
-        .await
-        .expect("an individual has a prekey")
-}
 
 /// The current CGKA op heads for `doc` as `observer` sees them.
 async fn cgka_heads(observer: &Instance, doc: DocumentId) -> BTreeSet<Digest<CgkaOperation>> {
@@ -66,16 +54,21 @@ async fn doc_shared_with_bob(
 }
 
 #[tokio::test]
-async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult {
+async fn an_update_whose_path_ends_at_an_older_root_is_accepted() -> TestResult {
     let mut ctx = TestContext::new().await;
     let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
-    let mut new_path = an_update(&alice, design_doc).await;
+    let new_path = an_update(&alice, design_doc).await;
+    assert_eq!(
+        new_path.path.len(),
+        1,
+        "written while the tree had two leaves"
+    );
 
-    let junk = own_prekey(&alice, design_doc).await;
-    new_path.path = vec![7u32, 9]
-        .into_iter()
-        .map(|i| (i, SecretStore::new(junk, junk, BTreeMap::new())))
-        .collect();
+    // Carol's add grows the tree, so the path stops below the root, as the path
+    // of any update concurrent with an add can.
+    let carol = ctx.individual("carol").await?;
+    alice.add_member(carol.id(), design_doc, Read).await?;
+    ctx.sync_all_unsent().await?;
     let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),
         predecessors: cgka_heads(&bob, design_doc).await,
@@ -85,7 +78,6 @@ async fn an_update_whose_path_is_not_its_direct_path_is_ignored() -> TestResult 
         },
     };
 
-    // We should ignore the forged path and not panic.
     bob.receive_cgka_op(alice.sign_cgka_op(op).await?).await?;
 
     Ok(())

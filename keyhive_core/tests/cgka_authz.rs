@@ -1,7 +1,9 @@
 use beekem::{
+    collections::Set,
     error::CgkaError,
     id::{MemberId, TreeId},
     operation::{CgkaChange, CgkaOperation, CitationId, RemovedMember},
+    secret_store::SecretStore,
     tree::PathChange,
 };
 use future_form::{FutureForm, Sendable};
@@ -26,7 +28,7 @@ use keyhive_core::{
 };
 use keyhive_crypto::{
     identifier::Identifier,
-    share_key::ShareKey,
+    share_key::{ShareKey, ShareSecretKey},
     signer::{async_signer::AsyncSigner, memory::MemorySigner, SigningError},
     verifiable::Verifiable,
     verified::{Signed, Verified},
@@ -38,7 +40,7 @@ use keyline::{
 use nonempty::nonempty;
 use rand::rngs::OsRng;
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     convert::Infallible,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -100,6 +102,11 @@ async fn intercepted_path(who: &Hive) -> Box<PathChange> {
         .generate_doc(vec![], nonempty![[7u8; 32]])
         .await
         .expect("a document");
+    update_path(who, doc_id).await
+}
+
+/// The path of an update `who` writes to `doc_id`.
+async fn update_path(who: &Hive, doc_id: DocumentId) -> Box<PathChange> {
     who.try_encrypt_content(doc_id, &[1u8; 32], &[], b"warm up".as_ref())
         .await
         .expect("content encrypts");
@@ -513,6 +520,29 @@ async fn an_operation_whose_predecessor_is_missing_is_pending() -> TestResult {
     let result = alice.receive_cgka_op(alice.sign_cgka_op(op).await?).await;
 
     assert!(is_pending(&result), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_update_whose_path_is_malformed_is_denied() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let mut new_path = update_path(&alice, doc_id).await;
+    let stranger = ShareSecretKey::generate(&mut OsRng).share_key();
+    new_path.path[0].1.merge(
+        &SecretStore::new(stranger, stranger, BTreeMap::new()),
+        &Set::new(),
+    );
+    let op = CgkaOperation {
+        doc_id: TreeId::from(doc_id),
+        predecessors: cgka_heads(&alice, doc_id).await,
+        change: CgkaChange::Update {
+            new_path,
+            predecessor_secrets: Vec::new(),
+        },
+    };
+    let result = alice.receive_cgka_op(alice.sign_cgka_op(op).await?).await;
+
+    assert!(is_denied(&result), "{result:?}");
     Ok(())
 }
 
