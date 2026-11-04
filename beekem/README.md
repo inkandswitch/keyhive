@@ -92,7 +92,7 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
 
 4. **Emit a path change** containing the leaf's new public key, a path node for every inner node on the path, and the list of old public keys that were replaced (the "removed keys"). The removed keys are important for merge; they tell other members which keys have been superseded.
 
-5. **Sign the path change, then write it into the tree** as any received update is written. It lists every key on its path as removed, so it replaces every version there. The tree then has a valid root secret that any member can decrypt.
+5. **Sign the path change, then write it into the tree** as any received update is written, tagged with its digest. It lists every key on its path as removed, so it replaces every version there. The tree then has a valid root secret that any member can decrypt.
 
 ## Decryption (Deriving the Root Secret)
 
@@ -190,6 +190,8 @@ A secret store contains the three components of an inner node described in an ea
 * **A public key** for the node corresponding to the encrypted secret.
 * **The map from tree node indices to encrypted secrets.**
 * **The encrypter child's public key.**
+
+Each version also records the digests of the operations that generated it.
 
 An inner node "has a conflict" when it has more than one version.
 
