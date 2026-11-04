@@ -131,7 +131,7 @@ mod tests {
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use future_form::Sendable;
-    use keyhive_content::store::memory::MemoryCiphertextStore;
+    use keyhive_content::{padding::PaddedBody, store::memory::MemoryCiphertextStore};
     use keyhive_crypto::{
         identifier::Identifier, share_key::ShareKey, signer::memory::MemorySigner,
         symmetric_key::SymmetricKey, verifiable::Verifiable, verified::Verified,
@@ -236,7 +236,7 @@ mod tests {
             [1u8; 32].into(),
             [1u8; 32].into(),
             hash1.coerce(),
-            &[4, 5, 6],
+            &PaddedBody::pad(&[4, 5, 6]),
         )?);
 
         let ciphertext2 = Arc::new(EncryptedContent::encrypt(
@@ -246,7 +246,7 @@ mod tests {
             [2u8; 32].into(),
             [2u8; 32].into(),
             hash2.coerce(),
-            &[1, 2, 3],
+            &PaddedBody::pad(&[1, 2, 3]),
         )?);
 
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
@@ -262,7 +262,7 @@ mod tests {
                 [3u8; 32].into(),
                 [3u8; 32].into(),
                 hash3.coerce(),
-                &[0],
+                &PaddedBody::pad(&[0]),
             )?))
             .await;
 

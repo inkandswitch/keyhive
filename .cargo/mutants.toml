@@ -90,6 +90,10 @@ additional_cargo_args = ["--features", "test_utils"]
 # `uniform_index` accepts a draw `< limit`; `<=` differs only when a draw is
 # exactly `limit`, which happens with probability 2^-64 and then still yields an
 # index in range (`limit` is a multiple of `len`), so no test can tell them apart.
+#
+# `padme` returns lengths below 2 as they are. With `<=` it also returns 2 as
+# it is, which is what the rounding gives for 2 (E = 1, S = 1, no low bits to
+# clear), so the result is the same for every length.
 exclude_re = [
   "<impl From<InvalidIdentifier> for SigningError>::from",
   "<impl LacksKeylineAnswer for ReceiveCgkaOpError<E>>::lacked -> .* with Some\\(Box::leak\\(Box::new\\(BTreeSet::new\\(\\)\\)\\)\\)",
@@ -102,6 +106,7 @@ exclude_re = [
   "keyhive_core/src/cgka.rs:.*Cgka::membership_sets -> .* with Ok\\(vec!\\[(BTreeSet::new\\(\\))?\\]\\)",
   "replace != with == in Keyhive<[^>]*>::reconcile_locked",
   "replace < with <= in changed_to",
+  "replace < with <= in padme",
   "replace < with <= in uniform_index",
   "replace == with != in Keyhive<[^>]*>::require_keyline_answers",
   "replace Keyhive<[^>]*>::has_cgka_op -> bool with false",
