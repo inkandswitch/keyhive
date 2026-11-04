@@ -7,7 +7,7 @@ use crate::{
     keys::{NodeKeys, ShareKeyMap},
     node_versions::NodeVersions,
     pcs_key::PcsKey,
-    secret_store::SecretStore,
+    secret_store::{PathNode, SecretStore},
     treemath,
 };
 use alloc::{
@@ -46,8 +46,8 @@ pub struct PathChange {
     pub leaf_idx: u32,
     /// The leaf's new key. An update rotates its leaf to one fresh key.
     pub leaf_pk: ShareKey,
-    /// Each inner node on the path with the secret store this update puts there.
-    pub path: Vec<(u32, SecretStore)>,
+    /// Each inner node on the path with what this update puts there.
+    pub path: Vec<(u32, PathNode)>,
     pub removed_keys: BTreeSet<ShareKey>,
 }
 
@@ -80,7 +80,7 @@ impl StreamDecode for PathChange {
         let mut path = Vec::new();
         for _ in 0..count {
             let (idx, after) = u32::decode_next(rest)?;
-            let (node, after) = SecretStore::decode_next(after)?;
+            let (node, after) = PathNode::decode_next(after)?;
             path.push((idx, node));
             rest = after;
         }
@@ -103,9 +103,9 @@ impl PathChange {
     /// The path is not empty. Each node is the parent of the one below it,
     /// starting from the leaf, and the last is the root of a tree of some size.
     ///
-    /// Every node on the path is encrypted by the new key of the child below
-    /// it, with an entry under that child. No new node key is one of the keys
-    /// the update removes or repeats any other new key. The leaf index is below
+    /// Every node on the path has an entry under the child below it, which
+    /// encrypted it with its new key. No new node key is one of the keys the
+    /// update removes or repeats any other new key. The leaf index is below
     /// 2^31, past which it has no tree index.
     ///
     /// This does not check that the entries were encrypted with the leaf key or
@@ -115,19 +115,16 @@ impl PathChange {
             return false;
         }
         let mut new_keys = BTreeSet::from([self.leaf_pk]);
-        let mut encrypter = self.leaf_pk;
         let mut child = TreeNodeIndex::Leaf(LeafNodeIndex::new(self.leaf_idx));
         for (idx, node) in &self.path {
             let parent = treemath::parent(child);
             if *idx != parent.u32()
-                || node.encrypter_pk != encrypter
                 || !node.sk.contains_key(&child)
                 || self.removed_keys.contains(&node.pk)
                 || !new_keys.insert(node.pk)
             {
                 return false;
             }
-            encrypter = node.pk;
             child = TreeNodeIndex::Inner(parent);
         }
         // The roots are the tree indices 2^k - 1, which are the inner indices
@@ -135,6 +132,24 @@ impl PathChange {
         self.path
             .last()
             .is_some_and(|(idx, _)| (idx + 1).is_power_of_two())
+    }
+
+    /// The secret store for each node on the path, with its inner node index.
+    /// Each node's encrypter is the next key down the path.
+    pub(crate) fn secret_stores(&self) -> impl Iterator<Item = (u32, SecretStore)> + '_ {
+        let encrypters =
+            core::iter::once(self.leaf_pk).chain(self.path.iter().map(|(_, node)| node.pk));
+        self.path
+            .iter()
+            .zip(encrypters)
+            .map(|((idx, node), encrypter_pk)| {
+                let store = SecretStore {
+                    pk: node.pk,
+                    sk: node.sk.clone(),
+                    encrypter_pk,
+                };
+                (*idx, store)
+            })
     }
 
     /// Attempt to decrypt the root secret using only the information in this path
@@ -150,17 +165,15 @@ impl PathChange {
         doc_id: TreeId,
         sks: &ShareKeyMap,
     ) -> Option<ShareSecretKey> {
+        let stores: Vec<_> = self.secret_stores().map(|(_, store)| store).collect();
         let (intersection_idx, mut secret) =
-            self.path
-                .iter()
-                .enumerate()
-                .rev()
-                .find_map(|(i, (_, node))| {
-                    node.decrypt_with_sibling_secret(doc_id, sks)
-                        .map(|sk| (i, sk))
-                })?;
-        for (_, node) in &self.path[intersection_idx + 1..] {
-            secret = node.decrypt_with_child_secret(doc_id, &secret)?;
+            stores.iter().enumerate().rev().find_map(|(i, store)| {
+                store
+                    .decrypt_with_sibling_secret(doc_id, sks)
+                    .map(|sk| (i, sk))
+            })?;
+        for store in &stores[intersection_idx + 1..] {
+            secret = store.decrypt_with_child_secret(doc_id, &secret)?;
         }
         Some(secret)
     }
@@ -431,11 +444,8 @@ impl BeeKem {
         // succeeded, we write the stores from `new_path` and the new secrets from `new_sks`.
         let mut new_sks: Vec<(ShareKey, ShareSecretKey)> = Vec::new();
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
-        // An encrypter will always have a single public key at each node as it
-        // encrypts up its path. At its leaf, it will have written the latest public
-        // key at the start. And as it moves up the path, it will generate a new public
-        // key for each ancestor up to the root.
-        let mut child_pk = pk;
+        // Each node is encrypted with the secret of the child below it (`pk`'s at
+        // the leaf and the fresh secret generated for each ancestor).
         let mut child_sk = *sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?;
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
@@ -447,17 +457,15 @@ impl BeeKem {
             // Hold on to the secret so we can derive the root key later without
             // having to decrypt our own path.
             new_sks.push((new_parent_pk, new_parent_sk));
-            let secret_store = self.encrypt_new_secret_store_for_parent(
+            let node = self.encrypt_new_path_node_for_parent(
                 child_idx,
-                child_pk,
                 &child_sk,
                 new_parent_pk,
                 &new_parent_sk,
                 csprng,
             )?;
-            new_path.path.push((parent_idx.u32(), secret_store));
+            new_path.path.push((parent_idx.u32(), node));
             child_idx = parent_idx.into();
-            child_pk = new_parent_pk;
             child_sk = new_parent_sk;
             parent_idx = treemath::parent(child_idx);
         }
@@ -467,9 +475,9 @@ impl BeeKem {
             id,
             versions: NodeVersions::new(NonEmpty::new(pk)),
         });
-        for (idx, secret_store) in &new_path.path {
-            self.inner_nodes[InnerNodeIndex::new(*idx).usize()] =
-                Some(NodeVersions::new(NonEmpty::new(secret_store.clone())));
+        for (idx, store) in new_path.secret_stores() {
+            self.inner_nodes[InnerNodeIndex::new(idx).usize()] =
+                Some(NodeVersions::new(NonEmpty::new(store)));
         }
         for (new_pk, new_sk) in new_sks {
             sks.insert(new_pk, new_sk);
@@ -501,9 +509,9 @@ impl BeeKem {
             self.blank_path(treemath::parent(leaf_idx.into()));
             return ApplyPathOutcome::BlankedPath;
         }
-        for (idx, node) in &new_path.path {
-            let versions = NonEmpty::new(node.clone());
-            let slot = &mut self.inner_nodes[InnerNodeIndex::new(*idx).usize()];
+        for (idx, store) in new_path.secret_stores() {
+            let versions = NonEmpty::new(store);
+            let slot = &mut self.inner_nodes[InnerNodeIndex::new(idx).usize()];
             match slot {
                 Some(current) => current.merge(versions, &new_path.removed_keys),
                 None => *slot = Some(NodeVersions::new(versions)),
@@ -570,21 +578,20 @@ impl BeeKem {
         Ok(Some(secret))
     }
 
-    /// Build the new [`SecretStore`] for a parent node.
+    /// Build the new [`PathNode`] for a parent node.
     ///
     /// Encrypt the new parent [`ShareSecretKey`] for each member of your sibling
-    /// node's resolution. These are then stored in the new version, indexed by
-    /// the tree index for each member of that resolution.
+    /// node's resolution. These are then stored in the new node, indexed by the
+    /// tree index for each member of that resolution.
     #[allow(clippy::type_complexity)]
-    fn encrypt_new_secret_store_for_parent<R: rand::CryptoRng + rand::RngCore>(
+    fn encrypt_new_path_node_for_parent<R: rand::CryptoRng + rand::RngCore>(
         &self,
         child_idx: TreeNodeIndex,
-        child_pk: ShareKey,
         child_sk: &ShareSecretKey,
         new_parent_pk: ShareKey,
         new_parent_sk: &ShareSecretKey,
         csprng: &mut R,
-    ) -> Result<SecretStore, CgkaError> {
+    ) -> Result<PathNode, CgkaError> {
         debug_assert!(!self.is_root(child_idx));
         let sibling_idx = treemath::sibling(child_idx);
         let mut secret_map = BTreeMap::new();
@@ -623,10 +630,9 @@ impl BeeKem {
             }
         };
 
-        Ok(SecretStore {
+        Ok(PathNode {
             pk: new_parent_pk,
             sk: secret_map,
-            encrypter_pk: child_pk,
         })
     }
 

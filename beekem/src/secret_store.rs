@@ -26,34 +26,38 @@ pub struct SecretStore {
     pub encrypter_pk: ShareKey,
 }
 
-/// `pk || sk || encrypter_pk`, with `sk` in ascending index order.
-impl Encode for SecretStore {
+/// What an update writes at one inner node of its path. This includes the
+/// node's new key and its secret, encrypted for the resolution of the
+/// non-encrypting child.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct PathNode {
+    /// The node's new key.
+    pub pk: ShareKey,
+    /// The node's secret, encrypted for each node in the resolution, by tree
+    /// index.
+    pub sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
+}
+
+/// `pk || sk`, with `sk` in ascending index order.
+impl Encode for PathNode {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.pk.encode_into(out);
         self.sk.encode_into(out);
-        self.encrypter_pk.encode_into(out);
     }
 }
 
-impl Decode for SecretStore {
+impl Decode for PathNode {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         decode_exact(bytes)
     }
 }
 
-impl StreamDecode for SecretStore {
+impl StreamDecode for PathNode {
     fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
         let (pk, rest) = ShareKey::decode_next(bytes)?;
         let (sk, rest) = BTreeMap::decode_next(rest)?;
-        let (encrypter_pk, rest) = ShareKey::decode_next(rest)?;
-        Ok((
-            SecretStore {
-                pk,
-                sk,
-                encrypter_pk,
-            },
-            rest,
-        ))
+        Ok((PathNode { pk, sk }, rest))
     }
 }
 

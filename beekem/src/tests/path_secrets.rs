@@ -6,12 +6,12 @@ use crate::{
     error::CgkaError,
     keys::ShareKeyMap,
     operation::{CgkaChange, CgkaOperation},
-    secret_store::SecretStore,
+    secret_store::PathNode,
     test_utils::Group,
     tree::PathChange,
     treemath::{InnerNodeIndex, LeafNodeIndex, TreeNodeIndex},
 };
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use future_form::Local;
 use keyhive_crypto::{share_key::ShareSecretKey, verified::Verified};
 use rand::{rngs::StdRng, SeedableRng};
@@ -26,9 +26,13 @@ async fn forged_update(
 ) -> Arc<Verified<CgkaOperation>> {
     let doc_id = group.replicas[author].doc_id;
     tampered_update(group, author, rng, |new_path, sks, rng| {
-        for (_, version) in new_path.path.iter_mut() {
+        let encrypters: Vec<_> = new_path
+            .secret_stores()
+            .map(|(_, store)| store.encrypter_pk)
+            .collect();
+        for ((_, version), encrypter_pk) in new_path.path.iter_mut().zip(encrypters) {
             let encrypter_sk = *sks
-                .get(&version.encrypter_pk)
+                .get(&encrypter_pk)
                 .expect("the author has its path secrets");
             let incorrect_secret = ShareSecretKey::generate(rng);
             for encrypted in version.sk.values_mut() {
@@ -263,21 +267,6 @@ async fn a_path_node_without_an_entry_for_its_encrypting_child_is_malformed() {
 }
 
 #[tokio::test]
-async fn a_path_node_whose_encrypter_is_not_the_child_below_it_is_malformed() {
-    let mut rng = StdRng::seed_from_u64(0x9a7b_0006);
-    let honest = honest_path(&mut rng).await;
-    let sibling = TreeNodeIndex::from(LeafNodeIndex::new(1));
-    let mut at_first = honest.clone();
-    let version = &mut at_first.path[0].1;
-    version.encrypter_pk = version.sk[&sibling].paired_pk;
-    let mut at_second = honest.clone();
-    at_second.path[1].1.encrypter_pk = honest.leaf_pk;
-
-    assert!(!at_first.is_well_formed());
-    assert!(!at_second.is_well_formed());
-}
-
-#[tokio::test]
 async fn a_path_node_whose_key_the_update_removes_is_malformed() {
     let mut rng = StdRng::seed_from_u64(0x9a7b_0007);
     let mut path = honest_path(&mut rng).await;
@@ -343,18 +332,15 @@ async fn chain_from_leaf_zero(len: u32, rng: &mut StdRng) -> PathChange {
     let leaf = TreeNodeIndex::from(LeafNodeIndex::new(path.leaf_idx));
     let entry = path.path[0].1.sk[&leaf].clone();
     let mut child = leaf;
-    let mut encrypter = path.leaf_pk;
     path.path = (0..len)
         .map(|j| {
             let idx = (1u32 << j) - 1;
             let pk = ShareSecretKey::generate(rng).share_key();
-            let node = SecretStore {
+            let node = PathNode {
                 pk,
                 sk: BTreeMap::from([(child, entry.clone())]),
-                encrypter_pk: encrypter,
             };
             child = TreeNodeIndex::from(InnerNodeIndex::new(idx));
-            encrypter = pk;
             (idx, node)
         })
         .collect();
