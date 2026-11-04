@@ -442,7 +442,7 @@ mod tests {
             plaintext,
             ancestors,
         };
-        let bytes = envelope.encode().into_bytes();
+        let bytes = envelope.padded_body();
         (
             Arc::new(
                 EncryptedContent::<String, [u8; 32]>::encrypt(
@@ -731,7 +731,7 @@ mod tests {
                 PredecessorRefs::digest(&[]),
                 group_secret.digest(),
                 [9u8; 32].into(),
-                &envelope.encode().into_bytes(),
+                &envelope.padded_body(),
             )
             .expect("a fresh key encrypts"),
         );
