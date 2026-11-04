@@ -2,8 +2,12 @@
 //!
 //! [ECDH]: https://wikipedia.org/wiki/Elliptic-curve_Diffie%E2%80%93Hellman
 
-use super::{context::Context, symmetric_key::SymmetricKey};
-use alloc::vec::Vec;
+use super::{
+    context::Context,
+    secret::{boxed, constant_time_eq},
+    symmetric_key::SymmetricKey,
+};
+use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 #[cfg(feature = "std")]
 use dupe::Dupe;
@@ -12,6 +16,7 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use tracing::instrument;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Newtype around [x25519_dalek::PublicKey].
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -90,9 +95,15 @@ impl From<x25519_dalek::PublicKey> for ShareKey {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// An X25519 secret key, wiped when dropped.
+///
+/// Not `Copy`: a copy needs an explicit `clone`, and a clone is wiped too.
+/// The bytes are in their own allocation, so moving a key, or a map of keys
+/// growing, does not copy them. Equality takes constant time. It cannot be
+/// printed: `Debug` is redacted, and there is no `Display`.
+#[derive(Zeroize, ZeroizeOnDrop)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub struct ShareSecretKey([u8; 32]);
+pub struct ShareSecretKey(Box<[u8; 32]>);
 
 impl ShareSecretKey {
     #[instrument(skip_all)]
@@ -102,16 +113,13 @@ impl ShareSecretKey {
 
     pub fn share_key(&self) -> ShareKey {
         ShareKey(x25519_dalek::PublicKey::from(
-            &x25519_dalek::StaticSecret::from(*self),
+            &x25519_dalek::StaticSecret::from(*self.0),
         ))
     }
 
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.0
-    }
-
+    /// The secret's bytes, borrowed: a copy of them would not be wiped.
     pub fn as_slice(&self) -> &[u8] {
-        &self.0
+        self.0.as_slice()
     }
 
     /// The symmetric key this secret's holder and `other`'s holder share for
@@ -126,7 +134,7 @@ impl ShareSecretKey {
     /// has its own context, so a key for one never opens what another sealed.
     #[instrument(skip_all)]
     pub fn derive_symmetric_key(&self, other: &ShareKey, context: Context) -> SymmetricKey {
-        let shared = x25519_dalek::StaticSecret::from(*self).diffie_hellman(&other.0);
+        let shared = x25519_dalek::StaticSecret::from(*self.0).diffie_hellman(&other.0);
         let mine = self.share_key();
         let mut hasher = context.hasher();
         hasher.update(shared.as_bytes());
@@ -135,38 +143,53 @@ impl ShareSecretKey {
         SymmetricKey::from(*hasher.finalize().as_bytes())
     }
 
+    /// Use `bytes` as a secret key, as they are: any 32 bytes are one.
+    ///
+    /// Takes `bytes` by value, so the caller's array is a copy that is not
+    /// wiped. To build a key from bytes the caller holds, prefer
+    /// `From<&[u8; 32]>` or [`Self::try_from_slice`].
     pub fn force_from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
+        Self(Box::new(bytes))
+    }
+
+    /// Copy a secret key out of `bytes` with no copy on the way. Returns
+    /// `None` unless `bytes` is 32 bytes long.
+    pub fn try_from_slice(bytes: &[u8]) -> Option<Self> {
+        <&[u8; 32]>::try_from(bytes).ok().map(Self::from)
     }
 }
 
+/// Copies `bytes` into the key's own allocation, with no copy on the stack.
+impl From<&[u8; 32]> for ShareSecretKey {
+    fn from(bytes: &[u8; 32]) -> Self {
+        Self(boxed(bytes))
+    }
+}
+
+/// Copies into a new allocation, so the copy is never on the stack.
+impl Clone for ShareSecretKey {
+    fn clone(&self) -> Self {
+        Self(boxed(&self.0))
+    }
+}
+
+impl PartialEq for ShareSecretKey {
+    fn eq(&self, other: &Self) -> bool {
+        constant_time_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ShareSecretKey {}
+
 impl From<ShareSecretKey> for x25519_dalek::StaticSecret {
     fn from(secret: ShareSecretKey) -> Self {
-        x25519_dalek::StaticSecret::from(secret.0)
+        x25519_dalek::StaticSecret::from(*secret.0)
     }
 }
 
 impl From<x25519_dalek::StaticSecret> for ShareSecretKey {
     fn from(secret: x25519_dalek::StaticSecret) -> Self {
-        Self(secret.to_bytes())
-    }
-}
-
-impl From<&ShareSecretKey> for Vec<u8> {
-    fn from(secret: &ShareSecretKey) -> Self {
-        secret.0.to_vec()
-    }
-}
-
-impl fmt::LowerHex for ShareSecretKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        crate::hex::bytes_as_hex(self.0.iter(), f)
-    }
-}
-
-impl fmt::Display for ShareSecretKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:#x}", self)
+        Self::from(secret.as_bytes())
     }
 }
 
@@ -216,9 +239,12 @@ impl StreamDecode for ShareKey {
 
 /// The secret's 32 bytes. Every 32 bytes are a secret (X25519 clamps them
 /// when it uses them), so decoding refuses only the wrong length.
+///
+/// `out` is not wiped and may reallocate, so this leaves copies of the secret.
+/// To store secrets, write them with [`write_secret`](crate::secret::write_secret).
 impl Encode for ShareSecretKey {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.0);
+        out.extend_from_slice(self.as_slice());
     }
 }
 
@@ -230,8 +256,10 @@ impl Decode for ShareSecretKey {
 
 impl StreamDecode for ShareSecretKey {
     fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
-        let (secret, rest) = <[u8; 32]>::decode_next(bytes)?;
-        Ok((ShareSecretKey(secret), rest))
+        let (secret, rest) = bytes
+            .split_first_chunk::<32>()
+            .ok_or(DecodeError::UnexpectedEnd)?;
+        Ok((ShareSecretKey::from(secret), rest))
     }
 }
 
@@ -249,6 +277,15 @@ fn is_canonical_u(u: &[u8; 32]) -> bool {
 fn has_small_order(u: &[u8; 32]) -> bool {
     x25519_dalek::x25519([1; 32], *u) == [0; 32]
 }
+
+// Fails to compile unless the key is marked `ZeroizeOnDrop` and has a
+// destructor, which a `Copy` type cannot have. Its `Box` gives it one today;
+// the check keeps that true if the bytes are ever held inline.
+const _: () = assert!(core::mem::needs_drop::<ShareSecretKey>());
+const _: fn() = || {
+    fn wiped_on_drop<T: ZeroizeOnDrop>() {}
+    wiped_on_drop::<ShareSecretKey>();
+};
 
 #[cfg(all(test, feature = "std"))]
 mod tests {
@@ -268,6 +305,43 @@ mod tests {
         keyhive_codec::laws::round_trip::<ShareKey>();
         keyhive_codec::laws::canonical_near::<ShareKey>();
         keyhive_codec::laws::stream::<ShareKey>();
+        keyhive_codec::laws::round_trip::<ShareSecretKey>();
+        keyhive_codec::laws::canonical_near::<ShareSecretKey>();
+        keyhive_codec::laws::stream::<ShareSecretKey>();
+    }
+
+    /// Equality compares every byte: a secret key equals itself, and differs
+    /// from the same key with any one bit flipped.
+    #[test]
+    fn secret_keys_are_equal_exactly_when_every_byte_is() {
+        bolero::check!()
+            .with_type::<([u8; 32], u8, u8)>()
+            .for_each(|(bytes, at, bit)| {
+                let mut flipped = *bytes;
+                flipped[usize::from(*at) % 32] ^= 1 << (bit % 8);
+                assert_eq!(ShareSecretKey::from(bytes), ShareSecretKey::from(bytes));
+                assert_ne!(ShareSecretKey::from(bytes), ShareSecretKey::from(&flipped));
+            });
+    }
+
+    /// A secret key is built from exactly 32 bytes, and holds those bytes. The
+    /// fixed cases cover the lengths the generator rarely draws.
+    #[test]
+    fn a_secret_key_is_built_from_exactly_32_bytes() {
+        assert_eq!(
+            ShareSecretKey::try_from_slice(&[7; 32])
+                .as_ref()
+                .map(ShareSecretKey::as_slice),
+            Some(&[7u8; 32][..])
+        );
+        assert!(ShareSecretKey::try_from_slice(&[7; 31]).is_none());
+        assert!(ShareSecretKey::try_from_slice(&[7; 33]).is_none());
+        bolero::check!().with_type::<Vec<u8>>().for_each(|bytes| {
+            match ShareSecretKey::try_from_slice(bytes) {
+                Some(sk) => assert_eq!(sk.as_slice(), bytes.as_slice()),
+                None => assert_ne!(bytes.len(), 32),
+            }
+        });
     }
 
     #[test]

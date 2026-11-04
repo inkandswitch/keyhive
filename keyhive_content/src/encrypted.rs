@@ -46,11 +46,13 @@ use keyhive_crypto::{
     context::Context,
     digest::Digest,
     identifier::Identifier,
+    secret::{write_secret, Sink},
     signable::{Kind, Kinded, TAG},
     siv::{nonces_match, synthetic_nonce},
     symmetric_key::SymmetricKey,
 };
 use tracing::instrument;
+use zeroize::Zeroizing;
 
 /// The first bytes of encrypted content: Keyhive's tag, then `E`, which the
 /// kind registry reserves for it.
@@ -145,24 +147,27 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
     /// decodes it.
     ///
     /// Each chunk must authenticate, and its nonce must be the synthetic nonce
-    /// of what it decrypts to.
+    /// of what it decrypts to. If one does not, the chunks already decrypted
+    /// are wiped. The body holds its ancestors' keys, so it is wiped when
+    /// dropped.
     #[instrument(skip_all)]
     pub fn try_decrypt(
         &self,
-        key: SymmetricKey,
+        key: &SymmetricKey,
         doc_id: Identifier,
-    ) -> Result<Vec<u8>, ContentDecryptError> {
-        let keys = ChunkKeys::new(&key, doc_id, &self.header());
-        let mut plaintext = Vec::with_capacity(self.chunks.len());
+    ) -> Result<Zeroizing<Vec<u8>>, ContentDecryptError> {
+        let keys = ChunkKeys::new(key, doc_id, &self.header());
+        // Never grows: the plaintext is shorter than the chunks.
+        let mut plaintext = Zeroizing::new(Vec::with_capacity(self.chunks.len()));
         let mut chunks = (0u64..).zip(self.chunks.chunks(FULL_CHUNK)).peekable();
         while let Some((i, chunk)) = chunks.next() {
             let (nonce, ciphertext) = chunk
                 .split_first_chunk::<NONCE_LEN>()
                 .expect("every chunk contains its nonce and tag");
             let aad = keys.aad(i, chunks.peek().is_none());
-            let mut buf = ciphertext.to_vec();
+            let mut buf = Zeroizing::new(ciphertext.to_vec());
             keys.cipher
-                .decrypt_in_place(&XNonce::from(*nonce), &aad, &mut buf)?;
+                .decrypt_in_place(&XNonce::from(*nonce), &aad, &mut *buf)?;
             if !nonces_match(&keys.nonce(&aad, &buf), nonce) {
                 return Err(ContentDecryptError::NonceMismatch);
             }
@@ -319,7 +324,7 @@ impl From<chacha20poly1305::Error> for ContentDecryptError {
 /// The keys and header digest every chunk of one block uses.
 struct ChunkKeys {
     cipher: XChaCha20Poly1305,
-    nonce_key: [u8; 32],
+    nonce_key: Zeroizing<[u8; 32]>,
     header_digest: [u8; 32],
 }
 
@@ -328,13 +333,11 @@ impl ChunkKeys {
         let mut hasher = Context::CONTENT_HEADER.hasher();
         hasher.update(doc_id.as_bytes());
         hasher.update(header);
+        // The cipher keeps, and wipes, its own copy of the key.
+        let enc_key = Zeroizing::new(Context::CONTENT_ENCRYPTION_KEY.derive_key(key.as_slice()));
         ChunkKeys {
-            cipher: XChaCha20Poly1305::new(
-                &Context::CONTENT_ENCRYPTION_KEY
-                    .derive_key(key.as_slice())
-                    .into(),
-            ),
-            nonce_key: Context::CONTENT_NONCE_KEY.derive_key(key.as_slice()),
+            cipher: XChaCha20Poly1305::new(enc_key.as_ref().into()),
+            nonce_key: Zeroizing::new(Context::CONTENT_NONCE_KEY.derive_key(key.as_slice())),
             header_digest: *hasher.finalize().as_bytes(),
         }
     }
@@ -356,18 +359,55 @@ impl ChunkKeys {
 /// `count ‖ ( content_ref ‖ key )*`, each content ref once, in ascending
 /// order of their encodings, so the bytes do not depend on the order given.
 /// Where a ref is listed more than once, its last key is kept.
+#[cfg(feature = "std")]
 pub(crate) fn encode_ancestors<'a, Cr: ContentRef + 'a>(
     ancestors: impl IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
     out: &mut Vec<u8>,
 ) {
-    let sorted: BTreeMap<Vec<u8>, [u8; 32]> = ancestors
+    write_ancestors(&sorted_ancestors(ancestors), out);
+}
+
+/// A block's body, `count ‖ ( content_ref ‖ key )* ‖ payload` with the
+/// ancestors as [`encode_ancestors`] writes them, in a buffer that is wiped
+/// when dropped: it carries the ancestors' keys. The buffer is allocated once
+/// at its exact length, so it leaves no copy of a key behind.
+pub(crate) fn encode_body<'a, Cr: ContentRef + 'a>(
+    ancestors: impl IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
+    payload: &[u8],
+) -> Zeroizing<Vec<u8>> {
+    let sorted = sorted_ancestors(ancestors);
+    let mut count = Vec::new();
+    encode_len(sorted.len(), &mut count);
+    let keys_len: usize = sorted
+        .iter()
+        .map(|(content_ref, key)| content_ref.len() + key.as_slice().len())
+        .sum();
+    write_secret(count.len() + keys_len + payload.len(), |out| {
+        write_ancestors(&sorted, out);
+        out.put(payload);
+    })
+}
+
+/// The ancestors by their encoded content refs, each once and in ascending
+/// order of the encodings. Where a ref is listed more than once, its last key
+/// is kept. The keys are borrowed, not copied.
+fn sorted_ancestors<'a, Cr: ContentRef + 'a>(
+    ancestors: impl IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
+) -> BTreeMap<Vec<u8>, &'a SymmetricKey> {
+    ancestors
         .into_iter()
-        .map(|(content_ref, key)| (content_ref.encode().into_bytes(), (*key).into()))
-        .collect();
-    encode_len(sorted.len(), out);
-    for (content_ref, key) in &sorted {
-        out.extend_from_slice(content_ref);
-        out.extend_from_slice(key);
+        .map(|(content_ref, key)| (content_ref.encode().into_bytes(), key))
+        .collect()
+}
+
+/// `count ‖ ( content_ref ‖ key )*`. The only place the ancestors are written.
+fn write_ancestors<S: Sink>(sorted: &BTreeMap<Vec<u8>, &SymmetricKey>, out: &mut S) {
+    let mut count = Vec::new();
+    encode_len(sorted.len(), &mut count);
+    out.put(&count);
+    for (content_ref, key) in sorted {
+        out.put(content_ref);
+        out.put(key.as_slice());
     }
 }
 
@@ -447,8 +487,8 @@ mod tests {
                 "{len} bytes decode to what encoded them"
             );
             assert_eq!(
-                content.try_decrypt(key(1), doc(1)),
-                Ok(plaintext),
+                content.try_decrypt(&key(1), doc(1)).as_deref(),
+                Ok(&plaintext),
                 "{len} bytes decrypt"
             );
         }
@@ -477,11 +517,11 @@ mod tests {
     fn the_wrong_key_or_document_does_not_decrypt() {
         let content = encrypt(b"secret");
         assert_eq!(
-            content.try_decrypt(key(9), doc(1)),
+            content.try_decrypt(&key(9), doc(1)),
             Err(ContentDecryptError::Decryption)
         );
         assert_eq!(
-            content.try_decrypt(key(1), doc(9)),
+            content.try_decrypt(&key(1), doc(9)),
             Err(ContentDecryptError::Decryption)
         );
     }
@@ -499,7 +539,7 @@ mod tests {
         for (field, at) in fields {
             let edited = reencoded(&content, |b| b[at] ^= 1);
             assert_eq!(
-                edited.try_decrypt(key(1), doc(1)),
+                edited.try_decrypt(&key(1), doc(1)),
                 Err(ContentDecryptError::Decryption),
                 "{field} edited"
             );
@@ -515,7 +555,7 @@ mod tests {
             HEADER_LEN + 2 * FULL_CHUNK + 1,
         ] {
             let edited = reencoded(&content, |b| b[at] ^= 1);
-            assert!(edited.try_decrypt(key(1), doc(1)).is_err(), "byte {at}");
+            assert!(edited.try_decrypt(&key(1), doc(1)).is_err(), "byte {at}");
         }
     }
 
@@ -543,7 +583,7 @@ mod tests {
             ("appended", appended),
         ] {
             assert_eq!(
-                edited.try_decrypt(key(1), doc(1)),
+                edited.try_decrypt(&key(1), doc(1)),
                 Err(ContentDecryptError::Decryption),
                 "{what}"
             );
@@ -568,7 +608,7 @@ mod tests {
             b.extend_from_slice(&buf);
         });
         assert_eq!(
-            forged.try_decrypt(key(1), doc(1)),
+            forged.try_decrypt(&key(1), doc(1)),
             Err(ContentDecryptError::NonceMismatch)
         );
     }
@@ -638,7 +678,7 @@ mod tests {
                 )
                 .expect("encrypts");
                 let read = Content::decode(content.encode().as_bytes()).expect("decodes");
-                assert_eq!(read.try_decrypt(key(1), doc).as_ref(), Ok(plaintext));
+                assert_eq!(read.try_decrypt(&key(1), doc).as_deref(), Ok(plaintext));
             });
     }
 

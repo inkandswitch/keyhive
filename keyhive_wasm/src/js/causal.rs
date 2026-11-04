@@ -236,7 +236,10 @@ mod tests {
                 .await
                 .expect("the content encrypts");
             pred_refs = vec![content_ref.into()];
-            written.push((keyed.encrypted_content(), keyed.application_secret()));
+            written.push((
+                keyed.encrypted_content(),
+                keyed.application_secret().to_vec(),
+            ));
         }
         let written = <[_; N]>::try_from(written).expect("each block was written");
         (kh, doc, written)
@@ -255,7 +258,7 @@ mod tests {
         let complete: Vec<(Vec<u8>, Vec<u8>)> = read
             .complete()
             .iter()
-            .map(|block| (block.content(), block.application_secret()))
+            .map(|block| (block.content(), block.application_secret().to_vec()))
             .collect();
         assert_eq!(
             complete,
@@ -267,7 +270,7 @@ mod tests {
         let next: Vec<(Vec<u8>, Vec<u8>)> = read
             .next()
             .iter()
-            .map(|a| (a.content_ref().to_bytes(), a.key()))
+            .map(|a| (a.content_ref().to_bytes(), a.key().to_vec()))
             .collect();
         assert_eq!(next, vec![(vec![1], grandparent_key)]);
         assert!(read.failed().is_empty());
@@ -300,7 +303,7 @@ mod tests {
         let next: Vec<(Vec<u8>, Vec<u8>)> = read
             .next()
             .iter()
-            .map(|a| (a.content_ref().to_bytes(), a.key()))
+            .map(|a| (a.content_ref().to_bytes(), a.key().to_vec()))
             .collect();
         assert_eq!(next, vec![(vec![1], grandparent_key)]);
     }
@@ -347,7 +350,7 @@ mod tests {
         let next: Vec<(Vec<u8>, Vec<u8>)> = read
             .next()
             .iter()
-            .map(|a| (a.content_ref().to_bytes(), a.key()))
+            .map(|a| (a.content_ref().to_bytes(), a.key().to_vec()))
             .collect();
         assert_eq!(next, vec![(vec![1], parent_key)]);
     }

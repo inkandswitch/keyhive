@@ -28,6 +28,7 @@ ed25519-dalek = { workspace = true, features = ["fast", "rand_core", "std", "zer
 rand = { workspace = true, features = ["std", "std_rng"] }
 signature = { workspace = true }
 x25519-dalek = { workspace = true }
+zeroize = { workspace = true }
 
 # Error Handling
 thiserror = { workspace = true }
@@ -35,7 +36,6 @@ thiserror = { workspace = true }
 # Utilities
 async-lock = { workspace = true }
 derive_more = { workspace = true, features = ["std"] }
-derive-where = { workspace = true }
 dupe = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true, features = ["async-await", "executor", "std"] }

@@ -43,12 +43,14 @@ impl<Cr: ContentRef> AncestorKey<Cr> {
         self.doc_id
     }
 
-    pub(crate) fn key_ref(&self) -> &SymmetricKey {
+    /// The key, borrowed. Treat as secret.
+    pub fn key_ref(&self) -> &SymmetricKey {
         &self.key
     }
 
-    /// The key itself. Treat as secret.
+    /// A copy of the key, which is wiped when dropped too. Prefer
+    /// [`Self::key_ref`] unless an owned key is needed. Treat as secret.
     pub fn key(&self) -> SymmetricKey {
-        self.key
+        self.key.clone()
     }
 }

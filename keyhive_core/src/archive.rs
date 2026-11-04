@@ -11,7 +11,7 @@ use crate::{
     content::heads::ContentHeads,
     event::static_event::StaticEvent,
     principal::{
-        active::archive::ActiveArchive,
+        active::archive::{key_pairs_len, write_key_pairs, ActiveArchive},
         document::{archive::DocumentArchive, id::DocumentId},
         individual::{id::IndividualId, IndividualState},
     },
@@ -23,11 +23,19 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_content::reference::ContentRef;
-use keyhive_crypto::verified;
+use keyhive_crypto::{
+    secret::{write_secret, Sink},
+    verified,
+};
 use keyline::certificate::Certificate;
 use std::collections::{BTreeMap, HashMap};
+use zeroize::Zeroizing;
 
 /// What a [`Keyhive`][crate::keyhive::Keyhive] stores to be rebuilt.
+///
+/// It holds this replica's secret keys. To store it, use
+/// [`Archive::encode_zeroizing`], not [`Encode::encode`], which leaves
+/// unwiped copies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Archive<T: ContentRef> {
     pub(crate) active: ActiveArchive,
@@ -50,6 +58,83 @@ impl<T: ContentRef> Archive<T> {
     pub fn id(&self) -> IndividualId {
         self.active.individual.id()
     }
+
+    /// The archive's encoding, the same bytes as [`Encode`] gives, in a buffer
+    /// that is wiped when dropped: it holds this replica's secret keys.
+    ///
+    /// The buffer never grows, so it leaves no copy of a key behind. Use this,
+    /// not [`Encode::encode`], to store an archive.
+    pub fn encode_zeroizing(&self) -> Zeroizing<Vec<u8>> {
+        // Only the individuals and the statements are written outside the
+        // wiped buffer: the key pairs and the documents (with their content
+        // keys) must be written straight into it. The test
+        // `no_secret_is_written_outside_the_wiped_buffer` checks that those
+        // two sections hold no secret; it cannot see what this function does,
+        // so keep any new secret-bearing section inside `write_secret`.
+        let mut individuals = Vec::new();
+        self.encode_individuals_into(&mut individuals);
+        let mut statements = Vec::new();
+        self.encode_statements_into(&mut statements);
+        let len = Self::MAGIC.len()
+            + 1
+            + key_pairs_len(&self.active.key_pairs)
+            + individuals.len()
+            + self.docs_len()
+            + statements.len();
+        write_secret(len, |out| {
+            self.encode_key_pairs_into(out);
+            out.put(&individuals);
+            self.encode_docs_into(out);
+            out.put(&statements);
+        })
+    }
+
+    /// The header and the key pairs. Secret.
+    fn encode_key_pairs_into<S: Sink>(&self, out: &mut S) {
+        out.put(&Self::MAGIC);
+        out.put(&[Self::FORMAT]);
+        write_key_pairs(&self.active.key_pairs, out);
+    }
+
+    /// This replica's individual and the individuals it knows. Public.
+    fn encode_individuals_into(&self, out: &mut Vec<u8>) {
+        self.active.individual.encode_into(out);
+        let individuals: BTreeMap<_, _> = self.individuals.values().map(|i| (i.id(), i)).collect();
+        encode_len(individuals.len(), out);
+        individuals.values().for_each(|i| i.encode_into(out));
+    }
+
+    /// The documents, with their content keys. Secret.
+    fn encode_docs_into<S: Sink>(&self, out: &mut S) {
+        let docs: BTreeMap<_, _> = self.docs.iter().collect();
+        let mut count = Vec::new();
+        encode_len(docs.len(), &mut count);
+        out.put(&count);
+        for (id, doc) in docs {
+            out.put(id.encode().as_bytes());
+            doc.write_into(out);
+        }
+    }
+
+    /// The length of [`Self::encode_docs_into`]'s output, found without
+    /// writing a content key.
+    fn docs_len(&self) -> usize {
+        let mut count = Vec::new();
+        encode_len(self.docs.len(), &mut count);
+        count.len()
+            + self
+                .docs
+                .iter()
+                .map(|(id, doc)| id.encode().as_bytes().len() + doc.encoded_len())
+                .sum::<usize>()
+    }
+
+    /// The CGKA operations, certificates and pending events. Public.
+    fn encode_statements_into(&self, out: &mut Vec<u8>) {
+        encode_by_key(&self.cgka_ops, |op| op.digest(), out);
+        encode_by_key(&self.certificates, |cert| cert.id(), out);
+        encode_by_key(&self.pending_events, |event| event.digest(), out);
+    }
 }
 
 /// `"KHIV" ‖ format ‖ active ‖ individuals ‖ docs ‖ cgka_ops ‖ certificates ‖
@@ -58,23 +143,15 @@ impl<T: ContentRef> Archive<T> {
 /// statement's digest. A statement held twice is written once, so each archive
 /// has one encoding. Individuals are stored without their ids, which their
 /// prekey operations give.
+///
+/// `out` is not wiped and may reallocate, so this leaves copies of the secret
+/// keys. To store an archive, use [`Archive::encode_zeroizing`].
 impl<T: ContentRef> Encode for Archive<T> {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&Self::MAGIC);
-        out.push(Self::FORMAT);
-        self.active.encode_into(out);
-        let individuals: BTreeMap<_, _> = self.individuals.values().map(|i| (i.id(), i)).collect();
-        encode_len(individuals.len(), out);
-        individuals.values().for_each(|i| i.encode_into(out));
-        let docs: BTreeMap<_, _> = self.docs.iter().collect();
-        encode_len(docs.len(), out);
-        for (id, doc) in docs {
-            id.encode_into(out);
-            doc.encode_into(out);
-        }
-        encode_by_key(&self.cgka_ops, |op| op.digest(), out);
-        encode_by_key(&self.certificates, |cert| cert.id(), out);
-        encode_by_key(&self.pending_events, |event| event.digest(), out);
+        self.encode_key_pairs_into(out);
+        self.encode_individuals_into(out);
+        self.encode_docs_into(out);
+        self.encode_statements_into(out);
     }
 }
 
@@ -155,6 +232,65 @@ fn decode_by_key<V: StreamDecode, K: Ord>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::{TestContext, TestResult};
+    use keyline::power::Power::Read;
+
+    /// The sections written outside the wiped buffer hold no secret: no share
+    /// secret key and no content key appears in them.
+    #[tokio::test]
+    async fn no_secret_is_written_outside_the_wiped_buffer() -> TestResult<()> {
+        let mut ctx = TestContext::new().await;
+        let alice = ctx.individual("alice").await?;
+        let bob = ctx.individual("bob").await?;
+        let doc = ctx.doc(&alice, "doc").await?;
+        alice.add_member(bob.id(), doc, Read).await?;
+        ctx.encrypt(&alice, doc, b"one").await?;
+        ctx.encrypt(&alice, doc, b"two").await?;
+        let archive = alice.into_archive().await?;
+
+        let secrets: Vec<&[u8]> = archive
+            .active
+            .key_pairs
+            .values()
+            .map(|sk| sk.as_slice())
+            .chain(
+                archive
+                    .docs
+                    .values()
+                    .flat_map(|d| d.content_keys.values().map(|k| k.as_slice())),
+            )
+            .collect();
+        assert!(
+            archive.docs.values().any(|d| !d.content_keys.is_empty()),
+            "precondition: the archive holds content keys"
+        );
+
+        let mut public = Vec::new();
+        archive.encode_individuals_into(&mut public);
+        archive.encode_statements_into(&mut public);
+        for secret in secrets {
+            assert!(
+                !public.windows(secret.len()).any(|w| w == secret),
+                "a secret was written outside the wiped buffer"
+            );
+        }
+        Ok(())
+    }
+
+    /// The documents' length is found exactly, without writing them.
+    #[tokio::test]
+    async fn the_docs_length_is_exact() -> TestResult<()> {
+        let mut ctx = TestContext::new().await;
+        let alice = ctx.individual("alice").await?;
+        let doc = ctx.doc(&alice, "doc").await?;
+        ctx.encrypt(&alice, doc, b"one").await?;
+        let archive = alice.into_archive().await?;
+
+        let mut docs = Vec::new();
+        archive.encode_docs_into(&mut docs);
+        assert_eq!(archive.docs_len(), docs.len());
+        Ok(())
+    }
 
     /// Keys sort the items; a repeated key is written once, for its first
     /// item.

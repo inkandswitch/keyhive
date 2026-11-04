@@ -143,7 +143,7 @@ impl<T: ContentRef> DocumentState<T> {
     ) -> Result<(Self, Vec<Verified<CgkaOperation>>), GenerateDocError<E>> {
         let (owner, owner_pk, _, _) = founders.head;
         let mut owner_sks = ShareKeyMap::new();
-        owner_sks.insert(owner_pk, owner_sk);
+        owner_sks.insert(owner_pk, owner_sk.clone());
         let mut cgka = Cgka::new(id, owner, owner_sks, implicit_removes_protocol);
         let mut ops = cgka.add_multiple(founders, signer).await?;
         let (_pcs_key, update_op, _new_key_pair) =
@@ -308,7 +308,7 @@ impl<T: ContentRef> DocumentState<T> {
             .cgka
             .decryption_key_for(encrypted_content)
             .map_err(|_| DecryptError::KeyNotFound)?;
-        self.try_decrypt_content_with(encrypted_content, decrypt_key)
+        self.try_decrypt_content_with(encrypted_content, &decrypt_key)
             .map(|envelope| (envelope, decrypt_key))
     }
 
@@ -318,7 +318,7 @@ impl<T: ContentRef> DocumentState<T> {
     pub(crate) fn try_decrypt_content_with<P>(
         &mut self,
         encrypted_content: &EncryptedContent<P, T>,
-        decrypt_key: SymmetricKey,
+        decrypt_key: &SymmetricKey,
     ) -> Result<Envelope<T, Vec<u8>>, DecryptError> {
         let (envelope, opened_by) =
             Envelope::open(encrypted_content, decrypt_key, self.doc_id().into())?;
@@ -349,9 +349,9 @@ where {
                 .await
                 .map_err(DocCausalDecryptionError::GetCiphertextError)?
             {
-                to_decrypt.push((encrypted, *symm_key));
+                to_decrypt.push((encrypted, symm_key.clone()));
             } else {
-                not_served.insert(digest.clone(), *symm_key);
+                not_served.insert(digest.clone(), symm_key.clone());
             }
         }
 

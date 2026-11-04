@@ -15,9 +15,9 @@ keyhive_codec = { workspace = true }
 keyhive_crypto = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }
+zeroize = { workspace = true }
 
 # std-only dependencies: the envelope and the ciphertext store
-derive-where = { workspace = true, optional = true }
 dupe = { workspace = true, optional = true }
 future_form = { workspace = true, optional = true }
 futures = { workspace = true, features = ["std"], optional = true }
@@ -39,7 +39,6 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 default = ["std"]
 std = [
   "blake3/std",
-  "dep:derive-where",
   "dep:dupe",
   "dep:future_form",
   "dep:futures",

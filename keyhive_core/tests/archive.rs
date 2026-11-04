@@ -455,3 +455,27 @@ async fn an_archive_re_encodes_to_the_same_bytes() -> Result<()> {
     assert_eq!(decoded.encode().as_bytes(), bytes.as_bytes());
     Ok(())
 }
+
+/// The wiped encoding is the archive's encoding, byte for byte, and the
+/// decoder, which shares nothing with the writer, reads it as a canonical
+/// archive.
+#[tokio::test]
+async fn an_archive_encodes_the_same_into_a_wiped_buffer() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let doc = ctx.doc(&alice, "doc").await?;
+    alice.add_member(bob.id(), doc, Read).await?;
+    ctx.encrypt(&alice, doc, b"some content").await?;
+    ctx.sync_all_unsent().await?;
+
+    let archive = alice.into_archive().await?;
+    let wiped = archive.encode_zeroizing();
+    assert_eq!(wiped.as_slice(), archive.encode().as_bytes());
+    // An archive in memory may hold a statement twice or out of order, which
+    // its encoding does not, so it is the bytes that must survive decoding.
+    let decoded = Archive::<[u8; 32]>::decode(wiped.as_slice())
+        .map_err(|e| TestError::Other(e.to_string()))?;
+    assert_eq!(decoded.encode().as_bytes(), wiped.as_slice());
+    Ok(())
+}

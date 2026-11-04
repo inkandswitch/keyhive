@@ -1047,7 +1047,7 @@ impl Dupe for Instance {
 /// the graph.
 pub fn decrypt_with_key(
     ct: &Ciphertext,
-    key: SymmetricKey,
+    key: &SymmetricKey,
     doc: DocumentId,
 ) -> TestResult<Vec<u8>> {
     Envelope::<_, Vec<u8>>::open(ct, key, doc.into())
@@ -1086,7 +1086,7 @@ impl CausalDecryptionExt for CausalDecryptionState<[u8; 32], Vec<u8>> {
     }
 
     fn key_for_missing(&self, ct: &Ciphertext) -> Option<SymmetricKey> {
-        self.next.get(&ct.content_ref).copied()
+        self.next.get(&ct.content_ref).cloned()
     }
 
     fn key_for_recovered(&self, ct: &Ciphertext) -> Option<SymmetricKey> {

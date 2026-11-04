@@ -44,14 +44,26 @@ impl RootSecrets {
         self.0.insert(verified.op_hash, verified.secret);
     }
 
-    /// The root secret recorded for `op_hash`.
+    /// The root secret recorded for `op_hash`, borrowed.
+    pub(crate) fn get_ref(&self, op_hash: &Digest<CgkaOperation>) -> Option<&PcsKey> {
+        self.0.get(op_hash)
+    }
+
+    /// A copy of the root secret recorded for `op_hash`, which is wiped when
+    /// dropped too. Prefer [`Self::get_ref`] or [`Self::contains`] unless an
+    /// owned key is needed.
     pub(crate) fn get(&self, op_hash: &Digest<CgkaOperation>) -> Option<PcsKey> {
-        self.0.get(op_hash).copied()
+        self.get_ref(op_hash).cloned()
+    }
+
+    /// Whether a root secret is recorded for `op_hash`, without copying it.
+    pub(crate) fn contains(&self, op_hash: &Digest<CgkaOperation>) -> bool {
+        self.get_ref(op_hash).is_some()
     }
 
     /// Every recorded update with its root secret.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (Digest<CgkaOperation>, PcsKey)> + '_ {
-        self.0.iter().map(|(op_hash, secret)| (*op_hash, *secret))
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Digest<CgkaOperation>, &PcsKey)> {
+        self.0.iter()
     }
 
     /// Add every secret `other` has recorded, returning the ones not recorded
@@ -59,8 +71,9 @@ impl RootSecrets {
     pub(crate) fn merge_from(&mut self, other: &Self) -> Vec<(Digest<CgkaOperation>, PcsKey)> {
         let mut added = Vec::new();
         for (op_hash, secret) in other.iter() {
-            if self.0.insert(op_hash, secret) != Some(secret) {
-                added.push((op_hash, secret));
+            if self.0.get(op_hash) != Some(secret) {
+                self.0.insert(*op_hash, secret.clone());
+                added.push((*op_hash, secret.clone()));
             }
         }
         added

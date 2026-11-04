@@ -39,7 +39,6 @@ bolero = { version = "0.11.1", features = ["arbitrary"] }
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
 console_error_panic_hook = "0.1"
 curve25519-dalek = "4.1"
-derive-where = "1.2"
 derive_more = { version = "1.0", default-features = false, features = [
   "debug",
   "deref",
@@ -78,6 +77,7 @@ proptest-derive = "0.5.0"
 rand = { version = "0.8.5", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 signature = "2.2"
+subtle = { version = "2.6", default-features = false }
 test-utils = { path = "test-utils" }
 testresult = "0.4.1"
 thiserror = { version = "2.0", default-features = false }
@@ -96,6 +96,7 @@ x25519-dalek = { version = "2.0", features = [
   "reusable_secrets",
   "static_secrets",
 ] }
+zeroize = { version = "1.8", default-features = false, features = ["alloc", "derive"] }
 
 [workspace.lints.clippy]
 # Long doc list continuations are indented for reading as plain text.

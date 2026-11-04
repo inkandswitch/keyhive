@@ -55,10 +55,9 @@ impl JsEncrypted {
     /// way that allows that.
     #[wasm_bindgen(js_name = decryptWithKey)]
     pub fn decrypt_with_key(&self, key: &[u8], doc_id: &JsDocumentId) -> Result<Vec<u8>, JsValue> {
-        let key_arr: [u8; 32] = key
-            .try_into()
-            .map_err(|_| JsValue::from_str("application secret key must be 32 bytes"))?;
-        Envelope::<JsChangeId, Vec<u8>>::open(&self.0, SymmetricKey::from(key_arr), doc_id.0.into())
+        let key = SymmetricKey::try_from_slice(key)
+            .ok_or_else(|| JsValue::from_str("application secret key must be 32 bytes"))?;
+        Envelope::<JsChangeId, Vec<u8>>::open(&self.0, &key, doc_id.0.into())
             .map(|(envelope, _)| envelope.plaintext)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }

@@ -2,17 +2,18 @@
 
 use crate::{
     ancestor_key::AncestorKey,
-    encrypted::{encode_ancestors, ContentDecryptError, EncryptedContent},
+    encrypted::{encode_ancestors, encode_body, ContentDecryptError, EncryptedContent},
     reference::ContentRef,
 };
 use keyhive_codec::{
     error::DecodeError,
     prefixed::decode_len,
-    traits::{Decode, Encode, StreamDecode},
+    traits::{Decode, Encode},
 };
 use keyhive_crypto::{identifier::Identifier, symmetric_key::SymmetricKey};
 use std::{collections::HashMap, vec::Vec};
 use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 
 /// A container for an arbitrary payload and the references and keys of its ancestors.
 ///
@@ -44,11 +45,25 @@ pub struct Envelope<C: ContentRef, T> {
     pub ancestors: HashMap<C, SymmetricKey>,
 }
 
+impl<C: ContentRef, T: Encode> Envelope<C, T> {
+    /// The envelope's encoding, the same bytes as [`Encode`] gives, in a buffer
+    /// that is wiped when dropped: it carries its ancestors' keys.
+    ///
+    /// The buffer never grows, so it leaves no copy of a key behind.
+    pub fn encode_zeroizing(&self) -> Zeroizing<Vec<u8>> {
+        let payload = Zeroizing::new(self.plaintext.encode().into_bytes());
+        encode_body(&self.ancestors, &payload)
+    }
+}
+
 /// `count ‖ ( content_ref ‖ key )* ‖ payload`: the ancestors in ascending order
 /// of their content refs' encodings, so the bytes do not depend on the map's
 /// order and a streaming reader has every ancestor's key first, then the
 /// payload through its own codec. The payload comes last, so it needs no
 /// length.
+///
+/// `out` is not wiped and may reallocate, so this leaves copies of the
+/// ancestors' keys. To store an envelope, use [`Envelope::encode_zeroizing`].
 impl<C: ContentRef, T: Encode> Encode for Envelope<C, T> {
     fn encode_into(&self, out: &mut Vec<u8>) {
         encode_ancestors(&self.ancestors, out);
@@ -82,7 +97,9 @@ fn decode_ancestors<C: ContentRef>(
         if previous.is_some_and(|p| p >= encoded) {
             return Err(DecodeError::UnsortedKeys);
         }
-        let (key, after_key) = <[u8; 32]>::decode_next(after_ref)?;
+        let (key, after_key) = after_ref
+            .split_first_chunk::<32>()
+            .ok_or(DecodeError::UnexpectedEnd)?;
         ancestors.insert(content_ref, SymmetricKey::from(key));
         previous = Some(encoded);
         rest = after_key;
@@ -95,23 +112,26 @@ impl<C: ContentRef> Envelope<C, Vec<u8>> {
     /// its body, which is always an envelope. Returns it with `key` as the
     /// block's [`AncestorKey`]. The payload keeps the decrypted buffer rather
     /// than a copy of it.
+    ///
+    /// The ancestors' keys in the body are wiped, whether or not it decodes.
     pub fn open<P>(
         encrypted: &EncryptedContent<P, C>,
-        key: SymmetricKey,
+        key: &SymmetricKey,
         doc_id: Identifier,
     ) -> Result<(Self, AncestorKey<C>), OpenEnvelopeError> {
         let mut body = encrypted.try_decrypt(key, doc_id)?;
         let (ancestors, payload) = decode_ancestors(&body)?;
         let payload_start = body.len() - payload.len();
+        body[..payload_start].zeroize();
         body.drain(..payload_start);
         Ok((
             Envelope {
-                plaintext: body,
+                plaintext: core::mem::take(&mut *body),
                 ancestors,
             },
             // We have just demonstrated that `key` can decrypt the content
             // for `encrypted.content_ref` for `doc_id`.
-            AncestorKey::new(encrypted.content_ref.clone(), doc_id, key),
+            AncestorKey::new(encrypted.content_ref.clone(), doc_id, key.clone()),
         ))
     }
 }
@@ -155,6 +175,20 @@ mod tests {
                 .map(|(content_ref, key)| (*content_ref, SymmetricKey::from(*key)))
                 .collect(),
         }
+    }
+
+    /// The wiped encoding is the envelope's encoding, byte for byte, and the
+    /// decoder, which shares nothing with the writer, reads it back.
+    #[test]
+    fn an_envelope_encodes_the_same_into_a_wiped_buffer() {
+        bolero::check!()
+            .with_arbitrary::<(Vec<([u8; 32], [u8; 32])>, Vec<u8>)>()
+            .for_each(|(ancestors, payload)| {
+                let envelope = arbitrary_envelope(ancestors, payload);
+                let wiped = envelope.encode_zeroizing();
+                assert_eq!(wiped.as_slice(), envelope.encode().as_bytes());
+                assert_eq!(Env::decode(wiped.as_slice()).as_ref(), Ok(&envelope));
+            });
     }
 
     #[test]
@@ -254,7 +288,7 @@ mod tests {
             .for_each(|(ancestors, payload)| {
                 let original = arbitrary_envelope(ancestors, payload);
                 let (encrypted, key, doc_id) = encrypt(original.encode().as_bytes());
-                let opened = Env::open(&encrypted, key, doc_id).map(|(envelope, _)| envelope);
+                let opened = Env::open(&encrypted, &key, doc_id).map(|(envelope, _)| envelope);
                 assert_eq!(opened, Ok(original));
             });
     }
@@ -264,7 +298,7 @@ mod tests {
         // A count of one ancestor, with no ancestor after it.
         let (encrypted, key, doc_id) = encrypt(&[1]);
         assert!(matches!(
-            Env::open(&encrypted, key, doc_id),
+            Env::open(&encrypted, &key, doc_id),
             Err(OpenEnvelopeError::Decode(_))
         ));
     }

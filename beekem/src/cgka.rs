@@ -169,7 +169,7 @@ impl<M> Hash for Cgka<M> {
         pending_replay.hash(state);
         root_secrets
             .iter()
-            .map(|(op_hash, _)| op_hash)
+            .map(|(op_hash, _)| *op_hash)
             .collect::<BTreeSet<_>>()
             .hash(state);
         unchained_updates
@@ -479,7 +479,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         let invitation_secrets: Vec<InvitationSecret> = ancestor_secrets
             .iter()
             .filter_map(|(update_op_hash, secret)| {
-                match encrypt_secret_with(&key, self.doc_id, *secret) {
+                match encrypt_secret_with(&key, self.doc_id, secret) {
                     Ok(encrypted_root_secret) => Some(InvitationSecret {
                         update_op_hash: *update_op_hash,
                         encrypted_root_secret,
@@ -515,7 +515,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             .ok()?
             .keys()
             .into_iter()
-            .find_map(|pk| self.owner_sks.get(&pk).map(|sk| (pk, *sk)))
+            .find_map(|pk| self.owner_sks.get(&pk).map(|sk| (pk, sk.clone())))
     }
 
     /// Record the root secrets of `op`'s invitation if it is addressed to us.
@@ -533,7 +533,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         }
 
         for invited in &invitation.ancestor_secrets {
-            if self.root_secrets.get(&invited.update_op_hash).is_some() {
+            if self.root_secrets.contains(&invited.update_op_hash) {
                 continue;
             }
             if let Some(pcs_key) = self.decrypt_invitation_secret(invitation.inviter_pk, invited) {
@@ -616,7 +616,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 &invitation_secret.encrypted_root_secret,
             )
             .ok()?;
-        PcsKey::from_decrypted_secret(plaintext)
+        PcsKey::from_decrypted_secret(&plaintext)
     }
 
     /// Remove member from group.
@@ -694,7 +694,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         if !self.tree.contains_id(&self.owner_id) {
             return Err(CgkaError::IdentifierNotFound);
         }
-        self.owner_sks.insert(new_pk, new_sk);
+        self.owner_sks.insert(new_pk, new_sk.clone());
         // Get our reachable ancestors before `encrypt_path` changes the tree so the
         // tree's root still corresponds to the current heads.
         let ancestors = self.reachable_ancestor_secrets();
@@ -713,7 +713,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             };
 
             let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
-            self.record_root_secret_for(pcs_key, signed_op.digest());
+            self.record_root_secret_for(pcs_key.clone(), signed_op.digest());
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
             Err(CgkaError::IdentifierNotFound)
@@ -1073,7 +1073,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             return None;
         };
         let pcs_key = PcsKey::new(new_path.decrypt_root_secret(self.doc_id, &self.owner_sks)?);
-        self.record_root_secret_for(pcs_key, *op_hash)
+        self.record_root_secret_for(pcs_key.clone(), *op_hash)
             .then_some(pcs_key)
     }
 
@@ -1153,7 +1153,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         }
         let pcs_key = self.decrypt_current_group_secret().ok()?;
 
-        self.record_root_secret_for(pcs_key, op_hash)
+        self.record_root_secret_for(pcs_key.clone(), op_hash)
             .then_some((op_hash, pcs_key))
     }
 
@@ -1165,7 +1165,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
     fn mark_chained(&mut self, entries: &[(Digest<CgkaOperation>, PcsKey)]) {
         for (update, secret) in entries {
             if self.unchained_updates.contains(update)
-                && VerifiedRootSecret::verify(&self.ops_graph, *update, *secret).is_some()
+                && VerifiedRootSecret::verify(&self.ops_graph, *update, secret.clone()).is_some()
             {
                 self.unchained_updates.remove(update);
             }
@@ -1219,7 +1219,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                     .ok()?;
                 Some((
                     entry.update_op_hash,
-                    PcsKey::from_decrypted_secret(plaintext)?,
+                    PcsKey::from_decrypted_secret(&plaintext)?,
                 ))
             })
             .collect()
@@ -1246,18 +1246,20 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             .root_secrets
             .iter()
             .flat_map(|(op_hash, key)| {
-                self.decrypt_predecessor_secrets(&op_hash, &key, |entry| {
-                    self.root_secrets.get(entry).is_none()
+                self.decrypt_predecessor_secrets(op_hash, key, |entry| {
+                    !self.root_secrets.contains(entry)
                 })
             })
             .collect();
         while let Some((op_hash, found)) = frontier.pop() {
-            if self.root_secrets.get(&op_hash).is_some() {
+            if self.root_secrets.contains(&op_hash) {
                 continue;
             }
             // A secret that is not the update's cannot open that update's own
             // entries, so it is not followed.
-            let Some(verified) = VerifiedRootSecret::verify(&self.ops_graph, op_hash, found) else {
+            let Some(verified) =
+                VerifiedRootSecret::verify(&self.ops_graph, op_hash, found.clone())
+            else {
                 continue;
             };
             self.root_secrets.insert(verified);
@@ -1338,10 +1340,11 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
     /// it is not the secret that update produced.
     #[instrument(skip_all)]
     fn record_root_secret_for(&mut self, pcs_key: PcsKey, op_hash: Digest<CgkaOperation>) -> bool {
-        if self.root_secrets.get(&op_hash) == Some(pcs_key) {
+        if self.root_secrets.get_ref(&op_hash) == Some(&pcs_key) {
             return true;
         }
-        let Some(verified) = VerifiedRootSecret::verify(&self.ops_graph, op_hash, pcs_key) else {
+        let Some(verified) = VerifiedRootSecret::verify(&self.ops_graph, op_hash, pcs_key.clone())
+        else {
             debug!(
                 ?op_hash,
                 "a root secret does not match the update it was paired with"

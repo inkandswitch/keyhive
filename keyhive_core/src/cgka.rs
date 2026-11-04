@@ -119,7 +119,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         CgkaError,
     > {
         let (pcs_key, op_hash, rotation) = self.0.group_secret_for_write(signer, csprng).await?;
-        let app_secret = GroupSecret(pcs_key.0).derive_application_secret(
+        let app_secret = GroupSecret(pcs_key.0.clone()).derive_application_secret(
             content_ref,
             &PredecessorRefs::digest(pred_refs),
             &op_hash.coerce(),
@@ -140,7 +140,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             &encrypted.group_secret_hash.coerce(),
             &encrypted.group_secret_origin_hash.coerce(),
         )?;
-        let app_secret = GroupSecret(pcs_key.0).derive_application_secret(
+        let app_secret = GroupSecret(pcs_key.0.clone()).derive_application_secret(
             &encrypted.content_ref,
             &encrypted.pred_refs,
             &encrypted.group_secret_origin_hash,
@@ -293,7 +293,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         // fails before the owner changes.
         self.replay_if_pending()?;
         let mut owner_sks = self.owner_sks().clone();
-        owner_sks.insert(pk, *sk);
+        owner_sks.insert(pk, sk.clone());
         *self = self.with_new_owner(added_id.into(), owner_sks)?;
         self.merge_concurrent_operation(op)
     }

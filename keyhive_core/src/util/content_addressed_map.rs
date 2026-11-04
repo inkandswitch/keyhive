@@ -1,5 +1,4 @@
 use crate::transact::{fork::Fork, merge::Merge};
-use derive_where::derive_where;
 use keyhive_crypto::digest::Digest;
 use std::{
     cmp::Ordering,
@@ -15,8 +14,15 @@ pub trait ContentAddressed: Sized {
 
 /// A content-addressed map, each value under its [`ContentAddressed`] digest.
 #[derive(Debug, PartialEq, Eq)]
-#[derive_where(Clone)]
 pub struct CaMap<T: ContentAddressed>(pub(crate) HashMap<Digest<T>, Arc<T>>);
+
+/// Written by hand so `T` need not be `Clone`: cloning copies the digests and
+/// the `Arc`s, not the values.
+impl<T: ContentAddressed> Clone for CaMap<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl<T: ContentAddressed> CaMap<T> {
     /// Create an empty [`CaMap`].
@@ -185,5 +191,37 @@ impl<T: ContentAddressed> Hash for CaMap<T> {
         let mut keys: Vec<_> = self.0.keys().collect();
         keys.sort();
         keys.hash(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Not `Clone`, so a clone of a map of them shares their `Arc`s.
+    #[derive(Debug, PartialEq, Eq)]
+    struct Value(u8);
+
+    impl ContentAddressed for Value {
+        fn content_digest(&self) -> Digest<Self> {
+            Digest::from([self.0; 32])
+        }
+    }
+
+    /// A clone holds every value the map held, under the same digests. Every
+    /// map drawn holds at least one value, so an empty clone fails.
+    #[test]
+    fn a_clone_holds_what_the_map_held() {
+        bolero::check!().with_type::<Vec<u8>>().for_each(|values| {
+            let map: CaMap<Value> = core::iter::once(0)
+                .chain(values.iter().copied())
+                .map(Value)
+                .collect();
+            let clone = map.clone();
+            assert_eq!(clone, map);
+            assert!(clone
+                .iter()
+                .all(|(digest, value)| Arc::ptr_eq(value, &map.0[digest])));
+        });
     }
 }

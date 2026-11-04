@@ -26,9 +26,11 @@ impl JsDecryptedContent {
     }
 
     /// The block's 32-byte application secret.
-    /// Treat as secret: do not log or persist unencrypted.
+    /// Treat as secret: do not log or persist unencrypted. Each call copies it
+    /// into a new JS array, which Keyhive cannot wipe: call `fill(0)` on it when
+    /// done.
     #[wasm_bindgen(getter, js_name = applicationSecret)]
-    pub fn application_secret(&self) -> Vec<u8> {
-        self.key.as_slice().to_vec()
+    pub fn application_secret(&self) -> js_sys::Uint8Array {
+        js_sys::Uint8Array::from(self.key.as_slice())
     }
 }
