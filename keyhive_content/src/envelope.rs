@@ -86,6 +86,10 @@ impl<C: ContentRef, T: Encode> Encode for Envelope<C, T> {
 
 /// Refuses ancestors out of order or repeated, so each envelope has one
 /// encoding; the payload's own codec decides what follows them.
+///
+/// This decodes an envelope, not a decrypted body: a body is padded, and with
+/// a byte payload the padding would come back as part of it. To read a block,
+/// use [`Envelope::open`], which strips the padding first.
 impl<C: ContentRef, T: Decode> Decode for Envelope<C, T> {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         let (ancestors, payload) = decode_ancestors(bytes)?;
@@ -358,8 +362,7 @@ mod tests {
         );
     }
 
-    /// An envelope encrypted without its padding, as blocks were before
-    /// padding, does not open when, as here, it does not happen to end like
+    /// A body without padding does not open, unless it happens to end like
     /// padding.
     #[test]
     fn an_unpadded_body_does_not_open() {
