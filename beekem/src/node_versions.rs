@@ -62,3 +62,19 @@ fn sorted_and_deduplicated<V: Ord>(mut values: NonEmpty<V>) -> NonEmpty<V> {
     }
     kept
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nonempty::nonempty;
+
+    #[test]
+    fn a_node_with_two_versions_has_a_conflict_and_no_single_version() {
+        let single = NodeVersions::new(nonempty![1u8]);
+        let two = NodeVersions::new(nonempty![1u8, 2]);
+        assert!(!single.has_conflict());
+        assert_eq!(single.non_conflict_version(), Some(&1));
+        assert!(two.has_conflict());
+        assert_eq!(two.non_conflict_version(), None);
+    }
+}
