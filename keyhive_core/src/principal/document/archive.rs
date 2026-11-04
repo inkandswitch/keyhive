@@ -4,7 +4,7 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_content::reference::ContentRef;
-use keyhive_crypto::symmetric_key::SymmetricKey;
+use keyhive_crypto::{secret::Sink, symmetric_key::SymmetricKey};
 use std::collections::{HashMap, HashSet};
 
 /// What a document holds that cannot be recomputed: its content heads and
@@ -28,6 +28,17 @@ impl<T: ContentRef> DocumentArchive<T> {
             + refs_len(self.content_state.iter(), 0)
             + refs_len(self.content_keys.keys(), KEY_LEN)
     }
+
+    /// The [`Encode`] layout, below. The only place it is written: into a
+    /// `Vec` to encode, and into a wiped buffer to store an archive.
+    pub(crate) fn write_into<S: Sink>(&self, out: &mut S) {
+        write_refs(self.content_heads.iter().map(|r| (r, &[][..])), out);
+        write_refs(self.content_state.iter().map(|r| (r, &[][..])), out);
+        write_refs(
+            self.content_keys.iter().map(|(r, k)| (r, k.as_slice())),
+            out,
+        );
+    }
 }
 
 /// `content_heads ‖ content_state ‖ content_keys`, each a count and then its
@@ -39,12 +50,7 @@ impl<T: ContentRef> DocumentArchive<T> {
 /// keys. To store them, use [`Archive::encode_zeroizing`](crate::archive::Archive::encode_zeroizing).
 impl<T: ContentRef> Encode for DocumentArchive<T> {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        encode_refs(self.content_heads.iter().map(|r| (r, &[][..])), out);
-        encode_refs(self.content_state.iter().map(|r| (r, &[][..])), out);
-        encode_refs(
-            self.content_keys.iter().map(|(r, k)| (r, k.as_slice())),
-            out,
-        );
+        self.write_into(out);
     }
 }
 
@@ -75,7 +81,7 @@ impl<T: ContentRef> StreamDecode for DocumentArchive<T> {
     }
 }
 
-/// The length [`encode_refs`] writes for `refs`, each followed by
+/// The length [`write_refs`] writes for `refs`, each followed by
 /// `value_len` bytes.
 fn refs_len<'a, T: Encode + 'a>(
     refs: impl ExactSizeIterator<Item = &'a T>,
@@ -91,18 +97,21 @@ fn refs_len<'a, T: Encode + 'a>(
 
 /// A count, then each ref followed by its value's bytes, in ascending order of
 /// the refs' encodings.
-fn encode_refs<'a, T: Encode + 'a>(
+fn write_refs<'a, T: Encode + 'a, S: Sink>(
     entries: impl Iterator<Item = (&'a T, &'a [u8])>,
-    out: &mut Vec<u8>,
+    out: &mut S,
 ) {
     let mut encoded: Vec<_> = entries
         .map(|(r, value)| (r.encode().into_bytes(), value))
         .collect();
-    encoded.sort();
-    encode_len(encoded.len(), out);
+    // Sorted by the refs' encodings alone, so the keys after them are never compared.
+    encoded.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut count = Vec::new();
+    encode_len(encoded.len(), &mut count);
+    out.put(&count);
     for (r, value) in encoded {
-        out.extend_from_slice(&r);
-        out.extend_from_slice(value);
+        out.put(&r);
+        out.put(value);
     }
 }
 

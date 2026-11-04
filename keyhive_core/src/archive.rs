@@ -11,7 +11,7 @@ use crate::{
     content::heads::ContentHeads,
     event::static_event::StaticEvent,
     principal::{
-        active::archive::{key_pairs_len, ActiveArchive},
+        active::archive::{key_pairs_len, write_key_pairs, ActiveArchive},
         document::{archive::DocumentArchive, id::DocumentId},
         individual::{id::IndividualId, IndividualState},
     },
@@ -23,7 +23,10 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_content::reference::ContentRef;
-use keyhive_crypto::{secret::write_secret, verified};
+use keyhive_crypto::{
+    secret::{write_secret, Sink},
+    verified,
+};
 use keyline::certificate::Certificate;
 use std::collections::{BTreeMap, HashMap};
 use zeroize::Zeroizing;
@@ -80,17 +83,17 @@ impl<T: ContentRef> Archive<T> {
             + statements.len();
         write_secret(len, |out| {
             self.encode_key_pairs_into(out);
-            out.extend_from_slice(&individuals);
+            out.put(&individuals);
             self.encode_docs_into(out);
-            out.extend_from_slice(&statements);
+            out.put(&statements);
         })
     }
 
     /// The header and the key pairs. Secret.
-    fn encode_key_pairs_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&Self::MAGIC);
-        out.push(Self::FORMAT);
-        self.active.key_pairs.encode_into(out);
+    fn encode_key_pairs_into<S: Sink>(&self, out: &mut S) {
+        out.put(&Self::MAGIC);
+        out.put(&[Self::FORMAT]);
+        write_key_pairs(&self.active.key_pairs, out);
     }
 
     /// This replica's individual and the individuals it knows. Public.
@@ -102,12 +105,14 @@ impl<T: ContentRef> Archive<T> {
     }
 
     /// The documents, with their content keys. Secret.
-    fn encode_docs_into(&self, out: &mut Vec<u8>) {
+    fn encode_docs_into<S: Sink>(&self, out: &mut S) {
         let docs: BTreeMap<_, _> = self.docs.iter().collect();
-        encode_len(docs.len(), out);
+        let mut count = Vec::new();
+        encode_len(docs.len(), &mut count);
+        out.put(&count);
         for (id, doc) in docs {
-            id.encode_into(out);
-            doc.encode_into(out);
+            out.put(id.encode().as_bytes());
+            doc.write_into(out);
         }
     }
 

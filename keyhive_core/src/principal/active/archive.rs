@@ -7,7 +7,7 @@ use keyhive_codec::{
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::{
-    secret::write_secret,
+    secret::{write_secret, Sink},
     share_key::{ShareKey, ShareSecretKey},
 };
 use std::{
@@ -74,7 +74,7 @@ impl Eq for ActiveArchive {}
 /// or [`encode_key_pairs`].
 impl Encode for ActiveArchive {
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.key_pairs.encode_into(out);
+        write_key_pairs(&self.key_pairs, out);
         self.individual.encode_into(out);
     }
 }
@@ -105,7 +105,26 @@ impl StreamDecode for ActiveArchive {
 /// Encode `key_pairs`, `count ‖ ( share_key ‖ secret )*`, into a buffer that
 /// is wiped when dropped and never grows, so it leaves no copy of a secret.
 pub fn encode_key_pairs(key_pairs: &BTreeMap<ShareKey, ShareSecretKey>) -> Zeroizing<Vec<u8>> {
-    write_secret(key_pairs_len(key_pairs), |out| key_pairs.encode_into(out))
+    write_secret(key_pairs_len(key_pairs), |out| {
+        write_key_pairs(key_pairs, out)
+    })
+}
+
+/// `count ‖ ( share_key ‖ secret )*`, ascending by key: the map's
+/// [`Encode`] layout. The archive and the prekey export write the key pairs
+/// only through this, into a `Vec` to encode and into a wiped buffer to store.
+/// The generic map encoding gives the same bytes, and a test checks that.
+pub(crate) fn write_key_pairs<S: Sink>(
+    key_pairs: &BTreeMap<ShareKey, ShareSecretKey>,
+    out: &mut S,
+) {
+    let mut count = Vec::new();
+    encode_len(key_pairs.len(), &mut count);
+    out.put(&count);
+    for (pk, sk) in key_pairs {
+        out.put(pk.encode().as_bytes());
+        out.put(sk.as_slice());
+    }
 }
 
 /// The length of `key_pairs`' encoding, found without writing a secret.

@@ -46,7 +46,7 @@ use keyhive_crypto::{
     context::Context,
     digest::Digest,
     identifier::Identifier,
-    secret::write_secret,
+    secret::{write_secret, Sink},
     signable::{Kind, Kinded, TAG},
     siv::{nonces_match, synthetic_nonce},
     symmetric_key::SymmetricKey,
@@ -384,7 +384,7 @@ pub(crate) fn encode_body<'a, Cr: ContentRef + 'a>(
         .sum();
     write_secret(count.len() + keys_len + payload.len(), |out| {
         write_ancestors(&sorted, out);
-        out.extend_from_slice(payload);
+        out.put(payload);
     })
 }
 
@@ -400,11 +400,14 @@ fn sorted_ancestors<'a, Cr: ContentRef + 'a>(
         .collect()
 }
 
-fn write_ancestors(sorted: &BTreeMap<Vec<u8>, &SymmetricKey>, out: &mut Vec<u8>) {
-    encode_len(sorted.len(), out);
+/// `count ‖ ( content_ref ‖ key )*`. The only place the ancestors are written.
+fn write_ancestors<S: Sink>(sorted: &BTreeMap<Vec<u8>, &SymmetricKey>, out: &mut S) {
+    let mut count = Vec::new();
+    encode_len(sorted.len(), &mut count);
+    out.put(&count);
     for (content_ref, key) in sorted {
-        out.extend_from_slice(content_ref);
-        out.extend_from_slice(key.as_slice());
+        out.put(content_ref);
+        out.put(key.as_slice());
     }
 }
 
