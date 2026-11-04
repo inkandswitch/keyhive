@@ -35,9 +35,8 @@ const TREE_INDEX_LIMIT: u32 = 1 << 31;
 const MAX_PATH_LEN: usize = 31;
 
 /// A PathChange represents an update along a path from a leaf to the root.
-/// This includes the leaf's new public key, a new secret store for each inner
-/// node on the path, and the keys that have been removed as part of this
-/// change.
+/// This includes both the leaf's new public key and a new secret store for
+/// each inner node on the path.
 ///
 /// The leaf is the signer's: whoever signs the update rotates their own leaf.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -48,11 +47,10 @@ pub struct PathChange {
     pub leaf_pk: ShareKey,
     /// Each inner node on the path with what this update puts there.
     pub path: Vec<(u32, PathNode)>,
-    pub removed_keys: BTreeSet<ShareKey>,
 }
 
-/// `leaf_idx ‖ leaf_pk ‖ count ‖ ( inner_idx ‖ secret_store )* ‖ removed_keys`,
-/// the path in its order and the removed keys as a count and then ascending.
+/// `leaf_idx ‖ leaf_pk ‖ count ‖ ( inner_idx ‖ path_node )*`, the path in
+/// its order.
 impl Encode for PathChange {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.leaf_idx.encode_into(out);
@@ -62,7 +60,6 @@ impl Encode for PathChange {
             idx.encode_into(out);
             node.encode_into(out);
         }
-        self.removed_keys.encode_into(out);
     }
 }
 
@@ -84,13 +81,11 @@ impl StreamDecode for PathChange {
             path.push((idx, node));
             rest = after;
         }
-        let (removed_keys, rest) = BTreeSet::decode_next(rest)?;
         Ok((
             PathChange {
                 leaf_idx,
                 leaf_pk,
                 path,
-                removed_keys,
             },
             rest,
         ))
@@ -104,9 +99,8 @@ impl PathChange {
     /// starting from the leaf, and the last is the root of a tree of some size.
     ///
     /// Every node on the path has an entry under the child below it, which
-    /// encrypted it with its new key. No new node key is one of the keys the
-    /// update removes or repeats any other new key. The leaf index is below
-    /// 2^31, past which it has no tree index.
+    /// encrypted it with its new key. No new node key repeats any other new
+    /// key. The leaf index is below 2^31, past which it has no tree index.
     ///
     /// This does not check that the entries were encrypted with the leaf key or
     /// that they decrypt to the node keys.
@@ -118,11 +112,7 @@ impl PathChange {
         let mut child = TreeNodeIndex::Leaf(LeafNodeIndex::new(self.leaf_idx));
         for (idx, node) in &self.path {
             let parent = treemath::parent(child);
-            if *idx != parent.u32()
-                || !node.sk.contains_key(&child)
-                || self.removed_keys.contains(&node.pk)
-                || !new_keys.insert(node.pk)
-            {
+            if *idx != parent.u32() || !node.sk.contains_key(&child) || !new_keys.insert(node.pk) {
                 return false;
             }
             child = TreeNodeIndex::Inner(parent);
@@ -204,6 +194,12 @@ pub enum ApplyPathOutcome {
 /// so a conflict there is between instances of the same member. Unlike a conflicted
 /// inner node, such a leaf stays in its parent's resolution, and every encrypter
 /// encrypts to its lowest key.
+///
+/// Each version at a tree node is tagged with the operations that generated it
+/// An update drops the origins in its causal past from the versions at its nodes
+/// and removes any version left with none, so which versions it removes depends
+/// only on which operations were applied, not on the order a replica received
+/// them in.
 ///
 /// Leaf nodes represent group members. Each member has a fixed identifier as well
 /// as a public key that is rotated over time. Each inner node stores one or more
@@ -444,7 +440,6 @@ impl BeeKem {
             leaf_idx: leaf_idx.u32(),
             leaf_pk: leaf_sk.share_key(),
             path: Vec::new(),
-            removed_keys: self.node_keys_for_id(id)?.keys().into_iter().collect(),
         };
         let mut new_sks = ShareKeyMap::new();
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
@@ -453,9 +448,6 @@ impl BeeKem {
         let mut child_sk = leaf_sk.clone();
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
-            if let Some(store) = self.inner_node(parent_idx) {
-                new_path.removed_keys.extend(store.node_keys().keys());
-            }
             let new_parent_sk = ShareSecretKey::generate(csprng);
             let new_parent_pk = new_parent_sk.share_key();
             // Hold on to the secret so we can derive the root key later without
@@ -478,9 +470,37 @@ impl BeeKem {
         Ok(Some((child_sk.into(), new_path, new_sks)))
     }
 
+    /// The origins of the versions at the nodes `id`'s [`PathChange`] would
+    /// write. This includes its leaf and its path nodes if the path is valid
+    /// here. Empty if `id` is not in the tree.
+    pub(crate) fn origins_at(
+        &self,
+        id: MemberId,
+        new_path: &PathChange,
+    ) -> BTreeSet<VersionOrigin> {
+        let Ok(leaf_idx) = self.leaf_index_for_id(id) else {
+            return BTreeSet::new();
+        };
+        let mut origins: BTreeSet<VersionOrigin> = self
+            .leaf(*leaf_idx)
+            .iter()
+            .flat_map(|leaf| leaf.versions.origins())
+            .collect();
+        if self.is_valid_path(*leaf_idx, new_path) {
+            for (idx, _) in &new_path.path {
+                if let Some(node) = self.inner_node(InnerNodeIndex::new(*idx)) {
+                    origins.extend(node.origins());
+                }
+            }
+        }
+        origins
+    }
+
     /// Applies `id`'s [`PathChange`], representing new public and encrypted
     /// secret keys for each node on its path. `id` is the update's signer and
-    /// `origin` is the update.
+    /// `origin` is the update. `observed` is the origins in the update's causal
+    /// past. At each node it writes, those origins are dropped from every
+    /// version, and a version with no origins left is removed.
     ///
     /// If `new_path` is not a valid path from `id`'s leaf, only the leaf is
     /// updated and `id`'s direct path is blanked. This is a no-op if `id` has
@@ -490,6 +510,7 @@ impl BeeKem {
         id: MemberId,
         new_path: &PathChange,
         origin: VersionOrigin,
+        observed: &BTreeSet<VersionOrigin>,
     ) -> ApplyPathOutcome {
         // If this id has been concurrently removed, it might no longer be present
         // when we try to apply the concurrent update at that id.
@@ -501,11 +522,7 @@ impl BeeKem {
             .as_mut()
             .expect("Leaf for present ID should not be None")
             .versions
-            .merge(
-                NonEmpty::new(new_path.leaf_pk),
-                origin,
-                &new_path.removed_keys,
-            );
+            .merge(NonEmpty::new(new_path.leaf_pk), origin, observed);
         if !is_valid_path {
             // Since this path is no longer valid, we can only update the leaf for
             // this id.
@@ -516,7 +533,7 @@ impl BeeKem {
             let versions = NonEmpty::new(store);
             let slot = &mut self.inner_nodes[InnerNodeIndex::new(idx).usize()];
             match slot {
-                Some(current) => current.merge(versions, origin, &new_path.removed_keys),
+                Some(current) => current.merge(versions, origin, observed),
                 None => *slot = Some(NodeVersions::new(versions, origin)),
             }
         }
@@ -918,6 +935,26 @@ impl BeeKem {
 }
 
 #[cfg(test)]
+impl BeeKem {
+    /// Each node that has versions, with each origin of a version there.
+    pub(crate) fn origins_by_node(&self) -> Vec<(TreeNodeIndex, VersionOrigin)> {
+        let leaves = self.leaves.iter().enumerate().flat_map(|(i, leaf)| {
+            let idx = TreeNodeIndex::Leaf(LeafNodeIndex::new(i as u32));
+            leaf.iter()
+                .flat_map(|leaf| leaf.versions.origins())
+                .map(move |origin| (idx, origin))
+        });
+        let inner = self.inner_nodes.iter().enumerate().flat_map(|(i, node)| {
+            let idx = TreeNodeIndex::Inner(InnerNodeIndex::new(i as u32));
+            node.iter()
+                .flat_map(NodeVersions::origins)
+                .map(move |origin| (idx, origin))
+        });
+        leaves.chain(inner).collect()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
@@ -930,11 +967,11 @@ mod tests {
         Digest::from([n; 32])
     }
 
-    /// Apply `path` as operation `n`, signed by `id`. Each path here was
-    /// encrypted on the tree it is applied to, so it follows every version at
-    /// its nodes.
+    /// Apply `path` as operation `n`, signed by `id`, with every version at the
+    /// nodes it writes in its causal past.
     fn apply_after_all(tree: &mut BeeKem, id: MemberId, path: &PathChange, n: u8) {
-        tree.apply_path(id, path, origin(n));
+        let observed = tree.origins_at(id, path);
+        tree.apply_path(id, path, origin(n), &observed);
     }
 
     fn join_new_member_to_share_key_map(
@@ -1039,9 +1076,11 @@ mod tests {
             .expect("encrypting a path")
             .expect("the owner is in the tree");
 
+        // Each rotation saw only the adds.
         let mut tree = base;
-        tree.apply_path(owner, &low_path, origin(1));
-        tree.apply_path(owner, &high_path, origin(2));
+        let adds = BTreeSet::from([origin(0)]);
+        tree.apply_path(owner, &low_path, origin(1), &adds);
+        tree.apply_path(owner, &high_path, origin(2), &adds);
         assert_eq!(
             tree.node_keys_for_id(owner).map(|keys| keys.keys()).ok(),
             Some(vec![low.share_key(), high.share_key()])
@@ -1174,12 +1213,6 @@ mod tests {
             .enumerate()
             .map(|(n, (_, store))| (past_the_end + n as u32, store.clone()))
             .collect();
-        forged.removed_keys = tree
-            .node_keys_for_id(owner)
-            .expect("the owner is placed")
-            .keys()
-            .into_iter()
-            .collect();
 
         apply_after_all(&mut tree, owner, &forged, 1);
 
@@ -1227,8 +1260,9 @@ mod tests {
         );
 
         let mut accepted = tree.clone();
+        let observed = accepted.origins_at(owner, &genuine);
         assert_eq!(
-            accepted.apply_path(owner, &genuine, origin(1)),
+            accepted.apply_path(owner, &genuine, origin(1), &observed),
             ApplyPathOutcome::Applied
         );
         assert!(accepted.has_root_key(), "a genuine path was not applied");
@@ -1238,8 +1272,9 @@ mod tests {
         let mut forged = genuine;
         forged.path[0].0 = 2;
         let mut denied = tree;
+        let observed = denied.origins_at(owner, &forged);
         assert_eq!(
-            denied.apply_path(owner, &forged, origin(1)),
+            denied.apply_path(owner, &forged, origin(1), &observed),
             ApplyPathOutcome::BlankedPath
         );
         assert!(

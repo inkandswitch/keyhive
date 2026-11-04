@@ -883,7 +883,19 @@ impl CgkaOperationGraph {
         NonEmpty::from_vec(batches).ok_or(CgkaError::NotInitialized)
     }
 
-    fn depth(&self, op_hash: &Digest<CgkaOperation>) -> Result<u64, CgkaError> {
+    /// The operations that list `op_hash` as a predecessor.
+    pub(crate) fn children_of(
+        &self,
+        op_hash: &Digest<CgkaOperation>,
+    ) -> impl Iterator<Item = &Digest<CgkaOperation>> {
+        self.children.get(op_hash).into_iter().flatten()
+    }
+
+    /// The length of the longest chain of predecessors before `op_hash`. An
+    /// operation with no predecessors has depth 0. Returns
+    /// [`CgkaError::OperationNotFound`] if it is not in the graph and
+    /// [`CgkaError::DepthNotFound`] if it has no recorded depth.
+    pub(crate) fn depth(&self, op_hash: &Digest<CgkaOperation>) -> Result<u64, CgkaError> {
         match self.depths.get(op_hash) {
             Some(depth) => Ok(*depth),
             None if self.cgka_ops.contains_key(op_hash) => Err(CgkaError::DepthNotFound),
@@ -1126,6 +1138,45 @@ mod causal_graph_tests {
                 graph, in_order,
                 "the merged graph differs from one built in order"
             );
+        });
+    }
+
+    #[test]
+    fn a_search_finds_exactly_the_targets_in_the_causal_past() {
+        use rand::{seq::IteratorRandom, Rng};
+        crate::test_utils::for_each_seed(|mut rng| async move {
+            let (_, graph) = merged_random_graph(&mut rng).await;
+            let all: BTreeSet<_> = graph.cgka_ops.keys().copied().collect();
+            for i in 0..8 {
+                let preds: Predecessors = if i == 0 {
+                    Predecessors::heads_of(&graph)
+                } else {
+                    let count = rng.gen_range(1..=3);
+                    all.iter()
+                        .copied()
+                        .choose_multiple(&mut rng, count)
+                        .into_iter()
+                        .collect()
+                };
+                let count = rng.gen_range(1..=6);
+                let targets: BTreeSet<_> = all
+                    .iter()
+                    .copied()
+                    .choose_multiple(&mut rng, count)
+                    .into_iter()
+                    .collect();
+                let past = crate::test_utils::causal_past(&graph, &preds);
+                assert_eq!(
+                    preds
+                        .filter_in_causal_past(targets.clone(), &graph)
+                        .expect("every op is in the graph"),
+                    targets
+                        .intersection(&past)
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                    "predecessors {preds:?}, targets {targets:?}"
+                );
+            }
         });
     }
 

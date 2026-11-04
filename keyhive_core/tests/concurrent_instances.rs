@@ -16,7 +16,7 @@ use keyhive_core::{
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
 use keyline::power::Power::Read;
 use rand::rngs::OsRng;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 /// One of `who`'s own prekeys it would use to join `doc`.
 async fn own_prekey(who: &Instance, doc: DocumentId) -> ShareKey {
@@ -83,9 +83,8 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     let (alice, bob, design_doc) = doc_shared_with_bob(&mut ctx).await?;
     let mut new_path = an_update(&alice, design_doc).await;
 
-    // A peer can put whatever it likes in a signed `PathChange`, including a key that
-    // does not displace the one already at the leaf. The first node is then taken to
-    // be encrypted by that key.
+    // A peer can put whatever key it likes in a signed `PathChange`'s `leaf_pk`. The
+    // first node is then taken to be encrypted by that key, which takes no secret.
     let forged_pk = own_prekey(&bob, design_doc).await;
     let leaf = TreeNodeIndex::from(LeafNodeIndex::new(new_path.leaf_idx));
     let node_sk = ShareSecretKey::generate(&mut OsRng);
@@ -95,7 +94,6 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
         sk: BTreeMap::from([(leaf, entry)]),
     };
     new_path.leaf_pk = forged_pk;
-    new_path.removed_keys = BTreeSet::new();
     let op = CgkaOperation {
         doc_id: TreeId::from(design_doc),
         predecessors: cgka_heads(&bob, design_doc).await,
