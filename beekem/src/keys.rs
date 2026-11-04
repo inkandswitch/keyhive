@@ -211,10 +211,6 @@ impl HasShareKey for ShareKey {
 impl<V: HasShareKey + Ord + Clone> NodeVersions<V> {
     /// The node's share keys, one per version.
     pub fn node_keys(&self) -> NodeKeys {
-        let versions = self.values();
-        NodeKeys::from_ascending(NonEmpty {
-            head: versions.head.share_key(),
-            tail: versions.tail.iter().map(HasShareKey::share_key).collect(),
-        })
+        NodeKeys::from_ascending(self.values().map(HasShareKey::share_key))
     }
 }
