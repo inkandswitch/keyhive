@@ -96,8 +96,9 @@ mod tests {
 
     #[test]
     fn a_node_with_two_versions_has_a_conflict_and_no_single_version() {
-        let single = NodeVersions::new(nonempty![1u8]);
-        let two = NodeVersions::new(nonempty![1u8, 2]);
+        let origin = Digest::from([0; 32]);
+        let single = NodeVersions::new(nonempty![1u8], origin);
+        let two = NodeVersions::new(nonempty![1u8, 2], origin);
         assert!(!single.has_conflict());
         assert_eq!(single.non_conflict_version(), Some(&1));
         assert!(two.has_conflict());
