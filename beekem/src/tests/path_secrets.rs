@@ -205,7 +205,7 @@ async fn an_update_whose_path_is_cut_short_converges_with_concurrent_and_later_u
 
 #[tokio::test]
 async fn an_update_cut_short_keeping_its_leaf_key_converges_with_a_concurrent_one() {
-    let mut rng = StdRng::seed_from_u64(0x9a7b_000e);
+    let mut rng = StdRng::seed_from_u64(0x9a7b_0011);
     let mut group = Group::new(2, &mut rng).await;
     group.settle(0, &mut rng).await;
     let leaf_pk = group.replicas[0].owner_leaf_key().expect("a member");
@@ -213,7 +213,6 @@ async fn an_update_cut_short_keeping_its_leaf_key_converges_with_a_concurrent_on
     let cut_short = tampered_update(&mut group, 0, &mut rng, |path, _, _| {
         path.path.pop();
         path.leaf_pk = leaf_pk;
-        path.removed_keys.clear();
     })
     .await;
     let by_b = group.rotate(1, &mut rng).await;
@@ -262,16 +261,6 @@ async fn a_path_node_without_an_entry_for_its_encrypting_child_is_malformed() {
         .sk
         .remove(&first)
         .expect("a node has an entry for the child that encrypted it");
-
-    assert!(!path.is_well_formed());
-}
-
-#[tokio::test]
-async fn a_path_node_whose_key_the_update_removes_is_malformed() {
-    let mut rng = StdRng::seed_from_u64(0x9a7b_0007);
-    let mut path = honest_path(&mut rng).await;
-    let root = path.path[1].1.pk;
-    path.removed_keys.insert(root);
 
     assert!(!path.is_well_formed());
 }

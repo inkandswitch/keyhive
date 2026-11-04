@@ -708,8 +708,11 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             };
 
             let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
+            // The update follows every head. The origin of every version at
+            // its nodes is in its past.
+            let observed = self.tree.origins_at(self.owner_id, &new_path);
             self.tree
-                .apply_path(self.owner_id, &new_path, signed_op.digest());
+                .apply_path(self.owner_id, &new_path, signed_op.digest(), &observed);
             self.record_root_secret_for(pcs_key, signed_op.digest());
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
@@ -864,9 +867,12 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 }
             }
             CgkaChange::Update { ref new_path, .. } => {
-                let outcome =
-                    self.tree
-                        .apply_path(MemberId::from(op.issuer()), new_path, op.digest());
+                let id = MemberId::from(op.issuer());
+                let observed = op
+                    .payload()
+                    .predecessors()
+                    .filter_in_causal_past(self.tree.origins_at(id, new_path), &self.ops_graph)?;
+                let outcome = self.tree.apply_path(id, new_path, op.digest(), &observed);
                 if outcome == ApplyPathOutcome::BlankedPath {
                     self.blanked_updates.insert(op.digest());
                 }
