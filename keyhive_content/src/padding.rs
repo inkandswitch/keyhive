@@ -27,7 +27,7 @@
 //! together.
 //!
 //! Padding is not a defence against compression oracles; see
-//! `design/ciphersuite.md`.
+//! T10 in `design/threat_model.md`.
 //!
 //! [PADMÉ]: https://petsymposium.org/popets/2019/popets-2019-0056.pdf
 
