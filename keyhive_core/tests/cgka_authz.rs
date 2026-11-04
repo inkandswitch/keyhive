@@ -1,10 +1,8 @@
 use beekem::{
-    collections::Set,
     error::CgkaError,
     id::{MemberId, TreeId},
     operation::{CgkaChange, CgkaOperation, CitationId, RemovedMember},
     predecessors::Predecessors,
-    secret_store::SecretStore,
     tree::PathChange,
 };
 use future_form::{FutureForm, Sendable};
@@ -41,7 +39,7 @@ use keyline::{
 use nonempty::nonempty;
 use rand::rngs::OsRng;
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeSet, HashSet},
     convert::Infallible,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -529,10 +527,8 @@ async fn an_update_whose_path_is_malformed_is_denied() -> TestResult {
     let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
     let mut new_path = update_path(&alice, doc_id).await;
     let stranger = ShareSecretKey::generate(&mut OsRng).share_key();
-    new_path.path[0].1.merge(
-        &SecretStore::new(stranger, stranger, BTreeMap::new()),
-        &Set::new(),
-    );
+    // The first node must be encrypted by the leaf key.
+    new_path.path[0].1.encrypter_pk = stranger;
     let op = CgkaOperation {
         doc_id: TreeId::from(doc_id),
         predecessors: cgka_heads(&alice, doc_id).await,

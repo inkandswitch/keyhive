@@ -90,11 +90,11 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     let leaf = TreeNodeIndex::from(LeafNodeIndex::new(new_path.leaf_idx));
     let node_sk = ShareSecretKey::generate(&mut OsRng);
     let entry = encrypt_secret(TreeId::from(design_doc), node_sk, &node_sk, &forged_pk)?;
-    new_path.path[0].1 = SecretStore::new(
-        node_sk.share_key(),
-        forged_pk,
-        BTreeMap::from([(leaf, entry)]),
-    );
+    new_path.path[0].1 = SecretStore {
+        pk: node_sk.share_key(),
+        sk: BTreeMap::from([(leaf, entry)]),
+        encrypter_pk: forged_pk,
+    };
     new_path.leaf_pk = forged_pk;
     new_path.removed_keys = BTreeSet::new();
     let op = CgkaOperation {
