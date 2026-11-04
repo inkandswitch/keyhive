@@ -4,8 +4,8 @@ use beekem::{
     encrypted::encrypt_secret,
     id::TreeId,
     operation::{CgkaChange, CgkaOperation},
-    secret_store::SecretStore,
     predecessors::Predecessors,
+    secret_store::SecretStore,
     tree::PathChange,
     treemath::{LeafNodeIndex, TreeNodeIndex},
 };

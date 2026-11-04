@@ -594,7 +594,7 @@ where
                         .certificate_sets
                         .lock()
                         .await
-                        .predecessor_set(&cgka, &predecessors);
+                        .predecessor_set(&cgka, predecessors);
                     match self
                         .cgka_op_is_authorized_over(&op, doc_id, predecessor_set)
                         .await?
@@ -2797,7 +2797,7 @@ where
         doc_id: DocumentId,
     ) -> Result<Result<(), CgkaUnauthorized>, KeylineStorageError<K::Error>> {
         let predecessors = signed_op.payload().predecessors();
-        let predecessor_set = self.predecessor_set(doc_id, &predecessors).await;
+        let predecessor_set = self.predecessor_set(doc_id, predecessors).await;
         self.cgka_op_is_authorized_over(signed_op, doc_id, predecessor_set)
             .await
     }
@@ -5195,7 +5195,7 @@ mod tests {
             .await?;
         let built_on_it = hive
             .sign_cgka_op(remove(
-                BTreeSet::from([listing_bob.digest()]),
+                Predecessors::from([listing_bob.digest()]),
                 BTreeSet::new(),
             ))
             .await?;
@@ -5246,7 +5246,7 @@ mod tests {
         Ok(hive
             .sign_cgka_op(CgkaOperation {
                 doc_id: doc_id.into(),
-                predecessors: BTreeSet::new(),
+                predecessors: Predecessors::default(),
                 change: CgkaChange::Remove {
                     citations: creation_citations,
                     removed: BTreeSet::new(),
@@ -5298,7 +5298,7 @@ mod tests {
         let built_on_it = hive
             .sign_cgka_op(CgkaOperation {
                 doc_id: doc_id.into(),
-                predecessors: BTreeSet::from([invalid_root.digest()]),
+                predecessors: Predecessors::from([invalid_root.digest()]),
                 change: CgkaChange::Remove {
                     citations: BTreeSet::new(),
                     removed: BTreeSet::new(),

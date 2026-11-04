@@ -10,8 +10,7 @@ use keyhive_crypto::digest::Digest;
 
 /// The immediate causal predecessors of a CGKA operation.
 ///
-/// Only an add may have none. `CgkaOperationGraph::check_can_add` rejects
-/// any other operation with an empty set.
+/// Only an add may have none.
 #[derive(Debug, Clone, Default, Hash, PartialEq, Eq)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct Predecessors(BTreeSet<Digest<CgkaOperation>>);

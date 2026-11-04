@@ -3,8 +3,8 @@ use beekem::{
     error::CgkaError,
     id::{MemberId, TreeId},
     operation::{CgkaChange, CgkaOperation, CitationId, RemovedMember},
-    secret_store::SecretStore,
     predecessors::Predecessors,
+    secret_store::SecretStore,
     tree::PathChange,
 };
 use future_form::{FutureForm, Sendable};
