@@ -76,7 +76,7 @@ jobs:
 
       - name: Upload Playwright report
         if: failure() && matrix.check == 'ci-e2e'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: keyhive_wasm/playwright-report/
@@ -137,7 +137,7 @@ jobs:
       # mutants.out holds the missed/caught/timeout lists and per-mutant
       # logs — the thing to read when the job goes red.
       - name: Upload mutants report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: mutants-report
