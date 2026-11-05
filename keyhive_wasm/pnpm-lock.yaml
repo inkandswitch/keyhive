@@ -16,7 +16,7 @@ importers:
         version: 22.17.2
       http-server:
         specifier: ^14.1.1
-        version: 14.1.1
+        version: 14.1.1(debug@4.4.1(supports-color@7.2.0))(supports-color@7.2.0)
       typescript:
         specifier: ^5.9.2
         version: 5.9.2
@@ -93,8 +93,8 @@ packages:
   eventemitter3@4.0.7:
     resolution: {integrity: sha512-8guHBZCwKnFhYdHr2ysuRWErTwhoN2X8XELRlrRwpmfeY2jjuUN4taQMsULKUVo1K4DvZl+0pgfyoysHxvmvEw==}
 
-  follow-redirects@1.15.11:
-    resolution: {integrity: sha512-deG2P0JfjrTxl50XGCDyfI97ZGVCxIpfKYmfyrQ54n5FO/0gfIES8C/Psl6kWVDolizcaaxZJnTS0QSMxvnsBQ==}
+  follow-redirects@1.16.2:
+    resolution: {integrity: sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==}
     engines: {node: '>=4.0'}
     peerDependencies:
       debug: '*'
@@ -291,9 +291,11 @@ snapshots:
 
   corser@2.0.1: {}
 
-  debug@4.4.1:
+  debug@4.4.1(supports-color@7.2.0):
     dependencies:
       ms: 2.1.3
+    optionalDependencies:
+      supports-color: 7.2.0
 
   dunder-proto@1.0.1:
     dependencies:
@@ -311,7 +313,9 @@ snapshots:
 
   eventemitter3@4.0.7: {}
 
-  follow-redirects@1.15.11: {}
+  follow-redirects@1.16.2(debug@4.4.1(supports-color@7.2.0)):
+    optionalDependencies:
+      debug: 4.4.1(supports-color@7.2.0)
 
   fsevents@2.3.2:
     optional: true
@@ -352,26 +356,26 @@ snapshots:
     dependencies:
       whatwg-encoding: 2.0.0
 
-  http-proxy@1.18.1:
+  http-proxy@1.18.1(debug@4.4.1(supports-color@7.2.0)):
     dependencies:
       eventemitter3: 4.0.7
-      follow-redirects: 1.15.11
+      follow-redirects: 1.16.2(debug@4.4.1(supports-color@7.2.0))
       requires-port: 1.0.0
     transitivePeerDependencies:
       - debug
 
-  http-server@14.1.1:
+  http-server@14.1.1(debug@4.4.1(supports-color@7.2.0))(supports-color@7.2.0):
     dependencies:
       basic-auth: 2.0.1
       chalk: 4.1.2
       corser: 2.0.1
       he: 1.2.0
       html-encoding-sniffer: 3.0.0
-      http-proxy: 1.18.1
+      http-proxy: 1.18.1(debug@4.4.1(supports-color@7.2.0))
       mime: 1.6.0
       minimist: 1.2.8
       opener: 1.5.2
-      portfinder: 1.0.38
+      portfinder: 1.0.38(supports-color@7.2.0)
       secure-compare: 3.0.1
       union: 0.5.0
       url-join: 4.0.1
@@ -403,10 +407,10 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.2
 
-  portfinder@1.0.38:
+  portfinder@1.0.38(supports-color@7.2.0):
     dependencies:
       async: 3.2.6
-      debug: 4.4.1
+      debug: 4.4.1(supports-color@7.2.0)
     transitivePeerDependencies:
       - supports-color
 
