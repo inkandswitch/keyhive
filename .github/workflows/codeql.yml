@@ -11,7 +11,9 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only supersede PR runs: a cancelled main or scheduled run uploads nothing,
+  # leaving the baseline that PR alerts are diffed against stale.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -19,6 +21,9 @@ permissions:
 # Not a `nix run .#ci-*` app like the rest of CI: the nixpkgs CodeQL CLI lags
 # the published query packs and ships extractor binaries unpatched for NixOS.
 # The action's bundle keeps CLI and queries in lockstep.
+#
+# Actions are pinned by SHA (this job can write code-scanning alerts);
+# Dependabot keeps the pins current.
 jobs:
   analyze:
     name: ${{ matrix.language }}
@@ -30,25 +35,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Neither needs a build: the Rust extractor reads sources via
-        # rust-analyzer, and JS/TS is extracted directly.
-        language: [javascript-typescript, rust]
+        # None needs a build: the Rust extractor reads sources via
+        # rust-analyzer, and JS/TS and workflow YAML are extracted directly.
+        # `actions` checks the workflows themselves (expression injection,
+        # untrusted checkout, excess permissions), notably release-js.yml.
+        language: [actions, javascript-typescript, rust]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           build-mode: none
           languages: ${{ matrix.language }}
           queries: security-and-quality
-          config: |
-            paths-ignore:
-              - '**/node_modules'
-              - keyhive_wasm/dist
-              - keyhive_wasm/pkg
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           category: /language:${{ matrix.language }}

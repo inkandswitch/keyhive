@@ -1,0 +1,12 @@
+version: 2
+
+updates:
+  # Keeps SHA-pinned actions (codeql.yml, release-js.yml) current, so pins
+  # don't silently freeze the CodeQL bundle or miss security fixes.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
