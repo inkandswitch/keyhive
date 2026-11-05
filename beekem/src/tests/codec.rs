@@ -241,8 +241,8 @@ fn a_remove_encodes_in_its_documented_layout() {
     assert_eq!(CgkaOperation::decode(&expected), Ok(op));
 }
 
-/// `doc ‖ predecessors ‖ 2 ‖ leaf_idx ‖ leaf_pk ‖ path ‖ removed_keys ‖
-/// predecessor_secrets`, the path a count and then `( index ‖ node )*`.
+/// `doc ‖ predecessors ‖ 2 ‖ leaf_idx ‖ leaf_pk ‖ path ‖ predecessor_secrets`,
+/// the path a count and then `( index ‖ node )*`.
 #[test]
 fn an_update_encodes_in_its_documented_layout() {
     use layout::*;
@@ -258,7 +258,6 @@ fn an_update_encodes_in_its_documented_layout() {
                 leaf_idx: 2,
                 leaf_pk: share_key(3),
                 path: alloc::vec![(1, node)],
-                removed_keys: [share_key(8)].into(),
             }),
             predecessor_secrets: alloc::vec![PredecessorSecret {
                 update_op_hash: digest(),
@@ -273,8 +272,6 @@ fn an_update_encodes_in_its_documented_layout() {
         &[1, 1],
         share_key(6).as_bytes(),
         &[0],
-        &[1],
-        share_key(8).as_bytes(),
         &[1],
         &[4; 32],
         &[3, 6, 6, 6],
