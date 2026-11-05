@@ -158,7 +158,6 @@ mod tests {
                 change: CgkaChange::Add {
                     added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
                     pk: ShareKey::generate(&mut csprng),
-                    leaf_index: 42,
                     invitation: None,
                     key_proof: None,
                     citations: BTreeSet::new(),
@@ -186,7 +185,6 @@ mod tests {
                 change: CgkaChange::Add {
                     added_id: MemberId::from(&SigningKey::generate(&mut csprng)),
                     pk: ShareKey::generate(&mut csprng),
-                    leaf_index: 11,
                     invitation: None,
                     key_proof: None,
                     citations: BTreeSet::new(),

@@ -259,7 +259,6 @@ async fn add_op(
         change: CgkaChange::Add {
             added_id: MemberId::from(added),
             pk,
-            leaf_index: 0,
             invitation: None,
             key_proof,
             citations,

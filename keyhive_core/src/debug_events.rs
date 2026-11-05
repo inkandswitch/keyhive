@@ -67,7 +67,6 @@ pub enum CgkaOperationDetails {
     Add {
         id: Hash,
         share_key: Hash,
-        leaf_index: u32,
         inviter_share_key: Option<Hash>,
         invited_updates: Vec<Hash>,
         predecessors: Vec<Hash>,
@@ -187,14 +186,12 @@ impl DebugEventRow {
                     CgkaChange::Add {
                         added_id,
                         pk,
-                        leaf_index,
                         invitation,
                         ..
                     } => {
                         let op_details = CgkaOperationDetails::Add {
                             id: Hash::new(added_id.as_bytes(), nicknames),
                             share_key: Hash::new(pk.as_bytes(), nicknames),
-                            leaf_index: *leaf_index,
                             inviter_share_key: invitation
                                 .as_ref()
                                 .map(|i| Hash::new(i.inviter_pk.as_bytes(), nicknames)),

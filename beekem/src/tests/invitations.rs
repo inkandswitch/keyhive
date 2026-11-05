@@ -75,7 +75,6 @@ async fn an_invitation_cannot_pair_a_secret_with_an_update_that_did_not_produce_
         change: CgkaChange::Add {
             added_id: bob_id,
             pk: bob_pk,
-            leaf_index: 1,
             invitation: Some(Box::new(Invitation {
                 inviter_pk,
                 ancestor_secrets: vec![InvitationSecret {

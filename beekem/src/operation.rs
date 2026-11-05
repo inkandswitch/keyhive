@@ -276,7 +276,6 @@ pub enum CgkaChange {
     Add {
         added_id: MemberId,
         pk: ShareKey,
-        leaf_index: u32,
         /// Root secrets from before this add, encrypted to `pk`, so the new member
         /// can read content written before it could derive anything from the tree.
         /// `None` when the adder had no root secrets to wrap, or no key pair of
@@ -389,7 +388,6 @@ impl Encode for CgkaChange {
             CgkaChange::Add {
                 added_id,
                 pk,
-                leaf_index,
                 invitation,
                 key_proof,
                 citations,
@@ -397,7 +395,6 @@ impl Encode for CgkaChange {
                 out.push(0);
                 added_id.encode_into(out);
                 pk.encode_into(out);
-                leaf_index.encode_into(out);
                 match invitation {
                     None => out.push(0),
                     Some(invitation) => {
@@ -444,7 +441,6 @@ impl StreamDecode for CgkaChange {
             Some((0, rest)) => {
                 let (added_id, rest) = MemberId::decode_next(rest)?;
                 let (pk, rest) = ShareKey::decode_next(rest)?;
-                let (leaf_index, rest) = u32::decode_next(rest)?;
                 let (invitation, rest) = Option::<Invitation>::decode_next(rest)?;
                 let (key_proof, rest) = match rest.split_first() {
                     None => return Err(DecodeError::UnexpectedEnd),
@@ -460,7 +456,6 @@ impl StreamDecode for CgkaChange {
                     CgkaChange::Add {
                         added_id,
                         pk,
-                        leaf_index,
                         invitation: invitation.map(Box::new),
                         key_proof,
                         citations,
@@ -924,17 +919,9 @@ mod causal_graph_tests {
     async fn signed_add(
         signer: &MemorySigner,
         doc_id: TreeId,
-        leaf_index: u32,
         predecessors: &[&Verified<CgkaOperation>],
     ) -> Verified<CgkaOperation> {
-        signed_add_from(
-            &mut rand::thread_rng(),
-            signer,
-            doc_id,
-            leaf_index,
-            predecessors,
-        )
-        .await
+        signed_add_from(&mut rand::thread_rng(), signer, doc_id, predecessors).await
     }
 
     /// An add of a new member, with its member and key drawn from `rng`.
@@ -942,11 +929,10 @@ mod causal_graph_tests {
         rng: &mut R,
         signer: &MemorySigner,
         doc_id: TreeId,
-        leaf_index: u32,
         predecessors: &[&Verified<CgkaOperation>],
     ) -> Verified<CgkaOperation> {
         let added_id = member_id_from(rng);
-        signed_add_of(rng, signer, doc_id, added_id, leaf_index, predecessors).await
+        signed_add_of(rng, signer, doc_id, added_id, predecessors).await
     }
 
     async fn signed_add_of<R: rand::CryptoRng + rand::RngCore>(
@@ -954,7 +940,6 @@ mod causal_graph_tests {
         signer: &MemorySigner,
         doc_id: TreeId,
         added_id: MemberId,
-        leaf_index: u32,
         predecessors: &[&Verified<CgkaOperation>],
     ) -> Verified<CgkaOperation> {
         let op = CgkaOperation {
@@ -963,7 +948,6 @@ mod causal_graph_tests {
             change: CgkaChange::Add {
                 added_id,
                 pk: ShareSecretKey::generate(rng).share_key(),
-                leaf_index,
                 invitation: None,
                 key_proof: None,
                 citations: BTreeSet::new(),
@@ -985,11 +969,11 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut trunk = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
         trunk.add_op(&root).expect("a root has no predecessors");
 
         let mut forked = trunk.fork();
-        let on_fork = signed_add(&signer, doc_id, 1, &[&root]).await;
+        let on_fork = signed_add(&signer, doc_id, &[&root]).await;
         let on_fork_hash = on_fork.digest();
         forked
             .add_op(&on_fork)
@@ -1012,7 +996,7 @@ mod causal_graph_tests {
             "the merged operation should be the only head"
         );
         trunk
-            .add_op(&signed_add(&signer, doc_id, 2, &[&on_fork]).await)
+            .add_op(&signed_add(&signer, doc_id, &[&on_fork]).await)
             .expect("the merged operation's depth is in the graph");
     }
 
@@ -1034,13 +1018,13 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut one = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
         one.add_op(&root).expect("a root has no predecessors");
         let mut two = one.fork();
 
         assert_eq!(hash_of(&one), hash_of(&two), "equal graphs should agree");
 
-        two.add_op(&signed_add(&signer, doc_id, 1, &[&root]).await)
+        two.add_op(&signed_add(&signer, doc_id, &[&root]).await)
             .expect("the predecessor is in the graph");
 
         assert_ne!(
@@ -1066,9 +1050,9 @@ mod causal_graph_tests {
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         let mut signed = BTreeMap::new();
-        for (leaf_index, (name, preds)) in (0..).zip(ops) {
+        for (name, preds) in ops {
             let preds: Vec<_> = preds.iter().map(|pred| &signed[pred]).collect();
-            let op = signed_add(&signer, doc_id, leaf_index, &preds).await;
+            let op = signed_add(&signer, doc_id, &preds).await;
             graph.add_op(&op).expect("predecessors are listed first");
             signed.insert(*name, op);
         }
@@ -1100,10 +1084,10 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(rng);
         let doc_id = TreeId::from(&signer.0);
         let mut ops: Vec<Verified<CgkaOperation>> = Vec::new();
-        for leaf_index in 0..24 {
+        for _ in 0..24 {
             let count = rng.gen_range(1..=3).min(ops.len());
             let preds: Vec<_> = ops.iter().choose_multiple(rng, count);
-            let op = signed_add_from(rng, &signer, doc_id, leaf_index, &preds).await;
+            let op = signed_add_from(rng, &signer, doc_id, &preds).await;
             ops.push(op);
         }
         let mut graph = CgkaOperationGraph::new();
@@ -1293,9 +1277,9 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
-        let child = signed_add(&signer, doc_id, 1, &[&root]).await;
-        let grandchild = signed_add(&signer, doc_id, 2, &[&child]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
+        let child = signed_add(&signer, doc_id, &[&root]).await;
+        let grandchild = signed_add(&signer, doc_id, &[&child]).await;
         for op in [&root, &child, &grandchild] {
             graph.add_op(op).expect("predecessors are added first");
         }
@@ -1313,12 +1297,12 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
         graph.add_op(&root).expect("a root has no predecessors");
-        let unknown = signed_add(&signer, doc_id, 1, &[]).await;
+        let unknown = signed_add(&signer, doc_id, &[]).await;
         let before = graph.clone();
 
-        let result = graph.add_op(&signed_add(&signer, doc_id, 2, &[&root, &unknown]).await);
+        let result = graph.add_op(&signed_add(&signer, doc_id, &[&root, &unknown]).await);
 
         assert!(
             matches!(result, Err(CgkaError::OutOfOrderOperation)),
@@ -1364,9 +1348,9 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let first_add = signed_add(&signer, doc_id, 0, &[]).await;
+        let first_add = signed_add(&signer, doc_id, &[]).await;
         let update = signed_update(&signer, doc_id, &[&first_add]).await;
-        let second_add = signed_add(&signer, doc_id, 1, &[]).await;
+        let second_add = signed_add(&signer, doc_id, &[]).await;
         for op in [&first_add, &update, &second_add] {
             graph.add_op(op).expect("predecessors are added first");
         }
@@ -1387,7 +1371,7 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
         let update = signed_update(&signer, doc_id, &[&root]).await;
         let other_signer = MemorySigner::generate(&mut rand::thread_rng());
         let other_update = signed_update(&other_signer, doc_id, &[&root]).await;
@@ -1410,7 +1394,7 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let graph = CgkaOperationGraph::new();
-        let unknown = signed_add(&signer, doc_id, 0, &[]).await;
+        let unknown = signed_add(&signer, doc_id, &[]).await;
 
         assert!(
             matches!(
@@ -1427,8 +1411,8 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let first_root = signed_add(&signer, doc_id, 0, &[]).await;
-        let second_root = signed_add(&signer, doc_id, 1, &[]).await;
+        let first_root = signed_add(&signer, doc_id, &[]).await;
+        let second_root = signed_add(&signer, doc_id, &[]).await;
         for op in [&first_root, &second_root] {
             graph.add_op(op).expect("a root has no predecessors");
         }
@@ -1447,7 +1431,7 @@ mod causal_graph_tests {
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
         graph
-            .add_op(&signed_add(&signer, doc_id, 0, &[]).await)
+            .add_op(&signed_add(&signer, doc_id, &[]).await)
             .expect("a root add is accepted");
         let before = graph.clone();
 
@@ -1469,7 +1453,7 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
         let u1 = signed_update(&signer, doc_id, &[&root]).await;
         let u2 = signed_update(&signer, doc_id, &[&u1]).await;
         for op in [&root, &u1, &u2] {
@@ -1487,11 +1471,11 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
         let earlier = signed_update(&signer, doc_id, &[&root]).await;
         let later = signed_update(&signer, doc_id, &[&earlier]).await;
-        let add = signed_add(&signer, doc_id, 1, &[&later]).await;
-        let later_add = signed_add(&signer, doc_id, 2, &[&add]).await;
+        let add = signed_add(&signer, doc_id, &[&later]).await;
+        let later_add = signed_add(&signer, doc_id, &[&add]).await;
         for op in [&root, &earlier, &later, &add, &later_add] {
             graph.add_op(op).expect("predecessors are added first");
         }
@@ -1508,7 +1492,7 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
         let update = signed_update(&signer, doc_id, &[&root]).await;
         for op in [&root, &update] {
             graph.add_op(op).expect("predecessors are added first");
@@ -1523,8 +1507,8 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
-        let add = signed_add(&signer, doc_id, 1, &[&root]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
+        let add = signed_add(&signer, doc_id, &[&root]).await;
         for op in [&root, &add] {
             graph.add_op(op).expect("predecessors are added first");
         }
@@ -1540,9 +1524,9 @@ mod causal_graph_tests {
         let mut rng = rand::thread_rng();
         let founder = member_id();
         let joiner = member_id();
-        let root = signed_add_of(&mut rng, &signer, doc_id, founder, 0, &[]).await;
+        let root = signed_add_of(&mut rng, &signer, doc_id, founder, &[]).await;
         let before = signed_update(&signer, doc_id, &[&root]).await;
-        let join = signed_add_of(&mut rng, &signer, doc_id, joiner, 1, &[&before]).await;
+        let join = signed_add_of(&mut rng, &signer, doc_id, joiner, &[&before]).await;
         let after = signed_update(&signer, doc_id, &[&join]).await;
         for op in [&root, &before, &join, &after] {
             graph.add_op(op).expect("predecessors are added first");
@@ -1567,15 +1551,15 @@ mod causal_graph_tests {
         let signer = MemorySigner::generate(&mut rand::thread_rng());
         let doc_id = TreeId::from(&signer.0);
         let mut graph = CgkaOperationGraph::new();
-        let root = signed_add(&signer, doc_id, 0, &[]).await;
+        let root = signed_add(&signer, doc_id, &[]).await;
         graph.add_op(&root).expect("a root add has no predecessors");
 
         // Two concurrent branches, each an update followed by an add.
         let mut expected = Set::new();
         let mut heads = Set::new();
-        for leaf_index in 1..=2u32 {
+        for _ in 0..2 {
             let update = signed_update(&signer, doc_id, &[&root]).await;
-            let add = signed_add(&signer, doc_id, leaf_index, &[&update]).await;
+            let add = signed_add(&signer, doc_id, &[&update]).await;
             for op in [&update, &add] {
                 graph.add_op(op).expect("predecessors are added first");
             }

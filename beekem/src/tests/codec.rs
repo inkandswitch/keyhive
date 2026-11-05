@@ -180,8 +180,8 @@ mod layout {
     }
 }
 
-/// `doc ‖ predecessors ‖ 0 ‖ added_id ‖ pk ‖ leaf_index ‖ invitation? ‖
-/// key_proof? ‖ citations`, an absent invitation as tag `0` and a present
+/// `doc ‖ predecessors ‖ 0 ‖ added_id ‖ pk ‖ invitation? ‖ key_proof? ‖
+/// citations`, an absent invitation as tag `0` and a present
 /// key proof as tag `1` and its length-prefixed bytes.
 #[test]
 fn an_add_encodes_in_its_documented_layout() {
@@ -192,7 +192,6 @@ fn an_add_encodes_in_its_documented_layout() {
         change: CgkaChange::Add {
             added_id: member(),
             pk: share_key(3),
-            leaf_index: 3,
             invitation: None,
             key_proof: Some(alloc::vec![9, 9]),
             citations: [CitationId([5; 32])].into(),
@@ -203,7 +202,7 @@ fn an_add_encodes_in_its_documented_layout() {
         &[0, 0],
         member().as_bytes(),
         share_key(3).as_bytes(),
-        &[3, 0, 1, 2, 9, 9, 1],
+        &[0, 1, 2, 9, 9, 1],
         &[5; 32],
     ]);
     assert_eq!(op.encode().as_bytes(), expected);

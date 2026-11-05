@@ -109,7 +109,6 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                 CgkaOperationDetails::Add {
                     id,
                     share_key,
-                    leaf_index,
                     inviter_share_key,
                     invited_updates,
                     predecessors,
@@ -120,11 +119,10 @@ fn format_details(details: &DebugEventDetails, verbose: bool) -> String {
                         .collect::<Vec<String>>()
                         .join(", ");
                     format!(
-                        "ID: {}\nShareKey: {}\nLeaf Index: {}\nInviter ShareKey: {}\nInvited \
+                        "ID: {}\nShareKey: {}\nInviter ShareKey: {}\nInvited \
                          Updates: {}\nPredecessors: {}",
                         id.short_hex(),
                         share_key.short_hex(),
-                        leaf_index,
                         inviter_share_key
                             .as_ref()
                             .map_or_else(|| "none".to_string(), |k| k.short_hex()),
@@ -254,7 +252,6 @@ mod tests {
             op_details: CgkaOperationDetails::Add {
                 id: named("added"),
                 share_key: named("share_key"),
-                leaf_index: 3,
                 inviter_share_key,
                 invited_updates,
                 predecessors: vec![named("pred")],
