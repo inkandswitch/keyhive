@@ -171,7 +171,46 @@ async fn a_non_member_cannot_add_themselves() -> TestResult {
     };
     let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
 
-    assert!(is_denied(&result), "{result:?}");
+    // Not denied outright: any reader may cite another's delegation (see
+    // `reconcile_doc_readers`), and a path by which Mallory reads the document
+    // could still arrive. It is never applied.
+    assert!(is_pending(&result), "{result:?}");
+    assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_non_member_cannot_seat_a_reader_another_members_delegation_admits() -> TestResult {
+    let alice = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let bob = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let mallory = keyhive_core::test_utils::make_simple_keyhive().await?;
+    let bob_id = learn(&alice, &bob).await;
+    let doc_id = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    let bob_delegation = alice
+        .add_member(bob_id, doc_id, Access::Read, &[])
+        .await?
+        .delegation
+        .digest();
+
+    // Mallory re-issues the add Alice made for Bob, under her own signature.
+    let mut op = op_where(&alice, doc_id, |op| {
+        matches!(op, CgkaOperation::Add { added_id, .. } if *added_id == MemberId(bob.id().verifying_key()))
+    })
+    .await
+    .payload()
+    .clone();
+    if let CgkaOperation::Add {
+        predecessors,
+        authorization,
+        ..
+    } = &mut op
+    {
+        *predecessors = cgka_heads(&alice, doc_id).await;
+        *authorization = CgkaAuthorization::Delegation(bob_delegation.into());
+    }
+    let result = alice.receive_cgka_op(mallory.try_sign(op).await?).await;
+
+    assert!(is_pending(&result), "{result:?}");
     assert!(!contains_op_from(&alice, doc_id, mallory.id().verifying_key()).await);
     Ok(())
 }

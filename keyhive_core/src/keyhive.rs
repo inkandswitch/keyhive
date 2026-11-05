@@ -747,6 +747,124 @@ impl<
             .await
     }
 
+    /// Seat in `doc_id`'s key tree every reader of the document that the tree is missing.
+    ///
+    /// [`Keyhive::add_member_with_manual_content`] seats a new reader only in the documents
+    /// the *granting* node holds. A member added to a group reaches every document the group
+    /// reaches, including ones the granter has never seen, and receiving the delegation issues
+    /// no CGKA operation anywhere, so nobody would seat the reader in those trees. This lets
+    /// any node that holds the tree and reads the document issue the missing add instead. Each
+    /// add cites the reader-level delegation that admits the reader here, which
+    /// `cgka_op_is_authorized` accepts from any reader of the document, not only from that
+    /// delegation's issuer.
+    ///
+    /// Returns the operations issued; the caller persists and publishes them. A reader whose
+    /// prekeys have not arrived here is skipped, so run this again once they do. Issues
+    /// nothing when this node does not hold the document's tree or cannot read the document.
+    ///
+    /// Only adds: a reader the tree still seats after losing access stays seated.
+    pub async fn reconcile_doc_readers(
+        &self,
+        doc_id: DocumentId,
+    ) -> Result<Vec<Signed<CgkaOperation>>, CgkaError> {
+        let Some(doc) = self.get_document(doc_id).await else {
+            return Ok(Vec::new());
+        };
+        let seated: HashSet<IndividualId> = {
+            let mut locked = doc.lock().await;
+            if locked.cgka().is_err() {
+                return Ok(Vec::new());
+            }
+            let seated = locked.cgka_members()?.collect();
+            seated
+        };
+        let active_id = { self.active.lock().await.id() };
+
+        // Every individual reachable from the document through reader-level delegations, each
+        // with one delegation that admits it. A delegation's subject is the group or document
+        // whose member map holds it, so walking member maps from the document finds, for each
+        // reader, a delegation whose subject reaches the document at reader level: the shape
+        // the authorization check requires of a cited delegation. The walk takes one short
+        // lock per node and never holds the document's lock.
+        let mut active_reads = false;
+        let mut unseated: Vec<(Agent<F, S, T, L>, Arc<Signed<Delegation<F, S, T, L>>>)> =
+            Vec::new();
+        let mut visited: HashSet<Identifier> = HashSet::from([Identifier::from(doc_id)]);
+        let mut explore = vec![Membered::Document(doc_id, doc.dupe())];
+        while let Some(membered) = explore.pop() {
+            for dlgs in membered.members().await.into_values() {
+                let Some(dlg) = dlgs
+                    .iter()
+                    .filter(|dlg| dlg.payload.can.is_reader())
+                    .max_by_key(|dlg| dlg.payload.can)
+                else {
+                    continue;
+                };
+                let delegate = dlg.payload.delegate.dupe();
+                if !visited.insert(delegate.id()) {
+                    continue;
+                }
+                match &delegate {
+                    Agent::Individual(id, _) | Agent::Active(id, _) => {
+                        active_reads |= *id == active_id;
+                        if !seated.contains(id) {
+                            unseated.push((delegate.dupe(), dlg.dupe()));
+                        }
+                    }
+                    Agent::Group(..) | Agent::Document(..) => {
+                        explore.push(
+                            delegate
+                                .as_membered()
+                                .expect("groups and documents are membered"),
+                        );
+                    }
+                }
+            }
+        }
+        // A node that cannot read the document has no standing to seat anyone in its tree.
+        if !active_reads {
+            return Ok(Vec::new());
+        }
+
+        let signer = { self.active.lock().await.signer.clone() };
+        let public_id = Public.individual().id();
+        let mut ops = Vec::new();
+        for (delegate, dlg) in unseated {
+            let prekeys = if delegate.id() == public_id.into() {
+                // Public is always seated with its single well-known key.
+                HashMap::from([(public_id, Public.share_key())])
+            } else {
+                match delegate.pick_individual_prekeys(doc_id).await {
+                    Ok(prekeys) => prekeys,
+                    Err(err) => {
+                        tracing::debug!(
+                            %doc_id,
+                            reader = %delegate.id(),
+                            %err,
+                            "reader not seated: its prekeys have not arrived here"
+                        );
+                        continue;
+                    }
+                }
+            };
+            let authorization = CgkaAuthorization::Delegation(dlg.digest().into());
+            ops.extend(
+                doc.lock()
+                    .await
+                    .add_cgka_members_from_prekeys(&prekeys, authorization, &signer)
+                    .await?,
+            );
+        }
+
+        for op in &ops {
+            self.event_listener.on_cgka_op(&Arc::new(op.clone())).await;
+        }
+        if !ops.is_empty() {
+            self.touch();
+        }
+        Ok(ops)
+    }
+
     /// Revoke `to_revoke`'s membership in `resource`.
     ///
     /// With `retain_all_other_members`, the members `to_revoke` had admitted keep their
@@ -2521,7 +2639,6 @@ impl<
                     };
                     ensure(issuer_founded_with_admin, CgkaUnauthorized::Pending)?;
                 } else {
-                    ensure(dlg.issuer == op_issuer, CgkaUnauthorized::Denied)?;
                     // The subject's path into this document may not have
                     // arrived yet.
                     let access = access_to_this_doc_ever(dlg.subject_id()).await;
@@ -2529,6 +2646,23 @@ impl<
                         access.is_some_and(|a| dlg.payload.can.min(a).is_reader()),
                         CgkaUnauthorized::Pending,
                     )?;
+                    // Any reader of the document may seat a reader the cited
+                    // delegation admits, not only the delegation's issuer: the
+                    // issuer seats it only in the documents it holds, and
+                    // `reconcile_doc_readers` lets another holder seat it in the
+                    // rest. The issuer's own path into the document may not have
+                    // arrived yet, so an unknown issuer is pending. Access ever
+                    // held counts, like the subject's above, so whether the add
+                    // is accepted does not depend on whether a concurrent
+                    // revocation of its issuer arrived first.
+                    if dlg.issuer != op_issuer {
+                        let issuer_access =
+                            access_to_this_doc_ever(Identifier::from(op_issuer)).await;
+                        ensure(
+                            issuer_access.is_some_and(|a| a.is_reader()),
+                            CgkaUnauthorized::Pending,
+                        )?;
+                    }
                 }
                 reaches_ever(dlg.payload.delegate.dupe(), IndividualId::from(*added_id)).await
             }
@@ -5964,6 +6098,76 @@ mod tests {
             assert_eq!(locked_trunk.docs.lock().await.len(), 4);
         }
 
+        Ok(())
+    }
+
+    /// A reader whose prekeys have not arrived is skipped, and seated by the next
+    /// reconciliation after they do.
+    #[tokio::test]
+    async fn a_reader_is_seated_once_its_prekeys_arrive() -> TestResult {
+        use crate::principal::individual::state::PrekeyState;
+
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let dave = make_keyhive().await;
+
+        let group_id = alice.generate_group(vec![]).await?;
+        let bob_id = register_peer(&alice, &bob).await;
+        alice
+            .add_member(bob_id, group_id, Access::Edit, &[])
+            .await?;
+        let to_bob = alice.static_events_for_agent(bob.id()).await;
+        assert!(bob
+            .ingest_unsorted_static_events(to_bob.into_values().collect())
+            .await
+            .is_empty());
+        let doc_id = bob
+            .generate_doc(vec![group_id.into()], nonempty![[1u8; 32]])
+            .await?;
+
+        // Bob knows dave by name only: registered, with no published prekey.
+        let dave_add = dave.expand_prekeys().await?;
+        let mut dave_on_bob = Individual::new(KeyOp::Add(dave_add.dupe()));
+        dave_on_bob.prekeys.clear();
+        dave_on_bob.prekey_state = PrekeyState::empty_for_tests();
+        let dave_id = dave_on_bob.id();
+        assert!(
+            bob.register_individual(Arc::new(Mutex::new(dave_on_bob)))
+                .await
+        );
+        alice
+            .register_individual(Arc::new(Mutex::new(Individual::new(KeyOp::Add(
+                dave_add.dupe(),
+            )))))
+            .await;
+        alice
+            .add_member(dave_id, group_id, Access::Read, &[])
+            .await?;
+        let grant: Vec<_> = alice
+            .static_events_for_agent(bob.id())
+            .await
+            .into_values()
+            .filter(|event| !matches!(event, StaticEvent::PrekeysExpanded(add) if *add.issuer() == dave_id.verifying_key()))
+            .collect();
+        assert!(bob.ingest_unsorted_static_events(grant).await.is_empty());
+        assert_eq!(
+            bob.access_for_doc(dave_id, doc_id).await,
+            Some(Access::Read),
+            "bob holds the grant"
+        );
+
+        assert!(
+            bob.reconcile_doc_readers(doc_id).await?.is_empty(),
+            "nothing to seat dave with yet"
+        );
+
+        bob.receive_prekey_op(&KeyOp::Add(dave_add)).await?;
+        let ops = bob.reconcile_doc_readers(doc_id).await?;
+        assert_eq!(ops.len(), 1, "{ops:?}");
+        assert!(matches!(
+            ops[0].payload(),
+            CgkaOperation::Add { added_id, .. } if IndividualId::from(*added_id) == dave_id
+        ));
         Ok(())
     }
 }
