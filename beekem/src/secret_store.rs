@@ -1,136 +1,86 @@
-//! Secret store for inner tree nodes.
+//! The secret store an update writes at an inner tree node.
 
 use crate::{
-    collections::Set,
     encrypted::EncryptedSecret,
     error::CgkaError,
     id::TreeId,
-    keys::{ConflictKeys, NodeKey, ShareKeyMap},
+    keys::{HasShareKey, NodeKeys, ShareKeyMap},
     treemath::TreeNodeIndex,
 };
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    string::ToString,
-    vec,
-    vec::Vec,
-};
+use alloc::{collections::BTreeMap, string::ToString, vec::Vec};
 use keyhive_codec::{
     error::DecodeError,
-    prefixed::encode_list,
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
 use keyhive_crypto::share_key::{ShareKey, ShareSecretKey};
-use nonempty::NonEmpty;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct SecretStore {
-    /// Every encrypted secret key (and hence version) corresponds to a single
-    /// public key. There must be at least one.
-    ///
-    /// Kept sorted and free of duplicates.
-    versions: NonEmpty<SecretStoreVersion>,
+    /// Every encrypted secret key corresponds to a single public key.
+    pub pk: ShareKey,
+    /// This is a map in order to handle the case of blank siblings, when we must encrypt
+    /// the same secret key separately for each public key in the sibling resolution.
+    pub sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
+    /// The share key of the child that encrypted this parent.
+    pub encrypter_pk: ShareKey,
 }
 
-/// We implement here since deriving would require turning on a feature of
-/// `NonEmpty` to get its `Arbitrary`.
-#[cfg(any(test, feature = "arbitrary"))]
-impl<'a> arbitrary::Arbitrary<'a> for SecretStore {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let mut versions = NonEmpty::new(SecretStoreVersion::arbitrary(u)?);
-        versions.extend(Vec::<SecretStoreVersion>::arbitrary(u)?);
-        Ok(Self {
-            versions: Self::sorted(versions),
-        })
+/// What an update writes at one inner node of its path. This includes the
+/// node's new key and its secret, encrypted for the resolution of the
+/// non-encrypting child.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
+pub struct PathNode {
+    /// The node's new key.
+    pub pk: ShareKey,
+    /// The node's secret, encrypted for each node in the resolution, by tree
+    /// index.
+    pub sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
+}
+
+/// `pk || sk`, with `sk` in ascending index order.
+impl Encode for PathNode {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.pk.encode_into(out);
+        self.sk.encode_into(out);
+    }
+}
+
+impl Decode for PathNode {
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        decode_exact(bytes)
+    }
+}
+
+impl StreamDecode for PathNode {
+    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
+        let (pk, rest) = ShareKey::decode_next(bytes)?;
+        let (sk, rest) = BTreeMap::decode_next(rest)?;
+        Ok((PathNode { pk, sk }, rest))
+    }
+}
+
+impl HasShareKey for SecretStore {
+    fn share_key(&self) -> ShareKey {
+        self.pk
     }
 }
 
 impl SecretStore {
-    /// The current version, for testing version forgery.
-    #[cfg(test)]
-    pub(crate) fn head_mut(&mut self) -> &mut SecretStoreVersion {
-        &mut self.versions.head
-    }
-
-    pub fn new(
-        pk: ShareKey,
-        encrypter_pk: ShareKey,
-        sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
-    ) -> Self {
-        let version = SecretStoreVersion {
-            pk,
-            sk,
-            encrypter_pk,
-        };
-        Self {
-            versions: NonEmpty::new(version),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn versions(&self) -> &NonEmpty<SecretStoreVersion> {
-        &self.versions
-    }
-
-    pub fn has_conflict(&self) -> bool {
-        self.versions.len() > 1
-    }
-
-    /// The node's single version. Returns `None` if this is a conflict node.
-    pub(crate) fn non_conflict_version(&self) -> Option<&SecretStoreVersion> {
-        (!self.has_conflict()).then_some(&self.versions.head)
-    }
-
-    pub fn node_key(&self) -> NodeKey {
-        match self.versions.tail.as_slice() {
-            [] => NodeKey::ShareKey(self.versions.head.pk),
-            [second] => ConflictKeys {
-                first: self.versions.head.pk,
-                second: second.pk,
-                more: vec![],
-            }
-            .into(),
-            [second, more @ ..] => ConflictKeys {
-                first: self.versions.head.pk,
-                second: second.pk,
-                more: more.iter().map(|v| v.pk).collect(),
-            }
-            .into(),
-        }
-    }
-
-    pub fn decrypt_secret(
-        &self,
-        doc_id: TreeId,
-        child_node_key: &NodeKey,
-        child_sks: &mut ShareKeyMap,
-        seen_idxs: &[TreeNodeIndex],
-    ) -> Result<ShareSecretKey, CgkaError> {
-        if self.has_conflict() {
-            return Err(CgkaError::UnexpectedKeyConflict);
-        }
-        self.versions
-            .head
-            .decrypt_secret(doc_id, child_node_key, child_sks, seen_idxs)
-    }
-
     /// Decrypt this node's secret with the secret of its child's sibling, found
     /// in `sks`. If the sibling was blank or in conflict, the key is from its
     /// resolution.
     ///
-    /// Returns `None` if the node has more than one version or none of its
-    /// encryptions is to a key in `sks`.
+    /// Returns `None` if none of its encryptions is to a key in `sks`.
     pub(crate) fn decrypt_with_sibling_secret(
         &self,
         doc_id: TreeId,
         sks: &ShareKeyMap,
     ) -> Option<ShareSecretKey> {
-        if self.has_conflict() {
-            return None;
-        }
-        let version = &self.versions.head;
-        version.sk.values().find_map(|encrypted| {
+        self.sk.values().find_map(|encrypted| {
             let plaintext = sks
-                .try_decrypt_encryption(doc_id, version.encrypter_pk, encrypted)
+                .try_decrypt_encryption(doc_id, self.encrypter_pk, encrypted)
                 .ok()?;
             ShareSecretKey::try_from_slice(&plaintext)
         })
@@ -139,123 +89,28 @@ impl SecretStore {
     /// Decrypt this node's secret with `child_sk`, the secret of the child below
     /// it that encrypted it.
     ///
-    /// Returns `None` if the node has more than one version or `child_sk` is not
-    /// that child's secret.
+    /// Returns `None` if `child_sk` is not that child's secret.
     pub(crate) fn decrypt_with_child_secret(
         &self,
         doc_id: TreeId,
         child_sk: &ShareSecretKey,
     ) -> Option<ShareSecretKey> {
-        if self.has_conflict() {
-            return None;
-        }
-        self.versions
-            .head
-            .sk
+        self.sk
             .values()
             .find_map(|encrypted| encrypted.try_encrypter_decrypt(doc_id, child_sk).ok())
             .and_then(|plaintext| ShareSecretKey::try_from_slice(&plaintext))
     }
 
-    /// Drop the versions corresponding to `removed_keys` and then merge `other`.
-    pub fn merge(&mut self, other: &SecretStore, removed_keys: &Set<ShareKey>) {
-        let mut versions = other.versions.clone();
-        versions.extend(
-            self.versions
-                .iter()
-                .filter(|version| !removed_keys.contains(&version.pk))
-                .cloned(),
-        );
-        self.versions = Self::sorted(versions);
-    }
-
-    /// Sort `versions` and drop duplicates.
-    fn sorted(versions: NonEmpty<SecretStoreVersion>) -> NonEmpty<SecretStoreVersion> {
-        let mut sorted: Vec<SecretStoreVersion> = versions.into_iter().collect();
-        sorted.sort();
-        sorted.dedup();
-        NonEmpty::from_vec(sorted).expect("sorting a non-empty list leaves it non-empty")
-    }
-}
-
-/// A count (at least one), then the versions in ascending order without
-/// repeats, as [`SecretStore`] keeps them.
-impl Encode for SecretStore {
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        encode_list(self.versions.iter(), out);
-    }
-}
-
-impl Decode for SecretStore {
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        decode_exact(bytes)
-    }
-}
-
-impl StreamDecode for SecretStore {
-    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
-        let (versions, rest) = BTreeSet::<SecretStoreVersion>::decode_next(bytes)?;
-        let versions = NonEmpty::collect(versions)
-            .ok_or(DecodeError::InvalidField("secret store versions"))?;
-        Ok((SecretStore { versions }, rest))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
-pub struct SecretStoreVersion {
-    /// Every encrypted secret key (and hence version) corresponds to a single public
-    /// key.
-    pub pk: ShareKey,
-    /// This is a map in order to handle the case of blank siblings, when we must encrypt
-    /// the same secret key separately for each public key in the sibling resolution.
-    pub sk: BTreeMap<TreeNodeIndex, EncryptedSecret<ShareSecretKey>>,
-    /// The PublicKey of the child that encrypted this parent.
-    pub encrypter_pk: ShareKey,
-}
-
-/// `pk ‖ sk ‖ encrypter_pk`, with `sk` in ascending index order.
-impl Encode for SecretStoreVersion {
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.pk.encode_into(out);
-        self.sk.encode_into(out);
-        self.encrypter_pk.encode_into(out);
-    }
-}
-
-impl Decode for SecretStoreVersion {
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        decode_exact(bytes)
-    }
-}
-
-impl StreamDecode for SecretStoreVersion {
-    fn decode_next(bytes: &[u8]) -> Result<(Self, &[u8]), DecodeError> {
-        let (pk, rest) = ShareKey::decode_next(bytes)?;
-        let (sk, rest) = BTreeMap::decode_next(rest)?;
-        let (encrypter_pk, rest) = ShareKey::decode_next(rest)?;
-        Ok((
-            SecretStoreVersion {
-                pk,
-                sk,
-                encrypter_pk,
-            },
-            rest,
-        ))
-    }
-}
-
-impl SecretStoreVersion {
     pub fn decrypt_secret(
         &self,
         doc_id: TreeId,
-        child_node_key: &NodeKey,
+        child_node_keys: &NodeKeys,
         child_sks: &mut ShareKeyMap,
         seen_idxs: &[TreeNodeIndex],
     ) -> Result<ShareSecretKey, CgkaError> {
-        // The child's node key may not list the encrypter's key. Check our own
+        // The child's node keys may not include the encrypter's key. Check our own
         // secrets too.
-        let is_encrypter = child_node_key.contains_key(&self.encrypter_pk)
+        let is_encrypter = child_node_keys.contains_key(&self.encrypter_pk)
             || child_sks.contains_key(&self.encrypter_pk);
         let mut lookup_idx = seen_idxs.last().ok_or(CgkaError::EncryptedSecretNotFound)?;
         if !self.sk.contains_key(lookup_idx) {

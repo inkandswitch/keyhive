@@ -9,7 +9,7 @@ use crate::{
         RemovedMember,
     },
     predecessors::Predecessors,
-    secret_store::{SecretStore, SecretStoreVersion},
+    secret_store::PathNode,
     tree::PathChange,
     treemath::TreeNodeIndex,
 };
@@ -71,13 +71,8 @@ fn encrypted_secret_laws() {
 }
 
 #[test]
-fn secret_store_version_laws() {
-    laws::<SecretStoreVersion>();
-}
-
-#[test]
 fn secret_store_laws() {
-    laws::<SecretStore>();
+    laws::<PathNode>();
 }
 
 #[test]
@@ -107,70 +102,29 @@ fn cgka_operation_laws() {
     laws::<CgkaOperation>();
 }
 
-fn version(seed: u8) -> SecretStoreVersion {
-    SecretStoreVersion {
+fn path_node(seed: u8) -> PathNode {
+    PathNode {
         pk: key(seed),
         sk: BTreeMap::from([(
             TreeNodeIndex::decode(&[seed]).expect("one byte"),
             sealed(seed),
         )]),
-        encrypter_pk: key(seed.wrapping_add(1)),
     }
-}
-
-/// A count followed by `versions`, encoded as given.
-fn store_bytes(versions: &[SecretStoreVersion]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    keyhive_codec::prefixed::encode_list(versions, &mut bytes);
-    bytes
-}
-
-#[test]
-fn a_secret_store_must_have_a_version() {
-    assert_eq!(
-        SecretStore::decode(&store_bytes(&[])),
-        Err(DecodeError::InvalidField("secret store versions"))
-    );
-}
-
-#[test]
-fn secret_store_versions_must_ascend_without_repeats() {
-    let (low, high) = {
-        let (a, b) = (version(1), version(2));
-        if a < b {
-            (a, b)
-        } else {
-            (b, a)
-        }
-    };
-    assert!(SecretStore::decode(&store_bytes(&[low.clone(), high.clone()])).is_ok());
-    assert_eq!(
-        SecretStore::decode(&store_bytes(&[high, low.clone()])),
-        Err(DecodeError::UnsortedKeys)
-    );
-    assert_eq!(
-        SecretStore::decode(&store_bytes(&[low.clone(), low])),
-        Err(DecodeError::UnsortedKeys)
-    );
 }
 
 #[test]
 fn a_secret_map_must_ascend_by_tree_index() {
-    let v = version(3);
-    let entry = v.sk.values().next().expect("one entry").clone();
+    let node = path_node(3);
+    let entry = node.sk.values().next().expect("one entry").clone();
     let mut bytes = Vec::new();
-    v.pk.encode_into(&mut bytes);
+    node.pk.encode_into(&mut bytes);
     // Count 2: index 5, then index 4.
     bytes.push(2);
     for index in [5, 4] {
         bytes.push(index);
         entry.encode_into(&mut bytes);
     }
-    v.encrypter_pk.encode_into(&mut bytes);
-    assert_eq!(
-        SecretStoreVersion::decode(&bytes),
-        Err(DecodeError::UnsortedKeys)
-    );
+    assert_eq!(PathNode::decode(&bytes), Err(DecodeError::UnsortedKeys));
 }
 
 /// Every sealed secret holds at least its 24-byte nonce and 16-byte tag.
@@ -292,7 +246,10 @@ fn a_remove_encodes_in_its_documented_layout() {
 #[test]
 fn an_update_encodes_in_its_documented_layout() {
     use layout::*;
-    let node = SecretStore::new(share_key(6), share_key(3), BTreeMap::new());
+    let node = PathNode {
+        pk: share_key(6),
+        sk: BTreeMap::new(),
+    };
     let op = CgkaOperation {
         doc_id: doc(),
         predecessors: Default::default(),
@@ -300,7 +257,7 @@ fn an_update_encodes_in_its_documented_layout() {
             new_path: alloc::boxed::Box::new(PathChange {
                 leaf_idx: 2,
                 leaf_pk: share_key(3),
-                path: alloc::vec![(1, node.clone())],
+                path: alloc::vec![(1, node)],
                 removed_keys: [share_key(8)].into(),
             }),
             predecessor_secrets: alloc::vec![PredecessorSecret {
@@ -314,7 +271,8 @@ fn an_update_encodes_in_its_documented_layout() {
         &[0, 2, 2],
         share_key(3).as_bytes(),
         &[1, 1],
-        node.encode().as_bytes(),
+        share_key(6).as_bytes(),
+        &[0],
         &[1],
         share_key(8).as_bytes(),
         &[1],

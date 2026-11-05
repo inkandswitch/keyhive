@@ -31,7 +31,7 @@ BeeKEM's innovation is in how it handles concurrent operations without a central
 
 An inner node with conflict keys is treated similarly to a blank node during subsequent updates: you encrypt for its resolution rather than using a single key. This prevents an adversary who compromised one fork from decrypting the other fork's path to root. Future updates by any member whose path passes through the conflicted node resolve the conflict by replacing all conflict keys with a single fresh key.
 
-When applying a concurrent path change, BeeKEM merges keys at each affected node (combining into conflict keys where needed) and merges secret stores (keeping all concurrent versions). Removes are applied last, blanking paths after all other concurrent operations merge.
+When applying a concurrent path change, BeeKEM merges keys at each affected node (combining into conflict keys where needed) and adds the update's secret store at each inner node as a new version (keeping all concurrent versions). Removes are applied last, blanking paths after all other concurrent operations merge.
 
 ## Performance
 
@@ -53,7 +53,8 @@ Space is O(n log n) worst case for conflict key storage.
 * **Blank node**: a node set to empty. Either an inner node whose secret has been invalidated, an unoccupied leaf, or a removed member's leaf (functioning as a tombstone).
 * **Resolution of a node**: if the node has a single public key, the resolution is just that node. If the node is blank or contains conflict keys, the resolution is the set of its highest descendants that are neither blank nor conflicted inner nodes. During encryption, resolution is taken on sibling nodes (not on the node being encrypted), so the worst case for a single resolution is n/2 (all leaves in one subtree).
 * **Path**: the sequence of inner nodes from a leaf's parent up to and including the root.
-* **Secret store**: the data stored at an inner node. It contains one or more *versions*, where each version holds a public key for the node, the encrypter child's public key, and a map of encrypted secrets keyed by tree node indices.
+* **Secret store**: what an update stores at an inner node on its path: a public key for the node, the encrypter child's public key, and a map of encrypted secrets keyed by tree node indices. An inner node has one or more secret stores, called its "versions".
+* **Path node**: what an update sends for each inner node on its path (the node's public key and the map of encrypted secrets).
 
 ## The Tree
 
@@ -85,13 +86,11 @@ When a member rotates their leaf key, they encrypt a new secret at every ancesto
 
    e. **Handle the empty resolution case.** If the sibling's entire subtree is blank (no members), generate a throwaway keypair and use it for the DH. The encrypted secret is stored keyed by the child's own index only (so the encrypter can still decrypt it later).
 
-   f. **Record the encrypter child's public key** alongside the encrypted secrets. This is needed during decryption so that decrypters know which public key was used for the DH.
-
-   g. **Store the new secret store** (parent's public key, encrypted secret map, and encrypter child's public key) at the parent, replacing whatever was there.
+   f. **Store the new secret store** (parent's public key, encrypted secret map, and encrypter child's public key) at the parent, replacing whatever was there.
 
 3. **After reaching the root**, record which leaf performed this encryption. The root now has a valid secret and any member can decrypt it.
 
-4. **Emit a path change** containing the leaf's new public key, the new secret store for every inner node on the path, and the list of old public keys that were replaced (the "removed keys"). The removed keys are important for merge; they tell other members which keys have been superseded.
+4. **Emit a path change** containing the leaf's new public key, a path node for every inner node on the path, and the list of old public keys that were replaced (the "removed keys"). The removed keys are important for merge; they tell other members which keys have been superseded.
 
 ## Decryption (Deriving the Root Secret)
 
@@ -122,9 +121,8 @@ After an add, there is no valid root key. Someone must perform an update (path e
 
 1. Verify the group has more than one member.
 2. Find the leaf index for the member being removed.
-3. Collect all public keys from the inner nodes on the removed member's path (these are the "removed keys", needed for merge bookkeeping).
-4. Blank the leaf and its entire path to the root.
-5. Trim contiguous blank leaves from the right edge of the tree.
+3. Blank the leaf and its entire path to the root.
+4. Trim contiguous blank leaves from the right edge of the tree.
 
 Like add, remove invalidates the root key.
 
@@ -144,7 +142,7 @@ When applying a path change from another member that was created concurrently:
 
    a. **At the leaf**: merge the new public key with the existing one. If the existing key was in the "removed keys" list (meaning this update replaced it), the new key simply substitutes. Otherwise, both keys are retained as **conflict keys**. A leaf's conflict keys come from concurrent rotations by one member's instances. They stay until an update that has seen them replaces them, so replicas agree whatever order the rotations arrived in. A conflicted leaf stays in its parent's resolution, and encrypters encrypt to its lowest key.
 
-   b. **At each inner node on the path**: if the node already has a secret store, merge the new store's versions into the existing one, removing any versions whose public keys appear in the removed keys list and appending the new versions. If the node was blank, just insert the new store.
+   b. **At each inner node on the path**: if the node is not blank, remove its versions whose public keys are in the removed keys list, then add the update's path node, with its encrypter's key, as a new version. If the node was blank, that becomes its only version.
 
 4. **Check the root.** If the root has a single version (no conflict), record the new encrypter. If the root now has multiple conflicting versions, clear the encrypter. The tree has no valid root key until someone does a fresh update.
 
@@ -182,16 +180,16 @@ Batches are applied in order:
 
 Concurrent updates are merged into the tree as they arrive. A concurrent add or remove is recorded but not applied. So is a concurrent update that a replay would put in the same batch as an add or remove. Once anything has been recorded this way, every later concurrent operation is recorded too, and the tree is **replayed from scratch** before the next local operation, before applying an operation whose predecessors include every head, and when listing members. Merging two replicas' states always replays. Replay starts from the initial state, sorts all known operations into batches, and re-applies them in order. This guarantees convergence regardless of the order in which operations were received.
 
-## The Secret Store (Inner Node Data)
+## Inner Node Versions
 
-Each inner node stores a list of **versions**. In the normal case, there is exactly one version. After concurrent updates that overlap at that node, there may be multiple.
+Each inner node stores one or more **versions**, each a secret store. In the normal case, there is exactly one version. After concurrent updates that overlap at that node, there may be several.
 
-Each version contains the three components of an inner node described in an earlier section:
+A secret store contains the three components of an inner node described in an earlier section:
 * **A public key** for the node corresponding to the encrypted secret.
 * **The map from tree node indices to encrypted secrets.**
 * **The encrypter child's public key.**
 
-A secret store "has a conflict" when it has more than one version.
+An inner node "has a conflict" when it has more than one version.
 
 ## Security Notes
 

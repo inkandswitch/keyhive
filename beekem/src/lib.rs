@@ -25,6 +25,7 @@ pub mod encrypted;
 pub mod error;
 pub mod id;
 pub mod keys;
+pub mod node_versions;
 pub mod operation;
 pub mod pcs_key;
 pub mod predecessors;

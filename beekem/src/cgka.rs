@@ -446,7 +446,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 id
             );
         }
-        let leaf_index = self.tree.push_leaf(id, pk.into());
+        let leaf_index = self.tree.add_leaf(id, pk);
         let op = CgkaOperation {
             doc_id: self.doc_id,
             predecessors: Predecessors::heads_of(&self.ops_graph),
@@ -511,7 +511,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             return None;
         }
         self.tree
-            .node_key_for_id(self.owner_id)
+            .node_keys_for_id(self.owner_id)
             .ok()?
             .keys()
             .into_iter()
@@ -727,7 +727,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
     /// Returns [`None`] when the owner is not in the tree.
     pub fn owner_leaf_key(&self) -> Option<ShareKey> {
         self.tree
-            .node_key_for_id(self.owner_id)
+            .node_keys_for_id(self.owner_id)
             .ok()
             .map(|k| k.lowest())
     }
@@ -855,7 +855,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             CgkaChange::Add { added_id, pk, .. } => {
                 // A concurrent history might have added the same member.
                 if !self.tree.contains_id(&added_id) {
-                    self.tree.push_leaf(added_id, pk.into());
+                    self.tree.add_leaf(added_id, pk);
                 }
             }
             CgkaChange::Remove { ref removed, .. } => {

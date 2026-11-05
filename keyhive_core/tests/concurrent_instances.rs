@@ -5,7 +5,7 @@ use beekem::{
     id::TreeId,
     operation::{CgkaChange, CgkaOperation},
     predecessors::Predecessors,
-    secret_store::SecretStore,
+    secret_store::PathNode,
     tree::PathChange,
     treemath::{LeafNodeIndex, TreeNodeIndex},
 };
@@ -84,17 +84,16 @@ async fn a_forged_leaf_key_still_leaves_one_key_at_the_leaf() -> Result<()> {
     let mut new_path = an_update(&alice, design_doc).await;
 
     // A peer can put whatever it likes in a signed `PathChange`, including a key that
-    // does not displace the one already at the leaf. The first node has to list that
-    // key as its encrypter, which takes no secret.
+    // does not displace the one already at the leaf. The first node is then taken to
+    // be encrypted by that key.
     let forged_pk = own_prekey(&bob, design_doc).await;
     let leaf = TreeNodeIndex::from(LeafNodeIndex::new(new_path.leaf_idx));
     let node_sk = ShareSecretKey::generate(&mut OsRng);
     let entry = encrypt_secret(TreeId::from(design_doc), &node_sk, &node_sk, &forged_pk)?;
-    new_path.path[0].1 = SecretStore::new(
-        node_sk.share_key(),
-        forged_pk,
-        BTreeMap::from([(leaf, entry)]),
-    );
+    new_path.path[0].1 = PathNode {
+        pk: node_sk.share_key(),
+        sk: BTreeMap::from([(leaf, entry)]),
+    };
     new_path.leaf_pk = forged_pk;
     new_path.removed_keys = BTreeSet::new();
     let op = CgkaOperation {
