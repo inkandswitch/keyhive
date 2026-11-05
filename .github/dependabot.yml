@@ -1,12 +1,23 @@
 version: 2
 
 updates:
-  # Keeps SHA-pinned actions (codeql.yml, release-js.yml) current, so pins
-  # don't silently freeze the CodeQL bundle or miss security fixes.
+  # Every action in .github/workflows/ is pinned by SHA (CodeQL's `actions`
+  # queries flag mutable tags); this keeps the pins and their `# vN` comments
+  # current so they don't freeze the CodeQL bundle or miss security fixes.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    # Don't propose a release until it has been public for a week, so a
+    # hijacked tag is likely caught upstream before it reaches a bump PR.
+    cooldown:
+      default-days: 7
     groups:
+      # upload-artifact and download-artifact must move together.
+      artifact:
+        patterns: ['actions/*-artifact']
+      # Routine bumps in one PR; majors (not matched here) arrive one per
+      # action, so a breaking major can't hold back the rest.
       actions:
         patterns: ['*']
+        update-types: [minor, patch]
