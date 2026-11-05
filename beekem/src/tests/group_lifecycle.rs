@@ -423,9 +423,9 @@ async fn a_removal_whose_signing_fails_does_not_change_the_tree() {
 }
 
 #[tokio::test]
-async fn a_rotation_whose_signing_fails_does_not_change_the_tree() {
+async fn a_rotation_whose_signing_fails_does_not_change_the_replica() {
     let (mut group, failing, mut rng) = group_with_a_failing_signer(0x5167_0003).await;
-    let before = group.replicas[0].tree.clone();
+    let before = group.replicas[0].clone();
     let sk = ShareSecretKey::generate(&mut rng);
     let result = group.replicas[0]
         .update::<Local, _, StdRng>(sk.share_key(), sk, &failing, &mut rng)
@@ -435,8 +435,8 @@ async fn a_rotation_whose_signing_fails_does_not_change_the_tree() {
         "{result:?}"
     );
     assert!(
-        group.replicas[0].tree == before,
-        "the failed rotation's path is still in the tree"
+        group.replicas[0] == before,
+        "the failed rotation's path or secrets are still in the replica"
     );
     assert_agreement_after_rotations(group, &mut rng, "after a failed rotation").await;
 }

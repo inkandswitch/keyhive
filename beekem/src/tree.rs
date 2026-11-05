@@ -415,10 +415,11 @@ impl BeeKem {
         maybe_last_secret_decrypted.ok_or(CgkaError::NoRootKey)
     }
 
-    /// Rotate key and encrypt new secrets along the provided [`MemberId`]'s path,
-    /// adding the new secrets to `sks`. This returns the root secret and the
-    /// [`PathChange`] without writing them to the tree. Applying the returned
-    /// path with [`Self::apply_path`] installs a new root secret in the tree.
+    /// Rotate `id`'s leaf to the key of `leaf_sk` and encrypt new secrets along
+    /// its path. This returns the root secret, the [`PathChange`], and the new
+    /// secret of each node on the path, without writing any of them to the tree.
+    /// Applying the returned path with [`Self::apply_path`] installs a new root
+    /// secret in the tree.
     ///
     /// Starting from the owner's leaf, move up the tree toward the root (i.e., along the
     /// leaf's path). As you look at each parent node along the way, you need to populate
@@ -434,25 +435,22 @@ impl BeeKem {
     pub(crate) fn encrypt_path<R: rand::CryptoRng + rand::RngCore>(
         &self,
         id: MemberId,
-        pk: ShareKey,
-        sks: &mut ShareKeyMap,
+        leaf_sk: &ShareSecretKey,
         csprng: &mut R,
-    ) -> Result<Option<(PcsKey, PathChange)>, CgkaError> {
+    ) -> Result<Option<(PcsKey, PathChange, ShareKeyMap)>, CgkaError> {
         let leaf_idx = *self.leaf_index_for_id(id)?;
         debug_assert!(self.id_for_leaf(leaf_idx).unwrap() == id);
         let mut new_path = PathChange {
             leaf_idx: leaf_idx.u32(),
-            leaf_pk: pk,
+            leaf_pk: leaf_sk.share_key(),
             path: Vec::new(),
             removed_keys: self.node_keys_for_id(id)?.keys().into_iter().collect(),
         };
-        // Wait to record the new secrets until the whole path has been encrypted
-        // so none are recorded if we hit an error on the way.
-        let mut new_sks: Vec<(ShareKey, ShareSecretKey)> = Vec::new();
+        let mut new_sks = ShareKeyMap::new();
         let mut child_idx: TreeNodeIndex = leaf_idx.into();
-        // Each node is encrypted with the secret of the child below it (`pk`'s at
-        // the leaf and the fresh secret generated for each ancestor).
-        let mut child_sk = sks.get(&pk).ok_or(CgkaError::SecretKeyNotFound)?.clone();
+        // Each node is encrypted with the secret of the child below it (`leaf_sk`
+        // at the leaf and the fresh secret generated for each ancestor).
+        let mut child_sk = leaf_sk.clone();
         let mut parent_idx = treemath::parent(child_idx);
         while !self.is_root(child_idx) {
             if let Some(store) = self.inner_node(parent_idx) {
@@ -462,7 +460,7 @@ impl BeeKem {
             let new_parent_pk = new_parent_sk.share_key();
             // Hold on to the secret so we can derive the root key later without
             // having to decrypt our own path.
-            new_sks.push((new_parent_pk, new_parent_sk.clone()));
+            new_sks.insert(new_parent_pk, new_parent_sk.clone());
             let node = self.encrypt_new_path_node_for_parent(
                 child_idx,
                 &child_sk,
@@ -477,10 +475,7 @@ impl BeeKem {
         }
 
         debug_assert!(new_path.is_well_formed());
-        for (new_pk, new_sk) in new_sks {
-            sks.insert(new_pk, new_sk);
-        }
-        Ok(Some((child_sk.into(), new_path)))
+        Ok(Some((child_sk.into(), new_path, new_sks)))
     }
 
     /// Applies `id`'s [`PathChange`], representing new public and encrypted
@@ -1006,10 +1001,8 @@ mod tests {
         } else {
             (b, a)
         };
-        let mut low_sks = sks.clone();
-        low_sks.insert(low.share_key(), low.clone());
-        let (_, low_path) = base
-            .encrypt_path(owner, low.share_key(), &mut low_sks, &mut rng)
+        let (_, low_path, _) = base
+            .encrypt_path(owner, &low, &mut rng)
             .expect("encrypting a path")
             .expect("the owner is in the tree");
         // A member joins before the second rotation, so the first one's path
@@ -1017,10 +1010,8 @@ mod tests {
         let (joiner, joiner_pk) =
             join_new_member_to_share_key_map(&mut rng, &mut ShareKeyMap::new());
         base.add_leaf(joiner, joiner_pk);
-        let mut high_sks = sks.clone();
-        high_sks.insert(high.share_key(), high.clone());
-        let (root_secret, high_path) = base
-            .encrypt_path(owner, high.share_key(), &mut high_sks, &mut rng)
+        let (root_secret, high_path, _) = base
+            .encrypt_path(owner, &high, &mut rng)
             .expect("encrypting a path")
             .expect("the owner is in the tree");
 
@@ -1074,10 +1065,8 @@ mod tests {
             *id = next;
         }
 
-        let mut sks = ShareKeyMap::new();
-        sks.insert(owner_pk, owner_sk);
-        let (_, path) = tree
-            .encrypt_path(owner, owner_pk, &mut sks, &mut rng)
+        let (_, path, _) = tree
+            .encrypt_path(owner, &owner_sk, &mut rng)
             .expect("encrypting a path")
             .expect("the owner is in the tree");
         (tree, ids, path)
@@ -1270,8 +1259,12 @@ mod tests {
         );
         assert!(!tree.has_root_key(), "a leaf on its own is not a root key");
 
-        let (_, path) = tree
-            .encrypt_path(joiner, joiner_pk, &mut sks, &mut rng)
+        let (_, path, _) = tree
+            .encrypt_path(
+                joiner,
+                sks.get(&joiner_pk).expect("the joiner's secret"),
+                &mut rng,
+            )
             .expect("encrypting a path")
             .expect("the joiner is in the tree");
         tree.apply_path(joiner, &path);

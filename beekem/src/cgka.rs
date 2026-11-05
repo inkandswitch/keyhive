@@ -689,14 +689,11 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         if !self.tree.contains_id(&self.owner_id) {
             return Err(CgkaError::IdentifierNotFound);
         }
-        self.owner_sks.insert(new_pk, new_sk.clone());
         // Get our reachable ancestors before the update is applied to the tree so
         // the tree's root still corresponds to the current heads.
         let ancestors = self.reachable_ancestor_secrets();
-        let maybe_key_and_path =
-            self.tree
-                .encrypt_path(self.owner_id, new_pk, &mut self.owner_sks, csprng)?;
-        if let Some((pcs_key, new_path)) = maybe_key_and_path {
+        let maybe_key_and_path = self.tree.encrypt_path(self.owner_id, &new_sk, csprng)?;
+        if let Some((pcs_key, new_path, path_sks)) = maybe_key_and_path {
             let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestors);
             let op = CgkaOperation {
                 doc_id: self.doc_id,
@@ -708,6 +705,8 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             };
 
             let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
+            self.owner_sks.insert(new_pk, new_sk.clone());
+            self.owner_sks.extend(&path_sks);
             self.tree.apply_path(self.owner_id, &new_path);
             self.record_root_secret_for(pcs_key.clone(), signed_op.digest());
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
