@@ -460,7 +460,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             },
         };
         let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
-        let placed_leaf_index = self.tree.add_leaf(id, pk);
+        let placed_leaf_index = self.tree.add_leaf(id, pk, signed_op.digest());
         debug_assert_eq!(
             placed_leaf_index, leaf_index,
             "the add's leaf is at the index it was signed with"
@@ -707,7 +707,8 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
             self.owner_sks.insert(new_pk, new_sk.clone());
             self.owner_sks.extend(&path_sks);
-            self.tree.apply_path(self.owner_id, &new_path);
+            self.tree
+                .apply_path(self.owner_id, &new_path, signed_op.digest());
             self.record_root_secret_for(pcs_key.clone(), signed_op.digest());
             Ok((pcs_key, signed_op, (new_pk, new_sk)))
         } else {
@@ -850,7 +851,7 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             CgkaChange::Add { added_id, pk, .. } => {
                 // A concurrent history might have added the same member.
                 if !self.tree.contains_id(&added_id) {
-                    self.tree.add_leaf(added_id, pk);
+                    self.tree.add_leaf(added_id, pk, op.digest());
                 }
             }
             CgkaChange::Remove { ref removed, .. } => {
@@ -862,7 +863,9 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
                 }
             }
             CgkaChange::Update { ref new_path, .. } => {
-                let outcome = self.tree.apply_path(MemberId::from(op.issuer()), new_path);
+                let outcome =
+                    self.tree
+                        .apply_path(MemberId::from(op.issuer()), new_path, op.digest());
                 if outcome == ApplyPathOutcome::BlankedPath {
                     self.blanked_updates.insert(op.digest());
                 }
