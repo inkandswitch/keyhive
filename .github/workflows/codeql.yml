@@ -1,0 +1,56 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Rerun periodically to pick up new queries
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only supersede PR runs: a cancelled main or scheduled run uploads nothing,
+  # leaving the baseline that PR alerts are diffed against stale.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+# Not a `nix run .#ci-*` app like the rest of CI: the nixpkgs CodeQL CLI lags
+# the published query packs and ships extractor binaries unpatched for NixOS.
+# The action's bundle keeps CLI and queries in lockstep.
+#
+# Actions are pinned by SHA (this job can write code-scanning alerts);
+# Dependabot keeps the pins current.
+jobs:
+  analyze:
+    name: ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # None needs a build: the Rust extractor reads sources via
+        # rust-analyzer, and JS/TS and workflow YAML are extracted directly.
+        # `actions` checks the workflows themselves (expression injection,
+        # untrusted checkout, excess permissions), notably release-js.yml.
+        language: [actions, javascript-typescript, rust]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          build-mode: none
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          category: /language:${{ matrix.language }}
