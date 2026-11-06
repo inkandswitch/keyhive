@@ -115,15 +115,42 @@ Two members issue concurrent path updates; an attacker who compromised one fork 
 
 ### T8. Metadata
 
-An observer without plaintext learns document IDs, membership, operation counts, sizes, and timing.
+An observer without plaintext learns document IDs, membership, operation counts, coarse sizes, and timing.
 
-- Accepted. Relays must see membership to evaluate capabilities. Sizes and timing are visible to the transport. Padding and cover traffic are application or transport concerns.
+- Mitigated for content sizes. Each block's body is padded inside the AEAD to a [PADMÉ] length with a 256-byte floor (see [`ciphersuite.md`](./ciphersuite.md#content)), so a block's length shows the size class of its body, O(log log n) bits, not its exact size. Operation counts, CGKA operation sizes, and timing are still visible.
+- Not a defence against compression oracles. See [T10](#t10-compression-oracles).
+- Accepted otherwise. Relays must see membership to evaluate capabilities. Timing is visible to the transport. Cover traffic is an application or transport concern.
+
+[PADMÉ]: https://petsymposium.org/popets/2019/popets-2019-0056.pdf
 
 ### T9. Genesis compromise
 
 The root key of a group or document is malicious or leaked at creation.
 
 - Accepted. The root is the trust anchor. Applications should treat creation as security-relevant and may create from a hardened key and delegate immediately.
+
+### T10. Compression oracles
+
+An attacker who can put chosen bytes into the same compressed payload as a secret, and see how long each resulting block is, can recover the secret a guess at a time (the CRIME and BREACH attacks).
+
+Compression replaces repeated byte strings with short references, so a payload that contains a string twice compresses better than one that contains it once. Suppose a document holds `token=7f3a…` and the attacker can add text to it. They add `token=7`: if that matches the start of the secret, the payload compresses a little better and the block is a little shorter. A wrong guess makes no difference. Repeating this one character at a time recovers the secret. Encryption does not prevent it, because the AEAD preserves length. Automerge may compress an application's data before Keyhive encrypts it, so this applies to Keyhive content.
+
+The attack needs both of these:
+
+- _Write without read._ The attacker can get bytes into a document they cannot read. A member who can write can also read, and has no need for an oracle. The cases that matter are an application that copies outside input into a shared document (email, form submissions, webhook payloads, scraped text), or a member who pastes text that an outsider wrote.
+- _Lengths._ The attacker sees the block sizes: a relay ([A1](#a1-untrusted-relay)), a network observer ([A5](#a5-network-adversary)), or an outsider working with either.
+
+Padding does not stop it. A block is padded to a [PADMÉ] length (see [T8](#t8-metadata)), so a one-byte saving usually leaves its length unchanged. But the padding is deterministic, and the attacker controls part of the input:
+
+1. They add bytes that do not compress until the block moves up to the next length, then remove one. The block now sits at the top of its bucket. This takes a few observations.
+2. From there, any saving from a correct guess moves the block down a bucket. Each guess costs about one observation, as without padding.
+3. After each character they recover, they adjust the filler by a known amount to stay at the boundary.
+
+Padding therefore adds a one-time cost, not a cost per guess, and wider buckets only make the first search slightly longer. Random padding does not help either: the attacker repeats each guess and takes the smallest length, so the noise cancels out. Padding every block to one fixed size would stop the attack, but would cost a full block for every edit, which is not practical for a CRDT.
+
+Padding is still worth having, because it addresses a different and more common attacker. Length leakage ([T8](#t8-metadata)) needs only an observer: every relay and network observer sees every block's size, for as long as it keeps the blocks, without doing anything. A compression oracle needs that observer and also an attacker who can write without reading, who can put bytes next to a particular secret, and who can make many writes. Padding removes most of what a passive observer learns. The defence against the active attack is in how the application compresses its data.
+
+- Accepted. Keyhive cannot prevent this; it depends on what the application compresses together. Applications should not compress attacker-influenced data in the same payload as secrets. They can compress them separately, leave fields that hold secrets uncompressed, or keep outside input out of documents that hold secrets.
 
 ## Known Gaps
 

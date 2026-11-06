@@ -64,15 +64,29 @@ Trade-offs:
 
 ## Content
 
-A block's body is its ancestors' content refs and keys, then its payload:
+A block's body is its ancestors' content refs and keys, then its payload, padded:
 
 ```
-body = count ‖ ( content_ref ‖ key:32 )* ‖ payload
+envelope = count ‖ ( content_ref ‖ key:32 )* ‖ payload
+body     = envelope ‖ 0x80 ‖ 0x00*         len(body) = max(256, PADMÉ(len(envelope) + 1))
 ```
 
-The refs are in ascending order of their encodings, each once, and a block with no ancestors has a count of zero, so every block has one body format.
+The refs are in ascending order of their encodings, each once, and a block with no ancestors has a count of zero, so every block has one envelope format.
 
-The body is encrypted in chunks of 64 KiB, so a block of any size streams through bounded memory, and any byte range of the body decrypts by reading only the chunks that cover it. A range of the payload lies after the ancestors, so a reader locates it only after decrypting the chunks that contain them, usually just the first. Each block's application key derives two subkeys:
+A block's length is visible to anyone who stores or forwards it, such as a relay, and that observer needs to do nothing but watch. Without padding, the length would reveal the size of each edit (a keystroke, a paste, a bulk import), how a document grows, and how well a compressed payload compressed. The exact size of an attached file can identify it, if the file is known elsewhere. A distinctive size also lets an observer link the same block across relays. Exact lengths alone have been enough to recover content in other systems, for example search queries from the lengths of TLS responses ([Chen et al., 2010][TLS]), and spoken phrases from the packet sizes of encrypted VoIP calls ([Wright et al., 2008][VoIP]).
+
+PADMÉ is a trade-off between what a length shows and what padding costs. Padding every block to one fixed size shows nothing, but costs a full block for every edit. Padding to powers of two shows O(log n) bits and can nearly double a block. [PADMÉ] (Nikitin et al., 2019, Algorithm 1) rounds a length up so that its low E − S bits are zero, where E = ⌊log₂ len⌋ and S = ⌊log₂ E⌋ + 1: only the leading bit and the S bits after it can be set. A padded length then shows O(log log n) bits about the envelope instead of O(log n). Above the floor the padding adds at most a sixteenth of the envelope's length, falling to a 32nd from 64 KiB. Every envelope of at most 255 bytes pads to 256.
+
+- _Inside the AEAD._ The padding is encrypted and authenticated with the rest of the body, so zeros serve as well as random bytes.
+- _Self-describing._ A reader strips the last nonzero byte, which must be `0x80`, and everything after it, and refuses a body without that marker. It does not need to know the rule the lengths come from. Every writer must still use the same rule: a body of any other length stands out, which tells an observer which client wrote it and leaves it among fewer blocks of its length. Changing the rule is a change every writer has to make together.
+- _Typed._ The raw chunk encryption, `EncryptedContent::encrypt`, takes a `PaddedBody`, which only padding builds, so an unpadded envelope cannot be encrypted by mistake.
+- _Not a compression-oracle defence._ An attacker who can add chosen bytes to a compressed payload that also holds a secret, and see block lengths, can still recover the secret a guess at a time. See [T10](./threat_model.md#t10-compression-oracles) in the threat model.
+
+[PADMÉ]: https://petsymposium.org/popets/2019/popets-2019-0056.pdf
+[TLS]: https://doi.org/10.1109/SP.2010.20
+[VoIP]: https://doi.org/10.1109/SP.2008.21
+
+The body is encrypted in chunks of 64 KiB, so a block of any size streams through bounded memory, and any byte range of the body decrypts by reading only the chunks that cover it. A range of the payload lies after the ancestors, so a reader locates its start only after decrypting the chunks that contain them, usually just the first. The payload ends at the body's last nonzero byte, the marker, which a reader finds by decrypting back from the last chunk: for a large body the padding can fill several chunks. Each block's application key derives two subkeys:
 
 ```
 enc_key   = derive_key("/keyhive/content/encryption-key/v1/2026-10-31", app_key)
@@ -88,7 +102,7 @@ The block travels as `"KHE" ‖ version ‖ content_ref ‖ pred_refs ‖ group_
 - _Commitment per chunk._ The reader recomputes each `nonce_i` from what the chunk decrypts to and rejects a mismatch. Causal encryption hands ancestors' keys out in envelopes that any writer composes, so without the check one ciphertext could decrypt under its real key and under a key an envelope names, to two histories.
 - _Bound to its header and document._ The header digest and `doc_id` are in every chunk's associated data, so editing a header field or reading a block as part of another document fails authentication.
 - _Order and length._ The index and final flag are in each chunk's associated data, so reordering chunks, truncating at a chunk boundary, or appending a chunk fails authentication.
-- _Overhead._ 132 bytes of header, the ancestors (a varint count, one byte when there are none, then each one's encoded ref and 32-byte key), and 40 bytes per chunk (nonce and tag), which is 0.06% of a full chunk.
+- _Overhead._ 132 bytes of header, the ancestors (a varint count, one byte when there are none, then each one's encoded ref and 32-byte key), the padding (up to 256 bytes in total for small envelopes, at most a sixteenth of the envelope above that), and 40 bytes per chunk (nonce and tag), which is 0.06% of a full chunk.
 
 ## Key Derivation in BeeKEM
 

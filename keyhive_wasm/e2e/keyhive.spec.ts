@@ -346,6 +346,14 @@ test.describe("Keyhive", async () => {
         new Uint8Array([1, 2, 3]),
       );
       const bytes = keyed.encryptedContent().toBytes();
+      // Both bodies are under the 256-byte floor, so they pad alike.
+      const longer = await kh.tryEncryptKeyed(
+        docId,
+        new ChangeId(new Uint8Array(32).fill(4)),
+        [],
+        new Uint8Array(200).fill(9),
+      );
+      const longerBytes = longer.encryptedContent().toBytes();
       const read = Encrypted.fromBytes(bytes);
       let otherDocRefused = false;
       try {
@@ -357,12 +365,17 @@ test.describe("Keyhive", async () => {
         header: Array.from(bytes.slice(0, 4)),
         plaintext: Array.from(read.decryptWithKey(keyed.applicationSecret, docId)),
         otherDocRefused,
+        lengths: [bytes.length, longerBytes.length],
       };
     });
 
     expect(out.header).toStrictEqual([0x4b, 0x48, 0x45, 0x00]); // "KHE", version 0
     expect(out.plaintext).toStrictEqual([1, 2, 3]);
     expect(out.otherDocRefused).toBe(true);
+    expect(out.lengths[0]).toBe(out.lengths[1]);
+    // Header (3 + 1 + a 33-byte change id + 3 × 32) + the 256-byte floor + one
+    // chunk's nonce and tag.
+    expect(out.lengths[0]).toBe(133 + 256 + 40);
   });
 
   test("a causal decryption reads the ancestors an async load returns", async ({ page }) => {
