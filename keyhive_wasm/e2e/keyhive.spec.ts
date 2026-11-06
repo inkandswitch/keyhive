@@ -506,7 +506,7 @@ test.describe("Keyhive", async () => {
         try {
           const freshStore = CiphertextStore.newInMemory();
           const archiveToLoad = new Archive(archiveBytes);
-          const freshKh = await archiveToLoad.tryToKeyhive(freshStore, signer);
+          await archiveToLoad.tryToKeyhive(freshStore, signer);
           loadSuccess = true;
         } catch (e) {
           loadError = {
