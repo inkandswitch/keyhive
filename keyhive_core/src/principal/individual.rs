@@ -215,46 +215,28 @@ pub enum MissingPrekeys {
     NoPublishedPrekey(Box<IndividualId>),
 }
 
-fn clamp(bytes: [u8; 8], offset_bits: u8) -> usize {
-    let bound = u64::from_be_bytes(bytes)
-        .checked_shl(offset_bits as u32)
-        .unwrap_or(0);
-
-    usize::from_be(bound as usize)
-}
-
+/// A pseudorandom index in `0..max` (0 when `max` is 0 or 1) derived from `seed`.
+///
+/// Uniform by rejection sampling: each draw is masked down to the smallest power of two
+/// that covers `0..max`, which accepts at least half the draws, and a draw that is not
+/// strictly below `max` is discarded rather than folded in with a modulus, which would
+/// bias the low end of the range.
 fn pseudorandom_in_range(seed: &[u8], max: usize) -> usize {
-    let digits: u8 = max
-        .checked_ilog2()
-        .unwrap_or(0)
-        .try_into()
-        .expect("usize has at most 64 bits (< 256)");
-
-    let shiftsize: u8 = 64 - digits;
+    let bits = usize::BITS - max.saturating_sub(1).leading_zeros();
+    let mask = u64::MAX.checked_shr(64 - bits).unwrap_or(0);
 
     let mut hash_stream = blake3::Hasher::new().update(seed).finalize_xof();
-    let mut buf = [0; 8]; // usize max
-    let mut idx = None;
-
-    // NOTE this strategy looks odd at first, but it's an established way to
-    // avoid the biases that you get when sampling a (P)RNG and using a modulous
-    // to clamp to a range. Because the range (idx in our case) is likely not
-    // the same size as the RNG, a modulous will bias towards the lower end of the range.
-    // We use resampling here instead is a way to avoid this bias.
-    //
-    // Naively reampling from `usize` would be very inefficient when the
-    // range is small because it's so unlikely to get a random number in that range.
-    // to fix this, we first truncate the random number to the closest power of 2,
-    // which gives us a >=50% chance of getting a number in the range.
-    while idx.is_none() {
+    let mut buf = [0; 8];
+    loop {
         hash_stream.fill(&mut buf);
-        let raw_idx: usize = clamp(buf, shiftsize);
-        if raw_idx <= max {
-            idx = Some(raw_idx)
+        let raw = u64::from_be_bytes(buf) & mask;
+        if raw < max as u64 {
+            return raw as usize;
+        }
+        if max == 0 {
+            return 0;
         }
     }
-
-    idx.expect("index to be Some due to the check above")
 }
 
 #[cfg(test)]
@@ -271,46 +253,6 @@ mod tests {
         let op = sk.try_sign_sync(AddKeyOp::generate(&mut csprng)).unwrap();
         let individual: Individual = Individual::new(Arc::new(op).into());
         assert_eq!(individual.id.to_bytes(), sk.verifying_key().to_bytes());
-    }
-
-    #[test]
-    fn test_clamp_sequence() {
-        test_utils::init_logging();
-
-        let a = clamp([0xFF; 8], 0);
-        let b = clamp([0xFF; 8], 1);
-        let c = clamp([0xFF; 8], 8);
-        let d = clamp([0xFF; 8], 16);
-        let e = clamp([0xFF; 8], 32);
-        let f = clamp([0xFF; 8], 48);
-        let g = clamp([0xFF; 8], 64);
-
-        assert_eq!(a, usize::MAX);
-        assert!(a > b);
-        assert!(b > c);
-        assert!(c > d);
-        assert!(d > e);
-        assert!(e > f);
-        assert!(f > g);
-        assert_eq!(g, 0);
-    }
-
-    #[test]
-    fn test_clamp_keeps_in_range() {
-        test_utils::init_logging();
-
-        let x = clamp([0xFF; 8], 48);
-        assert!(x <= 2usize.pow(64 - 48));
-        assert_eq!(x, 65535);
-    }
-
-    #[test]
-    fn test_clamp_keeps_in_range_2() {
-        test_utils::init_logging();
-
-        let buf: [u8; 8] = rand::random();
-        let x = clamp(buf, 48);
-        assert!(x <= 2usize.pow(64 - 48));
     }
 
     #[test]
@@ -340,6 +282,27 @@ mod tests {
         assert_ne!(index1, index2);
         assert_ne!(index1, index3);
         assert_ne!(index2, index3);
+    }
+
+    /// Regression: the index must be strictly below `max`, for every length, not just
+    /// the lengths and seeds the other tests happen to draw. An index equal to the length
+    /// made `pick_prekey` report an individual with sixteen live prekeys as having none.
+    #[test]
+    fn pseudorandom_in_range_is_strictly_below_max_for_every_length() {
+        test_utils::init_logging();
+        for max in 1usize..=64 {
+            let mut seen = HashSet::new();
+            for seed in 0u32..4096 {
+                let index = pseudorandom_in_range(&seed.to_be_bytes(), max);
+                assert!(
+                    index < max,
+                    "index {index} not below max {max} for seed {seed}"
+                );
+                seen.insert(index);
+            }
+            // The draw must reach the whole range, not a stride of it.
+            assert_eq!(seen.len(), max, "max {max}: indices reached {seen:?}");
+        }
     }
 
     #[test]
