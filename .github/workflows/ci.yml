@@ -25,7 +25,7 @@ jobs:
       # Pinned exactly: a floating tag would fail CI whenever a new
       # release learns new typos. Allow-list lives in `_typos.toml`.
       - name: Spell check
-        uses: crate-ci/typos@626c4bedb751ce0b7f03262ca97ddda9a076ae1c # v1.39.2
+        uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
 
   # Every check is a `nix run .#<check>` app defined in flake.nix, so hosted
   # CI and `nix run .#ci` locally execute byte-identical commands.
