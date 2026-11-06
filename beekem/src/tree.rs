@@ -381,6 +381,22 @@ impl BeeKem {
         }
     }
 
+    /// The public keys of the concurrent versions at the root, or an empty
+    /// vec when the root is blank or has a single version.
+    ///
+    /// More than one means concurrent `Update`s each wrote a root of their
+    /// own and none has yet been followed by an `Update` that resolves them.
+    pub fn root_conflict_pks(&self) -> Vec<ShareKey> {
+        let root_idx: TreeNodeIndex = treemath::root(self.tree_size);
+        let TreeNodeIndex::Inner(p_idx) = root_idx else {
+            panic!("BeeKEM should always have a root at an inner node.")
+        };
+        match self.inner_node(p_idx) {
+            Some(root) if root.has_conflict() => root.version_pks().collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Decrypt parent node's [`ShareSecretKey`].
     ///
     /// Returns the secret if there is a single parent public key.

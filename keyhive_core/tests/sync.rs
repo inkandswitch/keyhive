@@ -310,16 +310,59 @@ async fn a_member_without_the_key_tree_derives_no_pcs_key() -> Result<()> {
         .await?;
 
     assert!(
-        bob.try_pcs_key_hash(design_doc).await.is_none(),
+        matches!(
+            bob.try_pcs_key_hash(design_doc).await,
+            Err(keyhive_core::cgka::PcsKeyError::NoCgka)
+        ),
         "bob knows the document but holds no key tree to derive from"
     );
 
     ctx.sync(&alice, &bob).await?;
 
     assert!(
-        bob.try_pcs_key_hash(design_doc).await.is_some(),
+        bob.try_pcs_key_hash(design_doc).await.is_ok(),
         "the key agreement operations let him derive one"
     );
+    Ok(())
+}
+
+/// Two members who update their keys without having seen each other's update leave the
+/// root with a version from each. The conflict names both issuers and holds until a
+/// later update that has seen both.
+#[tokio::test]
+async fn concurrent_updates_conflict_the_root_until_one_resolves_them() -> Result<()> {
+    use keyhive_core::cgka::PcsKeyError;
+
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), design_doc, Edit, &[]).await?;
+    ctx.sync(&alice, &bob).await?;
+    // One update each, made without seeing the other's.
+    alice.force_pcs_update(design_doc).await?;
+    bob.force_pcs_update(design_doc).await?;
+    ctx.sync(&alice, &bob).await?;
+    ctx.sync(&bob, &alice).await?;
+
+    let mut both = vec![alice.id(), bob.id()];
+    both.sort();
+    for who in [&alice, &bob] {
+        match who.try_pcs_key_hash(design_doc).await {
+            Err(PcsKeyError::RootConflicted { issuers }) => {
+                assert_eq!(issuers, both, "{} sees both issuers", who.name())
+            }
+            other => panic!("{} expected a conflicted root, got {other:?}", who.name()),
+        }
+    }
+
+    // An update that has seen both resolves the conflict.
+    alice.force_pcs_update(design_doc).await?;
+    ctx.sync(&alice, &bob).await?;
+    ctx.sync(&bob, &alice).await?;
+    let on_alice = alice.try_pcs_key_hash(design_doc).await.unwrap();
+    let on_bob = bob.try_pcs_key_hash(design_doc).await.unwrap();
+    assert_eq!(on_alice, on_bob, "the resolved root derives one key");
     Ok(())
 }
 

@@ -4,7 +4,7 @@ use crate::{
     access::Access,
     all_agent_events::{AllAgentEvents, EventDigest},
     archive::Archive,
-    cgka::{AllCgkaOps, LocalCgkaSecret},
+    cgka::{AllCgkaOps, LocalCgkaSecret, PcsKeyError},
     contact_card::ContactCard,
     crypto::signed_ext::{SignedId, SignedSubjectId},
     error::{missing_dependency::MissingDependency, not_found::NotFound},
@@ -1157,16 +1157,19 @@ impl<
         Ok(members)
     }
 
-    /// The hash of `doc`'s current PCS key. Returns `None` if it has no key to hash.
-    pub async fn try_pcs_key_hash(&self, doc: DocumentId) -> Option<Digest<PcsKey>> {
-        let handle = self.get_document(doc).await?;
-        let hash = handle
-            .lock()
+    /// The hash of `doc`'s current PCS key.
+    ///
+    /// The error says why there is none, notably
+    /// [`PcsKeyError::RootConflicted`] with the issuers of the concurrent
+    /// `Update`s that conflict at the root.
+    pub async fn try_pcs_key_hash(&self, doc: DocumentId) -> Result<Digest<PcsKey>, PcsKeyError> {
+        let handle = self
+            .get_document(doc)
             .await
-            .cgka_mut()
-            .ok()
-            .and_then(|cgka| cgka.try_pcs_key_hash().ok());
-        hash
+            .ok_or(PcsKeyError::UnknownDocument)?;
+        let mut doc = handle.lock().await;
+        let cgka = doc.cgka_mut().map_err(|_| PcsKeyError::NoCgka)?;
+        cgka.try_pcs_key_hash()
     }
 
     /// Try causal decrypt from more than one entrypoint at once.

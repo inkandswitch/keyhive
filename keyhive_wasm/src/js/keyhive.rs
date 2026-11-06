@@ -329,6 +329,7 @@ impl JsKeyhive {
         self.0
             .try_pcs_key_hash(doc_id.0)
             .await
+            .ok()
             .map(|d| d.as_slice().to_vec())
     }
 

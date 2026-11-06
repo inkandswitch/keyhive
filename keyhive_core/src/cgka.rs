@@ -34,6 +34,28 @@ use std::{
     sync::Arc,
 };
 
+/// Why a document's current PCS key could not be derived.
+#[derive(Debug, thiserror::Error)]
+pub enum PcsKeyError {
+    /// The document is not known to this keyhive.
+    #[error("unknown document")]
+    UnknownDocument,
+
+    /// The document has no CGKA yet.
+    #[error("document has no CGKA")]
+    NoCgka,
+
+    /// Concurrent `Update`s each wrote a root and none has been resolved by
+    /// a later `Update`. `issuers` are the members that issued them.
+    #[error("tree root is conflicted by concurrent updates from {issuers:?}")]
+    RootConflicted { issuers: Vec<IndividualId> },
+
+    /// The key is underivable for another reason, e.g. this member's leaf
+    /// or a secret on its path is missing.
+    #[error("no PCS key derivable: {0}")]
+    Underivable(#[from] CgkaError),
+}
+
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
 /// from the group.
@@ -90,9 +112,32 @@ impl Cgka {
         self.0.ops_count()
     }
 
-    pub fn try_pcs_key_hash(&mut self) -> Result<Digest<PcsKey>, CgkaError> {
+    /// The hash of the PCS key at the tree root.
+    ///
+    /// A root conflicted by concurrent `Update`s is reported as
+    /// [`PcsKeyError::RootConflicted`] with the issuers of those updates;
+    /// every other reason the key cannot be derived is carried verbatim in
+    /// [`PcsKeyError::Underivable`].
+    pub fn try_pcs_key_hash(&mut self) -> Result<Digest<PcsKey>, PcsKeyError> {
+        let issuers = self.root_conflict_issuers();
+        if !issuers.is_empty() {
+            return Err(PcsKeyError::RootConflicted { issuers });
+        }
         let pcs_key = self.0.pcs_key_from_tree_root()?;
         Ok(Digest::hash(&pcs_key))
+    }
+
+    /// The issuers of the concurrent `Update`s that conflict at the tree
+    /// root, sorted by id. Empty when the root is not conflicted.
+    ///
+    /// A conflicted root has no PCS key until a later `Update` that
+    /// causally follows all of them resolves it.
+    pub fn root_conflict_issuers(&self) -> Vec<IndividualId> {
+        self.0
+            .root_conflict_issuers()
+            .into_iter()
+            .map(IndividualId::from)
+            .collect()
     }
 
     pub fn owner_sks(&self) -> &ShareKeyMap {

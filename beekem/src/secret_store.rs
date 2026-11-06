@@ -55,6 +55,11 @@ impl SecretStore {
         &self.versions
     }
 
+    /// The public key of every concurrent version of this node.
+    pub fn version_pks(&self) -> impl Iterator<Item = ShareKey> + '_ {
+        self.versions.iter().map(|v| v.pk)
+    }
+
     pub fn has_conflict(&self) -> bool {
         self.versions.len() > 1
     }
