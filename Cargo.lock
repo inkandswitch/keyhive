@@ -136,7 +136,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beekem"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "arbitrary",
  "beekem",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "keyhive_content"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arbitrary",
  "blake3",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "keyhive_core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "keyhive_crypto"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "arbitrary",
  "blake3",
@@ -1104,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "keyhive_wasm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64-simd",
  "beekem",
@@ -1137,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "keyline"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arbitrary",
  "bijoux",
@@ -1155,7 +1155,7 @@ dependencies = [
 
 [[package]]
 name = "keyline_memory"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-lock",
  "divan",
