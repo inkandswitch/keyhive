@@ -108,10 +108,18 @@ jobs:
             exit 1
           fi
 
-          published="$(npm view "$name@$version" version)"
-          if [ -n "$published" ]; then
-            echo "$name@$version is already published."
-            exit 0
+          # `npm view` exits with E404 for a version that does not exist yet,
+          # which is the normal case for a new release. Any other failure is
+          # a failed lookup and aborts.
+          err="$(mktemp)"
+          if published="$(npm view "$name@$version" version 2>"$err")"; then
+            if [ -n "$published" ]; then
+              echo "$name@$version is already published."
+              exit 0
+            fi
+          elif ! grep -q E404 "$err"; then
+            cat "$err" >&2
+            exit 1
           fi
 
           # Dist-tag follows the version, not the GitHub "pre-release"
