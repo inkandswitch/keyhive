@@ -74,6 +74,9 @@ name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "async-lock"
@@ -199,6 +202,7 @@ dependencies = [
  "cfg-if",
  "constant_time_eq",
  "cpufeatures",
+ "zeroize",
 ]
 
 [[package]]
@@ -1084,6 +1088,7 @@ dependencies = [
  "arbitrary",
  "blake3",
  "bolero",
+ "chacha20",
  "chacha20poly1305",
  "curve25519-dalek",
  "derive_more",
@@ -1092,6 +1097,7 @@ dependencies = [
  "future_form",
  "futures",
  "keyhive_codec",
+ "poly1305",
  "rand 0.8.8",
  "signature",
  "subtle",
@@ -1340,6 +1346,7 @@ dependencies = [
  "cpufeatures",
  "opaque-debug",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]

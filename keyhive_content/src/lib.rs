@@ -2,6 +2,9 @@
 //! application secrets derived from a CGKA group secret, the causal
 //! envelopes that include ancestors' keys, and the ciphertext store that
 //! causal decryption reads from.
+//!
+//! Everything but the ciphertext store builds without `std`, so a block can be
+//! encrypted and opened in `no_std` code.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -23,8 +26,8 @@ extern crate std;
 pub mod ancestor_key;
 pub mod application_secret;
 pub mod encrypted;
-#[cfg(feature = "std")]
 pub mod envelope;
+pub mod padding;
 pub mod reference;
 #[cfg(feature = "std")]
 pub mod store;

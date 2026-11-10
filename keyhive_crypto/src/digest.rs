@@ -2,6 +2,7 @@
 
 use crate::{
     identifier::Identifier,
+    secret::ZeroizingHasher,
     signable::{head, Kinded, TAG},
 };
 use alloc::vec::Vec;
@@ -52,7 +53,9 @@ impl<T: Kinded> Digest<T> {
     /// of certificate identities: BLAKE3 over
     /// `"KH" ‖ kind ‖ version ‖ bytes`.
     pub fn of_bytes(bytes: &[u8]) -> Self {
-        let mut hasher = blake3::Hasher::new();
+        // Boxed and wiped when dropped: what is hashed this way includes
+        // secrets; see `ZeroizingHasher` for what this does not reach.
+        let mut hasher = ZeroizingHasher::new(blake3::Hasher::new());
         hasher.update(&TAG);
         hasher.update(&[T::KIND.to_u8(), T::VERSION]);
         hasher.update(bytes);

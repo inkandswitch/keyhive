@@ -140,7 +140,7 @@ impl ShareSecretKey {
         hasher.update(shared.as_bytes());
         hasher.update(mine.as_bytes().min(other.as_bytes()));
         hasher.update(mine.as_bytes().max(other.as_bytes()));
-        SymmetricKey::from(*hasher.finalize().as_bytes())
+        hasher.finalize_key()
     }
 
     /// Use `bytes` as a secret key, as they are: any 32 bytes are one.

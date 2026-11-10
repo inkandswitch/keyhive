@@ -2,18 +2,25 @@
 
 use crate::{
     ancestor_key::AncestorKey,
-    encrypted::{encode_ancestors, encode_body, ContentDecryptError, EncryptedContent},
+    encrypted::{encode_ancestors, encode_envelope, ContentDecryptError, EncryptedContent},
+    padding::{unpadded_len, MalformedPadding},
     reference::ContentRef,
 };
+use alloc::{collections::BTreeMap, vec::Vec};
+use core::mem::MaybeUninit;
 use keyhive_codec::{
     error::DecodeError,
     prefixed::decode_len,
     traits::{Decode, Encode},
 };
 use keyhive_crypto::{identifier::Identifier, symmetric_key::SymmetricKey};
-use std::{collections::HashMap, vec::Vec};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
+
+#[cfg(all(test, feature = "std"))]
+use crate::encrypted::encode_body;
+#[cfg(test)]
+use crate::padding::PaddedBody;
 
 /// A container for an arbitrary payload and the references and keys of its ancestors.
 ///
@@ -42,7 +49,7 @@ pub struct Envelope<C: ContentRef, T> {
     pub plaintext: T,
 
     /// Any ancestors that this envelope depends on.
-    pub ancestors: HashMap<C, SymmetricKey>,
+    pub ancestors: BTreeMap<C, SymmetricKey>,
 }
 
 impl<C: ContentRef, T: Encode> Envelope<C, T> {
@@ -51,8 +58,20 @@ impl<C: ContentRef, T: Encode> Envelope<C, T> {
     ///
     /// The buffer never grows, so it leaves no copy of a key behind.
     pub fn encode_zeroizing(&self) -> Zeroizing<Vec<u8>> {
-        let payload = Zeroizing::new(self.plaintext.encode().into_bytes());
-        encode_body(&self.ancestors, &payload)
+        encode_envelope(&self.ancestors, &self.encoded_plaintext())
+    }
+
+    /// The body a block encrypts: this envelope, padded as
+    /// [`ApplicationSecret::try_encrypt`](crate::application_secret::ApplicationSecret::try_encrypt)
+    /// pads it.
+    #[cfg(all(test, feature = "std"))]
+    pub(crate) fn padded_body(&self) -> PaddedBody {
+        encode_body(&self.ancestors, &self.encoded_plaintext())
+    }
+
+    /// The payload's encoding, wiped when dropped.
+    fn encoded_plaintext(&self) -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(self.plaintext.encode().into_bytes())
     }
 }
 
@@ -73,6 +92,10 @@ impl<C: ContentRef, T: Encode> Encode for Envelope<C, T> {
 
 /// Refuses ancestors out of order or repeated, so each envelope has one
 /// encoding; the payload's own codec decides what follows them.
+///
+/// This decodes an envelope, not a decrypted body: a body is padded, and with
+/// a byte payload the padding would come back as part of it. To read a block,
+/// use [`Envelope::open`], which strips the padding first.
 impl<C: ContentRef, T: Decode> Decode for Envelope<C, T> {
     fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         let (ancestors, payload) = decode_ancestors(bytes)?;
@@ -87,9 +110,9 @@ impl<C: ContentRef, T: Decode> Decode for Envelope<C, T> {
 /// after them.
 fn decode_ancestors<C: ContentRef>(
     bytes: &[u8],
-) -> Result<(HashMap<C, SymmetricKey>, &[u8]), DecodeError> {
+) -> Result<(BTreeMap<C, SymmetricKey>, &[u8]), DecodeError> {
     let (count, mut rest) = decode_len(bytes)?;
-    let mut ancestors = HashMap::new();
+    let mut ancestors = BTreeMap::new();
     let mut previous: Option<&[u8]> = None;
     for _ in 0..count {
         let (content_ref, after_ref) = C::decode_next(rest)?;
@@ -113,17 +136,23 @@ impl<C: ContentRef> Envelope<C, Vec<u8>> {
     /// block's [`AncestorKey`]. The payload keeps the decrypted buffer rather
     /// than a copy of it.
     ///
-    /// The ancestors' keys in the body are wiped, whether or not it decodes.
+    /// The ancestors' keys in the body are wiped, whether or not it decodes,
+    /// and so is the buffer's spare capacity, where moving the payload to the
+    /// front leaves a copy of its tail. The payload itself is the caller's to
+    /// wipe.
     pub fn open<P>(
         encrypted: &EncryptedContent<P, C>,
         key: &SymmetricKey,
         doc_id: Identifier,
     ) -> Result<(Self, AncestorKey<C>), OpenEnvelopeError> {
         let mut body = encrypted.try_decrypt(key, doc_id)?;
-        let (ancestors, payload) = decode_ancestors(&body)?;
+        let unpadded = unpadded_len(&body).map_err(MalformedBody::from)?;
+        body.truncate(unpadded);
+        let (ancestors, payload) = decode_ancestors(&body).map_err(MalformedBody::from)?;
         let payload_start = body.len() - payload.len();
         body[..payload_start].zeroize();
         body.drain(..payload_start);
+        body.spare_capacity_mut().fill(MaybeUninit::new(0));
         Ok((
             Envelope {
                 plaintext: core::mem::take(&mut *body),
@@ -143,16 +172,31 @@ pub enum OpenEnvelopeError {
     #[error(transparent)]
     Decrypt(#[from] ContentDecryptError),
 
-    /// The body decrypted, but is not an envelope. Only a writer with the
-    /// block's key can produce this.
+    /// The body decrypted, but is malformed. Only a writer with the block's
+    /// key can produce this.
+    #[error(transparent)]
+    Malformed(#[from] MalformedBody),
+}
+
+/// A body that decrypted but that no writer produces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum MalformedBody {
+    /// Its last nonzero byte is not the padding's marker.
+    #[error(transparent)]
+    Padding(#[from] MalformedPadding),
+
+    /// What precedes the padding is not an envelope.
     #[error("the content is not an envelope: {0}")]
-    Decode(#[from] DecodeError),
+    Envelope(#[from] DecodeError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::vec;
+    use crate::{application_secret::GroupSecret, encrypted::PredecessorRefs, padding::MARKER};
+    use alloc::vec;
+    use ed25519_dalek::SigningKey;
+    use keyhive_crypto::share_key::ShareSecretKey;
 
     type Env = Envelope<[u8; 32], Vec<u8>>;
     type Encrypted = EncryptedContent<Vec<u8>, [u8; 32]>;
@@ -222,7 +266,8 @@ mod tests {
             });
     }
 
-    /// A `HashMap` iterates in any order; the bytes do not depend on it.
+    /// The ancestors are written in order of their encoded refs, which for
+    /// some ref types is not their `Ord` order; here the two agree.
     #[test]
     fn ancestors_are_written_in_order_of_their_content_refs() {
         let bytes = envelope(&[9, 4, 7, 1], b"").encode().into_bytes();
@@ -251,7 +296,7 @@ mod tests {
     fn a_payload_refuses_what_its_codec_refuses() {
         let envelope: Envelope<[u8; 32], [u8; 4]> = Envelope {
             plaintext: *b"four",
-            ancestors: HashMap::new(),
+            ancestors: BTreeMap::new(),
         };
         let mut bytes = envelope.encode().into_bytes();
         assert_eq!(Envelope::decode(&bytes), Ok(envelope));
@@ -262,10 +307,7 @@ mod tests {
         );
     }
 
-    fn encrypt(body: &[u8]) -> (Encrypted, SymmetricKey, Identifier) {
-        use crate::encrypted::PredecessorRefs;
-        use ed25519_dalek::SigningKey;
-
+    fn encrypt(body: &PaddedBody) -> (Encrypted, SymmetricKey, Identifier) {
         let key = SymmetricKey::from([1; 32]);
         let doc_id = Identifier::from(&SigningKey::from_bytes(&[2; 32]));
         let encrypted = EncryptedContent::encrypt(
@@ -281,25 +323,69 @@ mod tests {
         (encrypted, key, doc_id)
     }
 
+    /// What a writer encrypts opens to its payload and ancestors, through the
+    /// production path: `try_encrypt` pads, `open` strips exactly the
+    /// padding, even when the payload itself ends like padding.
     #[test]
-    fn an_encrypted_envelope_opens_to_itself() {
+    fn a_write_opens_to_its_payload_and_ancestors() {
         bolero::check!()
-            .with_arbitrary::<(Vec<([u8; 32], [u8; 32])>, Vec<u8>)>()
-            .for_each(|(ancestors, payload)| {
-                let original = arbitrary_envelope(ancestors, payload);
-                let (encrypted, key, doc_id) = encrypt(original.encode().as_bytes());
-                let opened = Env::open(&encrypted, &key, doc_id).map(|(envelope, _)| envelope);
-                assert_eq!(opened, Ok(original));
+            .with_arbitrary::<(Vec<u8>, Vec<u8>, u8)>()
+            .for_each(|(ancestor_refs, payload, last)| {
+                let doc_id = Identifier::from(&SigningKey::from_bytes(&[2; 32]));
+                let ancestors: Vec<_> = ancestor_refs
+                    .iter()
+                    .map(|&n| AncestorKey::new([n; 32], doc_id, SymmetricKey::from([n ^ 1; 32])))
+                    .collect();
+                let refs: Vec<_> = ancestor_refs.iter().map(|&n| [n; 32]).collect();
+                let mut payload = payload.clone();
+                payload.push(*last);
+                payload.extend([MARKER, 0, 0]);
+
+                let secret = GroupSecret(ShareSecretKey::force_from_bytes([1; 32]))
+                    .derive_application_secret(
+                        &[9u8; 32],
+                        &PredecessorRefs::digest(&refs),
+                        &[5; 32].into(),
+                    );
+                let (encrypted, own) = secret
+                    .try_encrypt::<Vec<u8>>(doc_id, &ancestors, &payload)
+                    .expect("the ancestors are the predecessors");
+                let (opened, _) =
+                    Env::open(&encrypted, own.key_ref(), doc_id).expect("its own key opens it");
+                assert_eq!(opened.plaintext, payload);
+                assert_eq!(
+                    opened.ancestors,
+                    ancestors
+                        .iter()
+                        .map(|a| (*a.content_ref(), a.key()))
+                        .collect::<BTreeMap<_, _>>()
+                );
             });
     }
 
     #[test]
     fn a_body_that_is_not_an_envelope_does_not_open() {
-        // A count of one ancestor, with no ancestor after it.
-        let (encrypted, key, doc_id) = encrypt(&[1]);
-        assert!(matches!(
-            Env::open(&encrypted, &key, doc_id),
-            Err(OpenEnvelopeError::Decode(_))
-        ));
+        // A count of one ancestor, with no ancestor after it, padded.
+        let (encrypted, key, doc_id) = encrypt(&PaddedBody::pad(&[1]));
+        assert_eq!(
+            Env::open(&encrypted, &key, doc_id).map(|(envelope, _)| envelope),
+            Err(OpenEnvelopeError::Malformed(MalformedBody::Envelope(
+                DecodeError::UnexpectedEnd
+            )))
+        );
+    }
+
+    /// A body without padding does not open, unless it happens to end like
+    /// padding.
+    #[test]
+    fn an_unpadded_body_does_not_open() {
+        let unpadded = envelope(&[1], b"hi").encode().into_bytes();
+        let (encrypted, key, doc_id) = encrypt(&PaddedBody::unchecked(&unpadded));
+        assert_eq!(
+            Env::open(&encrypted, &key, doc_id).map(|(envelope, _)| envelope),
+            Err(OpenEnvelopeError::Malformed(MalformedBody::Padding(
+                MalformedPadding
+            )))
+        );
     }
 }

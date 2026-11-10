@@ -145,7 +145,7 @@ impl GroupSecret {
         hasher.update(pred_refs.as_slice());
         hasher.update(content_ref.encode().as_bytes());
         ApplicationSecret::new(
-            SymmetricKey::from(*hasher.finalize().as_bytes()),
+            hasher.finalize_key(),
             self.digest(),
             *group_secret_origin_hash,
             content_ref.clone(),
@@ -186,6 +186,11 @@ pub enum GroupSecretOrigin {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        encrypted::{CHUNK_LEN, CHUNK_OVERHEAD},
+        padding::{padded_len, unpadded_len},
+    };
+    use keyhive_codec::traits::Encode;
 
     /// Checked with `b3sum --derive-key` under `CONTENT_APPLICATION_KEY` over
     /// `[1; 32] ‖ Digest<PredecessorRefs>([[3; 32]]) ‖ [2; 32]`: the group secret,
@@ -228,6 +233,107 @@ mod tests {
             doc_id,
             SymmetricKey::from([content_ref; 32]),
         )
+    }
+
+    /// Writes a payload of `len` bytes with no ancestors, checks what it
+    /// decrypts to, and returns its body's padded length, its number of
+    /// chunks, and the length of its encoding.
+    fn write_of_len(len: usize) -> (usize, usize, usize) {
+        let payload = alloc::vec![7; len];
+        let (encrypted, own) = secret(&[])
+            .try_encrypt::<Vec<u8>>(doc(1), &[], &payload)
+            .expect("no ancestors, no predecessors");
+        let body = encrypted
+            .try_decrypt(own.key_ref(), doc(1))
+            .expect("its own key decrypts it");
+        // An envelope with no ancestors is a zero count, then the payload.
+        let unpadded = 1 + payload.len();
+        assert_eq!(unpadded_len(&body), Ok(unpadded));
+        assert_eq!(&body[1..unpadded], payload.as_slice());
+        let padded = padded_len(unpadded);
+        assert_eq!(body.len(), padded);
+        let chunks = padded.div_ceil(CHUNK_LEN);
+        assert_eq!(encrypted.chunks().len(), padded + chunks * CHUNK_OVERHEAD);
+        (padded, chunks, encrypted.encode().as_bytes().len())
+    }
+
+    /// What an observer sees of a write is its padded length: the ciphertext
+    /// of a payload is as long as its body's bucket plus the chunks'
+    /// overhead, so payloads whose bodies share a bucket are
+    /// indistinguishable by length.
+    ///
+    /// Each draw is also paired with the longest payload in its bucket, whose
+    /// envelope (a one-byte count, then the payload) leaves room for only the
+    /// marker. That payload must look the same, and one byte more must not.
+    #[test]
+    fn a_write_shows_only_its_padded_length() {
+        bolero::check!()
+            .with_type::<(u16, u16)>()
+            .for_each(|(a, b)| {
+                let (padded_a, _, len_a) = write_of_len(usize::from(*a));
+                let (padded_b, _, len_b) = write_of_len(usize::from(*b));
+                assert_eq!(padded_a == padded_b, len_a == len_b);
+
+                let longest = padded_a - 2;
+                let (padded_longest, _, len_longest) = write_of_len(longest);
+                assert_eq!((padded_longest, len_longest), (padded_a, len_a));
+                let (padded_next, _, len_next) = write_of_len(longest + 1);
+                assert!(padded_next > padded_a, "{longest} + 1 opens a new bucket");
+                assert!(len_next > len_a);
+            });
+    }
+
+    /// At the floor and at the first chunk's edge: a 65,535-byte envelope
+    /// pads to exactly one chunk, and one byte more pads to 67,584 bytes, a
+    /// second chunk.
+    #[test]
+    fn a_write_at_the_floor_and_chunk_edges() {
+        for (len, padded, chunks) in [
+            (0, 256, 1),
+            (254, 256, 1),
+            (255, 272, 1),
+            (65_534, 65_536, 1),
+            (65_535, 67_584, 2),
+        ] {
+            let (got_padded, got_chunks, _) = write_of_len(len);
+            assert_eq!(
+                (got_padded, got_chunks),
+                (padded, chunks),
+                "payload of {len}"
+            );
+        }
+    }
+
+    /// With ancestors, the body is exactly the envelope (their count, each
+    /// ref and key in order of ref, then the payload), the marker, and zeros
+    /// to the envelope's padded length: nothing extra before the marker that
+    /// stripping would hide.
+    #[test]
+    fn a_write_with_ancestors_pads_exactly_its_envelope() {
+        let secret = secret(&[[3; 32], [4; 32]]);
+        bolero::check!().with_type::<u16>().for_each(|len| {
+            let payload = alloc::vec![7; usize::from(*len)];
+            let (encrypted, own) = secret
+                .try_encrypt::<Vec<u8>>(
+                    doc(1),
+                    &[ancestor(4, doc(1)), ancestor(3, doc(1))],
+                    &payload,
+                )
+                .expect("its predecessors, in its document");
+            let body = encrypted
+                .try_decrypt(own.key_ref(), doc(1))
+                .expect("its own key decrypts it");
+
+            let mut envelope = alloc::vec![2];
+            for n in [3, 4] {
+                envelope.extend([n; 32]);
+                envelope.extend([n; 32]);
+            }
+            envelope.extend(&payload);
+            assert_eq!(unpadded_len(&body), Ok(envelope.len()));
+            assert_eq!(&body[..envelope.len()], envelope.as_slice());
+            assert_eq!(body.len(), padded_len(envelope.len()));
+        });
     }
 
     #[test]

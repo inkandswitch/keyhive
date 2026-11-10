@@ -46,6 +46,16 @@ impl SymmetricKey {
         <&[u8; 32]>::try_from(bytes).ok().map(Self::from)
     }
 
+    /// The first 32 bytes `hasher` outputs, read straight into the key's own
+    /// allocation, with the reader wiped after. BLAKE3's working copies on the
+    /// stack are not reached (see `ZeroizingHasher`). Callers go through
+    /// [`KeyDerivation::finalize_key`](crate::context::KeyDerivation::finalize_key).
+    pub(crate) fn from_hasher(hasher: &blake3::Hasher) -> Self {
+        let mut key = Box::new([0; 32]);
+        Zeroizing::new(hasher.finalize_xof()).fill(&mut *key);
+        Self(key)
+    }
+
     /// Generate a new random symmetric key.
     pub fn generate<R: rand::CryptoRng + rand::RngCore>(csprng: &mut R) -> Self {
         let mut key = Box::new([0; 32]);
@@ -115,10 +125,10 @@ struct SealKeys {
 impl SealKeys {
     fn new(key: &SymmetricKey) -> Self {
         // The cipher keeps, and wipes, its own copy of the key.
-        let enc_key = Zeroizing::new(Context::SEAL_ENCRYPTION_KEY.derive_key(key.as_slice()));
+        let enc_key = Context::SEAL_ENCRYPTION_KEY.derive_key(key.as_slice());
         SealKeys {
             cipher: XChaCha20Poly1305::new(enc_key.as_ref().into()),
-            nonce_key: Zeroizing::new(Context::SEAL_NONCE_KEY.derive_key(key.as_slice())),
+            nonce_key: Context::SEAL_NONCE_KEY.derive_key(key.as_slice()),
         }
     }
 

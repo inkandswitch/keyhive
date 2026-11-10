@@ -6,18 +6,24 @@
 //! XChaCha20-Poly1305 alone is not key-committing. See
 //! `design/ciphersuite.md`.
 
+use crate::secret::ZeroizingHasher;
+use zeroize::Zeroizing;
+
 /// A synthetic nonce: the first 24 bytes of keyed BLAKE3 under `nonce_key`,
 /// over `parts` in order.
 ///
 /// The parts are concatenated as they are, so together they must be
 /// unambiguous: every part but the last of a fixed or prefixed length.
 pub fn synthetic_nonce(nonce_key: &[u8; 32], parts: &[&[u8]]) -> [u8; 24] {
-    let mut hasher = blake3::Hasher::new_keyed(nonce_key);
+    // Boxed, so what it buffers (which can be plaintext) is never moved, and
+    // wiped when dropped, with the nonce key; see `ZeroizingHasher` for what
+    // this does not reach.
+    let mut hasher = ZeroizingHasher::new(blake3::Hasher::new_keyed(nonce_key));
     for part in parts {
         hasher.update(part);
     }
     let mut nonce = [0; 24];
-    hasher.finalize_xof().fill(&mut nonce);
+    Zeroizing::new(hasher.finalize_xof()).fill(&mut nonce);
     nonce
 }
 

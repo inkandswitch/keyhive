@@ -34,8 +34,9 @@ async-lock = { version = "3.4", default-features = false }
 base64-simd = "0.8.0"
 beekem = { version = "0.8.0", path = "beekem", default-features = false }
 bijoux = { version = "0.3", default-features = false, features = ["u32", "u64"] }
-blake3 = { version = "1.5", default-features = false }
+blake3 = { version = "1.5", default-features = false, features = ["zeroize"] }
 bolero = { version = "0.11.1", features = ["arbitrary"] }
+chacha20 = { version = "0.9.1", default-features = false, features = ["zeroize"] }
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
 console_error_panic_hook = "0.1"
 curve25519-dalek = "4.1"
@@ -70,6 +71,7 @@ nonempty = { version = "0.12.0", default-features = false, features = ["serializ
 nu-ansi-term = "0.50.1"
 num = { version = "0.4.3", features = ["num-bigint"] }
 once_cell = { version = "1.21", default-features = false, features = ["alloc", "race"] }
+poly1305 = { version = "0.8.0", default-features = false, features = ["zeroize"] }
 pretty_assertions = "1.4"
 prettytable-rs = "0.10.0"
 proptest = "1.5"

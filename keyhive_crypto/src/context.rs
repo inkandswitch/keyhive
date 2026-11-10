@@ -10,6 +10,9 @@
 //!
 //! The shape, and that the contexts differ, are checked at compile time.
 
+use crate::{secret::ZeroizingHasher, symmetric_key::SymmetricKey};
+use zeroize::{ZeroizeOnDrop, Zeroizing};
+
 /// A BLAKE3 key-derivation context: one per derivation.
 ///
 /// ```
@@ -94,17 +97,60 @@ impl Context {
         self.0
     }
 
-    /// Derive a 32-byte key from `key_material` under this context.
-    #[allow(clippy::disallowed_methods)]
-    pub fn derive_key(self, key_material: &[u8]) -> [u8; 32] {
-        blake3::derive_key(self.0, key_material)
+    /// Derive a 32-byte key from `key_material` under this context: the same
+    /// bytes as `blake3::derive_key`. The key is wiped when dropped, and so is
+    /// the hasher state that saw `key_material` (see [`KeyDerivation`]).
+    pub fn derive_key(self, key_material: &[u8]) -> Zeroizing<[u8; 32]> {
+        let mut key = Zeroizing::new([0; 32]);
+        self.hasher()
+            .update(key_material)
+            .finalize_xof()
+            .fill(&mut *key);
+        key
     }
 
-    /// A hasher in key-derivation mode under this context, for key material
-    /// fed in parts or read as a stream.
+    /// A key derivation under this context, for key material fed in parts or
+    /// read as a stream.
     #[allow(clippy::disallowed_methods)]
-    pub fn hasher(self) -> blake3::Hasher {
-        blake3::Hasher::new_derive_key(self.0)
+    pub fn hasher(self) -> KeyDerivation {
+        KeyDerivation(ZeroizingHasher::new(blake3::Hasher::new_derive_key(self.0)))
+    }
+}
+
+/// A BLAKE3 hasher in key-derivation mode under one [`Context`], the only
+/// kind there is: what it absorbs is key material.
+///
+/// It lives in its own allocation, so moving it copies only a pointer, and it
+/// is wiped when dropped. It is not `Clone`, and its output comes out only as
+/// a [`SymmetricKey`] or a reader that is wiped when dropped. It is wiped as a
+/// `ZeroizingHasher` is, which does not reach BLAKE3's working copies on the
+/// stack.
+pub struct KeyDerivation(ZeroizingHasher);
+
+impl KeyDerivation {
+    /// Absorb `bytes`.
+    pub fn update(&mut self, bytes: &[u8]) -> &mut Self {
+        self.0.update(bytes);
+        self
+    }
+
+    /// The first 32 bytes of output, as a key.
+    pub fn finalize_key(&self) -> SymmetricKey {
+        SymmetricKey::from_hasher(&self.0)
+    }
+
+    /// The output as a stream, wiped when dropped.
+    pub fn finalize_xof(&self) -> Zeroizing<blake3::OutputReader> {
+        Zeroizing::new(self.0.finalize_xof())
+    }
+}
+
+impl ZeroizeOnDrop for KeyDerivation {}
+
+/// What it has absorbed is secret, so nothing of it is shown.
+impl core::fmt::Debug for KeyDerivation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("KeyDerivation")
     }
 }
 

@@ -28,7 +28,7 @@ This document describes who Keyhive defends against, what it defends, and what i
 
 ### A1. Untrusted relay
 
-Holds `Relay`: stores and forwards ciphertext and the document's CGKA operations; sees operation hashes, sizes, timing, the membership graph, and the CGKA group's shape and public keys. Cannot decrypt.
+Holds `Relay`: stores and forwards ciphertext and the document's CGKA operations; sees operation hashes, content sizes rounded up to padded lengths ([T8](#t8-metadata)), exact CGKA operation sizes, timing, the membership graph, and the CGKA group's shape and public keys. Cannot decrypt.
 
 _Mitigations_: content is E2EE; `Relay` is excluded from the CGKA group, so a relay never receives a path secret (the CGKA operations it carries are signed, and their secrets are encrypted to the CGKA group's members); a relay serves only peers that can prove `Relay` or better. A relay can still remove members from a document's CGKA group ([G3](#g3-eviction-through-a-self-revoked-delegation)).
 
@@ -115,15 +115,53 @@ Two members issue concurrent path updates; an attacker who compromised one fork 
 
 ### T8. Metadata
 
-An observer without plaintext learns document IDs, membership, operation counts, sizes, and timing.
+An observer without plaintext learns document IDs, membership, operation counts, coarse sizes, and timing.
 
-- Accepted. Relays must see membership to evaluate capabilities. Sizes and timing are visible to the transport. Padding and cover traffic are application or transport concerns.
+- Mitigated for content sizes. Each block's body is padded inside the AEAD to a [PADMÉ] length with a 256-byte floor (see [`ciphersuite.md`](./ciphersuite.md#content)), so a block's length shows the size class of its body, O(log log n) bits, not its exact size. That bound is per block: where blocks bundle overlapping ranges of history, an observer who compares their lengths, and those of single changes, can narrow the sizes further. Operation counts, CGKA operation sizes, and timing are still visible.
+- Not a defence against compression oracles. See [T10](#t10-compression-oracles).
+- Accepted otherwise. Relays must see membership to evaluate capabilities. Timing is visible to the transport. Cover traffic is an application or transport concern.
+
+[PADMÉ]: https://petsymposium.org/popets/2019/popets-2019-0056.pdf
 
 ### T9. Genesis compromise
 
 The root key of a group or document is malicious or leaked at creation.
 
 - Accepted. The root is the trust anchor. Applications should treat creation as security-relevant and may create from a hardened key and delegate immediately.
+
+### T10. Compression oracles
+
+An attacker who can put chosen bytes into the same compressed payload as a secret, and see how long each resulting block is, can recover the secret a guess at a time. This was first described by [Kelsey (2002)][Kelsey], and later exploited against HTTPS as [CRIME] (Rizzo and Duong, 2012; CVE-2012-4929) and [BREACH] (Gluck, Harris and Prado, 2013); [Alawatugoda, Stebila and Boyd (2015)][Alawatugoda] model these attacks and prove a mitigation for them secure.
+
+Compression replaces repeated byte strings with short references, so a payload that contains a string twice compresses better than one that contains it once. Suppose a document holds `token=7f3a…` and the attacker can add text to it. They add `token=7`: if that matches the start of the secret, it compresses to a short reference, and the block grows less than it would for a wrong guess, which compresses less. Repeating this one character at a time recovers the secret. Encryption does not prevent it, because the AEAD preserves length. Automerge may compress an application's data before Keyhive encrypts it, so this applies to Keyhive content.
+
+The attack needs all of these:
+
+- _Write without read._ The attacker can get bytes into a document they cannot read. A member who can write can also read, and has no need for an oracle. The cases that matter are an application that copies outside input into a shared document (email, form submissions, webhook payloads, scraped text), or a member who pastes text that an outsider wrote.
+- _Recompression._ A block the attacker can see compresses each guess together with the secret: one that bundles a range of history, not a lone change that holds only the guess. How often such blocks are written limits how fast the attack goes.
+- _Lengths._ The attacker sees the block sizes: a relay ([A1](#a1-untrusted-relay)), a network observer ([A5](#a5-network-adversary)), or an outsider working with either.
+
+Unlike CRIME and BREACH, where each guess is a fresh request, a CRDT keeps everything. Every guess and every byte of filler stays in the document's history and in each later block that covers it, so the payload only grows, and the attacker reads each guess from how much it grew.
+
+Padding does not stop it, but in a CRDT it makes it costlier. A block is padded to a [PADMÉ] length (see [T8](#t8-metadata)), so a difference of a byte or two usually leaves its length unchanged: an observer sees a block's length change only when it crosses into the next padded length. The padding is deterministic, so the attacker can still use those crossings:
+
+1. They add filler that does not compress until the block crosses into the next length. They now know where it is to within a byte, and the padding rule tells them where the next edge is.
+2. They add filler up to just short of that edge: short enough that a wrong guess crosses it, and a correct one, which compresses better, does not. Compression savings are not exact to the byte (DEFLATE's are in bits, and depend on the rest of the payload), so some probes are wasted.
+3. They add the guess, and see whether the block crosses.
+4. Either way, the block is now too close to the edge for another probe: a wrong guess crossed it, and a correct one used up the margin. Nothing can be taken out of a CRDT's history, so before the next probe they add filler up to just short of the next edge, about one bucket's width.
+
+So every probe, right or wrong, costs about a bucket's width of permanent filler: from 64 KiB, a 32nd to a 64th of the payload, and the growth compounds. One probe can test several candidates at once, so halving the candidates each time, a character from an alphabet of n takes about log₂ n probes. Simulating PADMÉ's buckets from a 64 KiB payload, for an attacker who knows its compressed size exactly:
+
+- A 32-character hex token takes about 128 probes, and grows the document about 16 times, to about 1 MiB. Testing one candidate per probe would take about 272 probes, and 384 times.
+- A six-digit PIN takes about 24 probes, and grows the document less than twice.
+
+These are upper bounds on what the attack costs. An observer who sees several blocks that each bundle the probe, over different ranges of history, can test one write against several edges. Filler also only gets in the way of DEFLATE, whose matches reach back at most 32 KiB, if it lands between the secret and the probes, which depends on where the application puts what the attacker writes. What the attacker cannot avoid is that every probe and every byte of filler stays in the history, for every member to see.
+
+Random padding would be weaker than it looks: each block that bundles the same history again is another sample, and the smallest of them approaches the unpadded length. Padding every block to one fixed size would stop the attack for blocks up to that size, but would cost a full block for every edit, which is not practical for a CRDT.
+
+Padding is therefore a real cost to this attack, which grows with the length of the secret, but not a defence to rely on: a short secret is still recoverable. It is worth having mainly because it addresses a different and more common attacker. Length leakage ([T8](#t8-metadata)) needs only an observer: every relay and network observer sees every block's size, for as long as it keeps the blocks, without doing anything. A compression oracle needs that observer and also an attacker who can write without reading, whose writes are compressed together with a particular secret, and who can make many writes. The defence against the active attack is in how the application compresses its data.
+
+- Accepted. Keyhive cannot prevent this; it depends on what the application compresses together. Applications should not compress attacker-influenced data in the same payload as secrets. They can compress them separately, leave fields that hold secrets uncompressed, or keep outside input out of documents that hold secrets.
 
 ## Known Gaps
 
@@ -153,7 +191,7 @@ A replica adds and removes readers in its trees after its own membership writes,
 - _Trusted time._ Ordering is causal only.
 - _Availability._ Keyhive guarantees that what is delivered is correct, not that it is delivered.
 - _Protection from a compromised host._
-- _Traffic analysis resistance._ See T8.
+- _Traffic analysis resistance_, beyond padding content to coarse lengths. See [T8](#t8-metadata).
 
 ## Open Questions
 
@@ -161,6 +199,10 @@ A replica adds and removes readers in its trees after its own membership writes,
 - Test coverage for T5: no content layer here reads `retain` yet.
 
 <!-- External Links -->
+[Alawatugoda]: https://doi.org/10.1007/978-3-662-47854-7_6
+[BREACH]: https://breachattack.com/resources/BREACH%20-%20SSL,%20gone%20in%2030%20seconds.pdf
+[CRIME]: https://en.wikipedia.org/wiki/CRIME
+[Kelsey]: https://doi.org/10.1007/3-540-45661-9_21
 [Keyline]: ./keyline/README.md
 [keyline permanence]: ./keyline/README.md#permanence
 [subduction threats]: https://github.com/inkandswitch/subduction/blob/main/design/security/threats.md
