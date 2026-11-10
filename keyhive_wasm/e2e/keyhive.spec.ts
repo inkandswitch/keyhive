@@ -369,7 +369,7 @@ test.describe("Keyhive", async () => {
       };
     });
 
-    expect(out.header).toStrictEqual([0x4b, 0x48, 0x45, 0x00]); // "KHE", version 0
+    expect(out.header).toStrictEqual([0x4b, 0x48, 0x45, 0x01]); // "KHE", version 1
     expect(out.plaintext).toStrictEqual([1, 2, 3]);
     expect(out.otherDocRefused).toBe(true);
     expect(out.lengths[0]).toBe(out.lengths[1]);

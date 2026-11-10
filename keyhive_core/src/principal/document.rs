@@ -29,6 +29,7 @@ use keyhive_content::{
     application_secret::TryEncryptError,
     encrypted::{ContentDecryptError, EncryptedContent},
     envelope::{Envelope, OpenEnvelopeError},
+    padding::MalformedPadding,
     reference::ContentRef,
     store::{CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
 };
@@ -626,12 +627,18 @@ pub enum DecryptError {
     /// its key can produce this.
     #[error("the content is not an envelope: {0}")]
     MalformedEnvelope(DecodeError),
+
+    /// The content decrypted, but its padding is malformed. Only a writer
+    /// with its key can produce this.
+    #[error(transparent)]
+    MalformedPadding(#[from] MalformedPadding),
 }
 
 impl From<OpenEnvelopeError> for DecryptError {
     fn from(err: OpenEnvelopeError) -> Self {
         match err {
             OpenEnvelopeError::Decrypt(e) => e.into(),
+            OpenEnvelopeError::Padding(e) => e.into(),
             OpenEnvelopeError::Decode(e) => DecryptError::MalformedEnvelope(e),
         }
     }

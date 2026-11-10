@@ -304,6 +304,38 @@ mod tests {
         }
     }
 
+    /// With ancestors, the body is exactly the envelope (their count, each
+    /// ref and key in order of ref, then the payload), the marker, and zeros
+    /// to the envelope's padded length: nothing extra before the marker that
+    /// stripping would hide.
+    #[test]
+    fn a_write_with_ancestors_pads_exactly_its_envelope() {
+        let secret = secret(&[[3; 32], [4; 32]]);
+        bolero::check!().with_type::<u16>().for_each(|len| {
+            let payload = alloc::vec![7; usize::from(*len)];
+            let (encrypted, own) = secret
+                .try_encrypt::<Vec<u8>>(
+                    doc(1),
+                    &[ancestor(4, doc(1)), ancestor(3, doc(1))],
+                    &payload,
+                )
+                .expect("its predecessors, in its document");
+            let body = encrypted
+                .try_decrypt(own.key_ref(), doc(1))
+                .expect("its own key decrypts it");
+
+            let mut envelope = alloc::vec![2];
+            for n in [3, 4] {
+                envelope.extend([n; 32]);
+                envelope.extend([n; 32]);
+            }
+            envelope.extend(&payload);
+            assert_eq!(unpadded_len(&body), Ok(envelope.len()));
+            assert_eq!(&body[..envelope.len()], envelope.as_slice());
+            assert_eq!(body.len(), padded_len(envelope.len()));
+        });
+    }
+
     #[test]
     fn a_write_refuses_an_ancestor_from_another_document() {
         assert_eq!(

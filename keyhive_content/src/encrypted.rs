@@ -1,7 +1,10 @@
 //! Encrypted content, with its public metadata.
 //!
-//! A block's body is encrypted in chunks, so a block of any size streams
-//! through bounded memory and any byte range of the body decrypts on its own:
+//! A block's body is encrypted in chunks. Each chunk authenticates on its own
+//! (its index and whether it is last are in its AAD), so the format allows a
+//! reader to stream a block through bounded memory or decrypt only the chunks
+//! a byte range needs. The reader here does neither yet: it
+//! decrypts every chunk.
 //!
 //! ```text
 //! "KHE" ‖ version ‖ content_ref ‖ pred_refs:32 ‖ group_secret_hash:32
@@ -19,14 +22,17 @@
 //! encoding, then the payload. A block with no ancestors has a count of zero.
 //! The envelope is [padded](crate::padding) into the body, so the
 //! ciphertext's length shows only which of a fixed set of lengths the body
-//! was rounded up to. The payload starts after the ancestors, so a reader
-//! finds where a range of the payload starts only after decrypting the chunks
-//! that contain them, usually just the first. It ends at the body's last
-//! nonzero byte, the marker, which a reader finds by decrypting back from the
-//! last chunk: for a large body the padding can fill several chunks.
+//! was rounded up to. The payload starts after the ancestors, and ends at the
+//! body's last nonzero byte, the marker. A reader of a range would need the
+//! chunks that hold the ancestors, usually just the first, to find where the
+//! payload starts, and would find the marker by decrypting back from the last
+//! chunk: for a large body the padding can fill several chunks.
 //!
-//! Every chunk but the last contains [`CHUNK_LEN`] bytes of the body. The last
-//! contains fewer, and is empty only when the whole body is. The nonce is
+//! Every chunk but the last contains [`CHUNK_LEN`] bytes of the body, and the
+//! last at most that: a body whose length is a multiple of [`CHUNK_LEN`], as
+//! every padded length from 2 MiB is, ends in a full chunk. The last chunk is
+//! empty only when the whole body is, which no padded body is; the rule makes
+//! the chunking canonical. The nonce is
 //! synthetic: decryption recomputes it from the plaintext and rejects a
 //! mismatch, which commits each chunk to one key. Without that, one
 //! ciphertext could decrypt under two keys to two plaintexts, and a causal
@@ -34,7 +40,7 @@
 
 use crate::{
     application_secret::{GroupSecret, GroupSecretOrigin},
-    padding::{padded_len, write_padding, PaddedBody},
+    padding::{PaddedBody, Unpadded},
     reference::ContentRef,
 };
 use alloc::{
@@ -52,20 +58,24 @@ use keyhive_crypto::{
     context::Context,
     digest::Digest,
     identifier::Identifier,
-    secret::{write_secret, Sink},
+    secret::Sink,
     signable::{Kind, Kinded, TAG},
-    siv::{nonces_match, synthetic_nonce},
+    siv::synthetic_nonce,
     symmetric_key::SymmetricKey,
 };
 use tracing::instrument;
+
+#[cfg(feature = "std")]
+use keyhive_crypto::secret::write_secret;
 use zeroize::Zeroizing;
 
 /// The first bytes of encrypted content: Keyhive's tag, then `E`, which the
 /// kind registry reserves for it.
 pub const CONTENT_TAG: [u8; 3] = [TAG[0], TAG[1], b'E'];
 
-/// The version of the content format.
-pub const CONTENT_VERSION: u8 = 0;
+/// The version of the content format. Version 1 pads the body (see
+/// [`padding`](crate::padding)); version 0, which did not, is refused.
+pub const CONTENT_VERSION: u8 = 1;
 
 /// Plaintext bytes in every chunk but the last.
 pub const CHUNK_LEN: usize = 64 * 1024;
@@ -140,9 +150,13 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
         while let Some((i, chunk)) = chunks.next() {
             let aad = keys.aad(i, chunks.peek().is_none());
             let nonce = keys.nonce(&aad, chunk);
-            let mut buf = chunk.to_vec();
+            // Wiped when dropped, so a chunk that fails to encrypt leaves no
+            // plaintext behind, and sized for the tag, so appending it does
+            // not reallocate.
+            let mut buf = Zeroizing::new(Vec::with_capacity(chunk.len() + AEAD_TAG_LEN));
+            buf.extend_from_slice(chunk);
             keys.cipher
-                .encrypt_in_place(&XNonce::from(nonce), &aad, &mut buf)?;
+                .encrypt_in_place(&XNonce::from(nonce), &aad, &mut *buf)?;
             content.chunks.extend_from_slice(&nonce);
             content.chunks.extend_from_slice(&buf);
         }
@@ -150,16 +164,18 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
     }
 
     /// Decrypt the body with the block's application key, for the document
-    /// `doc_id`. The body is returned [padded](crate::padding);
-    /// [`Envelope::open`](crate::envelope::Envelope::open) also strips the
-    /// padding and decodes the envelope.
+    /// `doc_id`. The body is returned [padded](crate::padding), so this is
+    /// not public: readers use
+    /// [`Envelope::open`](crate::envelope::Envelope::open), which also strips
+    /// the padding and decodes the envelope.
     ///
     /// Each chunk must authenticate, and its nonce must be the synthetic nonce
     /// of what it decrypts to. If one does not, the chunks already decrypted
     /// are wiped. The body holds its ancestors' keys, so it is wiped when
     /// dropped.
+    #[cfg(any(test, feature = "std"))]
     #[instrument(skip_all)]
-    pub fn try_decrypt(
+    pub(crate) fn try_decrypt(
         &self,
         key: &SymmetricKey,
         doc_id: Identifier,
@@ -176,7 +192,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
             let mut buf = Zeroizing::new(ciphertext.to_vec());
             keys.cipher
                 .decrypt_in_place(&XNonce::from(*nonce), &aad, &mut *buf)?;
-            if !nonces_match(&keys.nonce(&aad, &buf), nonce) {
+            if !keyhive_crypto::siv::nonces_match(&keys.nonce(&aad, &buf), nonce) {
                 return Err(ContentDecryptError::NonceMismatch);
             }
             plaintext.extend_from_slice(&buf);
@@ -375,82 +391,95 @@ impl ChunkKeys {
 /// order of their encodings, so the bytes do not depend on the order given.
 /// Where a ref is listed more than once, its last key is kept.
 #[cfg(feature = "std")]
-pub(crate) fn encode_ancestors<'a, Cr: ContentRef + 'a>(
-    ancestors: impl IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
+pub(crate) fn encode_ancestors<
+    'a,
+    Cr: ContentRef + 'a,
+    A: IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
+>(
+    ancestors: A,
     out: &mut Vec<u8>,
 ) {
-    write_ancestors(&sorted_ancestors(ancestors), out);
+    EnvelopeLayout::new(ancestors, &[]).write_to(out);
 }
 
 /// A block's body: the envelope `count ‖ ( content_ref ‖ key )* ‖ payload`,
 /// with the ancestors as [`encode_ancestors`] writes them, padded to
-/// [`padded_len`]. It is in a buffer that is wiped when dropped, since it
-/// carries the ancestors' keys, and that is allocated once at its padded
-/// length, so it leaves no copy of a key behind.
-pub(crate) fn encode_body<'a, Cr: ContentRef + 'a>(
-    ancestors: impl IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
+/// [`padded_len`](crate::padding::padded_len).
+pub(crate) fn encode_body<
+    'a,
+    Cr: ContentRef + 'a,
+    A: IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
+>(
+    ancestors: A,
     payload: &[u8],
 ) -> PaddedBody {
-    PaddedBody::from_padded(encode_envelope_with(ancestors, payload, true))
+    PaddedBody::write(&EnvelopeLayout::new(ancestors, payload))
 }
 
 /// The envelope alone, as [`encode_body`] writes it before padding it, in a
 /// buffer that is wiped when dropped and never grows.
 #[cfg(feature = "std")]
-pub(crate) fn encode_envelope<'a, Cr: ContentRef + 'a>(
-    ancestors: impl IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
+pub(crate) fn encode_envelope<
+    'a,
+    Cr: ContentRef + 'a,
+    A: IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
+>(
+    ancestors: A,
     payload: &[u8],
 ) -> Zeroizing<Vec<u8>> {
-    encode_envelope_with(ancestors, payload, false)
+    let envelope = EnvelopeLayout::new(ancestors, payload);
+    write_secret(envelope.len(), |out| envelope.write_to(out))
 }
 
-fn encode_envelope_with<'a, Cr: ContentRef + 'a>(
-    ancestors: impl IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
-    payload: &[u8],
-    padded: bool,
-) -> Zeroizing<Vec<u8>> {
-    let sorted = sorted_ancestors(ancestors);
-    let mut count = Vec::new();
-    encode_len(sorted.len(), &mut count);
-    let keys_len: usize = sorted
-        .iter()
-        .map(|(content_ref, key)| content_ref.len() + key.as_slice().len())
-        .sum();
-    let envelope_len = count.len() + keys_len + payload.len();
-    let len = if padded {
-        padded_len(envelope_len)
-    } else {
-        envelope_len
-    };
-    write_secret(len, |out| {
-        write_ancestors(&sorted, out);
-        out.put(payload);
-        if padded {
-            write_padding(envelope_len, out);
+/// An envelope ready to write, so its length is known before it is written
+/// into a buffer of that length. The only place an envelope is laid out.
+struct EnvelopeLayout<'a, 'p> {
+    count: Vec<u8>,
+
+    /// By their encoded content refs, each once and in ascending order of
+    /// the encodings. The keys are borrowed, not copied.
+    ancestors: BTreeMap<Vec<u8>, &'a SymmetricKey>,
+
+    payload: &'p [u8],
+}
+
+impl<'a, 'p> EnvelopeLayout<'a, 'p> {
+    /// Where a ref is listed more than once, its last key is kept.
+    fn new<Cr: ContentRef + 'a, A: IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>>(
+        ancestors: A,
+        payload: &'p [u8],
+    ) -> Self {
+        let ancestors: BTreeMap<_, _> = ancestors
+            .into_iter()
+            .map(|(content_ref, key)| (content_ref.encode().into_bytes(), key))
+            .collect();
+        let mut count = Vec::new();
+        encode_len(ancestors.len(), &mut count);
+        EnvelopeLayout {
+            count,
+            ancestors,
+            payload,
         }
-    })
+    }
 }
 
-/// The ancestors by their encoded content refs, each once and in ascending
-/// order of the encodings. Where a ref is listed more than once, its last key
-/// is kept. The keys are borrowed, not copied.
-fn sorted_ancestors<'a, Cr: ContentRef + 'a>(
-    ancestors: impl IntoIterator<Item = (&'a Cr, &'a SymmetricKey)>,
-) -> BTreeMap<Vec<u8>, &'a SymmetricKey> {
-    ancestors
-        .into_iter()
-        .map(|(content_ref, key)| (content_ref.encode().into_bytes(), key))
-        .collect()
-}
+impl Unpadded for EnvelopeLayout<'_, '_> {
+    fn len(&self) -> usize {
+        let keys_len: usize = self
+            .ancestors
+            .iter()
+            .map(|(content_ref, key)| content_ref.len() + key.as_slice().len())
+            .sum();
+        self.count.len() + keys_len + self.payload.len()
+    }
 
-/// `count ‖ ( content_ref ‖ key )*`. The only place the ancestors are written.
-fn write_ancestors<S: Sink>(sorted: &BTreeMap<Vec<u8>, &SymmetricKey>, out: &mut S) {
-    let mut count = Vec::new();
-    encode_len(sorted.len(), &mut count);
-    out.put(&count);
-    for (content_ref, key) in sorted {
-        out.put(content_ref);
-        out.put(key.as_slice());
+    fn write_to<S: Sink>(&self, out: &mut S) {
+        out.put(&self.count);
+        for (content_ref, key) in &self.ancestors {
+            out.put(content_ref);
+            out.put(key.as_slice());
+        }
+        out.put(self.payload);
     }
 }
 
@@ -552,7 +581,7 @@ mod tests {
     #[test]
     fn the_encoding_starts_with_the_header() {
         let bytes = encrypt(b"hi").encode().into_bytes();
-        assert_eq!(&bytes[..4], b"KHE\x00");
+        assert_eq!(&bytes[..4], b"KHE\x01");
         assert_eq!(bytes.len(), HEADER_LEN + 2 + CHUNK_OVERHEAD);
     }
 
@@ -666,13 +695,17 @@ mod tests {
         };
         assert_eq!(with(0, b'X'), Err(DecodeError::NotKeyhive));
         assert_eq!(with(2, b'D'), Err(DecodeError::UnexpectedKind(b'D')));
-        assert_eq!(
-            with(3, 1),
-            Err(DecodeError::UnsupportedVersion {
-                kind: b'E',
-                version: 1
-            })
-        );
+        // 0 is the unpadded format: its bodies have no padding to strip.
+        for version in [0, 2] {
+            assert_eq!(
+                with(3, version),
+                Err(DecodeError::UnsupportedVersion {
+                    kind: b'E',
+                    version
+                }),
+                "version {version}"
+            );
+        }
     }
 
     /// Lengths that no chunking produces: none, too short for a nonce and tag,
@@ -754,7 +787,7 @@ mod tests {
         let content = encrypt(b"keyhive");
         assert_eq!(
             blake3::hash(content.encode().as_bytes()).to_hex().as_str(),
-            "bdbac91c28fe7e5e9b40016f0927228c1e68348e8ac2896209e492c53148163b"
+            "1490e23b1965731687859d2eadea14cdebe0ce4edf330cd7ae0150cbf5d12a64"
         );
         assert_eq!(
             PredecessorRefs::digest(&[[3u8; 32]]).raw.to_hex().as_str(),

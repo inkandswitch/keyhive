@@ -31,9 +31,8 @@
 //!
 //! [PADMÉ]: https://petsymposium.org/popets/2019/popets-2019-0056.pdf
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 use core::fmt;
-use keyhive_codec::error::DecodeError;
 use keyhive_crypto::secret::{write_secret, Sink};
 use zeroize::Zeroizing;
 
@@ -49,9 +48,8 @@ pub const MIN_PADDED_LEN: usize = 256;
 
 /// A block's body: an encoded envelope, padded to [`padded_len`].
 ///
-/// Outside this crate, [`PaddedBody::pad`] is the only way to build one (inside
-/// it, `encode_body` writes one already padded), so an unpadded envelope never
-/// reaches
+/// [`PaddedBody::pad`] is the only way to build one, so an unpadded envelope
+/// never reaches
 /// [`EncryptedContent::encrypt`](crate::encrypted::EncryptedContent::encrypt).
 /// Its readers would refuse one, or, if it happened to end in `0x80` and
 /// zeros, cut those bytes off its payload.
@@ -59,7 +57,7 @@ pub const MIN_PADDED_LEN: usize = 256;
 /// A body holds its envelope's ancestor keys, so it is kept in a buffer that
 /// is wiped when dropped and allocated once at its padded length: it never
 /// grows, so it leaves no copy of a key behind. It is neither `Clone` nor
-/// comparable, so its bytes are never copied or compared.
+/// comparable, and its bytes are not exposed outside this crate.
 pub struct PaddedBody(Zeroizing<Vec<u8>>);
 
 impl PaddedBody {
@@ -70,26 +68,43 @@ impl PaddedBody {
     /// # Example
     ///
     /// ```
-    /// # use keyhive_content::padding::{PaddedBody, MARKER, MIN_PADDED_LEN};
+    /// # use keyhive_content::padding::PaddedBody;
     /// let body = PaddedBody::pad(b"hi");
-    /// assert_eq!(body.as_slice().len(), MIN_PADDED_LEN);
-    /// assert_eq!(&body.as_slice()[..3], &[b'h', b'i', MARKER]);
+    /// assert_eq!(format!("{body:?}"), "PaddedBody { len: 256 }");
     /// ```
     pub fn pad(envelope: &[u8]) -> Self {
-        PaddedBody(write_secret(padded_len(envelope.len()), |out| {
-            out.put(envelope);
-            write_padding(envelope.len(), out);
+        Self::write(envelope)
+    }
+
+    /// Write `envelope`, then its padding, into one buffer allocated at the
+    /// padded length. Every body is built here: [`PaddedBody::pad`] for an
+    /// envelope already written, and
+    /// [`encode_body`](crate::encrypted::encode_body) to write one in place.
+    ///
+    /// # Panics
+    ///
+    /// If `envelope` writes other than its [`Unpadded::len`] bytes. Padding
+    /// after a miscounted envelope would still strip cleanly, so the count is
+    /// checked here rather than left for a reader to notice.
+    pub(crate) fn write<E: Unpadded + ?Sized>(envelope: &E) -> Self {
+        let envelope_len = envelope.len();
+        let len = padded_len(envelope_len);
+        PaddedBody(write_secret(len, |out| {
+            envelope.write_to(out);
+            assert_eq!(
+                out.remaining(),
+                len - envelope_len,
+                "an envelope wrote other than its length"
+            );
+            out.put(&[MARKER]);
+            while out.remaining() > 0 {
+                out.put(&ZEROS[..out.remaining().min(ZEROS.len())]);
+            }
         }))
     }
 
-    /// Take a body that is already padded, as
-    /// [`encode_body`](crate::encrypted::encode_body) writes it.
-    pub(crate) fn from_padded(body: Zeroizing<Vec<u8>>) -> Self {
-        PaddedBody(body)
-    }
-
     /// The body's bytes: the envelope, the marker, then zeros.
-    pub fn as_slice(&self) -> &[u8] {
+    pub(crate) fn as_slice(&self) -> &[u8] {
         &self.0
     }
 
@@ -101,13 +116,6 @@ impl PaddedBody {
     }
 }
 
-/// Write the padding for an envelope of `len` bytes: the marker, then zeros
-/// up to [`padded_len`]`(len)`.
-pub(crate) fn write_padding<S: Sink>(len: usize, out: &mut S) {
-    out.put(&[MARKER]);
-    out.put(&vec![0; padded_len(len) - len - 1]);
-}
-
 /// A body holds its envelope's ancestor keys, so only its length is shown.
 impl fmt::Debug for PaddedBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -116,6 +124,30 @@ impl fmt::Debug for PaddedBody {
             .finish()
     }
 }
+
+/// An envelope to pad: its length, known before it is written, and how to
+/// write it. Both come from one value, so the padding is sized from the same
+/// layout that is written.
+pub(crate) trait Unpadded {
+    /// How many bytes [`Unpadded::write_to`] writes.
+    fn len(&self) -> usize;
+
+    /// Write the envelope.
+    fn write_to<S: Sink>(&self, out: &mut S);
+}
+
+impl Unpadded for [u8] {
+    fn len(&self) -> usize {
+        <[u8]>::len(self)
+    }
+
+    fn write_to<S: Sink>(&self, out: &mut S) {
+        out.put(self);
+    }
+}
+
+/// The source of the padding's zeros, so writing them allocates nothing.
+const ZEROS: [u8; 256] = [0; 256];
 
 /// The length an envelope of `len` bytes is padded to, marker included: the
 /// PADMÉ length of `len + 1`, or [`MIN_PADDED_LEN`] if that is longer.
@@ -141,10 +173,11 @@ pub fn padded_len(len: usize) -> usize {
 ///
 /// Refuses `body` if it has no nonzero byte, or its last nonzero byte is not
 /// the marker: no writer pads that way.
-pub fn unpadded_len(body: &[u8]) -> Result<usize, DecodeError> {
+#[cfg(any(test, feature = "std"))]
+pub(crate) fn unpadded_len(body: &[u8]) -> Result<usize, MalformedPadding> {
     match body.iter().rposition(|&byte| byte != 0) {
         Some(marker) if body[marker] == MARKER => Ok(marker),
-        _ => Err(DecodeError::InvalidField("padding")),
+        _ => Err(MalformedPadding),
     }
 }
 
@@ -162,6 +195,12 @@ fn padme(len: usize) -> usize {
         .expect("a padded length fits in a usize")
         & !mask
 }
+
+/// A decrypted body whose last nonzero byte is not the marker, or that has
+/// none. Only a writer with the block's key can produce one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the body's padding is malformed")]
+pub struct MalformedPadding;
 
 #[cfg(test)]
 mod tests {
@@ -295,7 +334,7 @@ mod tests {
     /// refused.
     #[test]
     fn padding_without_its_marker_is_refused() {
-        let refused = Err(DecodeError::InvalidField("padding"));
+        let refused = Err(MalformedPadding);
         assert_eq!(unpadded_len(&[]), refused);
         assert_eq!(unpadded_len(&[0; 300]), refused);
         assert_eq!(unpadded_len(&[1, 2, 0x81, 0, 0]), refused);

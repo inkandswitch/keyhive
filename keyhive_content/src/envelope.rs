@@ -3,7 +3,7 @@
 use crate::{
     ancestor_key::AncestorKey,
     encrypted::{encode_ancestors, encode_envelope, ContentDecryptError, EncryptedContent},
-    padding::unpadded_len,
+    padding::{unpadded_len, MalformedPadding},
     reference::ContentRef,
 };
 use keyhive_codec::{
@@ -55,8 +55,7 @@ impl<C: ContentRef, T: Encode> Envelope<C, T> {
     ///
     /// The buffer never grows, so it leaves no copy of a key behind.
     pub fn encode_zeroizing(&self) -> Zeroizing<Vec<u8>> {
-        let payload = Zeroizing::new(self.plaintext.encode().into_bytes());
-        encode_envelope(&self.ancestors, &payload)
+        encode_envelope(&self.ancestors, &self.encoded_plaintext())
     }
 
     /// The body a block encrypts: this envelope, padded as
@@ -64,8 +63,12 @@ impl<C: ContentRef, T: Encode> Envelope<C, T> {
     /// pads it.
     #[cfg(test)]
     pub(crate) fn padded_body(&self) -> PaddedBody {
-        let payload = Zeroizing::new(self.plaintext.encode().into_bytes());
-        encode_body(&self.ancestors, &payload)
+        encode_body(&self.ancestors, &self.encoded_plaintext())
+    }
+
+    /// The payload's encoding, wiped when dropped.
+    fn encoded_plaintext(&self) -> Zeroizing<Vec<u8>> {
+        Zeroizing::new(self.plaintext.encode().into_bytes())
     }
 }
 
@@ -161,6 +164,11 @@ pub enum OpenEnvelopeError {
     /// The body did not decrypt.
     #[error(transparent)]
     Decrypt(#[from] ContentDecryptError),
+
+    /// The body decrypted, but its padding is malformed. Only a writer with
+    /// the block's key can produce this.
+    #[error(transparent)]
+    Padding(#[from] MalformedPadding),
 
     /// The body decrypted, but is not an envelope. Only a writer with the
     /// block's key can produce this.
@@ -370,9 +378,7 @@ mod tests {
         let (encrypted, key, doc_id) = encrypt(&PaddedBody::unchecked(&unpadded));
         assert_eq!(
             Env::open(&encrypted, &key, doc_id).map(|(envelope, _)| envelope),
-            Err(OpenEnvelopeError::Decode(DecodeError::InvalidField(
-                "padding"
-            )))
+            Err(OpenEnvelopeError::Padding(MalformedPadding))
         );
     }
 }

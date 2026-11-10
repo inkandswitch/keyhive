@@ -8,6 +8,7 @@ use crate::{
     application_secret::GroupSecretOrigin,
     encrypted::EncryptedContent,
     envelope::{Envelope, OpenEnvelopeError},
+    padding::MalformedPadding,
     reference::ContentRef,
 };
 use dupe::Dupe;
@@ -167,6 +168,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                         .map(|plaintext| (plaintext, envelope.ancestors, opened_by))
                         .map_err(ErrorReason::DeserializationFailed),
                     Err(OpenEnvelopeError::Decrypt(_)) => Err(ErrorReason::DecryptionFailed(key)),
+                    Err(OpenEnvelopeError::Padding(e)) => Err(ErrorReason::MalformedPadding(e)),
                     Err(OpenEnvelopeError::Decode(e)) => Err(ErrorReason::DeserializationFailed(e)),
                 };
                 let (plaintext, ancestors, opened_by) = match opened {
@@ -377,6 +379,9 @@ pub enum ErrorReason<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr,
     #[error(transparent)]
     DeserializationFailed(#[from] DecodeError),
 
+    #[error(transparent)]
+    MalformedPadding(#[from] MalformedPadding),
+
     #[error("Decryption failed")]
     DecryptionFailed(SymmetricKey),
 
@@ -396,6 +401,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> Debug
             Self::DeserializationFailed(e) => {
                 f.debug_tuple("DeserializationFailed").field(e).finish()
             }
+            Self::MalformedPadding(e) => f.debug_tuple("MalformedPadding").field(e).finish(),
             Self::DecryptionFailed(key) => f.debug_tuple("DecryptionFailed").field(key).finish(),
             Self::CannotFindCiphertext(content_ref) => f
                 .debug_tuple("CannotFindCiphertext")
