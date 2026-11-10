@@ -2,6 +2,7 @@
 
 use crate::{
     identifier::Identifier,
+    secret::ZeroizingHasher,
     signable::{head, Kinded, TAG},
 };
 use alloc::vec::Vec;
@@ -15,7 +16,6 @@ use keyhive_codec::{
     error::DecodeError,
     traits::{decode_exact, Decode, Encode, StreamDecode},
 };
-use zeroize::Zeroizing;
 
 /// A [`blake3::Hash`] tagged with which type it is a hash of.
 ///
@@ -53,8 +53,9 @@ impl<T: Kinded> Digest<T> {
     /// of certificate identities: BLAKE3 over
     /// `"KH" ‖ kind ‖ version ‖ bytes`.
     pub fn of_bytes(bytes: &[u8]) -> Self {
-        // Wiped when dropped: what is hashed this way includes secrets.
-        let mut hasher = Zeroizing::new(blake3::Hasher::new());
+        // Boxed and wiped when dropped: what is hashed this way includes
+        // secrets; see `ZeroizingHasher` for what this does not reach.
+        let mut hasher = ZeroizingHasher::new(blake3::Hasher::new());
         hasher.update(&TAG);
         hasher.update(&[T::KIND.to_u8(), T::VERSION]);
         hasher.update(bytes);

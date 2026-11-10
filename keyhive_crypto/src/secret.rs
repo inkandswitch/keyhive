@@ -109,6 +109,43 @@ pub fn write_secret<F: FnOnce(&mut SecretBuf)>(len: usize, write: F) -> Zeroizin
     out.buf
 }
 
+/// A BLAKE3 hasher that absorbs secrets: in its own allocation, so moving it
+/// copies only a pointer and what it buffers stays put, and wiped when
+/// dropped.
+///
+/// This wipes the hasher, not everything BLAKE3 touches. Each compression
+/// works on stack copies of the 64-byte block and of the chaining value (for
+/// a keyed hasher, the key's), or on vector registers that may spill to the
+/// stack, and a keyed hasher's key passes through a stack array as it is
+/// built. `blake3` wipes none of these, and nothing outside it can.
+pub(crate) struct ZeroizingHasher(Box<blake3::Hasher>);
+
+impl ZeroizingHasher {
+    pub(crate) fn new(hasher: blake3::Hasher) -> Self {
+        ZeroizingHasher(Box::new(hasher))
+    }
+}
+
+impl core::ops::Deref for ZeroizingHasher {
+    type Target = blake3::Hasher;
+
+    fn deref(&self) -> &blake3::Hasher {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for ZeroizingHasher {
+    fn deref_mut(&mut self) -> &mut blake3::Hasher {
+        &mut self.0
+    }
+}
+
+impl Drop for ZeroizingHasher {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut *self.0);
+    }
+}
+
 /// A 32-byte secret in its own allocation, copied from `bytes` without a
 /// copy on the stack.
 pub(crate) fn boxed(bytes: &[u8; 32]) -> Box<[u8; 32]> {

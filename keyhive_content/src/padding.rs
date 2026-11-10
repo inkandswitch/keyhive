@@ -80,23 +80,14 @@ impl PaddedBody {
     /// padded length. Every body is built here: [`PaddedBody::pad`] for an
     /// envelope already written, and
     /// [`encode_body`](crate::encrypted::encode_body) to write one in place.
-    ///
-    /// # Panics
-    ///
-    /// If `envelope` writes other than its [`Unpadded::len`] bytes, which only
-    /// an implementation that overrides `len` can do. Padding after a
-    /// miscounted envelope would still strip cleanly, so the count is checked
-    /// here rather than left for a reader to notice.
+    /// The envelope's length is counted by running the same writer, so the
+    /// padding is sized from exactly what is written.
     pub(crate) fn write<E: Unpadded + ?Sized>(envelope: &E) -> Self {
-        let envelope_len = envelope.len();
+        let envelope_len = written_len(envelope);
         let len = padded_len(envelope_len);
         PaddedBody(write_secret(len, |out| {
             envelope.write_to(out);
-            assert_eq!(
-                out.remaining(),
-                len - envelope_len,
-                "an envelope wrote other than its length"
-            );
+            debug_assert_eq!(out.remaining(), len - envelope_len);
             out.put(&[MARKER]);
             while out.remaining() > 0 {
                 out.put(&ZEROS[..out.remaining().min(ZEROS.len())]);
@@ -126,18 +117,18 @@ impl fmt::Debug for PaddedBody {
     }
 }
 
-/// An envelope to pad: how to write it, and so how long it is.
+/// An envelope to pad, as how to write it.
 pub(crate) trait Unpadded {
     /// Write the envelope.
     fn write_to<S: Sink>(&self, out: &mut S);
+}
 
-    /// How many bytes [`Unpadded::write_to`] writes, counted by running it,
-    /// so the length cannot drift from the layout.
-    fn len(&self) -> usize {
-        let mut count = Count(0);
-        self.write_to(&mut count);
-        count.0
-    }
+/// How many bytes `envelope` writes, counted by running its writer, so the
+/// length cannot drift from the layout.
+pub(crate) fn written_len<E: Unpadded + ?Sized>(envelope: &E) -> usize {
+    let mut count = Count(0);
+    envelope.write_to(&mut count);
+    count.0
 }
 
 /// A sink that only counts what it is given.
@@ -150,10 +141,6 @@ impl Sink for Count {
 }
 
 impl Unpadded for [u8] {
-    fn len(&self) -> usize {
-        <[u8]>::len(self)
-    }
-
     fn write_to<S: Sink>(&self, out: &mut S) {
         out.put(self);
     }
@@ -243,44 +230,6 @@ mod tests {
                 assert!((padded - (len + 1)) * 32 <= len + 1, "{len} → {padded}");
             }
         });
-    }
-
-    /// An envelope that says it is longer or shorter than what it writes is
-    /// refused before any padding is written.
-    #[cfg(feature = "std")]
-    #[test]
-    fn a_miscounted_envelope_is_refused() {
-        struct Miscounted<'a>(&'a [u8], i8);
-
-        impl Unpadded for Miscounted<'_> {
-            fn write_to<S: Sink>(&self, out: &mut S) {
-                out.put(self.0);
-            }
-
-            fn len(&self) -> usize {
-                self.0.len().saturating_add_signed(isize::from(self.1))
-            }
-        }
-
-        bolero::check!()
-            .with_type::<(Vec<u8>, i8)>()
-            .filter(|(envelope, by)| {
-                *by != 0
-                    && envelope
-                        .len()
-                        .checked_add_signed(isize::from(*by))
-                        .is_some()
-            })
-            .for_each(|(envelope, by)| {
-                let written = std::panic::catch_unwind(|| {
-                    PaddedBody::write(&Miscounted(envelope, *by));
-                });
-                assert!(
-                    written.is_err(),
-                    "{} bytes said to be {by} off",
-                    envelope.len()
-                );
-            });
     }
 
     /// Longer envelopes never pad shorter, and every padded length is a

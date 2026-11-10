@@ -71,6 +71,7 @@ nonempty = { version = "0.12.0", default-features = false, features = ["serializ
 nu-ansi-term = "0.50.1"
 num = { version = "0.4.3", features = ["num-bigint"] }
 once_cell = { version = "1.21", default-features = false, features = ["alloc", "race"] }
+poly1305 = { version = "0.8.0", default-features = false, features = ["zeroize"] }
 pretty_assertions = "1.4"
 prettytable-rs = "0.10.0"
 proptest = "1.5"

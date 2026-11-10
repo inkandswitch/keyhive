@@ -47,8 +47,10 @@ impl SymmetricKey {
     }
 
     /// The first 32 bytes `hasher` outputs, read straight into the key's own
-    /// allocation, so neither they nor the reader's state are left behind.
-    pub fn from_hasher(hasher: &blake3::Hasher) -> Self {
+    /// allocation, with the reader wiped after. BLAKE3's working copies on the
+    /// stack are not reached (see `ZeroizingHasher`). Callers go through
+    /// [`KeyDerivation::finalize_key`](crate::context::KeyDerivation::finalize_key).
+    pub(crate) fn from_hasher(hasher: &blake3::Hasher) -> Self {
         let mut key = Box::new([0; 32]);
         Zeroizing::new(hasher.finalize_xof()).fill(&mut *key);
         Self(key)

@@ -11,10 +11,13 @@ rust-version.workspace = true
 
 [dependencies]
 blake3 = { workspace = true }
-# Not used directly: turns on `zeroize`, so the ChaCha20 state that
-# `chacha20poly1305` builds for each message is wiped when dropped.
+# Not used directly: they turn on `zeroize`, so the ChaCha20 and Poly1305
+# state that `chacha20poly1305` builds for each message is wiped when
+# dropped. Their versions must match the ones `chacha20poly1305` uses, or
+# the feature lands on a different copy.
 chacha20 = { workspace = true }
 chacha20poly1305 = { workspace = true }
+poly1305 = { workspace = true }
 derive_more = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["rand_core", "zeroize"] }
 future_form = { workspace = true }

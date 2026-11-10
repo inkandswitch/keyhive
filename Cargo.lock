@@ -1097,6 +1097,7 @@ dependencies = [
  "future_form",
  "futures",
  "keyhive_codec",
+ "poly1305",
  "rand 0.8.8",
  "signature",
  "subtle",
@@ -1345,6 +1346,7 @@ dependencies = [
  "cpufeatures",
  "opaque-debug",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]

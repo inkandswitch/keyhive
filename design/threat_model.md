@@ -131,7 +131,7 @@ The root key of a group or document is malicious or leaked at creation.
 
 ### T10. Compression oracles
 
-An attacker who can put chosen bytes into the same compressed payload as a secret, and see how long each resulting block is, can recover the secret a guess at a time. This was first described by [Kelsey (2002)][Kelsey], and later exploited against HTTPS as [CRIME] (Rizzo and Duong, 2012; CVE-2012-4929) and [BREACH] (Gluck, Harris and Prado, 2013); [Alawatugoda, Stebila and Boyd (2015)][Alawatugoda] analyse both and the mitigations for them.
+An attacker who can put chosen bytes into the same compressed payload as a secret, and see how long each resulting block is, can recover the secret a guess at a time. This was first described by [Kelsey (2002)][Kelsey], and later exploited against HTTPS as [CRIME] (Rizzo and Duong, 2012; CVE-2012-4929) and [BREACH] (Gluck, Harris and Prado, 2013); [Alawatugoda, Stebila and Boyd (2015)][Alawatugoda] model these attacks and prove a mitigation for them secure.
 
 Compression replaces repeated byte strings with short references, so a payload that contains a string twice compresses better than one that contains it once. Suppose a document holds `token=7f3a…` and the attacker can add text to it. They add `token=7`: if that matches the start of the secret, it compresses to a short reference, and the block grows less than it would for a wrong guess, which compresses less. Repeating this one character at a time recovers the secret. Encryption does not prevent it, because the AEAD preserves length. Automerge may compress an application's data before Keyhive encrypts it, so this applies to Keyhive content.
 
@@ -143,14 +143,19 @@ The attack needs all of these:
 
 Unlike CRIME and BREACH, where each guess is a fresh request, a CRDT keeps everything. Every guess and every byte of filler stays in the document's history and in each later block that covers it, so the payload only grows, and the attacker reads each guess from how much it grew.
 
-Padding does not stop it, but in a CRDT it makes it much more expensive. A block is padded to a [PADMÉ] length (see [T8](#t8-metadata)), so a difference of a byte or two usually leaves its length unchanged, and an observer sees only when a block crosses from one length to the next. The padding is deterministic, so the attacker can still use those crossings:
+Padding does not stop it, but in a CRDT it makes it costlier. A block is padded to a [PADMÉ] length (see [T8](#t8-metadata)), so a difference of a byte or two usually leaves its length unchanged: an observer sees a block's length change only when it crosses into the next padded length. The padding is deterministic, so the attacker can still use those crossings:
 
-1. They add filler that does not compress, a little at a time, until the block crosses into the next length. It now sits just above that edge, and the padding rule tells them how far the next edge is.
-2. They add filler for most of that distance, stopping short by a margin: close enough that a wrong guess would cross the next edge, and a correct one, which grows the block less, would not. Compression savings are not exact to the byte (DEFLATE's are in bits, and depend on the rest of the payload), so the margin is an estimate, and some probes are wasted.
-3. They add the guess. If the block crosses, the guess was wrong.
-4. A correct guess leaves the block below the edge, ready for the next character. A wrong one has crossed it, and nothing can be taken out of a CRDT's history, so before the next guess they must add about another bucket's width of filler.
+1. They add filler that does not compress until the block crosses into the next length. They now know where it is to within a byte, and the padding rule tells them where the next edge is.
+2. They add filler up to just short of that edge: short enough that a wrong guess crosses it, and a correct one, which compresses better, does not. Compression savings are not exact to the byte (DEFLATE's are in bits, and depend on the rest of the payload), so some probes are wasted.
+3. They add the guess, and see whether the block crosses.
+4. Either way, the block is now too close to the edge for another probe: a wrong guess crossed it, and a correct one used up the margin. Nothing can be taken out of a CRDT's history, so before the next probe they add filler up to just short of the next edge, about one bucket's width.
 
-So every wrong guess permanently grows the payload by about a bucket's width, a sixteenth to a 32nd of its size above the floor, and the growth compounds. A 32-character hex token takes about 240 wrong guesses on average, which at a 32nd each grows the document about 1,600 times over: from 64 KiB to around 100 MiB. A six-digit PIN takes about 27, which grows it about 2.3 times. If the payload is compressed with DEFLATE, whose matches reach back at most 32 KiB, the filler can also push the secret out of reach of later guesses; whether it does depends on how the application lays out its data. Either way, every guess and every byte of filler is in the history for every member to see.
+So every probe, right or wrong, costs about a bucket's width of permanent filler: from 64 KiB, a 32nd to a 64th of the payload, and the growth compounds. One probe can test several candidates at once, so halving the candidates each time, a character from an alphabet of n takes about log₂ n probes. Simulating PADMÉ's buckets from a 64 KiB payload, for an attacker who knows its compressed size exactly:
+
+- A 32-character hex token takes about 128 probes, and grows the document about 16 times, to about 1 MiB. Testing one candidate per probe would take about 272 probes, and 384 times.
+- A six-digit PIN takes about 24 probes, and grows the document less than twice.
+
+These are upper bounds on what the attack costs. An observer who sees several blocks that each bundle the probe, over different ranges of history, can test one write against several edges. Filler also only gets in the way of DEFLATE, whose matches reach back at most 32 KiB, if it lands between the secret and the probes, which depends on where the application puts what the attacker writes. What the attacker cannot avoid is that every probe and every byte of filler stays in the history, for every member to see.
 
 Random padding would be weaker than it looks: each block that bundles the same history again is another sample, and the smallest of them approaches the unpadded length. Padding every block to one fixed size would stop the attack for blocks up to that size, but would cost a full block for every edit, which is not practical for a CRDT.
 

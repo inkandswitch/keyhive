@@ -40,7 +40,7 @@
 
 use crate::{
     application_secret::{GroupSecret, GroupSecretOrigin},
-    padding::{PaddedBody, Unpadded},
+    padding::{written_len, PaddedBody, Unpadded},
     reference::ContentRef,
 };
 use alloc::{
@@ -365,7 +365,11 @@ impl ChunkKeys {
         ChunkKeys {
             cipher: XChaCha20Poly1305::new(enc_key.as_ref().into()),
             nonce_key: Context::CONTENT_NONCE_KEY.derive_key(key.as_slice()),
-            header_digest: *hasher.finalize().as_bytes(),
+            header_digest: {
+                let mut digest = [0; 32];
+                hasher.finalize_xof().fill(&mut digest);
+                digest
+            },
         }
     }
 
@@ -422,7 +426,7 @@ pub(crate) fn encode_envelope<
     payload: &[u8],
 ) -> Zeroizing<Vec<u8>> {
     let envelope = EnvelopeLayout::new(ancestors, payload);
-    write_secret(envelope.len(), |out| envelope.write_to(out))
+    write_secret(written_len(&envelope), |out| envelope.write_to(out))
 }
 
 /// An envelope ready to write, so its length is known before it is written
