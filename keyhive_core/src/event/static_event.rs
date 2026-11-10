@@ -54,18 +54,6 @@ impl<T: ContentRef> StaticEvent<T> {
             StaticEvent::Revoked(signed) => signed.digest().coerce(),
         }
     }
-
-    /// Whether the event passes the verification that receiving it starts
-    /// with: its payload decodes canonically and its signature checks.
-    pub(crate) fn verifies(&self) -> bool {
-        match self.clone() {
-            StaticEvent::PrekeysExpanded(signed) => signed.verify().is_ok(),
-            StaticEvent::PrekeyRotated(signed) => signed.verify().is_ok(),
-            StaticEvent::CgkaOperation(signed) => signed.verify().is_ok(),
-            StaticEvent::Delegated(signed) => signed.verify().is_ok(),
-            StaticEvent::Revoked(signed) => signed.verify().is_ok(),
-        }
-    }
 }
 
 /// The signed statement's own frame,

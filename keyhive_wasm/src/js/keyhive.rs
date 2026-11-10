@@ -58,6 +58,7 @@ use future_form::Local;
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_core::{
     all_agent_events::EventDigest,
+    crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{
@@ -732,16 +733,15 @@ impl JsKeyhive {
     ) -> Result<js_sys::Array, JsError> {
         init_span!("JsKeyhive::ingest_events_bytes");
         tracing::debug!("JsKeyhive::ingest_events_bytes");
-        // Keyed by the whole event, signature included, so that a pending event
-        // is returned as the bytes of that copy and not of another with its digest.
-        let mut static_event_to_bytes: HashMap<StaticEvent<JsChangeId>, Vec<u8>> = HashMap::new();
+        let mut static_event_hash_to_bytes: HashMap<Digest<StaticEvent<JsChangeId>>, Vec<u8>> =
+            HashMap::new();
         let mut static_events = Vec::new();
 
         for i in 0..events_bytes_array.length() {
             let js_value = events_bytes_array.get(i);
             let event_bytes = js_sys::Uint8Array::from(js_value).to_vec();
             let static_event = StaticEvent::<JsChangeId>::decode(&event_bytes)?;
-            static_event_to_bytes.insert(static_event.clone(), event_bytes);
+            static_event_hash_to_bytes.insert(static_event.digest(), event_bytes);
             static_events.push(static_event);
         }
 
@@ -749,8 +749,9 @@ impl JsKeyhive {
         let pending_events_bytes: Vec<Vec<u8>> = pending_events
             .iter()
             .map(|event| {
-                static_event_to_bytes
-                    .get(event.as_ref())
+                let hash: Digest<StaticEvent<JsChangeId>> = event.digest();
+                static_event_hash_to_bytes
+                    .get(&hash)
                     .cloned()
                     .unwrap_or_else(|| event.encode().into_bytes())
             })
