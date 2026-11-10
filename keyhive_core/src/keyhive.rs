@@ -3636,21 +3636,11 @@ where
             events.push(event.as_ref().clone());
         }
 
-        // Deduplicate events by hash. The hash leaves out the signature, so
-        // where two copies differ, keep one that verifies: a copy that does
-        // not is dropped as final, and would take the genuine event with it.
+        // Deduplicate events by hash
         let mut unique_events: HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> = HashMap::new();
         for event in events {
-            match unique_events.entry(event.digest()) {
-                Entry::Vacant(entry) => {
-                    entry.insert(event);
-                }
-                Entry::Occupied(mut entry) => {
-                    if *entry.get() != event && !entry.get().verifies() && event.verifies() {
-                        entry.insert(event);
-                    }
-                }
-            }
+            let hash = event.digest();
+            unique_events.entry(hash).or_insert(event);
         }
         let mut epoch: Vec<StaticEvent<T>> = unique_events.into_values().collect();
 
