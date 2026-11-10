@@ -34,9 +34,7 @@ impl PcsKey {
 
     /// Derive the key for encrypting the root secrets of an update's predecessors.
     pub(crate) fn derive_predecessor_secrets_key(&self) -> SymmetricKey {
-        Context::CGKA_PREDECESSOR_SECRETS_KEY
-            .derive_key(self.0.as_slice())
-            .into()
+        SymmetricKey::from(&*Context::CGKA_PREDECESSOR_SECRETS_KEY.derive_key(self.0.as_slice()))
     }
 }
 

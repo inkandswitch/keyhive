@@ -7,8 +7,7 @@ use crate::{
     ancestor_key::AncestorKey,
     application_secret::GroupSecretOrigin,
     encrypted::EncryptedContent,
-    envelope::{Envelope, OpenEnvelopeError},
-    padding::MalformedPadding,
+    envelope::{Envelope, MalformedBody, OpenEnvelopeError},
     reference::ContentRef,
 };
 use dupe::Dupe;
@@ -168,8 +167,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                         .map(|plaintext| (plaintext, envelope.ancestors, opened_by))
                         .map_err(ErrorReason::DeserializationFailed),
                     Err(OpenEnvelopeError::Decrypt(_)) => Err(ErrorReason::DecryptionFailed(key)),
-                    Err(OpenEnvelopeError::Padding(e)) => Err(ErrorReason::MalformedPadding(e)),
-                    Err(OpenEnvelopeError::Decode(e)) => Err(ErrorReason::DeserializationFailed(e)),
+                    Err(OpenEnvelopeError::Malformed(e)) => Err(ErrorReason::MalformedBody(e)),
                 };
                 let (plaintext, ancestors, opened_by) = match opened {
                     Ok(opened) => opened,
@@ -380,7 +378,7 @@ pub enum ErrorReason<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr,
     DeserializationFailed(#[from] DecodeError),
 
     #[error(transparent)]
-    MalformedPadding(#[from] MalformedPadding),
+    MalformedBody(#[from] MalformedBody),
 
     #[error("Decryption failed")]
     DecryptionFailed(SymmetricKey),
@@ -401,7 +399,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> Debug
             Self::DeserializationFailed(e) => {
                 f.debug_tuple("DeserializationFailed").field(e).finish()
             }
-            Self::MalformedPadding(e) => f.debug_tuple("MalformedPadding").field(e).finish(),
+            Self::MalformedBody(e) => f.debug_tuple("MalformedBody").field(e).finish(),
             Self::DecryptionFailed(key) => f.debug_tuple("DecryptionFailed").field(key).finish(),
             Self::CannotFindCiphertext(content_ref) => f
                 .debug_tuple("CannotFindCiphertext")
@@ -414,7 +412,8 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> Debug
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{application_secret::GroupSecret, encrypted::PredecessorRefs};
+    use crate::{application_secret::GroupSecret, encrypted::PredecessorRefs, padding::PaddedBody};
+    use alloc::collections::BTreeMap;
     use ed25519_dalek::SigningKey;
     use keyhive_crypto::share_key::ShareSecretKey;
     use rand::rngs::OsRng;
@@ -436,34 +435,47 @@ mod tests {
         plaintext: String,
         cref: [u8; 32],
         group_secret_origin_hash: Digest<GroupSecretOrigin>,
-        ancestors: HashMap<[u8; 32], SymmetricKey>,
+        ancestors: BTreeMap<[u8; 32], SymmetricKey>,
         doc_id: Identifier,
         csprng: &mut OsRng,
     ) -> (Arc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
         let group_secret: GroupSecret = ShareSecretKey::generate(csprng).into();
-        let group_secret_hash = group_secret.digest();
 
-        let key = SymmetricKey::generate(csprng);
         let envelope = Envelope {
             plaintext,
             ancestors,
         };
-        let bytes = envelope.padded_body();
-        (
-            Arc::new(
-                EncryptedContent::<String, [u8; 32]>::encrypt(
-                    &key,
-                    doc_id,
-                    cref,
-                    PredecessorRefs::digest(&[]),
-                    group_secret_hash,
-                    group_secret_origin_hash,
-                    &bytes,
-                )
-                .expect("a fresh key encrypts"),
-            ),
-            key,
+        encrypt_body(
+            &envelope.padded_body(),
+            cref,
+            group_secret.digest(),
+            group_secret_origin_hash,
+            doc_id,
+            csprng,
         )
+    }
+
+    /// Encrypts `body` as it is, whether or not it is a padded envelope.
+    fn encrypt_body(
+        body: &PaddedBody,
+        cref: [u8; 32],
+        group_secret_hash: Digest<GroupSecret>,
+        group_secret_origin_hash: Digest<GroupSecretOrigin>,
+        doc_id: Identifier,
+        csprng: &mut OsRng,
+    ) -> (Arc<EncryptedContent<String, [u8; 32]>>, SymmetricKey) {
+        let key = SymmetricKey::generate(csprng);
+        let encrypted = EncryptedContent::<String, [u8; 32]>::encrypt(
+            &key,
+            doc_id,
+            cref,
+            PredecessorRefs::digest(&[]),
+            group_secret_hash,
+            group_secret_origin_hash,
+            body,
+        )
+        .expect("a fresh key encrypts");
+        (Arc::new(encrypted), key)
     }
 
     #[tokio::test]
@@ -475,7 +487,7 @@ mod tests {
             "one".to_string(),
             [0; 32],
             origin,
-            HashMap::new(),
+            BTreeMap::new(),
             doc_id,
             &mut csprng,
         );
@@ -510,7 +522,7 @@ mod tests {
             "one".to_string(),
             one_ref,
             group_secret_origin_hash,
-            HashMap::new(),
+            BTreeMap::new(),
             doc_id,
             &mut csprng,
         );
@@ -519,7 +531,7 @@ mod tests {
             "two".to_string(),
             two_ref,
             group_secret_origin_hash,
-            HashMap::from_iter([(one_ref, one_key)]),
+            BTreeMap::from_iter([(one_ref, one_key)]),
             doc_id,
             &mut csprng,
         );
@@ -548,7 +560,7 @@ mod tests {
             "one".to_string(),
             one_ref,
             origin,
-            HashMap::new(),
+            BTreeMap::new(),
             doc_id,
             &mut csprng,
         );
@@ -556,7 +568,7 @@ mod tests {
             "two".to_string(),
             two_ref,
             origin,
-            HashMap::from_iter([(one_ref, wrong_key.clone())]),
+            BTreeMap::from_iter([(one_ref, wrong_key.clone())]),
             doc_id,
             &mut csprng,
         );
@@ -598,7 +610,7 @@ mod tests {
             "read".to_string(),
             read_ref,
             origin,
-            HashMap::from_iter([(parent_ref, parent_key.clone())]),
+            BTreeMap::from_iter([(parent_ref, parent_key.clone())]),
             doc_id,
             &mut csprng,
         );
@@ -606,7 +618,7 @@ mod tests {
             "refused".to_string(),
             refused_ref,
             origin,
-            HashMap::new(),
+            BTreeMap::new(),
             doc_id,
             &mut csprng,
         );
@@ -639,6 +651,65 @@ mod tests {
         Ok(())
     }
 
+    /// A body that decrypts but that no writer produces is reported as
+    /// malformed, for its padding or for what precedes it, not as a payload
+    /// that failed to decode.
+    #[tokio::test]
+    async fn a_malformed_body_is_reported_as_malformed() -> TestResult {
+        let mut csprng = OsRng;
+        let doc_id = Identifier::from(&SigningKey::generate(&mut csprng));
+        let group_secret: GroupSecret = ShareSecretKey::generate(&mut csprng).into();
+        let origin: Digest<GroupSecretOrigin> = [9u8; 32].into();
+        let (unpadded_ref, not_envelope_ref) = ([0u8; 32], [1u8; 32]);
+        let envelope = Envelope {
+            plaintext: "hi".to_string(),
+            ancestors: BTreeMap::<[u8; 32], SymmetricKey>::new(),
+        };
+        let (unpadded, unpadded_key) = encrypt_body(
+            &PaddedBody::unchecked(&envelope.encode_zeroizing()),
+            unpadded_ref,
+            group_secret.digest(),
+            origin,
+            doc_id,
+            &mut csprng,
+        );
+        // A count of one ancestor, with no ancestor after it.
+        let (not_envelope, not_envelope_key) = encrypt_body(
+            &PaddedBody::pad(&[1]),
+            not_envelope_ref,
+            group_secret.digest(),
+            origin,
+            doc_id,
+            &mut csprng,
+        );
+        let store = MemoryCiphertextStore::<[u8; 32], String>::new();
+        store.insert(unpadded).await;
+        store.insert(not_envelope).await;
+
+        let Err(err) = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt_from_keys(
+            &store,
+            doc_id,
+            &[
+                (unpadded_ref, unpadded_key),
+                (not_envelope_ref, not_envelope_key),
+            ],
+        )
+        .await
+        else {
+            panic!("a malformed body opened");
+        };
+        assert!(matches!(
+            err.cannot.get(&unpadded_ref),
+            Some(ErrorReason::MalformedBody(MalformedBody::Padding(_)))
+        ));
+        assert!(matches!(
+            err.cannot.get(&not_envelope_ref),
+            Some(ErrorReason::MalformedBody(MalformedBody::Envelope(_)))
+        ));
+        assert!(err.progress.complete.is_empty());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn a_causal_decrypt_from_known_keys_that_reads_every_start_is_ok() -> TestResult {
         let mut csprng = OsRng;
@@ -647,7 +718,7 @@ mod tests {
             "only".to_string(),
             [0u8; 32],
             [9u8; 32].into(),
-            HashMap::new(),
+            BTreeMap::new(),
             doc_id,
             &mut csprng,
         );
@@ -724,7 +795,7 @@ mod tests {
         let group_secret: GroupSecret = ShareSecretKey::generate(&mut csprng).into();
         let envelope = Envelope {
             plaintext: "a".to_string(),
-            ancestors: HashMap::from_iter([
+            ancestors: BTreeMap::from_iter([
                 (block_ref, key.clone()),
                 (unavailable_ref, SymmetricKey::generate(&mut csprng)),
             ]),

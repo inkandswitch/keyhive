@@ -11,6 +11,9 @@ rust-version.workspace = true
 
 [dependencies]
 blake3 = { workspace = true }
+# Not used directly: turns on `zeroize`, so the ChaCha20 state that
+# `chacha20poly1305` builds for each message is wiped when dropped.
+chacha20 = { workspace = true }
 chacha20poly1305 = { workspace = true }
 derive_more = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["rand_core", "zeroize"] }

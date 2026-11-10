@@ -58,15 +58,12 @@ use keyhive_crypto::{
     context::Context,
     digest::Digest,
     identifier::Identifier,
-    secret::Sink,
+    secret::{write_secret, Sink},
     signable::{Kind, Kinded, TAG},
-    siv::synthetic_nonce,
+    siv::{nonces_match, synthetic_nonce},
     symmetric_key::SymmetricKey,
 };
 use tracing::instrument;
-
-#[cfg(feature = "std")]
-use keyhive_crypto::secret::write_secret;
 use zeroize::Zeroizing;
 
 /// The first bytes of encrypted content: Keyhive's tag, then `E`, which the
@@ -173,7 +170,6 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
     /// of what it decrypts to. If one does not, the chunks already decrypted
     /// are wiped. The body holds its ancestors' keys, so it is wiped when
     /// dropped.
-    #[cfg(any(test, feature = "std"))]
     #[instrument(skip_all)]
     pub(crate) fn try_decrypt(
         &self,
@@ -192,7 +188,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
             let mut buf = Zeroizing::new(ciphertext.to_vec());
             keys.cipher
                 .decrypt_in_place(&XNonce::from(*nonce), &aad, &mut *buf)?;
-            if !keyhive_crypto::siv::nonces_match(&keys.nonce(&aad, &buf), nonce) {
+            if !nonces_match(&keys.nonce(&aad, &buf), nonce) {
                 return Err(ContentDecryptError::NonceMismatch);
             }
             plaintext.extend_from_slice(&buf);
@@ -365,10 +361,10 @@ impl ChunkKeys {
         hasher.update(doc_id.as_bytes());
         hasher.update(header);
         // The cipher keeps, and wipes, its own copy of the key.
-        let enc_key = Zeroizing::new(Context::CONTENT_ENCRYPTION_KEY.derive_key(key.as_slice()));
+        let enc_key = Context::CONTENT_ENCRYPTION_KEY.derive_key(key.as_slice());
         ChunkKeys {
             cipher: XChaCha20Poly1305::new(enc_key.as_ref().into()),
-            nonce_key: Zeroizing::new(Context::CONTENT_NONCE_KEY.derive_key(key.as_slice())),
+            nonce_key: Context::CONTENT_NONCE_KEY.derive_key(key.as_slice()),
             header_digest: *hasher.finalize().as_bytes(),
         }
     }
@@ -390,7 +386,6 @@ impl ChunkKeys {
 /// `count ‖ ( content_ref ‖ key )*`, each content ref once, in ascending
 /// order of their encodings, so the bytes do not depend on the order given.
 /// Where a ref is listed more than once, its last key is kept.
-#[cfg(feature = "std")]
 pub(crate) fn encode_ancestors<
     'a,
     Cr: ContentRef + 'a,
@@ -418,7 +413,6 @@ pub(crate) fn encode_body<
 
 /// The envelope alone, as [`encode_body`] writes it before padding it, in a
 /// buffer that is wiped when dropped and never grows.
-#[cfg(feature = "std")]
 pub(crate) fn encode_envelope<
     'a,
     Cr: ContentRef + 'a,
@@ -434,8 +428,6 @@ pub(crate) fn encode_envelope<
 /// An envelope ready to write, so its length is known before it is written
 /// into a buffer of that length. The only place an envelope is laid out.
 struct EnvelopeLayout<'a, 'p> {
-    count: Vec<u8>,
-
     /// By their encoded content refs, each once and in ascending order of
     /// the encodings. The keys are borrowed, not copied.
     ancestors: BTreeMap<Vec<u8>, &'a SymmetricKey>,
@@ -453,28 +445,15 @@ impl<'a, 'p> EnvelopeLayout<'a, 'p> {
             .into_iter()
             .map(|(content_ref, key)| (content_ref.encode().into_bytes(), key))
             .collect();
-        let mut count = Vec::new();
-        encode_len(ancestors.len(), &mut count);
-        EnvelopeLayout {
-            count,
-            ancestors,
-            payload,
-        }
+        EnvelopeLayout { ancestors, payload }
     }
 }
 
 impl Unpadded for EnvelopeLayout<'_, '_> {
-    fn len(&self) -> usize {
-        let keys_len: usize = self
-            .ancestors
-            .iter()
-            .map(|(content_ref, key)| content_ref.len() + key.as_slice().len())
-            .sum();
-        self.count.len() + keys_len + self.payload.len()
-    }
-
     fn write_to<S: Sink>(&self, out: &mut S) {
-        out.put(&self.count);
+        let mut count = Vec::new();
+        encode_len(self.ancestors.len(), &mut count);
+        out.put(&count);
         for (content_ref, key) in &self.ancestors {
             out.put(content_ref);
             out.put(key.as_slice());

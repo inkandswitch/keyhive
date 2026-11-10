@@ -10,6 +10,8 @@
 //!
 //! The shape, and that the contexts differ, are checked at compile time.
 
+use zeroize::Zeroizing;
+
 /// A BLAKE3 key-derivation context: one per derivation.
 ///
 /// ```
@@ -94,17 +96,23 @@ impl Context {
         self.0
     }
 
-    /// Derive a 32-byte key from `key_material` under this context.
-    #[allow(clippy::disallowed_methods)]
-    pub fn derive_key(self, key_material: &[u8]) -> [u8; 32] {
-        blake3::derive_key(self.0, key_material)
+    /// Derive a 32-byte key from `key_material` under this context: the same
+    /// bytes as `blake3::derive_key`. The key, and the hasher state that saw
+    /// `key_material`, are wiped when dropped.
+    pub fn derive_key(self, key_material: &[u8]) -> Zeroizing<[u8; 32]> {
+        let mut hasher = self.hasher();
+        hasher.update(key_material);
+        let mut key = Zeroizing::new([0; 32]);
+        Zeroizing::new(hasher.finalize_xof()).fill(&mut *key);
+        key
     }
 
     /// A hasher in key-derivation mode under this context, for key material
-    /// fed in parts or read as a stream.
+    /// fed in parts or read as a stream. It is wiped when dropped, since what
+    /// it has buffered is key material.
     #[allow(clippy::disallowed_methods)]
-    pub fn hasher(self) -> blake3::Hasher {
-        blake3::Hasher::new_derive_key(self.0)
+    pub fn hasher(self) -> Zeroizing<blake3::Hasher> {
+        Zeroizing::new(blake3::Hasher::new_derive_key(self.0))
     }
 }
 

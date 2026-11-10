@@ -145,7 +145,7 @@ impl GroupSecret {
         hasher.update(pred_refs.as_slice());
         hasher.update(content_ref.encode().as_bytes());
         ApplicationSecret::new(
-            SymmetricKey::from(*hasher.finalize().as_bytes()),
+            SymmetricKey::from_hasher(&hasher),
             self.digest(),
             *group_secret_origin_hash,
             content_ref.clone(),

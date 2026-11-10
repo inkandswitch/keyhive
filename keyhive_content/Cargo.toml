@@ -17,7 +17,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }
 zeroize = { workspace = true }
 
-# std-only dependencies: the envelope and the ciphertext store
+# std-only dependencies: the ciphertext store
 dupe = { workspace = true, optional = true }
 future_form = { workspace = true, optional = true }
 futures = { workspace = true, features = ["std"], optional = true }

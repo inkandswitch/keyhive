@@ -20,16 +20,12 @@ use beekem::{
 };
 use future_form::FutureForm;
 use id::DocumentId;
-use keyhive_codec::{
-    error::DecodeError,
-    traits::{Decode, Encode},
-};
+use keyhive_codec::traits::{Decode, Encode};
 use keyhive_content::{
     ancestor_key::AncestorKey,
     application_secret::TryEncryptError,
     encrypted::{ContentDecryptError, EncryptedContent},
-    envelope::{Envelope, OpenEnvelopeError},
-    padding::MalformedPadding,
+    envelope::{Envelope, MalformedBody, OpenEnvelopeError},
     reference::ContentRef,
     store::{CausalDecryptionError, CausalDecryptionState, CiphertextStore, CiphertextStoreExt},
 };
@@ -623,23 +619,17 @@ pub enum DecryptError {
     #[error("Unable to build SIV due to IO error: {0}")]
     IoErrorOnSivBuild(#[from] std::io::Error),
 
-    /// The content decrypted, but is not an envelope. Only a writer with
-    /// its key can produce this.
-    #[error("the content is not an envelope: {0}")]
-    MalformedEnvelope(DecodeError),
-
-    /// The content decrypted, but its padding is malformed. Only a writer
-    /// with its key can produce this.
+    /// The content decrypted, but is malformed. Only a writer with its key
+    /// can produce this.
     #[error(transparent)]
-    MalformedPadding(#[from] MalformedPadding),
+    MalformedBody(#[from] MalformedBody),
 }
 
 impl From<OpenEnvelopeError> for DecryptError {
     fn from(err: OpenEnvelopeError) -> Self {
         match err {
             OpenEnvelopeError::Decrypt(e) => e.into(),
-            OpenEnvelopeError::Padding(e) => e.into(),
-            OpenEnvelopeError::Decode(e) => DecryptError::MalformedEnvelope(e),
+            OpenEnvelopeError::Malformed(e) => e.into(),
         }
     }
 }
