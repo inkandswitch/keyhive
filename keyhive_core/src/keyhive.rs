@@ -12,7 +12,7 @@ use crate::{
     contact_card::ContactCard,
     content::heads::ContentHeads,
     error::not_found::NotFound,
-    event::{static_event::StaticEvent, Event},
+    event::{static_event::StaticEvent, Event, VerifiedEvent},
     listener::{log::Log, membership::MembershipListener},
     principal::{
         active::{Active, ImportPrekeySecretsError},
@@ -140,8 +140,8 @@ pub struct KeyhiveState<
     /// after a document's lock or `unjoined` when both are held.
     certificate_sets: Mutex<CertificateSets>,
 
-    /// [`StaticEvent`]s that are still awaiting dependencies.
-    pending_events: Mutex<Vec<Arc<StaticEvent<T>>>>,
+    /// Verified events that are still awaiting dependencies.
+    pending_events: Mutex<Vec<Arc<VerifiedEvent<T>>>>,
 
     /// Observer for [`Event`]s. Intended for running live updates.
     event_listener: L,
@@ -2819,6 +2819,26 @@ where
         Ok(())
     }
 
+    async fn receive_verified_event(
+        &self,
+        event: &VerifiedEvent<T>,
+    ) -> Result<(), ReceiveStaticEventError<K::Error>> {
+        match event {
+            VerifiedEvent::Prekey(key_op) => self.receive_prekey_op(key_op).await?,
+            VerifiedEvent::CgkaOperation(op) => {
+                let doc_id = DocumentId::from(op.payload().doc_id);
+                if !self.has_cgka_op(doc_id, op.digest()).await {
+                    self.apply_verified_cgka_op(op.dupe()).await?;
+                }
+            }
+            VerifiedEvent::Certificate(cert) => self
+                .insert_certificates(std::slice::from_ref(cert))
+                .await
+                .map_err(ReceiveCertificateError::from)?,
+        }
+        Ok(())
+    }
+
     /// Verify a Keyline certificate and insert it. Never pending: a
     /// certificate needs nothing else to arrive first.
     #[instrument(skip_all)]
@@ -3028,23 +3048,35 @@ where
         &self,
         signed_op: verified::Signed<CgkaOperation>,
     ) -> Result<(), ReceiveCgkaOpError<K::Error>> {
-        // The digest covers the issuer and the payload, not the signature, so
-        // an operation already in the CGKA graph is skipped before its
-        // signature is checked again.
-        let digest = signed_op.digest();
-        let payload: CgkaOperation = signed_op.encoded().decode().map_err(VerifyError::from)?;
-        if self
-            .has_cgka_op(DocumentId::from(payload.doc_id), digest)
-            .await
-        {
+        if self.has_signed_cgka_op(&signed_op).await? {
             return Ok(());
         }
-        let signed_op = signed_op.verify()?;
-        let doc_id = DocumentId::from(signed_op.payload().doc_id);
+        self.apply_verified_cgka_op(Arc::new(signed_op.verify()?))
+            .await
+    }
+
+    /// Whether the CGKA graph already has the op for `signed_op`.
+    async fn has_signed_cgka_op(
+        &self,
+        signed_op: &verified::Signed<CgkaOperation>,
+    ) -> Result<bool, VerifyError> {
+        let payload: CgkaOperation = signed_op.encoded().decode().map_err(VerifyError::from)?;
+        Ok(self
+            .has_cgka_op(DocumentId::from(payload.doc_id), signed_op.digest())
+            .await)
+    }
+
+    /// Authorize `op` and merge it.
+    async fn apply_verified_cgka_op(
+        &self,
+        op: Arc<Verified<CgkaOperation>>,
+    ) -> Result<(), ReceiveCgkaOpError<K::Error>> {
+        let digest = op.digest();
+        let doc_id = DocumentId::from(op.payload().doc_id);
 
         // Authorization reads the certificates and this replica's CGKA graph.
         // This replica need not be a member of the CGKA group.
-        match self.cgka_op_is_authorized(&signed_op, doc_id).await? {
+        match self.cgka_op_is_authorized(&op, doc_id).await? {
             Ok(()) => {}
             Err(CgkaUnauthorized::Pending) => {
                 return Err(ReceiveCgkaOpError::PendingCgkaAuthorization(Box::new(
@@ -3057,7 +3089,6 @@ where
             }
         }
 
-        let op = Arc::new(signed_op);
         let me = self.active.id();
         let secrets: BTreeMap<ShareKey, ShareSecretKey> = {
             let pairs = self.active.key_pairs.lock().await;
@@ -3196,12 +3227,10 @@ where
             return Ok(false);
         };
         let waiting_add = self.pending_events.lock().await.iter().any(|event| {
-            let StaticEvent::CgkaOperation(op) = event.as_ref() else {
+            let VerifiedEvent::CgkaOperation(op) = event.as_ref() else {
                 return false;
             };
-            op.encoded().decode().is_ok_and(|op: CgkaOperation| {
-                DocumentId::from(op.doc_id) == doc_id && invites(&op, me)
-            })
+            DocumentId::from(op.payload().doc_id) == doc_id && invites(op.payload(), me)
         });
         if waiting_add {
             return Ok(false);
@@ -3347,7 +3376,7 @@ where
             .lock()
             .await
             .iter()
-            .map(|event| event.as_ref().clone())
+            .map(|event| StaticEvent::from(event.as_ref()))
             .collect();
 
         Archive {
@@ -3363,8 +3392,8 @@ where
     /// Rebuild a replica from its archive. The certificates are inserted into
     /// `keyline` (a no-op for those it already holds), and each document's
     /// `Cgka` is rebuilt from valid archived operations. As with
-    /// [`Self::generate`], `keyline` becomes this keyhive's own. Fails if
-    /// Keyline cannot answer.
+    /// [`Self::generate`], `keyline` becomes this keyhive's own. Drop any pending
+    /// event that does not verify. Fails if Keyline cannot answer.
     #[instrument(skip_all)]
     pub async fn try_from_archive(
         archive: &Archive<T>,
@@ -3453,7 +3482,13 @@ where
                     .pending_events
                     .iter()
                     .cloned()
-                    .map(Arc::new)
+                    .filter_map(|event| match event.verify() {
+                        Ok(event) => Some(Arc::new(event)),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "an archived pending event does not verify");
+                            None
+                        }
+                    })
                     .collect(),
             ),
             csprng,
@@ -3483,9 +3518,7 @@ where
                 hive.pending_events
                     .lock()
                     .await
-                    .push(Arc::new(StaticEvent::CgkaOperation(Box::new(
-                        op.signed().as_ref().clone(),
-                    ))));
+                    .push(Arc::new(VerifiedEvent::CgkaOperation(op.dupe())));
                 continue;
             }
             let doc_id = DocumentId::from(op.payload().doc_id);
@@ -3511,9 +3544,7 @@ where
                 hive.pending_events
                     .lock()
                     .await
-                    .push(Arc::new(StaticEvent::CgkaOperation(Box::new(
-                        op.signed().as_ref().clone(),
-                    ))));
+                    .push(Arc::new(VerifiedEvent::CgkaOperation(op.dupe())));
             }
             // Operations that descend from a deferred operation are deferred with it.
             let mut has_progressed = true;
@@ -3528,9 +3559,7 @@ where
                         .any(|p| deferred.contains(p));
                     if should_wait {
                         deferred.insert(op.digest());
-                        pending.push(Arc::new(StaticEvent::CgkaOperation(Box::new(
-                            op.signed().as_ref().clone(),
-                        ))));
+                        pending.push(Arc::new(VerifiedEvent::CgkaOperation(op.dupe())));
                         has_progressed = true;
                     }
                     !should_wait
@@ -3626,23 +3655,38 @@ where
     #[instrument(level = "trace", skip_all)]
     pub async fn ingest_unsorted_static_events(
         &self,
-        mut events: Vec<StaticEvent<T>>,
+        events: Vec<StaticEvent<T>>,
     ) -> Vec<Arc<StaticEvent<T>>> {
         tracing::debug!("Keyhive::ingest_unsorted_static_events()");
         use std::collections::{HashMap, HashSet};
-        let mut replayed_pending: HashSet<Digest<StaticEvent<T>>> = HashSet::new();
-        for event in self.pending_events.lock().await.iter() {
-            replayed_pending.insert(event.digest());
-            events.push(event.as_ref().clone());
-        }
+        let mut unique_events: HashMap<Digest<StaticEvent<T>>, Arc<VerifiedEvent<T>>> = self
+            .pending_events
+            .lock()
+            .await
+            .iter()
+            .map(|event| (event.digest(), event.dupe()))
+            .collect();
+        let replayed_pending: HashSet<Digest<StaticEvent<T>>> =
+            unique_events.keys().copied().collect();
 
-        // Deduplicate events by hash
-        let mut unique_events: HashMap<Digest<StaticEvent<T>>, StaticEvent<T>> = HashMap::new();
         for event in events {
-            let hash = event.digest();
-            unique_events.entry(hash).or_insert(event);
+            let digest = event.digest();
+            if unique_events.contains_key(&digest) {
+                continue;
+            }
+            if let StaticEvent::CgkaOperation(op) = &event {
+                if matches!(self.has_signed_cgka_op(op).await, Ok(true)) {
+                    continue;
+                }
+            }
+            match event.verify() {
+                Ok(event) => {
+                    unique_events.insert(digest, Arc::new(event));
+                }
+                Err(e) => tracing::warn!(error = %e, "dropping an event that does not verify"),
+            }
         }
-        let mut epoch: Vec<StaticEvent<T>> = unique_events.into_values().collect();
+        let mut epoch: Vec<Arc<VerifiedEvent<T>>> = unique_events.into_values().collect();
 
         loop {
             let mut next_epoch = vec![];
@@ -3650,7 +3694,7 @@ where
             let epoch_len = epoch.len();
 
             for event in epoch {
-                if let Err(e) = self.receive_static_event(event.clone()).await {
+                if let Err(e) = self.receive_verified_event(&event).await {
                     if e.is_final() {
                         tracing::warn!(error = %e, "dropping an event that can never apply");
                     } else {
@@ -3676,11 +3720,13 @@ where
                     err
                 );
 
-                let new_pending: Vec<Arc<StaticEvent<T>>> =
-                    next_epoch.clone().into_iter().map(Arc::new).collect();
+                let new_pending: Vec<Arc<StaticEvent<T>>> = next_epoch
+                    .iter()
+                    .map(|event| Arc::new(StaticEvent::from(event.as_ref())))
+                    .collect();
                 drop(mem::replace(
                     &mut *self.pending_events.lock().await,
-                    new_pending.clone(),
+                    next_epoch,
                 ));
                 return new_pending;
             }
@@ -3778,33 +3824,33 @@ where
 
         for event in pending_events.iter() {
             match event.as_ref() {
-                StaticEvent::PrekeysExpanded(signed) => {
+                VerifiedEvent::Prekey(KeyOp::Add(signed)) => {
                     pending_prekeys_expanded += 1;
                     if IndividualId(signed.issuer()) == active_id {
                         pending_prekeys_expanded_by_active += 1;
                     }
                 }
-                StaticEvent::PrekeyRotated(signed) => {
+                VerifiedEvent::Prekey(KeyOp::Rotate(signed)) => {
                     pending_prekey_rotated += 1;
                     if IndividualId(signed.issuer()) == active_id {
                         pending_prekey_rotated_by_active += 1;
                     }
                 }
-                StaticEvent::CgkaOperation(signed) => {
+                VerifiedEvent::CgkaOperation(signed) => {
                     pending_cgka_operation += 1;
                     if IndividualId(signed.issuer()) == active_id {
                         pending_cgka_operation_by_active += 1;
                     }
                 }
                 // A certificate never waits on another, so one is pending only
-                // if it failed to verify.
-                StaticEvent::Delegated(signed) => {
+                // if its store failed.
+                VerifiedEvent::Certificate(VerifiedCertificate::Delegation(signed)) => {
                     pending_delegated += 1;
                     if IndividualId::from(signed.issuer()) == active_id {
                         pending_delegated_by_active += 1;
                     }
                 }
-                StaticEvent::Revoked(signed) => {
+                VerifiedEvent::Certificate(VerifiedCertificate::Revocation(signed)) => {
                     pending_revoked += 1;
                     if IndividualId::from(signed.issuer()) == active_id {
                         pending_revoked_by_active += 1;
@@ -4019,32 +4065,28 @@ where
             let certificate = match event {
                 // Merged with the individuals above.
                 Event::PrekeysExpanded(_) | Event::PrekeyRotated(_) => continue,
-                Event::Delegated(signed) => Some(Certificate::Delegation(signed.dupe())),
-                Event::Revoked(signed) => Some(Certificate::Revocation(signed.dupe())),
-                Event::CgkaOperation(_) => None,
+                Event::Delegated(signed) => Certificate::Delegation(signed.dupe()),
+                Event::Revoked(signed) => Certificate::Revocation(signed.dupe()),
+                // The trunk may have moved since the fork: an event that does
+                // not apply yet waits like any other received one.
+                Event::CgkaOperation(op) => {
+                    let event = VerifiedEvent::CgkaOperation(op.dupe());
+                    if let Err(error) = self.receive_verified_event(&event).await {
+                        if error.is_final() {
+                            tracing::warn!(%error, "dropping a fork's event that can never apply");
+                        } else {
+                            self.pending_events.lock().await.push(Arc::new(event));
+                        }
+                    }
+                    continue;
+                }
             };
             // The fork shares the store, so the trunk already holds what the
             // fork wrote, and inserting it again announces nothing: tell the
             // trunk's listener here.
-            if let Some(certificate) = certificate {
-                match certificate.verify() {
-                    Ok(verified) => self.notify(&verified).await,
-                    Err(error) => tracing::warn!(%error, "a fork's certificate does not verify"),
-                }
-                continue;
-            }
-
-            // The trunk may have moved since the fork: an event that does not
-            // apply yet waits like any other received one.
-            if let Err(error) = self.receive_static_event(event.clone().into()).await {
-                if error.is_final() {
-                    tracing::warn!(%error, "dropping a fork's event that can never apply");
-                } else {
-                    self.pending_events
-                        .lock()
-                        .await
-                        .push(Arc::new(event.clone().into()));
-                }
+            match certificate.verify() {
+                Ok(verified) => self.notify(&verified).await,
+                Err(error) => tracing::warn!(%error, "a fork's certificate does not verify"),
             }
         }
 
@@ -5429,9 +5471,47 @@ mod tests {
         let pending = loaded.pending_events.lock().await;
         assert!(
             pending.iter().any(
-                |event| matches!(event.as_ref(), StaticEvent::CgkaOperation(op) if op.digest() == update)
+                |event| matches!(event.as_ref(), VerifiedEvent::CgkaOperation(op) if op.digest() == update)
             ),
             "the update built on the add of bob was discarded"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_archived_pending_event_that_does_not_verify_is_dropped_on_load() -> TestResult {
+        let hive = make_keyhive().await;
+        let mut archive = hive.into_archive().await?;
+        let issuer = Identifier::from(hive.id());
+        let genuine = StaticEvent::Delegated(
+            Verified::sign_sync(
+                &Delegation::new(issuer, issuer, Power::Edit),
+                &hive.active.signer,
+            )?
+            .signed()
+            .as_ref()
+            .clone(),
+        );
+        let forged = StaticEvent::Delegated(verified::Signed::new(
+            issuer,
+            Delegation::new(issuer, issuer, Power::Read).encode(),
+            ed25519_dalek::Signature::from_bytes(&[0; 64]),
+        ));
+        archive.pending_events.extend([genuine.clone(), forged]);
+
+        let loaded: TestKeyhive = Keyhive::try_from_archive(
+            &archive,
+            hive.active.signer.clone(),
+            Arc::new(Mutex::new(MemoryCiphertextStore::new())),
+            NoListener,
+            MemoryKeyline::new(),
+            Arc::new(Mutex::new(rand::rngs::OsRng)),
+        )
+        .await?;
+
+        assert_eq!(
+            loaded.pending_event_hashes().await,
+            HashSet::from([genuine.digest()])
         );
         Ok(())
     }
@@ -6187,7 +6267,7 @@ mod tests {
             mine.into_iter()
                 .chain(mine_again)
                 .chain(theirs)
-                .map(Arc::new),
+                .map(|event| Arc::new(event.verify().expect("signed above"))),
         );
 
         let stats = hive.stats().await;

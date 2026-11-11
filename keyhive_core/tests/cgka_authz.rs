@@ -11,7 +11,7 @@ use keyhive_content::store::memory::MemoryCiphertextStore;
 use keyhive_core::{
     content::heads::ContentHeads,
     crypto::digest::Digest,
-    event::Event,
+    event::{static_event::StaticEvent, Event},
     keyhive::{Keyhive, ReceiveCgkaOpError},
     listener::no_listener::NoListener,
     principal::{
@@ -1002,6 +1002,28 @@ async fn an_operation_built_on_one_that_failed_to_merge_is_denied() -> TestResul
     Ok(())
 }
 
+#[tokio::test]
+async fn a_reader_adds_itself_unless_an_add_of_it_on_that_document_is_pending() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let waiting = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    let free = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+    for doc_id in [waiting, free] {
+        issue_grant(&alice, bob.id(), doc_id, Power::Read).await?;
+    }
+    send(&alice, &bob).await;
+    let mut add = proven_add(&alice, waiting, &bob, BTreeSet::new()).await;
+    add.predecessors = Predecessors::from([Digest::from([9u8; 32])]);
+    bob.ingest_unsorted_static_events(vec![StaticEvent::CgkaOperation(Box::new(
+        alice.sign_cgka_op(add).await?,
+    ))])
+    .await;
+
+    assert!(!bob.add_self_to(waiting).await?);
+    assert!(bob.add_self_to(free).await?);
+    Ok(())
+}
+
 /// Alice, her document, and Bob, who added himself to it, was removed when
 /// Alice revoked his `Read`, and was then granted `Edit`.
 async fn removed_and_granted_again() -> TestResult<(Hive, Hive, DocumentId)> {
@@ -1476,5 +1498,36 @@ async fn an_operation_citing_a_certificate_outside_its_documents_closure_is_pend
     let op = remove_op(&alice, doc, BTreeSet::from([elsewhere])).await;
     let result = alice.receive_cgka_op(mallory.sign_cgka_op(op).await?).await;
     assert!(is_pending(&result), "{result:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_forged_copy_of_a_pending_event_never_displaces_it() -> TestResult {
+    let (alice, _bob, doc_id) = doc_with_alice_and_bob().await?;
+    let waiting = CgkaOperation {
+        doc_id: TreeId::from(doc_id),
+        predecessors: Predecessors::from([Digest::from([9u8; 32])]),
+        change: CgkaChange::Update {
+            new_path: intercepted_path(&alice).await,
+            predecessor_secrets: Vec::new(),
+        },
+    };
+    let genuine = alice.sign_cgka_op(waiting).await?;
+    let forged = Signed::new(
+        genuine.issuer(),
+        genuine.encoded().clone(),
+        ed25519_dalek::Signature::from_bytes(&[0; 64]),
+    );
+    let event = |op| StaticEvent::CgkaOperation(Box::new(op));
+    let expected = vec![Arc::new(event(genuine.clone()))];
+
+    let pending = alice
+        .ingest_unsorted_static_events(vec![event(forged.clone()), event(genuine)])
+        .await;
+    assert_eq!(pending, expected, "a forged copy ahead of it in one batch");
+    let pending = alice
+        .ingest_unsorted_static_events(vec![event(forged)])
+        .await;
+    assert_eq!(pending, expected, "a forged copy after it is pending");
     Ok(())
 }
