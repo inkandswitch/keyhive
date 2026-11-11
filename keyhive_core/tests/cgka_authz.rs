@@ -1002,6 +1002,28 @@ async fn an_operation_built_on_one_that_failed_to_merge_is_denied() -> TestResul
     Ok(())
 }
 
+#[tokio::test]
+async fn a_reader_adds_itself_unless_an_add_of_it_on_that_document_is_pending() -> TestResult {
+    let alice = make_simple_keyhive().await?;
+    let bob = make_simple_keyhive().await?;
+    let waiting = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+    let free = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+    for doc_id in [waiting, free] {
+        issue_grant(&alice, bob.id(), doc_id, Power::Read).await?;
+    }
+    send(&alice, &bob).await;
+    let mut add = proven_add(&alice, waiting, &bob, BTreeSet::new()).await;
+    add.predecessors = Predecessors::from([Digest::from([9u8; 32])]);
+    bob.ingest_unsorted_static_events(vec![StaticEvent::CgkaOperation(Box::new(
+        alice.sign_cgka_op(add).await?,
+    ))])
+    .await;
+
+    assert!(!bob.add_self_to(waiting).await?);
+    assert!(bob.add_self_to(free).await?);
+    Ok(())
+}
+
 /// Alice, her document, and Bob, who added himself to it, was removed when
 /// Alice revoked his `Read`, and was then granted `Edit`.
 async fn removed_and_granted_again() -> TestResult<(Hive, Hive, DocumentId)> {
