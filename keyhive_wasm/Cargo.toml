@@ -12,7 +12,7 @@ rust-version.workspace = true
 include = ["/LICENSE", "/README.md", "/src/"]
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 beekem = { workspace = true, features = ["std"] }
