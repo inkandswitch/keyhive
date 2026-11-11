@@ -21,14 +21,17 @@
 //!    certificate.
 //! 4. Content. Alice writes v1, then edits it to v2.
 //! 5. Sync and relay. Each peer gets the events it is entitled to, and Carol
-//!    forwards v2 to Bob. Bob can decrypt it; Carol, who carried it, cannot.
+//!    forwards v1 and v2 to Bob. Bob can decrypt them; Carol, who carried
+//!    them, cannot.
 //! 6. Revocation. Alice removes Bob and writes v3. Bob keeps what he could
 //!    already read, but cannot read what is written after.
 //!
-//! The same walkthrough as a rain diagram, the notation of [Keyhive lab note
-//! 08]: time runs down the page, rows are certificates and writes, and dashed
-//! lines show where each one's authority comes from. Step 1 happens before the
-//! document exists, so it is not drawn.
+//! The same walkthrough as a rain diagram, the notation of Keyhive lab note 08
+//! (<https://www.inkandswitch.com/keyhive/notebook/08/>): time runs down the
+//! page, rows are certificates and writes, and dashed lines show where each
+//! one's authority comes from. Step 1 happens before the document exists, and
+//! step 5 moves only bytes, so neither is drawn. A `✗` marks a certificate
+//! that is later revoked, and `o` is where the revocation is issued.
 //!
 //! ```text
 //!      (Doc)             (Alice)       (Bob)       (Carol)
@@ -41,28 +44,31 @@
 //!        │     ┆ ╰┄┄┄┄┄┄┄┄┄┄┼┄┄┄┄┄╮      │            │
 //!        │     ┆            ├─ [Read] ──▶│            │      b) and gives Bob Read
 //!        │     ┆            │     ✗      │            │
-//!        │◀════╪═ [write] ══┤     │      │            │   4. a) Alice writes v1
+//!        │◀════╪═ [[Edit]] ═┤     │      │            │   4. a) Alice writes v1
 //!        │     ┆            │     │      │            │
-//!        │◀════╪═ [write] ══┤     │      │            │      b) and edits it to v2
+//!        │◀════╪═ [[Edit]] ═┤     │      │            │      b) and edits it to v2
 //!        │     ┆            │     │      │            │
-//!        │     ┆            │     │      │            │   5. Carol relays v2 to Bob,
-//!        │     ┆            │     │      │            │      who reads it; she cannot
-//!        │     ┆            │     │      │            │
+//!        │     ┆            │     │      │            │   5. Carol forwards v1 and v2
+//!        │     ┆            │     │      │            │      to Bob; she cannot read
+//!        │     ┆            │     │      │            │      them, but he can
 //!        │     ├┄┄┄┄┄┄┄┄┄┄┄┄o──<Revoke>  │            │   6. a) Alice revokes Bob's Read
 //!        │     ┆            │            │            │
-//!        │◀════╧═ [write] ══┤            │            │      b) and writes v3, which Bob
+//!        │◀════╧═ [[Edit]] ═┤            │            │      b) and writes v3, which Bob
 //!        │                  │            │            │         cannot read
 //!        ▼                  ▼            ▼            ▼ time
 //! ```
 //!
 //! # What next
 //!
-//! - Give Bob `Edit`, and have him try to delegate `Admin` to a fourth peer.
-//!   Keyhive refuses: a delegation never conveys more than its issuer holds.
-//! - Revoke Bob with `retain_all_other_members` set to `false`, and see who
-//!   else loses access.
-//! - Read [`design/keyline/README.md`] for how authority is computed, and
-//!   [`design/causal_encryption.md`] for how keys travel with content.
+//! - Introduce a fourth peer, give Bob `Edit`, and have him try to delegate
+//!   `Admin` to it. Keyhive refuses: a delegation never conveys more than its
+//!   issuer holds.
+//! - Have Bob delegate `Read` to that fourth peer, then revoke Bob with
+//!   `retain_all_other_members` set to `false`: the fourth peer loses access
+//!   too. With `true`, Alice re-issues its delegation and it keeps access.
+//! - Read `design/keyline/README.md` for how authority is computed,
+//!   `design/causal_encryption.md` for how keys travel with content, and
+//!   `design/threat_model.md` for what Keyhive does and does not protect.
 //!
 //! # Dependencies
 //!
@@ -70,10 +76,6 @@
 //! `future_form`, `keyhive_codec`, `keyhive_content`, `keyhive_core`,
 //! `keyhive_crypto`, `keyline`, `keyline_memory`, `nonempty`, `rand`, and
 //! `tokio` with the `macros` and `rt-multi-thread` features.
-//!
-//! [Keyhive lab note 08]: https://www.inkandswitch.com/keyhive/notebook/08/
-//! [`design/keyline/README.md`]: https://github.com/inkandswitch/keyhive/blob/main/design/keyline/README.md
-//! [`design/causal_encryption.md`]: https://github.com/inkandswitch/keyhive/blob/main/design/causal_encryption.md
 
 use future_form::Sendable;
 use keyhive_codec::traits::{Decode, Encode};
@@ -82,8 +84,9 @@ use keyhive_content::{
 };
 use keyhive_core::{
     content::heads::ContentHeads, keyhive::Keyhive, listener::no_listener::NoListener,
+    principal::document::id::DocumentId,
 };
-use keyhive_crypto::signer::memory::MemorySigner;
+use keyhive_crypto::{identifier::Identifier, signer::memory::MemorySigner};
 use keyline::power::Power;
 use keyline_memory::MemoryKeyline;
 use nonempty::nonempty;
@@ -93,10 +96,11 @@ use rand::rngs::OsRng;
 async fn main() -> Result<(), Error> {
     // 1. Identities.
     //
-    // A peer is identified by its signing key. Nothing else names it: no
-    // account, no server. A contact card is the signed public half: the
-    // peer's identifier and a prekey, the public key others use to include it
-    // in a document's key agreement. Peers swap cards however the application
+    // A peer is identified by its verifying key, and proves it is that peer
+    // by signing with the matching signing key. Nothing else names it: no
+    // account, no server. A contact card is signed and public: the peer's
+    // identifier and a prekey, the public key others use to include it in a
+    // document's key agreement. Peers swap cards however the application
     // likes, much as people swap phone numbers.
     println!("\n1. identities");
     let alice = new_peer().await?;
@@ -108,28 +112,32 @@ async fn main() -> Result<(), Error> {
         b.receive_contact_card(&a.get_existing_contact_card().await)
             .await?;
     }
+    let names = [
+        ("Alice", Identifier::from(alice.id())),
+        ("Bob", Identifier::from(bob.id())),
+        ("Carol", Identifier::from(carol.id())),
+    ];
     println!("   Alice, Bob and Carol each made a signing key and swapped contact cards");
 
     // 2. A document.
     //
-    // A document's identifier is a fresh public key. Its secret half signs
+    // A document's identifier is a fresh verifying key. Its signing key signs
     // one certificate for each creator, giving them the Admin power, and is
     // then thrown away, so nothing can ever again be signed as the document
     // itself: every later change traces back to its creators. Here Alice
     // creates it alone; `coparents` would name others who administer it too.
     //
-    // The content heads are the latest versions this replica knows of, and
-    // start at the first version Alice is about to write. Keyhive does not
-    // follow content itself: the application updates the heads as it writes,
-    // and each revocation records them, so the content layer can tell what a
+    // The content heads are the latest versions this peer knows of, and start
+    // at the first version Alice is about to write. Keyhive does not follow
+    // content itself: the application updates the heads as it writes, and
+    // each revocation records them, so the content layer can tell what a
     // revoked member wrote after it.
     println!("\n2. a document");
     let v1 = b"Design doc, v1".to_vec();
     let v1_ref = content_ref(&v1);
     let coparents = vec![];
     let doc = alice.generate_doc(coparents, nonempty![v1_ref]).await?;
-    let doc_id = doc.to_string();
-    println!("   Alice created a document, {}…", &doc_id[..12]);
+    println!("   Alice created a document, {:.12}…", doc.to_string());
 
     // 3. Delegation.
     //
@@ -147,6 +155,7 @@ async fn main() -> Result<(), Error> {
     alice.add_member(carol.id(), doc, Power::Relay).await?;
     alice.add_member(bob.id(), doc, Power::Read).await?;
     println!("   Alice delegated Relay to Carol and Read to Bob");
+    print_members(&alice, doc, &names).await?;
 
     // 4. Content.
     //
@@ -154,7 +163,7 @@ async fn main() -> Result<(), Error> {
     // encrypted under a key derived from the document's current shared
     // secret. An edit names the version it follows, its predecessor, and
     // carries the predecessor's key: whoever can read v2 can read v1 through
-    // it, without the key agreement. This is causal encryption.
+    // it, with no key agreement at all. This is causal encryption.
     println!("\n4. content");
     let v1_encrypted = alice.try_encrypt_content(doc, &v1_ref, &[], &v1).await?;
     let v2 = b"Design doc, v2: now with diagrams".to_vec();
@@ -177,52 +186,67 @@ async fn main() -> Result<(), Error> {
     // the events that peer is entitled to see. `ingest_unsorted_static_events`
     // applies them in dependency order, whatever order they arrive in.
     //
-    // Content travels separately, as bytes. Alice gives v2 to Carol, who
-    // stores it and forwards it to Bob. To Carol it is opaque.
+    // Content travels separately, as bytes. Alice gives v1 and v2 to Carol,
+    // who stores them and forwards them to Bob. To Carol they are opaque: her
+    // refusal is what anyone without Read would get. What Relay gives her is
+    // standing: she is sent the document's events, and so can serve its
+    // ciphertext, but only to peers that hold Relay or better (A1 in
+    // `design/threat_model.md`).
     println!("\n5. sync and relay");
     sync(&alice, &bob).await?;
     sync(&alice, &carol).await?;
 
-    let held_by_carol = v2_encrypted.encrypted_content().encode().into_bytes();
-    let Err(refusal) = carol
-        .try_decrypt_content(doc, &EncryptedContent::decode(&held_by_carol)?)
-        .await
-    else {
+    let carol_holds = [&v1_encrypted, &v2_encrypted]
+        .map(|written| written.encrypted_content().encode().into_bytes());
+    let [v1_forwarded, v2_forwarded] = carol_holds
+        .each_ref()
+        .map(|bytes| EncryptedContent::<Vec<u8>, [u8; 32]>::decode(bytes));
+    let (v1_forwarded, v2_forwarded) = (v1_forwarded?, v2_forwarded?);
+
+    let Err(refusal) = carol.try_decrypt_content(doc, &v2_forwarded).await else {
         return Err("a relay decrypted the document".into());
     };
     println!(
-        "   Carol stores v2 but cannot decrypt it (relays are not in the key agreement): {refusal}"
+        "   Carol stores v1 and v2 but cannot decrypt them (relays are not in the key agreement): {refusal}"
     );
 
-    let forwarded = EncryptedContent::decode(&held_by_carol)?;
-    let opened = bob.try_decrypt_content(doc, &forwarded).await?;
-    assert_eq!(opened.plaintext, v2);
+    let opened = bob.try_decrypt_content(doc, &v2_forwarded).await?;
+    ensure(opened.plaintext == v2, "Bob's v2 differs from Alice's")?;
     println!(
-        "   Bob decrypts the copy Carol forwarded: {}",
+        "   Bob decrypts the v2 Carol forwarded: {}",
         as_text(&opened.plaintext)
     );
 
+    // `Envelope::open` takes only a ciphertext, a key, and the document the
+    // key is bound to. It uses none of Bob's Keyhive state: the key v2
+    // carries is enough to read v1.
     let v1_key = opened
         .ancestors
         .get(&v1_ref)
         .ok_or("v2 carries no key for v1")?;
-    let (from_v2, _) = Envelope::open(v1_encrypted.encrypted_content(), v1_key, doc.into())?;
-    assert_eq!(from_v2.plaintext, v1);
+    let (from_v2, _) = Envelope::open(&v1_forwarded, v1_key, doc.into())?;
+    ensure(
+        from_v2.plaintext == v1,
+        "the key v2 carries opened the wrong v1",
+    )?;
     println!(
-        "   and opens v1 with the key v2 carries: {}",
+        "   and opens the v1 Carol forwarded with the key v2 carries: {}",
         as_text(&from_v2.plaintext)
     );
 
     // 6. Revocation.
     //
     // Alice revokes Bob. The revocation is another signed certificate, and on
-    // Alice's replica it also removes Bob from the key agreement, so the next
-    // shared secret is one he cannot derive. This is post-compromise
-    // security. Other replicas do not yet remove him themselves, and a
-    // revoked member can put a key of his own back: see gaps G1 and G4 in
-    // `design/threat_model.md`. Whatever Bob could read stays readable to
-    // him: he may have kept a copy anyway, and a CRDT (a data type whose
-    // replicas merge without coordination) needs its whole history.
+    // Alice's peer it also removes Bob from the key agreement, so the next
+    // shared secret is one he cannot derive. This is the mechanism behind
+    // post-compromise security: a member who is removed, or whose keys leak,
+    // cannot read what comes after. Two gaps remain, listed in
+    // `design/threat_model.md`: other peers do not yet remove Bob themselves
+    // (G4), and a revoked member can put a key of his own back (G1).
+    //
+    // Whatever Bob could read stays readable to him: he may have kept a copy
+    // anyway, and a CRDT (a data type whose replicas merge without
+    // coordination) needs its whole history.
     //
     // `retain_all_other_members` keeps anyone whose access came through Bob,
     // re-issued by Alice. Bob delegated to no one, so here it changes nothing.
@@ -239,13 +263,20 @@ async fn main() -> Result<(), Error> {
     alice.set_content_heads(doc, [v3_ref]).await?;
     sync(&alice, &bob).await?;
     println!("   Alice revoked Bob and wrote {}", as_text(&v3));
+    print_members(&alice, doc, &names).await?;
 
     let still = bob
         .try_decrypt_content(doc, v2_encrypted.encrypted_content())
         .await?;
-    assert_eq!(still.plaintext, v2);
+    ensure(
+        still.plaintext == v2,
+        "Bob's v2 changed after his revocation",
+    )?;
     println!("   Bob still decrypts v2: {}", as_text(&still.plaintext));
 
+    // Alice no longer sends Bob the document's key-agreement operations, but
+    // they would not help him: the secret v3 is under was made for a group
+    // he is not in.
     let Err(refusal) = bob
         .try_decrypt_content(doc, v3_encrypted.encrypted_content())
         .await
@@ -295,10 +326,34 @@ async fn sync(from: &Peer, to: &Peer) -> Result<(), Error> {
     let waiting = to
         .ingest_unsorted_static_events(events.into_values().collect())
         .await;
-    if !waiting.is_empty() {
-        return Err(format!("{} events are missing a dependency", waiting.len()).into());
-    }
+    ensure(
+        waiting.is_empty(),
+        &format!("{} events are missing a dependency", waiting.len()),
+    )
+}
+
+/// Who `peer` sees holding a power over `doc`, by name.
+async fn print_members(
+    peer: &Peer,
+    doc: DocumentId,
+    names: &[(&str, Identifier)],
+) -> Result<(), Error> {
+    let members = peer.reachable_members(doc).await?;
+    let holders: Vec<String> = names
+        .iter()
+        .filter_map(|(name, id)| members.get(id).map(|power| format!("{name} {power}")))
+        .collect();
+    println!("   who holds what: {}", holders.join(", "));
     Ok(())
+}
+
+/// An error carrying `message` unless `holds`.
+fn ensure(holds: bool, message: &str) -> Result<(), Error> {
+    if holds {
+        Ok(())
+    } else {
+        Err(message.into())
+    }
 }
 
 /// A version's content reference: its BLAKE3 hash.
