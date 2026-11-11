@@ -28,7 +28,7 @@
 //!        │     ┆            │     │      │            │   5. Bob syncs and reads v2;
 //!        │     ┆            │     │      │            │      Carol syncs, but has no key
 //!        │     ┆            │     │      │            │
-//!        │     ╰┄┄┄┄┄┄┄┄┄┄┄┄o────<Revoke>│            │   6. Alice revokes Bob's Read
+//!        │     ╰┄┄┄┄┄┄┄┄┄┄┄┄o──<Revoke>  │            │   6. Alice revokes Bob's Read
 //!        │                  │            │            │
 //!        │◀══════ [write] ══┤            │            │      and writes v3, which Bob
 //!        │                  │            │            │      cannot read
@@ -98,7 +98,7 @@ async fn main() -> Result<(), Error> {
     // peer's identifier and a prekey, the public key others use to include it
     // in a document's key agreement. Peers swap cards however the application
     // likes, much as people swap phone numbers.
-    step(1, "identities");
+    println!("\n1. identities");
     let alice = new_peer().await?;
     let bob = new_peer().await?;
     let carol = new_peer().await?;
@@ -108,34 +108,37 @@ async fn main() -> Result<(), Error> {
         b.receive_contact_card(&a.get_existing_contact_card().await)
             .await?;
     }
-    say("Alice, Bob and Carol each made a signing key and swapped contact cards");
+    println!("   Alice, Bob and Carol each made a signing key and swapped contact cards");
 
     // 2. A document.
     //
     // A document's identifier is a fresh public key. Its secret half signs a
     // single certificate giving Alice the Admin power, and is then thrown
     // away, so nothing can ever again be signed as the document itself:
-    // every later change traces back to Alice. The initial content heads say where its history starts:
-    // here, at the hash of the first version Alice is about to write.
-    step(2, "a document");
+    // every later change traces back to Alice. The initial content heads say
+    // where its history starts: here, at the hash of the first version Alice
+    // is about to write.
+    println!("\n2. a document");
     let v1 = b"Design doc, v1".to_vec();
     let v1_ref = content_ref(&v1);
     let doc = alice.generate_doc(vec![], nonempty![v1_ref]).await?;
-    say(&format!("Alice created a document, {}", short(doc)));
+    println!("   Alice created a document, {}", short(doc));
 
     // 3. Delegation.
     //
-    // Alice signs a certificate giving Bob a power over the document. Powers
-    // are ordered `Relay < Read < Edit < Admin`, each including those below
-    // it: Relay can store and forward ciphertext without reading it, Read can
-    // decrypt, Edit can write, and Admin can change who is a member. Readers
-    // join the document's key agreement, which is what lets them derive its
-    // keys; a relay does not, so it can serve the document to readers without
-    // being able to read it.
-    step(3, "delegation");
+    // For each delegation, Alice signs a certificate giving a power over the
+    // document. Powers are ordered `Relay < Read < Edit < Admin`, each
+    // including those below it: Relay can store and forward ciphertext
+    // without reading it, Read can decrypt, Edit can write, and Admin
+    // governs: an admin's revocations reach delegations it did not issue. Any
+    // member can pass its power on, but a delegation conveys no more than its
+    // issuer holds. Readers join the document's key agreement, which is what
+    // lets them derive its keys; a relay does not, so it can serve the
+    // document to readers without being able to read it.
+    println!("\n3. delegation");
     alice.add_member(carol.id(), doc, Power::Relay).await?;
     alice.add_member(bob.id(), doc, Power::Read).await?;
-    say("Alice delegated Relay to Carol and Read to Bob");
+    println!("   Alice delegated Relay to Carol and Read to Bob");
 
     // 4. Content.
     //
@@ -144,18 +147,18 @@ async fn main() -> Result<(), Error> {
     // secret. An edit names the version it follows, its predecessor, and
     // carries the predecessor's key: whoever can read v2 can read v1 through
     // it. This is causal encryption.
-    step(4, "content");
-    let v1_ct = alice.try_encrypt_content(doc, &v1_ref, &[], &v1).await?;
+    println!("\n4. content");
+    alice.try_encrypt_content(doc, &v1_ref, &[], &v1).await?;
     let v2 = b"Design doc, v2: now with diagrams".to_vec();
     let v2_ref = content_ref(&v2);
-    let v2_ct = alice
+    let v2_encrypted = alice
         .try_encrypt_content(doc, &v2_ref, &[v1_ref], &v2)
         .await?;
-    say(&format!(
-        "Alice wrote {} and edited it to {}",
-        text(&v1),
-        text(&v2)
-    ));
+    println!(
+        "   Alice wrote {} and edited it to {}",
+        as_text(&v1),
+        as_text(&v2)
+    );
 
     // 5. Sync.
     //
@@ -165,27 +168,25 @@ async fn main() -> Result<(), Error> {
     // `ingest_unsorted_static_events` applies them in dependency order,
     // whatever order they arrive in. The ciphertext itself is the
     // application's to send; here every peer is handed it.
-    step(5, "sync");
+    println!("\n5. sync");
     sync(&alice, &bob).await?;
     sync(&alice, &carol).await?;
 
     let opened = bob
-        .try_decrypt_content(doc, v2_ct.encrypted_content())
+        .try_decrypt_content(doc, v2_encrypted.encrypted_content())
         .await?;
     assert_eq!(opened.plaintext, v2);
     assert!(opened.ancestors.contains_key(&v1_ref));
-    say(&format!("Bob decrypts v2: {}", text(&opened.plaintext)));
-    say("  and finds v1's key inside it");
+    println!("   Bob decrypts v2: {}", as_text(&opened.plaintext));
+    println!("     and finds v1's key inside it");
 
     let Err(refusal) = carol
-        .try_decrypt_content(doc, v2_ct.encrypted_content())
+        .try_decrypt_content(doc, v2_encrypted.encrypted_content())
         .await
     else {
         panic!("a relay decrypted the document");
     };
-    say(&format!(
-        "Carol holds the same ciphertext but cannot decrypt it: {refusal}"
-    ));
+    println!("   Carol holds the same ciphertext but cannot decrypt it: {refusal}");
 
     // 6. Revocation.
     //
@@ -194,32 +195,37 @@ async fn main() -> Result<(), Error> {
     // one he cannot derive (post-compromise security). Whatever Bob
     // could read stays readable to him: he may have kept a copy anyway, and a
     // CRDT needs its whole history. What changes is everything written next.
-    step(6, "revocation");
-    alice.revoke_member(bob.id(), true, doc).await?;
+    //
+    // Revoking Bob would also cut off anyone whose access came through him.
+    // Retaining the others has Alice re-issue those delegations herself, so
+    // only Bob loses access. Bob delegated to no one, so here there is no one
+    // else to keep.
+    println!("\n6. revocation");
+    let retain_all_other_members = true;
+    alice
+        .revoke_member(bob.id(), retain_all_other_members, doc)
+        .await?;
     let v3 = b"Design doc, v3: after Bob left".to_vec();
     let v3_ref = content_ref(&v3);
-    let v3_ct = alice
+    let v3_encrypted = alice
         .try_encrypt_content(doc, &v3_ref, &[v2_ref], &v3)
         .await?;
     sync(&alice, &bob).await?;
-    say(&format!("Alice revoked Bob and wrote {}", text(&v3)));
+    println!("   Alice revoked Bob and wrote {}", as_text(&v3));
 
     let still = bob
-        .try_decrypt_content(doc, v1_ct.encrypted_content())
+        .try_decrypt_content(doc, v2_encrypted.encrypted_content())
         .await?;
-    assert_eq!(still.plaintext, v1);
-    say(&format!(
-        "Bob still decrypts v1: {}",
-        text(&still.plaintext)
-    ));
+    assert_eq!(still.plaintext, v2);
+    println!("   Bob still decrypts v2: {}", as_text(&still.plaintext));
 
     let Err(refusal) = bob
-        .try_decrypt_content(doc, v3_ct.encrypted_content())
+        .try_decrypt_content(doc, v3_encrypted.encrypted_content())
         .await
     else {
         panic!("a revoked reader decrypted what was written after");
     };
-    say(&format!("but cannot decrypt v3: {refusal}"));
+    println!("   but cannot decrypt v3: {refusal}");
 
     Ok(())
 }
@@ -254,15 +260,8 @@ fn content_ref(bytes: &[u8]) -> [u8; 32] {
     blake3::hash(bytes).into()
 }
 
-fn step(n: u8, title: &str) {
-    println!("\n{n}. {title}");
-}
-
-fn say(line: &str) {
-    println!("   {line}");
-}
-
-fn text(bytes: &[u8]) -> String {
+/// `bytes` as text, in quotes, for the output.
+fn as_text(bytes: &[u8]) -> String {
     format!("{:?}", String::from_utf8_lossy(bytes))
 }
 
