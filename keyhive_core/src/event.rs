@@ -19,7 +19,11 @@ use keyhive_crypto::{
     digest::Digest,
     verified::{self, Verified},
 };
-use keyline::{certificate::Certificate, delegation::Delegation, revocation::Revocation};
+use keyline::{
+    certificate::{Certificate, VerifiedCertificate},
+    delegation::Delegation,
+    revocation::Revocation,
+};
 use std::{collections::HashMap, sync::Arc};
 use tracing::instrument;
 
@@ -112,6 +116,37 @@ impl<T: ContentRef> From<Event<T>> for StaticEvent<T> {
             Event::PrekeyRotated(pkr) => StaticEvent::PrekeyRotated(Arc::unwrap_or_clone(pkr)),
             Event::PrekeysExpanded(pke) => StaticEvent::PrekeysExpanded(Arc::unwrap_or_clone(pke)),
         }
+    }
+}
+
+/// An event whose payload decoded canonically and whose signature verified.
+#[derive(Debug)]
+pub(crate) enum VerifiedEvent<T: ContentRef> {
+    Prekey(KeyOp),
+    CgkaOperation(Arc<Verified<CgkaOperation>>),
+    Certificate(VerifiedCertificate<ContentHeads<T>>),
+}
+
+impl<T: ContentRef> VerifiedEvent<T> {
+    /// The digest from [`StaticEvent::digest`].
+    pub(crate) fn digest(&self) -> Digest<StaticEvent<T>> {
+        match self {
+            VerifiedEvent::Prekey(op) => op.digest().coerce(),
+            VerifiedEvent::CgkaOperation(op) => op.digest().coerce(),
+            VerifiedEvent::Certificate(VerifiedCertificate::Delegation(d)) => d.digest().coerce(),
+            VerifiedEvent::Certificate(VerifiedCertificate::Revocation(r)) => r.digest().coerce(),
+        }
+    }
+}
+
+impl<T: ContentRef> From<&VerifiedEvent<T>> for StaticEvent<T> {
+    fn from(event: &VerifiedEvent<T>) -> Self {
+        let event = match event {
+            VerifiedEvent::Prekey(op) => Event::from(op.dupe()),
+            VerifiedEvent::CgkaOperation(op) => Event::CgkaOperation(op.dupe()),
+            VerifiedEvent::Certificate(cert) => Event::from(cert.clone().into_certificate()),
+        };
+        event.into()
     }
 }
 

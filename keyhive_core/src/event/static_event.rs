@@ -1,8 +1,9 @@
 //! Serializable version of [`Event`][super::Event].
 
+use super::VerifiedEvent;
 use crate::{
     content::heads::ContentHeads,
-    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp, KeyOp},
 };
 use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
@@ -14,9 +15,10 @@ use keyhive_content::reference::ContentRef;
 use keyhive_crypto::{
     digest::Digest,
     signable::Kind,
-    verified::{self, header},
+    verified::{self, header, VerifyError},
 };
 use keyline::{delegation::Delegation, revocation::Revocation};
+use std::sync::Arc;
 
 /// Serailizable version of [`Event`][super::Event].
 ///
@@ -25,19 +27,19 @@ use keyline::{delegation::Delegation, revocation::Revocation};
 /// dependencies, unlike [`Event`][super::Event]s.
 #[derive(Debug, Clone, PartialEq, Eq, From, Hash, TryInto)]
 pub enum StaticEvent<T: ContentRef> {
-    /// Prekeys were expanded, as received: verified on receipt.
+    /// Prekeys were expanded, as received: not yet verified.
     PrekeysExpanded(verified::Signed<AddKeyOp>),
 
-    /// A prekey was rotated, as received: verified on receipt.
+    /// A prekey was rotated, as received: not yet verified.
     PrekeyRotated(verified::Signed<RotateKeyOp>),
 
-    /// A CGKA operation, as received: verified on receipt.
+    /// A CGKA operation, as received: not yet verified.
     CgkaOperation(Box<verified::Signed<CgkaOperation>>),
 
-    /// A Keyline delegation, as received: verified on receipt.
+    /// A Keyline delegation, as received: not yet verified.
     Delegated(verified::Signed<Delegation>),
 
-    /// A Keyline revocation, as received: verified on receipt.
+    /// A Keyline revocation, as received: not yet verified.
     Revoked(verified::Signed<Revocation<ContentHeads<T>>>),
 }
 
@@ -53,6 +55,24 @@ impl<T: ContentRef> StaticEvent<T> {
             StaticEvent::Delegated(signed) => signed.digest().coerce(),
             StaticEvent::Revoked(signed) => signed.digest().coerce(),
         }
+    }
+
+    /// Decode the payload canonically and check the signature against the
+    /// issuer.
+    pub(crate) fn verify(self) -> Result<VerifiedEvent<T>, VerifyError> {
+        Ok(match self {
+            StaticEvent::PrekeysExpanded(signed) => {
+                VerifiedEvent::Prekey(KeyOp::Add(signed.verify()?))
+            }
+            StaticEvent::PrekeyRotated(signed) => {
+                VerifiedEvent::Prekey(KeyOp::Rotate(signed.verify()?))
+            }
+            StaticEvent::CgkaOperation(signed) => {
+                VerifiedEvent::CgkaOperation(Arc::new(signed.verify()?))
+            }
+            StaticEvent::Delegated(signed) => VerifiedEvent::Certificate(signed.verify()?.into()),
+            StaticEvent::Revoked(signed) => VerifiedEvent::Certificate(signed.verify()?.into()),
+        })
     }
 }
 

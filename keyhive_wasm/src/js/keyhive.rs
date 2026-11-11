@@ -58,7 +58,6 @@ use future_form::Local;
 use keyhive_codec::traits::{Decode, Encode};
 use keyhive_core::{
     all_agent_events::EventDigest,
-    crypto::digest::Digest,
     event::{static_event::StaticEvent, Event},
     keyhive::{EncryptContentError, Keyhive, ReceiveStaticEventError},
     principal::{
@@ -740,33 +739,18 @@ impl JsKeyhive {
     ) -> Result<js_sys::Array, JsError> {
         init_span!("JsKeyhive::ingest_events_bytes");
         tracing::debug!("JsKeyhive::ingest_events_bytes");
-        let mut static_event_hash_to_bytes: HashMap<Digest<StaticEvent<JsChangeId>>, Vec<u8>> =
-            HashMap::new();
         let mut static_events = Vec::new();
 
         for i in 0..events_bytes_array.length() {
             let js_value = events_bytes_array.get(i);
             let event_bytes = js_sys::Uint8Array::from(js_value).to_vec();
-            let static_event = StaticEvent::<JsChangeId>::decode(&event_bytes)?;
-            static_event_hash_to_bytes.insert(static_event.digest(), event_bytes);
-            static_events.push(static_event);
+            static_events.push(StaticEvent::<JsChangeId>::decode(&event_bytes)?);
         }
 
         let pending_events = self.0.ingest_unsorted_static_events(static_events).await;
-        let pending_events_bytes: Vec<Vec<u8>> = pending_events
-            .iter()
-            .map(|event| {
-                let hash: Digest<StaticEvent<JsChangeId>> = event.digest();
-                static_event_hash_to_bytes
-                    .get(&hash)
-                    .cloned()
-                    .unwrap_or_else(|| event.encode().into_bytes())
-            })
-            .collect();
-
         let result = js_sys::Array::new();
-        for event_bytes in pending_events_bytes {
-            let uint8_array = js_sys::Uint8Array::from(event_bytes.as_slice());
+        for event in pending_events {
+            let uint8_array = js_sys::Uint8Array::from(event.encode().as_bytes());
             result.push(&uint8_array);
         }
 
