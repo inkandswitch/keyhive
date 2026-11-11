@@ -239,6 +239,10 @@
           # suite still reports green.
           ci-test = mkCheck "ci-test" ''
             cargo test --workspace --exclude keyhive_wasm --features test_utils
+            # `cargo test` only builds examples. Running this one checks that
+            # what it teaches still holds: it fails if any step behaves
+            # differently.
+            cargo run -p keyhive_core --example basic
           '';
 
           ci-doc = mkCheck "ci-doc" ''
