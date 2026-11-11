@@ -1143,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "keyline"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arbitrary",
  "bijoux",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "keyline_memory"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-lock",
  "divan",

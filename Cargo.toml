@@ -64,8 +64,8 @@ keyhive_codec = { version = "0.1.0", path = "keyhive_codec", default-features = 
 keyhive_content = { version = "0.4.0", path = "keyhive_content", default-features = false }
 keyhive_core = { version = "0.12.0", path = "keyhive_core" }
 keyhive_crypto = { version = "0.6.0", path = "keyhive_crypto", default-features = false }
-keyline = { version = "0.3.0", path = "keyline", default-features = false }
-keyline_memory = { version = "0.3.0", path = "keyline_memory", default-features = false }
+keyline = { version = "0.4.0", path = "keyline", default-features = false }
+keyline_memory = { version = "0.4.0", path = "keyline_memory", default-features = false }
 lazy_static = "1.5"
 nonempty = { version = "0.12.0", default-features = false, features = ["serialize"] }
 nu-ansi-term = "0.50.1"
