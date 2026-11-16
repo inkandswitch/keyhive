@@ -217,6 +217,11 @@ impl<T: ContentRef> DocumentState<T> {
             .collect()
     }
 
+    /// Whether this document has a key for `content_ref`.
+    pub(crate) fn has_key_for(&self, content_ref: &T) -> bool {
+        self.known_decryption_keys.contains_key(content_ref)
+    }
+
     /// Remember `key` for its content ref, unless this document already has one for it.
     pub(crate) fn remember_key(&mut self, key: AncestorKey<T>) {
         self.known_decryption_keys

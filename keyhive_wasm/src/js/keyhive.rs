@@ -218,12 +218,21 @@ impl JsKeyhive {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Whether this keyhive has a key for `contentRef` in the document. Returns
+    /// `false` if this keyhive has not joined the document.
+    #[wasm_bindgen(js_name = hasKeyFor)]
+    pub async fn has_key_for(&self, doc_id: &JsDocumentId, content_ref: &JsChangeId) -> bool {
+        init_span!("JsKeyhive::has_key_for");
+        self.0.has_key_for(doc_id.0, content_ref).await
+    }
+
     /// Encrypt `content` after `predRefs`, with the key this keyhive has for
     /// each, from content it has written or read, so a reader who decrypts it
     /// can decrypt them too and traverse back with `tryCausalDecrypt`.
     ///
     /// Throws an `EncryptError` if this keyhive has neither written nor read one
-    /// of `predRefs`.
+    /// of `predRefs`. `hasKeyFor` indicates whether a content ref will be
+    /// accepted.
     #[wasm_bindgen(js_name = tryEncrypt)]
     pub async fn try_encrypt(
         &self,
