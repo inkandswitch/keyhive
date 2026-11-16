@@ -1704,6 +1704,15 @@ where
         Ok(())
     }
 
+    /// Whether `doc` has a key for `content_ref`. Returns `false` if this replica
+    /// has not joined `doc`.
+    pub async fn has_key_for(&self, doc: DocumentId, content_ref: &T) -> bool {
+        match self.document_state(doc).await {
+            Some(state) => state.lock().await.has_key_for(content_ref),
+            None => false,
+        }
+    }
+
     /// Encrypt `content` into `doc` after `pred_refs`, with the key this document has for
     /// each, from content it has written or read. A reader who opens the result can then
     /// open each predecessor and traverse back from there with
@@ -1712,7 +1721,7 @@ where
     ///
     /// Fails with [`EncryptContentError::NoKeyForPredecessor`] if this document has no key
     /// for one of `pred_refs`, because this `Keyhive` has not written that content or read
-    /// it.
+    /// it. [`Keyhive::has_key_for`] indicates whether a content ref will be accepted.
     #[instrument(skip_all)]
     pub async fn try_encrypt_content(
         &self,

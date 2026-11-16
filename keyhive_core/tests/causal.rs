@@ -117,7 +117,9 @@ async fn a_block_read_by_a_traversal_can_be_referred_to_as_a_predecessor() -> Re
         ctx.give_content(&bob, ct).await?;
     }
 
+    assert!(!bob.has_key_for(design_doc, &genesis.content_ref).await);
     bob.try_causal_decrypt_content(design_doc, &head).await?;
+    assert!(bob.has_key_for(design_doc, &genesis.content_ref).await);
     ctx.encrypt_after(&bob, design_doc, &[&genesis], b"sibling")
         .await?;
     Ok(())
