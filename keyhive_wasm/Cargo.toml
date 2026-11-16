@@ -26,6 +26,7 @@ keyhive_crypto = { workspace = true, features = ["std"] }
 wasm_refgen = { workspace = true }
 
 base64-simd = { workspace = true }
+blake3 = { workspace = true }
 derive_more = { workspace = true, features = ["std"] }
 dupe = { workspace = true }
 future_form = { workspace = true }
