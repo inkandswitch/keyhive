@@ -31,7 +31,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/audit@72c09e02f132669d52284a3323acdb503cfc1a24 # v1.2.7
         name: Audit Rust Dependencies
         # Advisory suppressions live in `deny.toml` (consulted by
