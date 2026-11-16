@@ -1114,6 +1114,7 @@ version = "0.8.0"
 dependencies = [
  "base64-simd",
  "beekem",
+ "blake3",
  "console_error_panic_hook",
  "derive_more",
  "dupe",

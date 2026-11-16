@@ -19,6 +19,12 @@ impl JsChangeId {
         Self(bytes)
     }
 
+    /// The plain BLAKE3 hash of `content`, as a content ref.
+    #[wasm_bindgen(js_name = forContent)]
+    pub fn for_content(content: &[u8]) -> Self {
+        Self(blake3::hash(content).as_bytes().to_vec())
+    }
+
     #[wasm_bindgen(js_name = toBytes)]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.clone()
@@ -61,5 +67,23 @@ impl StreamDecode for JsChangeId {
             .split_at_checked(len)
             .ok_or(DecodeError::UnexpectedEnd)?;
         Ok((JsChangeId(id.to_vec()), rest))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::JsChangeId;
+    use wasm_bindgen_test::*;
+
+    #[cfg(feature = "browser_test")]
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn for_content_is_the_blake3_hash_of_the_content() {
+        let abc = blake3::Hash::from_hex(
+            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+        )
+        .expect("a hex digest");
+        assert_eq!(JsChangeId::for_content(b"abc").to_bytes(), abc.as_bytes());
     }
 }
