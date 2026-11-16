@@ -1,6 +1,5 @@
 use super::{change_id::JsChangeId, revocation::JsRevocation};
 use derive_more::{From, Into};
-use dupe::Dupe;
 use keyhive_core::content::heads::ContentHeads;
 use keyhive_crypto::verified::Signed;
 use keyline::revocation::Revocation;
@@ -9,7 +8,7 @@ use wasm_bindgen::prelude::*;
 
 /// A signed Keyline revocation, in wire form.
 #[wasm_bindgen(js_name = SignedRevocation)]
-#[derive(Debug, Clone, Dupe, From, Into)]
+#[derive(Debug, Clone, From, Into)]
 pub struct JsSignedRevocation(pub(crate) Arc<Signed<Revocation<ContentHeads<JsChangeId>>>>);
 
 #[wasm_bindgen(js_class = SignedRevocation)]

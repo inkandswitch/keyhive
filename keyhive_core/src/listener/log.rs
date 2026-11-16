@@ -5,7 +5,6 @@ use crate::{
     principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
 };
 use beekem::operation::CgkaOperation;
-use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use keyhive_content::reference::ContentRef;
@@ -45,11 +44,9 @@ impl<T: ContentRef> Log<T> {
 
 impl<T: ContentRef> Clone for Log<T> {
     fn clone(&self) -> Self {
-        Self(self.0.dupe())
+        Self(self.0.clone())
     }
 }
-
-impl<T: ContentRef> Dupe for Log<T> {}
 
 impl<T: ContentRef> Default for Log<T> {
     fn default() -> Self {
@@ -63,35 +60,35 @@ impl<F: FutureForm, T: ContentRef + Send + Sync> PrekeyListener<F> for Log<T> {
         &'a self,
         new_prekey: &'a Arc<verified::Signed<AddKeyOp>>,
     ) -> F::Future<'a, ()> {
-        F::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey.dupe())).await })
+        F::from_future(async move { self.push(Event::PrekeysExpanded(new_prekey.clone())).await })
     }
 
     fn on_prekey_rotated<'a>(
         &'a self,
         rotate_key: &'a Arc<verified::Signed<RotateKeyOp>>,
     ) -> F::Future<'a, ()> {
-        F::from_future(async move { self.push(Event::PrekeyRotated(rotate_key.dupe())).await })
+        F::from_future(async move { self.push(Event::PrekeyRotated(rotate_key.clone())).await })
     }
 }
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm, T: ContentRef + Send + Sync> MembershipListener<F, T> for Log<T> {
     fn on_delegation<'a>(&'a self, data: &'a Arc<Verified<Delegation>>) -> F::Future<'a, ()> {
-        F::from_future(async move { self.push(Event::Delegated(data.signed().dupe())).await })
+        F::from_future(async move { self.push(Event::Delegated(data.signed().clone())).await })
     }
 
     fn on_revocation<'a>(
         &'a self,
         data: &'a Arc<Verified<Revocation<ContentHeads<T>>>>,
     ) -> F::Future<'a, ()> {
-        F::from_future(async move { self.push(Event::Revoked(data.signed().dupe())).await })
+        F::from_future(async move { self.push(Event::Revoked(data.signed().clone())).await })
     }
 }
 
 #[future_form(Sendable, Local)]
 impl<F: FutureForm, T: ContentRef + Send + Sync> CgkaListener<F> for Log<T> {
     fn on_cgka_op<'a>(&'a self, data: &'a Arc<Verified<CgkaOperation>>) -> F::Future<'a, ()> {
-        F::from_future(async move { self.push(Event::CgkaOperation(data.dupe())).await })
+        F::from_future(async move { self.push(Event::CgkaOperation(data.clone())).await })
     }
 }
 

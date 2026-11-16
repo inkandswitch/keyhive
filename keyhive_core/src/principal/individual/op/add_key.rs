@@ -1,4 +1,3 @@
-use dupe::Dupe;
 use keyhive_codec::{
     error::DecodeError,
     traits::{decode_exact, Decode, Encode, StreamDecode},
@@ -12,7 +11,7 @@ use keyhive_crypto::{
 ///
 /// Encoded as its share key (32 bytes), and signed under
 /// [`Kind::ADD_KEY`].
-#[derive(Debug, Clone, Copy, Dupe, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 pub struct AddKeyOp {
     /// The key to add.

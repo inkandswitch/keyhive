@@ -1,5 +1,4 @@
 use super::{identifier::JsIdentifier, power::JsPower, signed_delegation::JsSignedDelegation};
-use dupe::Dupe;
 use keyhive_crypto::identifier::Identifier;
 use keyline::power::Power;
 use wasm_bindgen::prelude::*;
@@ -28,6 +27,6 @@ impl Capability {
 
     #[wasm_bindgen(getter)]
     pub fn proof(&self) -> JsSignedDelegation {
-        self.proof.dupe()
+        self.proof.clone()
     }
 }

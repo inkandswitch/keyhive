@@ -10,7 +10,6 @@ use crate::{
     envelope::{Envelope, MalformedBody, OpenEnvelopeError},
     reference::ContentRef,
 };
-use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::lock::Mutex;
 use keyhive_codec::{
@@ -187,7 +186,7 @@ impl<F: FutureForm, Cr: ContentRef, T, S: CiphertextStore<F, Cr, T>> CiphertextS
                             progress.next.insert(ancestor_ref, ancestor_key);
                         }
                         Ok(Some(ancestor)) => {
-                            to_decrypt.push((ancestor.dupe(), ancestor_key));
+                            to_decrypt.push((ancestor.clone(), ancestor_key));
                         }
                     }
                 }
@@ -492,10 +491,10 @@ mod tests {
             &mut csprng,
         );
         let store = MemoryCiphertextStore::<[u8; 32], String>::new();
-        store.insert(one.dupe()).await;
+        store.insert(one.clone()).await;
         assert_eq!(
             store.get_by_group_secret_origin(&origin).await,
-            vec![one.dupe()]
+            vec![one.clone()]
         );
 
         assert_eq!(store.remove(&one.digest()).await, Some(one));
@@ -537,8 +536,8 @@ mod tests {
         );
 
         let store = MemoryCiphertextStore::<[u8; 32], String>::new();
-        store.insert(one.dupe()).await;
-        store.insert(two.dupe()).await;
+        store.insert(one.clone()).await;
+        store.insert(two.clone()).await;
 
         assert_eq!(get_ct(&store, &one_ref).await, Ok(Some(one)));
         assert_eq!(get_ct(&store, &two_ref).await, Ok(Some(two)));
@@ -574,7 +573,7 @@ mod tests {
         );
         let store = MemoryCiphertextStore::<[u8; 32], String>::new();
         store.insert(one).await;
-        store.insert(two.dupe()).await;
+        store.insert(two.clone()).await;
 
         let mut to_decrypt = vec![(two, two_key)];
         let Err(err) = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt(
@@ -817,7 +816,7 @@ mod tests {
             unavailable: unavailable_ref,
             fetches: Default::default(),
         };
-        store.inner.insert(block.dupe()).await;
+        store.inner.insert(block.clone()).await;
 
         let Err(err) = CiphertextStoreExt::<Sendable, _, _>::try_causal_decrypt(
             &store,

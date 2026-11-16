@@ -1,6 +1,5 @@
 use crate::principal::membered::id::MemberedId;
 use beekem::id::TreeId;
-use dupe::Dupe;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
@@ -30,8 +29,6 @@ impl DocumentId {
         self.0.as_bytes()
     }
 }
-
-impl Dupe for DocumentId {}
 
 impl From<Identifier> for DocumentId {
     fn from(id: Identifier) -> Self {

@@ -6,8 +6,6 @@ use crate::{
     verifiable::Verifiable,
 };
 use core::hash::Hash;
-#[cfg(feature = "std")]
-use dupe::Dupe;
 use ed25519_dalek::Signer;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use tracing::instrument;
@@ -92,13 +90,6 @@ impl SyncSignerBasic for MemorySigner {
 impl Hash for MemorySigner {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.verifying_key().hash(state);
-    }
-}
-
-#[cfg(feature = "std")]
-impl Dupe for MemorySigner {
-    fn dupe(&self) -> Self {
-        Self(self.0.clone())
     }
 }
 

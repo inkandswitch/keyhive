@@ -3,7 +3,6 @@ use super::{
     signed_revocation::JsSignedRevocation,
 };
 use derive_more::{From, Into};
-use dupe::Dupe;
 use keyhive_codec::traits::Encode;
 use keyhive_core::event::{static_event::StaticEvent, Event};
 use std::fmt;
@@ -34,7 +33,7 @@ impl JsEvent {
     #[wasm_bindgen(js_name = asSignedDelegation)]
     pub fn as_signed_delegation(&self) -> Option<JsSignedDelegation> {
         match &self.0 {
-            Event::Delegated(d) => Some(JsSignedDelegation(d.dupe())),
+            Event::Delegated(d) => Some(JsSignedDelegation(d.clone())),
             _ => None,
         }
     }
@@ -43,7 +42,7 @@ impl JsEvent {
     #[wasm_bindgen(js_name = asSignedRevocation)]
     pub fn as_signed_revocation(&self) -> Option<JsSignedRevocation> {
         match &self.0 {
-            Event::Revoked(r) => Some(JsSignedRevocation(r.dupe())),
+            Event::Revoked(r) => Some(JsSignedRevocation(r.clone())),
             _ => None,
         }
     }
@@ -55,12 +54,6 @@ impl JsEvent {
             .encode()
             .into_bytes()
             .into_boxed_slice()
-    }
-}
-
-impl Dupe for JsEvent {
-    fn dupe(&self) -> Self {
-        self.clone()
     }
 }
 

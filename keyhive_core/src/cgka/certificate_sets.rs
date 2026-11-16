@@ -7,7 +7,6 @@ use beekem::{
     id::TreeId,
     operation::{CgkaOperation, CitationId},
 };
-use dupe::Dupe;
 use imbl::{ordset::DiffItem, OrdSet};
 use keyhive_crypto::digest::Digest;
 use std::{
@@ -20,9 +19,6 @@ type OpDigest = Digest<CgkaOperation>;
 /// A set of citation ids.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CitationSet(OrdSet<CitationId>);
-
-// A clone of a persistent `OrdSet` shares the original's structure.
-impl Dupe for CitationSet {}
 
 impl Deref for CitationSet {
     type Target = OrdSet<CitationId>;
@@ -196,7 +192,7 @@ impl DocumentSets {
                 stack.extend(op.predecessors().iter().map(|p| (*p, false)));
             }
         }
-        self.sets.get(&digest).map(Dupe::dupe)
+        self.sets.get(&digest).cloned()
     }
 
     /// Record `set` for `digest`, as a checkpoint if one is due.
@@ -226,7 +222,7 @@ fn union(sets: &[&CitationSet]) -> CitationSet {
     let Some(largest) = sets.iter().max_by_key(|set| set.len()) else {
         return CitationSet::default();
     };
-    let mut merged = (*largest).dupe();
+    let mut merged = (*largest).clone();
     for set in sets.iter().filter(|s| !s.ptr_eq(largest)) {
         merged.extend(largest.diff(set).filter_map(|item| match item {
             DiffItem::Add(citation) => Some(*citation),
@@ -247,7 +243,7 @@ mod tests {
     #[test]
     fn extending_with_present_citations_keeps_the_set_shared() {
         let set = ids(0..100);
-        let mut extended = set.dupe();
+        let mut extended = set.clone();
         extended.extend(ids(0..100).iter().copied());
         assert!(extended.ptr_eq(&set));
     }
@@ -272,9 +268,9 @@ mod tests {
     #[test]
     fn union_contains_what_each_branch_cited_since_the_fork() {
         let fork = ids(0..100);
-        let mut left = fork.dupe();
+        let mut left = fork.clone();
         left.extend(ids(100..102).iter().copied());
-        let mut right = fork.dupe();
+        let mut right = fork.clone();
         right.extend(ids(102..103).iter().copied());
         assert_eq!(union(&[&left, &right]), ids(0..103));
     }

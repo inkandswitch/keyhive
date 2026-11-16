@@ -21,8 +21,6 @@ rand = { workspace = true }
 tracing = { workspace = true, features = ["attributes"] }
 zeroize = { workspace = true }
 
-# std-only dependencies
-dupe = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 arbitrary = { workspace = true, optional = true }
@@ -39,7 +37,6 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 default = ["std"]
 std = [
     "blake3/std",
-    "dupe",
     "ed25519-dalek/std",
     "keyhive_codec/std",
     "keyhive_crypto/std",

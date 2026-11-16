@@ -19,7 +19,6 @@ use crate::{
         merge::{Merge, MergeAsync},
     },
 };
-use dupe::Dupe;
 use ed25519_dalek::VerifyingKey;
 use future_form::FutureForm;
 use futures::{lock::Mutex, prelude::*};
@@ -118,7 +117,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
 
     /// The underlying [`IndividualState`].
     pub(crate) fn individual(&self) -> Arc<Mutex<IndividualState>> {
-        self.individual.dupe()
+        self.individual.clone()
     }
 
     /// Create a [`ShareKey`] that is not broadcast via the prekey state.
@@ -136,13 +135,13 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         let share_key = match picked {
             Some(share_key) => share_key,
             None => {
-                self.expand_prekeys(csprng.dupe())
+                self.expand_prekeys(csprng.clone())
                     .await?
                     .payload()
                     .share_key
             }
         };
-        let contact_key = self.rotate_prekey(share_key, csprng.dupe()).await?;
+        let contact_key = self.rotate_prekey(share_key, csprng.clone()).await?;
         self.rotate_prekey(contact_key.payload().new, csprng)
             .await?;
         Ok(contact_key)

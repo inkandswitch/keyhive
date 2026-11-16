@@ -1,6 +1,5 @@
 use super::{delegation::JsDelegation, identifier::JsIdentifier};
 use derive_more::{From, Into};
-use dupe::Dupe;
 use keyhive_crypto::verified::Signed;
 use keyline::delegation::Delegation;
 use std::sync::Arc;
@@ -8,7 +7,7 @@ use wasm_bindgen::prelude::*;
 
 /// A signed Keyline delegation, in wire form.
 #[wasm_bindgen(js_name = SignedDelegation)]
-#[derive(Debug, Clone, Dupe, From, Into)]
+#[derive(Debug, Clone, From, Into)]
 pub struct JsSignedDelegation(pub(crate) Arc<Signed<Delegation>>);
 
 #[wasm_bindgen(js_class = SignedDelegation)]

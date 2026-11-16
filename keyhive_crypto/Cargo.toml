@@ -30,8 +30,6 @@ tracing = { workspace = true, features = ["attributes"] }
 x25519-dalek = { workspace = true }
 zeroize = { workspace = true }
 
-# std-only dependencies
-dupe = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 arbitrary = { workspace = true, optional = true }
@@ -48,7 +46,6 @@ default = ["std"]
 std = [
   "blake3/std",
   "derive_more/std",
-  "dupe",
   "ed25519-dalek/std",
   "keyhive_codec/std",
   "rand/std",

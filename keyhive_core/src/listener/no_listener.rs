@@ -7,7 +7,6 @@ use crate::{
 };
 use beekem::operation::CgkaOperation;
 use derive_more::derive::Debug;
-use dupe::Dupe;
 use future_form::{future_form, FutureForm, Local, Sendable};
 use keyhive_content::reference::ContentRef;
 use keyhive_crypto::verified::{self, Verified};
@@ -17,7 +16,7 @@ use std::sync::Arc;
 /// Stub out listener functionality.
 ///
 /// This is the default listener. Generally you don't need to manually specify this as an option.
-#[derive(Debug, Default, Clone, Dupe, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct NoListener;
 
 #[future_form(Sendable, Local)]

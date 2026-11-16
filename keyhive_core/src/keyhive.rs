@@ -48,7 +48,6 @@ use beekem::{
     pcs_key::PcsKey,
     predecessors::Predecessors,
 };
-use dupe::{Dupe, OptionDupedExt};
 use future_form::FutureForm;
 use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
@@ -164,7 +163,7 @@ pub struct KeyhiveState<
 
 /// Cloning a [`Keyhive`] is `O(1)`: it is an `Arc` refcount bump, not a copy.
 /// The clones share live state, so a clone observes later changes rather
-/// than a snapshot. [`Dupe`] is the same.
+/// than a snapshot.
 ///
 /// Written by hand: a derive would require `Clone` of every parameter.
 impl<F, S, T, P, C, L, R, K> Clone for Keyhive<F, S, T, P, C, L, R, K>
@@ -179,23 +178,7 @@ where
     K: Keyline<F, RetentionWatermark = ContentHeads<T>>,
 {
     fn clone(&self) -> Self {
-        Keyhive(self.0.dupe())
-    }
-}
-
-impl<F, S, T, P, C, L, R, K> Dupe for Keyhive<F, S, T, P, C, L, R, K>
-where
-    F: FutureForm,
-    S: AsyncSigner<F> + Clone,
-    T: ContentRef,
-    P: Decode,
-    C: CiphertextStore<F, T, P> + CiphertextStoreExt<F, T, P> + Clone,
-    L: MembershipListener<F, T>,
-    R: rand::CryptoRng,
-    K: Keyline<F, RetentionWatermark = ContentHeads<T>>,
-{
-    fn dupe(&self) -> Self {
-        self.clone()
+        Keyhive(self.0.clone())
     }
 }
 
@@ -256,7 +239,7 @@ where
         Ok(Keyhive(Arc::new(KeyhiveState {
             individuals: Mutex::new(HashMap::from_iter([(
                 active_id,
-                inner_active.individual().dupe(),
+                inner_active.individual().clone(),
             )])),
             active: inner_active,
             documents: Mutex::new(HashMap::new()),
@@ -400,7 +383,7 @@ where
     /// set (what it and the batches before it cite) does not entitle to remain in the
     /// CGKA group.
     fn implicit_removes_protocol(&self, doc: Identifier) -> KeylineImplicitRemovesProtocol {
-        KeylineImplicitRemovesProtocol::new(doc, self.certificates.cited.dupe())
+        KeylineImplicitRemovesProtocol::new(doc, self.certificates.cited.clone())
     }
 
     /// `resource`'s members over the certificates of `cited` this replica
@@ -613,7 +596,8 @@ where
                         }
                     }
                 }
-                match apply_one::<core::convert::Infallible, _>(&mut cgka, op.dupe(), me, secrets) {
+                match apply_one::<core::convert::Infallible, _>(&mut cgka, op.clone(), me, secrets)
+                {
                     Ok(_) => has_progressed = true,
                     Err(ReceiveCgkaOpError::CgkaError(CgkaError::OutOfOrderOperation)) => {
                         waiting.push(op);
@@ -1115,7 +1099,7 @@ where
             .lock()
             .await
             .iter()
-            .map(|(id, d)| (*id, Identifier::from(*id), d.dupe()))
+            .map(|(id, d)| (*id, Identifier::from(*id), d.clone()))
             .collect();
 
         let mut before = Vec::with_capacity(docs.len());
@@ -1185,7 +1169,7 @@ where
                 .lock()
                 .await
                 .iter()
-                .map(|(id, state)| (*id, state.dupe()))
+                .map(|(id, state)| (*id, state.clone()))
                 .collect()
         };
         let mut retain = BTreeMap::new();
@@ -1429,7 +1413,7 @@ where
     pub async fn generate_contact_card(&self) -> Result<ContactCard, SignError> {
         let rot_key_op = self
             .active
-            .generate_private_prekey(self.csprng.dupe())
+            .generate_private_prekey(self.csprng.clone())
             .await?;
 
         Ok(ContactCard(KeyOp::Rotate(rot_key_op)))
@@ -1450,7 +1434,7 @@ where
             indie
                 .lock()
                 .await
-                .receive_prekey_op(contact_card.op().dupe())?;
+                .receive_prekey_op(contact_card.op().clone())?;
         } else {
             self.register_individual(IndividualState::from(contact_card))
                 .await;
@@ -1475,12 +1459,12 @@ where
         &self,
         prekey: ShareKey,
     ) -> Result<Verified<RotateKeyOp>, SignError> {
-        self.active.rotate_prekey(prekey, self.csprng.dupe()).await
+        self.active.rotate_prekey(prekey, self.csprng.clone()).await
     }
 
     #[instrument(skip_all)]
     pub async fn expand_prekeys(&self) -> Result<Verified<AddKeyOp>, SignError> {
-        self.active.expand_prekeys(self.csprng.dupe()).await
+        self.active.expand_prekeys(self.csprng.clone()).await
     }
 
     /// Sign opaque bytes on behalf of an application, under [`Kind::BYTES`].
@@ -1555,7 +1539,7 @@ where
 
         let cgka_ops = self
             .insert_and_reconcile::<AddMemberError<K::Error>>(&[VerifiedCertificate::Delegation(
-                delegation.dupe(),
+                delegation.clone(),
             )])
             .await?;
 
@@ -1643,11 +1627,11 @@ where
         // One batch, so no query sees the members cut off before adoption.
         let batch: Vec<VerifiedCertificate<ContentHeads<T>>> = revocations
             .iter()
-            .map(|r| VerifiedCertificate::Revocation(r.dupe()))
+            .map(|r| VerifiedCertificate::Revocation(r.clone()))
             .chain(
                 redelegations
                     .iter()
-                    .map(|d| VerifiedCertificate::Delegation(d.dupe())),
+                    .map(|d| VerifiedCertificate::Delegation(d.clone())),
             )
             .collect();
         let cgka_ops = self
@@ -2211,7 +2195,7 @@ where
         let mut ops = HashMap::new();
 
         for key_op in prekeys.values().flatten() {
-            let op = Event::<T>::from(key_op.as_ref().dupe());
+            let op = Event::<T>::from(key_op.as_ref().clone());
             ops.insert(op.digest(), op);
         }
 
@@ -2559,7 +2543,7 @@ where
             let documents = self.documents.lock().await;
             documents
                 .iter()
-                .map(|(id, doc)| (*id, doc.dupe()))
+                .map(|(id, doc)| (*id, doc.clone()))
                 .collect()
         };
         let mut held = Vec::with_capacity(docs.len());
@@ -2734,7 +2718,7 @@ where
         &self,
         id: IndividualId,
     ) -> Option<Arc<Mutex<IndividualState>>> {
-        self.individuals.lock().await.get(&id).duped()
+        self.individuals.lock().await.get(&id).cloned()
     }
 
     /// This replica's state for a document it is a member of.
@@ -2743,7 +2727,7 @@ where
         &self,
         id: DocumentId,
     ) -> Option<Arc<Mutex<DocumentState<T>>>> {
-        self.documents.lock().await.get(&id).duped()
+        self.documents.lock().await.get(&id).cloned()
     }
 
     /// Whether this replica holds the document: it is a member, and its
@@ -3079,7 +3063,7 @@ where
             // Serialized with writes, which choose an operation's citations
             // from the CGKA graph's heads and then sign it on those same heads.
             let _reconciled = self.certificates.reconciled.lock().await;
-            self.merge_received(doc_id, op.dupe(), me, &secrets).await
+            self.merge_received(doc_id, op.clone(), me, &secrets).await
         };
         let merged = match merged {
             Ok(merged) => merged,
@@ -3128,7 +3112,7 @@ where
             let mut locked = state.lock().await;
             return self
                 .require_keyline_answers(doc, locked.cgka_mut(), |cgka| {
-                    merge_one(cgka, op.dupe(), me, secrets)
+                    merge_one(cgka, op.clone(), me, secrets)
                 })
                 .await?;
         }
@@ -3158,7 +3142,7 @@ where
                 }
             };
             let merged = self
-                .require_keyline_answers(doc, cgka, |cgka| merge_one(cgka, op.dupe(), me, secrets))
+                .require_keyline_answers(doc, cgka, |cgka| merge_one(cgka, op.clone(), me, secrets))
                 .await??;
             let joined = if invites(op.payload(), me) {
                 unjoined.remove(&doc_id)
@@ -3223,7 +3207,7 @@ where
             let _reconciled = self.certificates.reconciled.lock().await;
             let held = self.document_state(doc_id).await;
             let state = match &held {
-                Some(state) => state.dupe(),
+                Some(state) => state.clone(),
                 None => {
                     let Some(cgka) = self.unjoined.lock().await.get(&doc_id).cloned() else {
                         return Ok(false);
@@ -3428,7 +3412,10 @@ where
             // archive's key for it.
             individuals.insert(indie.id(), Arc::new(Mutex::new(indie.clone())));
         }
-        individuals.insert(archive.active.individual.id(), raw_active.individual.dupe());
+        individuals.insert(
+            archive.active.individual.id(),
+            raw_active.individual.clone(),
+        );
 
         let verified: Vec<_> = archive
             .certificates
@@ -3962,7 +3949,7 @@ where
             signer,
             self.ciphertext_store.clone(),
             Log::new(),
-            self.certificates.dupe(),
+            self.certificates.clone(),
             self.csprng.clone(),
             false,
         )
@@ -4028,8 +4015,8 @@ where
             let certificate = match event {
                 // Merged with the individuals above.
                 Event::PrekeysExpanded(_) | Event::PrekeyRotated(_) => continue,
-                Event::Delegated(signed) => Some(Certificate::Delegation(signed.dupe())),
-                Event::Revoked(signed) => Some(Certificate::Revocation(signed.dupe())),
+                Event::Delegated(signed) => Some(Certificate::Delegation(signed.clone())),
+                Event::Revoked(signed) => Some(Certificate::Revocation(signed.clone())),
                 Event::CgkaOperation(_) => None,
             };
             // The fork shares the store, so the trunk already holds what the
@@ -4067,7 +4054,7 @@ where
                 .lock()
                 .await
                 .iter()
-                .map(|(id, doc)| (*id, doc.dupe()))
+                .map(|(id, doc)| (*id, doc.clone()))
                 .collect()
         };
         for (doc_id, forked) in forked_docs {
@@ -4558,10 +4545,8 @@ pub enum EncryptContentError<T: ContentRef> {
 mod tests {
     use super::*;
     use crate::{
-        certificate::route_through,
-        listener::no_listener::NoListener,
-        test_utils::{has_remove_citing_its_revocation, Hive},
-        transact::transact_async,
+        certificate::route_through, listener::no_listener::NoListener,
+        test_utils::has_remove_citing_its_revocation, transact::transact_async,
     };
     use future_form::Sendable;
     use keyhive_codec::traits::Decode;
@@ -4583,11 +4568,6 @@ mod tests {
         rand::rngs::OsRng,
         MemoryKeyline<ContentHeads<[u8; 32]>>,
     >;
-
-    // `Hive` (in-memory store, no listener, `OsRng`) is a cheap `Dupe`: an O(1)
-    // refcount clone. This fails to compile if a field stops being `Dupe`.
-    const fn assert_dupe<T: Dupe>() {}
-    const _: () = assert_dupe::<Hive>();
 
     async fn make_keyhive() -> TestKeyhive {
         let sk = MemorySigner::generate(&mut rand::rngs::OsRng);
@@ -4867,9 +4847,9 @@ mod tests {
             .iter()
             .map(Certificate::id)
             .collect();
-        let revocation = VerifiedCertificate::Revocation(revoked.revocations()[0].dupe()).id();
+        let revocation = VerifiedCertificate::Revocation(revoked.revocations()[0].clone()).id();
         let grant =
-            VerifiedCertificate::<ContentHeads<[u8; 32]>>::Delegation(carols.delegation.dupe())
+            VerifiedCertificate::<ContentHeads<[u8; 32]>>::Delegation(carols.delegation.clone())
                 .id();
         assert!(sent.contains(&revocation), "bob is sent his revocation");
         assert!(!sent.contains(&grant), "bob is not sent carol's grant");
@@ -5322,7 +5302,7 @@ mod tests {
 
         hive.cgka_from_ops(
             doc_id,
-            vec![invalid_root.dupe()],
+            vec![invalid_root.clone()],
             hive.active.id(),
             &BTreeMap::new(),
             false,
@@ -5558,7 +5538,7 @@ mod tests {
             "and so do the CGKA operations"
         );
         let pcs_hash = |h: &Arc<Mutex<DocumentState<_>>>| {
-            let h = h.dupe();
+            let h = h.clone();
             async move { h.lock().await.cgka_mut().try_pcs_key_hash() }
         };
         let doc_id = *hive
@@ -5805,7 +5785,7 @@ mod tests {
 
         // Now add bob to alices document using the new op
         let add_op = KeyOp::Add(add_bob_op);
-        let bob_on_alice = IndividualState::new(add_op.dupe());
+        let bob_on_alice = IndividualState::new(add_op.clone());
         assert!(alice.register_individual(bob_on_alice.clone()).await);
         let bob_on_alice_id = bob_on_alice.id();
         alice

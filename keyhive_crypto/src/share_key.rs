@@ -9,8 +9,6 @@ use super::{
 };
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
-#[cfg(feature = "std")]
-use dupe::Dupe;
 use keyhive_codec::{
     error::DecodeError,
     traits::{decode_exact, Decode, Encode, StreamDecode},
@@ -43,13 +41,6 @@ impl ShareKey {
 
     pub fn to_bytes(&self) -> [u8; 32] {
         self.0.to_bytes()
-    }
-}
-
-#[cfg(feature = "std")]
-impl Dupe for ShareKey {
-    fn dupe(&self) -> Self {
-        Self(self.0)
     }
 }
 

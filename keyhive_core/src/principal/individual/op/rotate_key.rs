@@ -1,4 +1,3 @@
-use dupe::Dupe;
 use keyhive_codec::{
     error::DecodeError,
     traits::{decode_exact, Decode, Encode, StreamDecode},
@@ -13,7 +12,7 @@ use keyhive_crypto::{
 /// Encoded as `old ‖ new` (64 bytes), and signed under
 /// [`Kind::ROTATE_KEY`]. Decoding refuses `old == new`: replacing a key with
 /// itself would retire it, leaving one fewer prekey than it claims.
-#[derive(Debug, Clone, Copy, Dupe, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RotateKeyOp {
     /// The prekey to remove.
     pub old: ShareKey,

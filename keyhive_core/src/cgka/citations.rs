@@ -8,7 +8,6 @@
 //! over those sets.
 
 use beekem::{cgka::ImplicitRemovesProtocol, id::MemberId, operation::CitationId};
-use dupe::Dupe;
 use imbl::OrdMap;
 use keyhive_crypto::{digest::Digest, identifier::Identifier, verified::Verified};
 use keyline::{
@@ -56,9 +55,6 @@ impl<W> From<&VerifiedCertificate<W>> for Cited {
 /// answer from the previous one and share storage with it.
 #[derive(Debug, Clone)]
 pub(crate) struct Members(OrdMap<Identifier, Power>);
-
-// A clone of a persistent `OrdMap` shares the original's structure.
-impl Dupe for Members {}
 
 impl Deref for Members {
     type Target = OrdMap<Identifier, Power>;
@@ -192,7 +188,7 @@ impl CitedCertificates {
 
     /// The cached answer for `key`.
     pub(crate) fn members(&self, key: &MembersKey) -> Option<Members> {
-        self.members.get(key).map(Dupe::dupe)
+        self.members.get(key).cloned()
     }
 
     /// Cache Keyline's `answer` for `key` and return it. It is built from the
@@ -204,15 +200,15 @@ impl CitedCertificates {
         answer: BTreeMap<Identifier, Power>,
     ) -> Members {
         if let Some(cached) = self.members.get(&key) {
-            return cached.dupe();
+            return cached.clone();
         }
         let (_, resource) = key;
         let members = match self.latest.get(&resource) {
             Some(base) => changed_to(base, &answer),
             None => Members(answer.into_iter().collect()),
         };
-        self.latest.insert(resource, members.dupe());
-        self.members.insert(key, members.dupe());
+        self.latest.insert(resource, members.clone());
+        self.members.insert(key, members.clone());
         self.cached.entry(resource).or_default().push_back(key);
         self.evict(resource);
         members
@@ -277,7 +273,7 @@ impl CitedCertificates {
 /// `base` with only the entries that differ from `answer` changed. The
 /// result normally shares most of its structure with `base`.
 fn changed_to(base: &Members, answer: &BTreeMap<Identifier, Power>) -> Members {
-    let mut members = base.dupe().0;
+    let mut members = base.clone().0;
     let mut old = base.iter().peekable();
     for (id, power) in answer {
         while let Some((gone, _)) = old.next_if(|(was, _)| *was < id) {
@@ -295,7 +291,7 @@ fn changed_to(base: &Members, answer: &BTreeMap<Identifier, Power>) -> Members {
 
 /// [`CitedCertificates`] shared by a keyhive, its forks, and their CGKA
 /// groups. A new keyhive starts from the empty default.
-#[derive(Clone, Default, Dupe)]
+#[derive(Clone, Default)]
 pub(crate) struct SharedCitations(Arc<Mutex<CitedCertificates>>);
 
 impl SharedCitations {
@@ -307,7 +303,7 @@ impl SharedCitations {
     pub(crate) fn replaying(&self, resource: Identifier) -> Replaying {
         self.lock().begin_replay(resource);
         Replaying {
-            citations: self.dupe(),
+            citations: self.clone(),
             resource,
         }
     }

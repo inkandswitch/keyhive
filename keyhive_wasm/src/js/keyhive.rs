@@ -52,7 +52,6 @@ use super::{
     summary::Summary,
 };
 use derive_more::{From, Into};
-use dupe::Dupe;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use keyhive_codec::traits::{Decode, Encode};
@@ -198,7 +197,7 @@ impl JsKeyhive {
     pub async fn try_sign(&self, data: &[u8]) -> Result<JsSignedBytes, JsSigningError> {
         init_span!("JsKeyhive::try_sign");
         let verified = self.0.sign_bytes(data.to_vec()).await?;
-        Ok(JsSignedBytes(verified.signed().dupe()))
+        Ok(JsSignedBytes(verified.signed().clone()))
     }
 
     /// Record `heads` as the document's current content heads: the
@@ -387,7 +386,7 @@ impl JsKeyhive {
         init_span!("JsKeyhive::add_member");
         let res = self.0.add_member(to_add.0, membered_id.0, **access).await?;
 
-        Ok(JsSignedDelegation(res.delegation.signed().dupe()))
+        Ok(JsSignedDelegation(res.delegation.signed().clone()))
     }
 
     #[wasm_bindgen(js_name = revokeMember)]
@@ -406,7 +405,7 @@ impl JsKeyhive {
         Ok(res
             .revocations()
             .iter()
-            .map(|r| JsSignedRevocation(r.signed().dupe()))
+            .map(|r| JsSignedRevocation(r.signed().clone()))
             .collect())
     }
 

@@ -12,7 +12,6 @@ use crate::{
 };
 use beekem::operation::CgkaOperation;
 use derive_more::{From, TryInto};
-use dupe::Dupe;
 use future_form::FutureForm;
 use keyhive_content::{encrypted::EncryptedContent, reference::ContentRef, store::CiphertextStore};
 use keyhive_crypto::{
@@ -84,8 +83,8 @@ impl<T: ContentRef> Event<T> {
 impl<T: ContentRef> From<KeyOp> for Event<T> {
     fn from(key_op: KeyOp) -> Self {
         match key_op {
-            KeyOp::Add(add) => Event::PrekeysExpanded(add.signed().dupe()),
-            KeyOp::Rotate(rot) => Event::PrekeyRotated(rot.signed().dupe()),
+            KeyOp::Add(add) => Event::PrekeysExpanded(add.signed().clone()),
+            KeyOp::Rotate(rot) => Event::PrekeyRotated(rot.signed().clone()),
         }
     }
 }
@@ -112,12 +111,6 @@ impl<T: ContentRef> From<Event<T>> for StaticEvent<T> {
             Event::PrekeyRotated(pkr) => StaticEvent::PrekeyRotated(Arc::unwrap_or_clone(pkr)),
             Event::PrekeysExpanded(pke) => StaticEvent::PrekeysExpanded(Arc::unwrap_or_clone(pke)),
         }
-    }
-}
-
-impl<T: ContentRef> Dupe for Event<T> {
-    fn dupe(&self) -> Self {
-        self.clone()
     }
 }
 
@@ -214,19 +207,19 @@ mod tests {
             Event::PrekeysExpanded(
                 Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
                     .signed()
-                    .dupe(),
+                    .clone(),
             ),
             Event::PrekeysExpanded(
                 Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
                     .signed()
-                    .dupe(),
+                    .clone(),
             ),
             Event::PrekeysExpanded(
                 Verified::sign_sync(&AddKeyOp::generate(&mut csprng), &signer)?
                     .signed()
-                    .dupe(),
+                    .clone(),
             ),
-            Event::Delegated(delegation.signed().dupe()),
+            Event::Delegated(delegation.signed().clone()),
         ];
 
         let ciphertext1 = Arc::new(EncryptedContent::encrypt(
@@ -250,8 +243,8 @@ mod tests {
         )?);
 
         let store: MemoryCiphertextStore<[u8; 32], Vec<u8>> = MemoryCiphertextStore::new();
-        store.insert(ciphertext1.dupe()).await;
-        store.insert(ciphertext2.dupe()).await;
+        store.insert(ciphertext1.clone()).await;
+        store.insert(ciphertext2.clone()).await;
 
         // Should not show up in updates
         store

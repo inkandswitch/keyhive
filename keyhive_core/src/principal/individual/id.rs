@@ -1,5 +1,4 @@
 use beekem::id::MemberId;
-use dupe::Dupe;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
@@ -40,8 +39,6 @@ impl fmt::Display for IndividualId {
         write!(f, "{:#x}", self.0)
     }
 }
-
-impl Dupe for IndividualId {}
 
 impl From<Identifier> for IndividualId {
     fn from(id: Identifier) -> Self {

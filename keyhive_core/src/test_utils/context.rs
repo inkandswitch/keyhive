@@ -22,7 +22,6 @@ use crate::{
     update::AddMemberUpdate,
 };
 use beekem::error::CgkaError;
-use dupe::Dupe;
 use future_form::Sendable;
 use futures::lock::Mutex;
 use keyhive_codec::traits::{Decode, Encode};
@@ -1034,12 +1033,6 @@ impl TestContext {
         };
         self.hives.insert(instance, handle.clone());
         Ok(handle)
-    }
-}
-
-impl Dupe for Instance {
-    fn dupe(&self) -> Self {
-        self.clone()
     }
 }
 

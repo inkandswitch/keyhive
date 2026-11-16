@@ -1,7 +1,6 @@
 use super::{change_id::JsChangeId, event::JsEvent};
 use beekem::operation::CgkaOperation;
 use derive_more::{From, Into};
-use dupe::Dupe;
 use future_form::Local;
 use futures::future::LocalBoxFuture;
 use keyhive_core::{
@@ -29,43 +28,37 @@ impl JsEventHandler {
     }
 }
 
-impl Dupe for JsEventHandler {
-    fn dupe(&self) -> Self {
-        self.clone()
-    }
-}
-
 impl PrekeyListener<Local> for JsEventHandler {
     fn on_prekeys_expanded<'a>(
         &'a self,
         e: &'a Arc<verified::Signed<AddKeyOp>>,
     ) -> LocalBoxFuture<'a, ()> {
-        Box::pin(async move { self.call(Event::PrekeysExpanded(e.dupe()).into()) })
+        Box::pin(async move { self.call(Event::PrekeysExpanded(e.clone()).into()) })
     }
 
     fn on_prekey_rotated<'a>(
         &'a self,
         e: &'a Arc<verified::Signed<RotateKeyOp>>,
     ) -> LocalBoxFuture<'a, ()> {
-        Box::pin(async move { self.call(Event::PrekeyRotated(e.dupe()).into()) })
+        Box::pin(async move { self.call(Event::PrekeyRotated(e.clone()).into()) })
     }
 }
 
 impl MembershipListener<Local, JsChangeId> for JsEventHandler {
     fn on_delegation<'a>(&'a self, data: &'a Arc<Verified<Delegation>>) -> LocalBoxFuture<'a, ()> {
-        Box::pin(async move { self.call(Event::Delegated(data.signed().dupe()).into()) })
+        Box::pin(async move { self.call(Event::Delegated(data.signed().clone()).into()) })
     }
 
     fn on_revocation<'a>(
         &'a self,
         data: &'a Arc<Verified<Revocation<ContentHeads<JsChangeId>>>>,
     ) -> LocalBoxFuture<'a, ()> {
-        Box::pin(async move { self.call(Event::Revoked(data.signed().dupe()).into()) })
+        Box::pin(async move { self.call(Event::Revoked(data.signed().clone()).into()) })
     }
 }
 
 impl CgkaListener<Local> for JsEventHandler {
     fn on_cgka_op<'a>(&'a self, data: &'a Arc<Verified<CgkaOperation>>) -> LocalBoxFuture<'a, ()> {
-        Box::pin(async move { self.call(Event::CgkaOperation(data.dupe()).into()) })
+        Box::pin(async move { self.call(Event::CgkaOperation(data.clone()).into()) })
     }
 }

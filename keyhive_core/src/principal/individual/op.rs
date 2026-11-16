@@ -6,7 +6,6 @@ pub mod rotate_key;
 use self::{add_key::AddKeyOp, rotate_key::RotateKeyOp};
 use crate::util::content_addressed_map::{CaMap, ContentAddressed};
 use derive_more::{From, TryInto};
-use dupe::Dupe;
 use ed25519_dalek::{Signature, VerifyingKey};
 use keyhive_codec::{
     error::DecodeError,
@@ -108,12 +107,6 @@ impl KeyOp {
 impl ContentAddressed for KeyOp {
     fn content_digest(&self) -> Digest<KeyOp> {
         self.digest()
-    }
-}
-
-impl Dupe for KeyOp {
-    fn dupe(&self) -> Self {
-        self.clone()
     }
 }
 

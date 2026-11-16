@@ -1,4 +1,3 @@
-use dupe::Dupe;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use keyhive_crypto::{
     identifier::{Identifier, InvalidIdentifier},
@@ -28,8 +27,6 @@ impl GroupId {
         self.0.as_bytes()
     }
 }
-
-impl Dupe for GroupId {}
 
 impl From<Identifier> for GroupId {
     fn from(id: Identifier) -> Self {

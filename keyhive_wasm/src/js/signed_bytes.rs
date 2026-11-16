@@ -1,5 +1,4 @@
 use derive_more::{From, Into};
-use dupe::Dupe;
 use keyhive_codec::{
     error::DecodeError,
     traits::{Decode, Encode},
@@ -15,7 +14,7 @@ use wasm_bindgen::prelude::*;
 /// else the key signs. Nothing ties them to one application, so they verify
 /// wherever they are carried.
 #[wasm_bindgen(js_name = SignedBytes)]
-#[derive(Debug, Clone, Dupe, From, Into)]
+#[derive(Debug, Clone, From, Into)]
 pub struct JsSignedBytes(pub(crate) Arc<Signed<Bytes>>);
 
 #[wasm_bindgen(js_class = SignedBytes)]

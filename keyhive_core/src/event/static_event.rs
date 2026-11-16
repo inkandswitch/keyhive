@@ -139,7 +139,6 @@ impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for 
 mod tests {
     use super::*;
     use crate::event::Event;
-    use dupe::Dupe;
     use keyhive_crypto::{
         bytes::Bytes, share_key::ShareKey, signer::memory::MemorySigner, verified::Verified,
     };
@@ -193,7 +192,7 @@ mod tests {
     #[test]
     fn an_events_digest_is_its_statements() {
         let signed = prekeys_expanded(&MemorySigner::generate(&mut rand::rngs::OsRng));
-        let event: Event<[u8; 32]> = Event::PrekeysExpanded(signed.signed().dupe());
+        let event: Event<[u8; 32]> = Event::PrekeysExpanded(signed.signed().clone());
         let wire = Event32::from(event.clone());
         let resigned = Event32::PrekeysExpanded(verified::Signed::new(
             signed.issuer(),

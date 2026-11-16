@@ -1,4 +1,3 @@
-use dupe::Dupe;
 use std::sync::Arc;
 
 use super::{base64::Base64, change_id::JsChangeId};
@@ -20,14 +19,6 @@ use keyhive_codec::traits::Decode;
 #[derive(Debug, Clone)]
 pub struct JsCiphertextStore {
     inner: JsCiphertextStoreInner,
-}
-
-// Manual: both kinds clone cheaply, the memory store through an `Arc` and web
-// storage as a JS handle, but `web_sys::Storage` does not implement `Dupe`.
-impl Dupe for JsCiphertextStore {
-    fn dupe(&self) -> Self {
-        self.clone()
-    }
 }
 
 #[wasm_bindgen(js_class = CiphertextStore)]

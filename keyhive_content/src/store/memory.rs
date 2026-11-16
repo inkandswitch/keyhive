@@ -1,7 +1,6 @@
 use crate::{
     application_secret::GroupSecretOrigin, encrypted::EncryptedContent, reference::ContentRef,
 };
-use dupe::Dupe;
 use futures::lock::Mutex;
 use keyhive_crypto::digest::Digest;
 use std::{
@@ -16,15 +15,6 @@ use tracing::instrument;
 pub struct MemoryCiphertextStore<Cr: ContentRef, P>(
     pub(crate) Arc<Mutex<MemoryCiphertextStoreInner<Cr, P>>>,
 );
-
-impl<Cr: ContentRef, P> Dupe for MemoryCiphertextStore<Cr, P>
-where
-    Self: Clone,
-{
-    fn dupe(&self) -> Self {
-        self.clone()
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct MemoryCiphertextStoreInner<Cr: ContentRef, P> {
@@ -60,7 +50,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
             .map(|digest| locked.store.get(digest))
             .collect::<Option<Vec<_>>>()?;
         let (_, largest) = xs.iter().max_by_key(|(size, _)| size)?;
-        Some(largest.dupe())
+        Some(largest.clone())
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -79,7 +69,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
                     if let Some(digests) = locked.refs_to_digests.get(content_ref) {
                         for digest in digests.iter() {
                             if let Some((_, encrypted)) = locked.store.get(digest) {
-                                acc.push(encrypted.dupe());
+                                acc.push(encrypted.clone());
                             }
                         }
                     }
@@ -124,7 +114,7 @@ impl<Cr: ContentRef, P> MemoryCiphertextStore<Cr, P> {
         encrypted: EncryptedContent<P, Cr>,
     ) -> Arc<EncryptedContent<P, Cr>> {
         let rc = Arc::new(encrypted);
-        self.insert(rc.dupe()).await;
+        self.insert(rc.clone()).await;
         rc
     }
 

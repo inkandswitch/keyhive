@@ -149,7 +149,6 @@ impl Merge for PrekeyState {
 mod tests {
     use super::*;
     use crate::principal::individual::op::rotate_key::RotateKeyOp;
-    use dupe::Dupe;
     use keyhive_crypto::signer::memory::MemorySigner;
     use rand::rngs::OsRng;
 
@@ -198,7 +197,7 @@ mod tests {
             .unwrap(),
         );
 
-        let mut state = PrekeyState::new(op1.dupe());
+        let mut state = PrekeyState::new(op1.clone());
 
         let op2 = KeyOp::Add(
             Verified::sign_sync(
