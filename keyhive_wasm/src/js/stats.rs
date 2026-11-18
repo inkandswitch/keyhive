@@ -133,19 +133,11 @@ impl JsStats {
 
     #[wasm_bindgen(getter, js_name = totalOps)]
     pub fn total_ops(&self) -> u64 {
-        self.0.prekeys_expanded
-            + self.0.prekey_rotations
-            + self.0.cgka_operations
-            + self.0.delegations
-            + self.0.revocations
+        self.0.total_ops()
     }
 
     #[wasm_bindgen(getter, js_name = totalPendingOps)]
     pub fn total_pending_ops(&self) -> u64 {
-        self.0.pending_prekeys_expanded
-            + self.0.pending_prekey_rotated
-            + self.0.pending_cgka_operation
-            + self.0.pending_delegated
-            + self.0.pending_revoked
+        self.0.pending_total()
     }
 }
