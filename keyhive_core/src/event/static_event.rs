@@ -15,7 +15,7 @@ use keyhive_content::reference::ContentRef;
 use keyhive_crypto::{
     digest::Digest,
     signable::Kind,
-    verified::{self, header, VerifyError},
+    verified::{header, Signed, VerifyError},
 };
 use keyline::{delegation::Delegation, revocation::Revocation};
 use std::sync::Arc;
@@ -28,19 +28,19 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, From, Hash, TryInto)]
 pub enum StaticEvent<T: ContentRef> {
     /// Prekeys were expanded, as received: not yet verified.
-    PrekeysExpanded(verified::Signed<AddKeyOp>),
+    PrekeysExpanded(Signed<AddKeyOp>),
 
     /// A prekey was rotated, as received: not yet verified.
-    PrekeyRotated(verified::Signed<RotateKeyOp>),
+    PrekeyRotated(Signed<RotateKeyOp>),
 
     /// A CGKA operation, as received: not yet verified.
-    CgkaOperation(Box<verified::Signed<CgkaOperation>>),
+    CgkaOperation(Box<Signed<CgkaOperation>>),
 
     /// A Keyline delegation, as received: not yet verified.
-    Delegated(verified::Signed<Delegation>),
+    Delegated(Signed<Delegation>),
 
     /// A Keyline revocation, as received: not yet verified.
-    Revoked(verified::Signed<Revocation<ContentHeads<T>>>),
+    Revoked(Signed<Revocation<ContentHeads<T>>>),
 }
 
 impl<T: ContentRef> StaticEvent<T> {
@@ -104,23 +104,23 @@ impl<T: ContentRef> StreamDecode for StaticEvent<T> {
         let (kind, _) = header(bytes)?;
         match Kind::from_u8(kind) {
             Some(Kind::ADD_KEY) => {
-                let (signed, rest) = verified::Signed::decode_next(bytes)?;
+                let (signed, rest) = Signed::decode_next(bytes)?;
                 Ok((StaticEvent::PrekeysExpanded(signed), rest))
             }
             Some(Kind::ROTATE_KEY) => {
-                let (signed, rest) = verified::Signed::decode_next(bytes)?;
+                let (signed, rest) = Signed::decode_next(bytes)?;
                 Ok((StaticEvent::PrekeyRotated(signed), rest))
             }
             Some(Kind::CGKA_OPERATION) => {
-                let (signed, rest) = verified::Signed::decode_next(bytes)?;
+                let (signed, rest) = Signed::decode_next(bytes)?;
                 Ok((StaticEvent::CgkaOperation(Box::new(signed)), rest))
             }
             Some(Kind::DELEGATION) => {
-                let (signed, rest) = verified::Signed::decode_next(bytes)?;
+                let (signed, rest) = Signed::decode_next(bytes)?;
                 Ok((StaticEvent::Delegated(signed), rest))
             }
             Some(Kind::REVOCATION) => {
-                let (signed, rest) = verified::Signed::decode_next(bytes)?;
+                let (signed, rest) = Signed::decode_next(bytes)?;
                 Ok((StaticEvent::Revoked(signed), rest))
             }
             _ => Err(DecodeError::UnexpectedKind(kind)),
@@ -134,8 +134,8 @@ impl<'a, T: arbitrary::Arbitrary<'a> + ContentRef> arbitrary::Arbitrary<'a> for 
         // Signatures are junk: these exercise encoding, not verification.
         fn junk<'a, V: arbitrary::Arbitrary<'a> + keyhive_codec::traits::Encode>(
             u: &mut arbitrary::Unstructured<'a>,
-        ) -> arbitrary::Result<verified::Signed<V>> {
-            Ok(verified::Signed::new(
+        ) -> arbitrary::Result<Signed<V>> {
+            Ok(Signed::new(
                 u.arbitrary()?,
                 keyhive_codec::traits::Encode::encode(&V::arbitrary(u)?),
                 ed25519_dalek::Signature::from_bytes(&u.arbitrary()?),
@@ -215,7 +215,7 @@ mod tests {
         let signed = prekeys_expanded(&MemorySigner::generate(&mut rand::rngs::OsRng));
         let event: Event<[u8; 32]> = Event::PrekeysExpanded(signed.signed().dupe());
         let wire = Event32::from(event.clone());
-        let resigned = Event32::PrekeysExpanded(verified::Signed::new(
+        let resigned = Event32::PrekeysExpanded(Signed::new(
             signed.issuer(),
             signed.signed().encoded().clone(),
             ed25519_dalek::Signature::from_bytes(&[7; 64]),
