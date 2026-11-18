@@ -311,7 +311,7 @@ where
         coparents: Vec<Identifier>,
     ) -> Result<(Identifier, Vec<VerifiedCertificate<ContentHeads<T>>>), E> {
         for id in &coparents {
-            if !self.is_known(*id).await? {
+            if !self.has_agent(*id).await? {
                 return Err(NotFound::new(*id).into());
             }
         }
@@ -1530,7 +1530,7 @@ where
         let resource = resource.into();
 
         let to_add = to_add.into();
-        if !self.is_known(to_add).await? {
+        if !self.has_agent(to_add).await? {
             return Err(NotFound::new(to_add).into());
         }
         self.ensure_known::<AddMemberError<K::Error>>(resource)
@@ -1661,9 +1661,11 @@ where
         })
     }
 
-    /// Whether this replica knows `id`: an individual, a document, or a Keyline
-    /// subject (a group).
-    async fn is_known(&self, id: Identifier) -> Result<bool, KeylineStorageError<K::Error>> {
+    /// Whether this replica knows `id`: an individual (including itself), a
+    /// document it holds, or another Keyline subject, such as a group or a
+    /// document it only relays.
+    #[instrument(skip_all)]
+    pub async fn has_agent(&self, id: Identifier) -> Result<bool, KeylineStorageError<K::Error>> {
         if self.has_individual(IndividualId(id)).await || self.has_document(DocumentId(id)).await {
             return Ok(true);
         }
@@ -1681,7 +1683,7 @@ where
         &self,
         resource: MemberedId,
     ) -> Result<(), E> {
-        if !self.is_known(resource.into()).await? {
+        if !self.has_agent(resource.into()).await? {
             return Err(NotFound::new(resource).into());
         }
         Ok(())

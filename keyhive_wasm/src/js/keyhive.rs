@@ -665,6 +665,14 @@ impl JsKeyhive {
         self.0.has_individual(id.0).await
     }
 
+    /// Whether `id` is this replica, or an individual, group or document it
+    /// knows.
+    #[wasm_bindgen(js_name = hasAgent)]
+    pub async fn has_agent(&self, id: &JsIdentifier) -> Result<bool, JsKeylineStorageError> {
+        init_span!("JsKeyhive::has_agent");
+        Ok(self.0.has_agent(id.0).await?)
+    }
+
     #[wasm_bindgen(js_name = getDocument)]
     pub async fn get_document(&self, doc_id: &JsDocumentId) -> Option<JsDocument> {
         init_span!("JsKeyhive::get_document");

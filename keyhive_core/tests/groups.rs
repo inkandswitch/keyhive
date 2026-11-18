@@ -4,7 +4,7 @@
 use keyhive_core::{
     content::heads::ContentHeads,
     principal::group::{id::GroupId, RevokeMemberError},
-    test_utils::{Instance, TestContext, TestError, TestResult as Result},
+    test_utils::{make_simple_keyhive, Instance, TestContext, TestError, TestResult as Result},
 };
 use keyhive_crypto::identifier::Identifier;
 use keyline::{
@@ -507,6 +507,21 @@ async fn a_document_is_not_a_group() -> Result<()> {
             .has_group(GroupId::new(Identifier::from(design_doc)))
             .await?
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn has_agent_knows_itself_and_the_groups_and_documents_it_holds() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let stranger = make_simple_keyhive().await?;
+    let g1 = ctx.group(&alice, "g1").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+
+    for known in [alice.id().into(), g1.into(), design_doc.into()] {
+        assert!(alice.has_agent(known).await?, "{}", ctx.name_of(known));
+    }
+    assert!(!alice.has_agent(stranger.id().into()).await?);
     Ok(())
 }
 
