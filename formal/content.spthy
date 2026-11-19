@@ -1,0 +1,355 @@
+theory KeyhiveContent
+begin
+
+/*
+ * Keyhive content encryption: causal key carriage and key commitment.
+ *
+ * What is modelled (design/ciphersuite.md, "Content" and "Synthetic Nonce and
+ * Key Commitment"):
+ *
+ *   app_key   = KDF_app(group_secret, H(preds), content_ref)
+ *   enc_key   = KDF_enc(app_key)
+ *   nonce_key = KDF_nonce(app_key)
+ *   aad       = <hdr(doc_id, <content_ref, preds, H(group_secret)>), '0', 'last'>
+ *   body      = <ancestor, payload>         ancestor = 'none' | <ref, app_key>
+ *   nonce     = MAC(nonce_key, <aad, body>)
+ *   block     = <content_ref, preds, H(group_secret), nonce, AEAD(enc_key, nonce, aad, body)>
+ *
+ * A reader gets a block's key in one of two ways: from the group secret (a
+ * member, through the CGKA), or from a successor's envelope (causal
+ * encryption). Either way it decrypts, recomputes the nonce from what it
+ * decrypted, and refuses a mismatch.
+ *
+ * Abstractions:
+ *
+ * - One group secret per document (one CGKA epoch). BeeKEM is out of scope.
+ * - One chunk per block, at most one predecessor per block (the history is a
+ *   tree, not a DAG). Padding is invisible to a symbolic model.
+ * - Content refs are fresh public names, not hashes of the payload: the
+ *   model does not assume the application checks a ref against what it
+ *   decrypts.
+ * - XChaCha20-Poly1305 on its own is not key-committing (see "Invisible
+ *   Salamanders"): rule Forge_Ciphertext lets the adversary make one
+ *   ciphertext that opens under two keys it knows. Keyhive commits with the
+ *   synthetic nonce instead, a keyed BLAKE3 hash the reader recomputes and
+ *   checks. The model keeps the two apart, so one_ciphertext_one_body shows
+ *   that the nonce check alone is what commits. The keyed hash is
+ *   collision-free, as every symbolic hash is.
+ *
+ * Build with -D=NO_NONCE_CHECK to drop the reader's nonce check.
+ */
+
+builtins: hashing
+
+functions:
+  hdr/2,       // BLAKE3_derive(/keyhive/content/header/..., doc_id ‖ header)
+  kdf_app/3,   // derive_key(/keyhive/content/application-key/..., ...)
+  kdf_enc/1,   // derive_key(/keyhive/content/encryption-key/..., app_key)
+  kdf_nonce/1, // derive_key(/keyhive/content/nonce-key/..., app_key)
+  mac/2,       // BLAKE3 keyed, truncated to 24 bytes
+  sdec/4,      // its decryption, for whoever holds the key
+  senc/4       // XChaCha20-Poly1305(key, nonce, aad, plaintext)
+
+equations:
+  sdec(k, n, a, senc(k, n, a, m)) = m
+
+/*
+ * Proof search tactics. A block's header and nonce are public, and the
+ * adversary can learn refs, document ids, hashes, header digests and nonces
+ * from many rules. Solving those goals first explores every way it could
+ * have read something off the wire, and the search does not end.
+ */
+tactic: wire_last
+presort: s
+deprio:
+    regex "!KU\( ~(r|pr|doc)" | regex "!KU\( h\(" | regex "!KU\( hdr\(" | regex "!KU\( mac\("
+
+/*
+ * As wire_last, but resolve a block's premise first: it names the block that
+ * wrote the key an envelope carries.
+ */
+tactic: blocks_first
+presort: s
+prio:
+    regex "!Block\( "
+deprio:
+    regex "!KU\( ~(r|pr|doc)" | regex "!KU\( h\(" | regex "!KU\( hdr\(" | regex "!KU\( mac\("
+
+/* A document and its group secret. Any member holds the group secret. */
+rule Create_Document:
+    [ Fr(~doc), Fr(~gs) ]
+  --[ Document(~doc), GroupSecret(~doc, ~gs) ]->
+    [ !Group(~doc, ~gs), Out(~doc) ]
+
+/* A member writes the first block of a history. */
+rule Write_Genesis:
+    let preds = 'genesis'
+        k     = kdf_app(gs, h(preds), ~r)
+        a     = <hdr(doc, <~r, preds, h(gs)>), '0', 'last'>
+        body  = <'none', ~p>
+        n     = mac(kdf_nonce(k), <a, body>)
+        block = <~r, preds, h(gs), n, senc(kdf_enc(k), n, a, body)>
+    in
+    [ !Group(doc, gs), Fr(~r), Fr(~p) ]
+  --[ Write(doc, ~r, body), Payload(doc, ~r, ~p, <~r, 'genesis'>), Key(doc, ~r, k, <~r, 'genesis'>) ]->
+    [ !Block(doc, ~r, preds, k, <~r, 'genesis'>), Out(block) ]
+
+/*
+ * A member writes a block after `pr`, carrying pr's key in its envelope.
+ *
+ * The premise spells out what every !Block holds (a fresh ref, and the key
+ * derived from it), so that Tamarin can finish the adversary's
+ * deconstructions of the envelope.
+ */
+rule Write_Child:
+    let preds = ~pr
+        k     = kdf_app(gs, h(preds), ~r)
+        a     = <hdr(doc, <~r, preds, h(gs)>), '0', 'last'>
+        body  = <<~pr, kdf_app(gs, h(ppreds), ~pr)>, ~p>
+        n     = mac(kdf_nonce(k), <a, body>)
+        block = <~r, preds, h(gs), n, senc(kdf_enc(k), n, a, body)>
+    in
+    [ !Group(doc, gs), !Block(doc, ~pr, ppreds, kdf_app(gs, h(ppreds), ~pr), pl), Fr(~r), Fr(~p) ]
+  --[ Write(doc, ~r, body), Payload(doc, ~r, ~p, <~r, pl>), Key(doc, ~r, k, <~r, pl>), Parent(doc, ~r, ~pr) ]->
+    [ !Block(doc, ~r, preds, k, <~r, pl>), Out(block) ]
+
+/* A member turns malicious, or its device is compromised. */
+rule Reveal_Group_Secret:
+    [ !Group(doc, gs) ]
+  --[ RevealGroup(doc) ]->
+    [ Out(gs) ]
+
+/*
+ * A read capability for one block is handed to the adversary. The block's
+ * lineage (its ref, its parent's, and so on back to genesis) is ghost state
+ * for the lemmas: no rule reads it.
+ */
+rule Reveal_Block_Key:
+    [ !Block(doc, r, preds, k, lineage) ]
+  --[ RevealKey(doc, r, lineage) ]->
+    [ Out(k) ]
+
+/*
+ * The AEAD on its own: with two keys it knows, the adversary can make one
+ * ciphertext that authenticates under both, to bodies it chooses, for one
+ * nonce. Over-approximates Invisible Salamanders, where the attacker
+ * controls the plaintexts only in part. The synthetic nonce check in the
+ * readers is what rules this out.
+ */
+rule Forge_Ciphertext:
+    [ In(<k1, n, a1, m1>), In(<k2, a2, m2>), Fr(~c) ]
+  --[ Forged(~c) ]->
+    [ !Forgery(~c, k1, n, a1, m1), !Forgery(~c, k2, n, a2, m2), Out(~c) ]
+
+/*
+ * Readers. Each comes in two forms: a ciphertext that senc made, and one that
+ * Forge_Ciphertext made. NonceCheck recomputes the synthetic nonce from what
+ * was decrypted, and the restriction refuses a mismatch.
+ */
+
+#ifdef NO_NONCE_CHECK
+#else
+restriction nonce_matches:
+  " All n m #i. NonceCheck(n, m) @ #i ==> n = m "
+#endif
+
+/* A member opens a block with a key derived from the group secret. */
+rule Read_Member:
+    let k     = kdf_app(gs, h(preds), r)
+        a     = <hdr(doc, <r, preds, h(gs)>), '0', 'last'>
+        block = <r, preds, h(gs), n, senc(kdf_enc(k), n, a, body)>
+    in
+    [ !Group(doc, gs), In(block) ]
+  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(block, body), AcceptMember(doc, r, body) ]->
+    [ !Opened(doc, r, body) ]
+
+rule Read_Member_Forged:
+    let k     = kdf_app(gs, h(preds), r)
+        a     = <hdr(doc, <r, preds, h(gs)>), '0', 'last'>
+        block = <r, preds, h(gs), n, c>
+    in
+    [ !Group(doc, gs), In(block), !Forgery(c, kdf_enc(k), n, a, body) ]
+  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(block, body), AcceptMember(doc, r, body) ]->
+    [ !Opened(doc, r, body) ]
+
+/*
+ * A reader opens an ancestor with the key a block it already opened names.
+ * It does not hold the group secret, so it takes the header as it comes.
+ */
+rule Read_Envelope:
+    let a     = <hdr(doc, <r, preds, gsh>), '0', 'last'>
+        block = <r, preds, gsh, n, senc(kdf_enc(k), n, a, body)>
+    in
+    [ !Opened(doc, cr, <<r, k>, cp>), In(block) ]
+  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(block, body), AcceptEnvelope(doc, cr, <<r, k>, cp>, r, body) ]->
+    [ !Opened(doc, r, body) ]
+
+rule Read_Envelope_Forged:
+    let a     = <hdr(doc, <r, preds, gsh>), '0', 'last'>
+        block = <r, preds, gsh, n, c>
+    in
+    [ !Opened(doc, cr, <<r, k>, cp>), In(block), !Forgery(c, kdf_enc(k), n, a, body) ]
+  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(block, body), AcceptEnvelope(doc, cr, <<r, k>, cp>, r, body) ]->
+    [ !Opened(doc, r, body) ]
+
+/*
+ * In a lemma, KU(t) says the adversary knows t. K(t) says it sent t to a
+ * protocol rule, which an adversary that only reads need never do: a
+ * secrecy lemma stated with K() has a weaker hypothesis than intended, and
+ * its induction hypothesis never applies to a key the adversary learned
+ * without sending it.
+ *
+ * Who holds which keys is said with RevealKey and the block's lineage:
+ * `lr = lx | lr << lx` holds when the block with lineage lr is the revealed
+ * block or one of its ancestors.
+ */
+
+/* Sanity: a member opens a block, then its parent through the envelope. */
+lemma executable_causal_read:
+  exists-trace
+  " Ex doc r pr b pb #i #j #k.
+      Parent(doc, r, pr) @ #i
+    & AcceptMember(doc, r, b) @ #j
+    & AcceptEnvelope(doc, r, b, pr, pb) @ #k
+    & not (Ex d #l. RevealGroup(d) @ #l)
+    & not (Ex d x lx #l. RevealKey(d, x, lx) @ #l)
+    & not (Ex c #l. Forged(c) @ #l)
+  "
+
+/* Sanity: a member accepts a forged ciphertext, so the forgery rule is usable. */
+lemma executable_forged_read:
+  exists-trace
+  " Ex doc r preds gsh n c b #i #j.
+      Forged(c) @ #j
+    & Accept(<r, preds, gsh, n, c>, b) @ #i
+    & AcceptMember(doc, r, b) @ #i
+  "
+
+/* Key commitment: a ciphertext opens to one body, whoever opens it and
+ * wherever they got the key. */
+lemma one_ciphertext_one_body:
+  " All blk b1 b2 #i #j.
+      Accept(blk, b1) @ #i & Accept(blk, b2) @ #j ==> b1 = b2 "
+
+/*
+ * Sanity: the adversary can decrypt. A read capability for a child reveals
+ * its parent's key, through the child's envelope. Without this, the secrecy
+ * lemmas below could hold only because the adversary cannot decrypt at all.
+ */
+lemma executable_child_cap_reveals_parent_key:
+  exists-trace
+  " Ex doc c p kp lp #i #j #l.
+      Parent(doc, c, p) @ #i & Key(doc, p, kp, lp) @ #j & KU(kp) @ #l
+    & not (Ex #m. RevealGroup(doc) @ #m)
+    & (All x lx #m. RevealKey(doc, x, lx) @ #m ==> x = c)
+  "
+
+/*
+ * One step of key flow: the adversary learns a block's key from the group
+ * secret, from a read capability for that block, or from a child's
+ * envelope, which needs the child's key first.
+ */
+lemma key_origin [reuse, heuristic={wire_last}]:
+  " All doc r k lr #i #j.
+      Key(doc, r, k, lr) @ #i & KU(k) @ #j
+      ==>
+        (Ex #l. RevealGroup(doc) @ #l)
+      | (Ex #l. RevealKey(doc, r, lr) @ #l)
+      | (Ex c kc lc #x #p #q.
+            Parent(doc, c, r) @ #x & Key(doc, c, kc, lc) @ #p & KU(kc) @ #q & #p < #j & #q < #j)
+  "
+
+/* A child's lineage is its ref followed by its parent's lineage. */
+lemma parent_lineage [reuse]:
+  " All doc c r kc lc k lr #x #p #i.
+      Parent(doc, c, r) @ #x & Key(doc, c, kc, lc) @ #p & Key(doc, r, k, lr) @ #i
+      ==>
+        lc = <c, lr>
+  "
+
+/*
+ * Causal encryption hands keys backwards only. The adversary learns a
+ * block's key only from the group secret, or from a read capability for
+ * that block or one of its descendants. A key never reaches a sibling or a
+ * descendant. By induction over key_origin's steps.
+ */
+lemma keys_flow_only_backwards [use_induction, reuse]:
+  " All doc r k lr #i #j.
+      Key(doc, r, k, lr) @ #i & KU(k) @ #j
+      ==>
+        (Ex #l. RevealGroup(doc) @ #l)
+      | (Ex x lx #l. RevealKey(doc, x, lx) @ #l & (lr = lx | lr << lx))
+  "
+
+/* The same for payloads: what the keys protect follows the keys. */
+lemma payload_secrecy:
+  " All doc r p lr #i #j.
+      Payload(doc, r, p, lr) @ #i & KU(p) @ #j
+      ==>
+        (Ex #l. RevealGroup(doc) @ #l)
+      | (Ex x lx #l. RevealKey(doc, x, lx) @ #l & (lr = lx | lr << lx))
+  "
+
+/*
+ * An application key the adversary holds is either built from a leaked
+ * group secret or is the key of a block an honest member wrote. A made-up
+ * ref gets no key without the group secret.
+ */
+lemma app_key_origin [reuse, heuristic={blocks_first}]:
+  " All doc gs preds r #c #j.
+      GroupSecret(doc, gs) @ #c & KU(kdf_app(gs, preds, r)) @ #j
+      ==>
+        (Ex #l. RevealGroup(doc) @ #l)
+      | (Ex lr #w. Key(doc, r, kdf_app(gs, preds, r), lr) @ #w)
+  "
+
+/*
+ * What a member opens is what an honest member wrote, unless the group
+ * secret leaked or the adversary holds that block's key: a read capability
+ * for it or a descendant. Holding a key is enough to forge under it.
+ */
+lemma member_reads_are_authentic [heuristic={wire_last}]:
+  " All doc r b #i.
+      AcceptMember(doc, r, b) @ #i
+      ==>
+        (Ex #j. Write(doc, r, b) @ #j)
+      | (Ex #j. RevealGroup(doc) @ #j)
+      | (Ex k lr x lx #v #l.
+            Key(doc, r, k, lr) @ #v & RevealKey(doc, x, lx) @ #l & (lr = lx | lr << lx))
+  "
+
+/*
+ * Envelope reads, one step at a time: when the block that carried the key
+ * is one an honest member wrote, what the reader opens with that key is what
+ * an honest member wrote, unless that block's key leaked.
+ *
+ * Stated per step because a forged carrier can name an ancestor that no one
+ * wrote: a holder of block X's key can make an X whose envelope names a ref
+ * and key of its own, and a member who opens that X then accepts the made-up
+ * ancestor. Chained with member_reads_are_authentic, this covers a whole
+ * walk back from an authentic block.
+ */
+lemma envelope_step_is_authentic:
+  " All doc cr cb r b #i #w.
+      AcceptEnvelope(doc, cr, cb, r, b) @ #i & Write(doc, cr, cb) @ #w
+      ==>
+        (Ex #j. Write(doc, r, b) @ #j)
+      | (Ex #j. RevealGroup(doc) @ #j)
+      | (Ex k lr x lx #v #l.
+            Key(doc, r, k, lr) @ #v & RevealKey(doc, x, lx) @ #l & (lr = lx | lr << lx))
+  "
+
+/*
+ * Expected to be FALSIFIED: a read capability for a block lets its holder
+ * make a different block under the same ref, which members accept. Keyhive
+ * does not sign content (design/threat_model.md, T2).
+ */
+lemma member_reads_are_authentic_without_read_caps:
+  " All doc r b #i.
+      AcceptMember(doc, r, b) @ #i
+      ==>
+        (Ex #j. Write(doc, r, b) @ #j)
+      | (Ex #j. RevealGroup(doc) @ #j)
+  "
+
+end
