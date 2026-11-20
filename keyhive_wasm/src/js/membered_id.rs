@@ -3,12 +3,14 @@ use crate::js::identifier::JsIdentifier;
 use keyhive_core::principal::membered::id::MemberedId;
 use keyhive_crypto::identifier::Identifier;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 /// ID for a resource that can have members, which is either a group or a document.
 #[wasm_bindgen(js_name = MemberedId)]
 #[derive(Debug, Clone, Copy)]
 pub struct JsMemberedId(pub(crate) MemberedId);
 
+#[wasm_refgen(js_ref = JsMemberedIdRef)]
 #[wasm_bindgen(js_class = MemberedId)]
 impl JsMemberedId {
     #[wasm_bindgen]

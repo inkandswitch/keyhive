@@ -1,10 +1,14 @@
 //! Adding and revoking members.
 
+use beekem::id::TreeId;
 use keyhive_core::{
-    principal::document::id::DocumentId,
+    principal::{
+        document::{id::DocumentId, AddMemberError},
+        membered::id::MemberedId,
+    },
     test_utils::{AddMemberUpdateExt, Instance, TestContext, TestError, TestResult as Result},
 };
-use keyline::power::Power::{Admin, Edit, Read};
+use keyline::power::Power::{Admin, Edit, Read, Relay};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Write new content and report which of `cast` can read it.
@@ -1065,5 +1069,65 @@ async fn a_document_has_no_key_for_itself() -> Result<()> {
         BTreeSet::from([alice.id(), bob.id()]),
         "only the members have keys and the document is not one of them"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn add_member_to_each_grants_the_power_on_every_resource() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let relay = ctx.individual("relay").await?;
+    let mut docs = Vec::new();
+    for name in ["a", "b", "c"] {
+        docs.push(ctx.doc(&alice, name).await?);
+    }
+    let resources: Vec<MemberedId> = docs.iter().map(|&doc| doc.into()).collect();
+
+    alice
+        .add_member_to_each(relay.id(), &resources, Relay)
+        .await?;
+
+    for doc in docs {
+        assert_eq!(alice.access_for_doc(relay.id(), doc).await?, Some(Relay));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn adding_a_member_to_each_document_grants_nothing_if_one_check_fails() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let relay = ctx.individual("relay").await?;
+    let mine = ctx.doc(&alice, "mine").await?;
+    let unknown = ctx.doc(&bob, "unknown").await?;
+
+    let result = alice
+        .add_member_to_each(relay.id(), &[mine.into(), unknown.into()], Relay)
+        .await;
+
+    assert!(matches!(result, Err(AddMemberError::NotFound(_))));
+    assert_eq!(alice.access_for_doc(relay.id(), mine).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn adding_a_reader_to_each_document_issues_cgka_ops_for_every_one() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let a = ctx.doc(&alice, "a").await?;
+    let b = ctx.doc(&alice, "b").await?;
+
+    let update = alice
+        .add_member_to_each(bob.id(), &[a.into(), b.into()], Read)
+        .await?;
+
+    let touched: BTreeSet<TreeId> = update
+        .cgka_ops
+        .iter()
+        .map(|op| *op.payload().doc_id())
+        .collect();
+    assert_eq!(touched, BTreeSet::from([a.into(), b.into()]));
     Ok(())
 }

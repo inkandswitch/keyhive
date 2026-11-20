@@ -39,7 +39,7 @@ use super::{
     import_prekey_secrets_error::JsImportPrekeySecretsError,
     individual_id::JsIndividualId,
     keyline_storage_error::JsKeylineStorageError,
-    membered_id::JsMemberedId,
+    membered_id::{JsMemberedId, JsMemberedIdRef},
     power::JsPower,
     principal::JsPrincipal,
     revoke_member_error::JsRevokeMemberError,
@@ -387,6 +387,36 @@ impl JsKeyhive {
         let res = self.0.add_member(to_add.0, membered_id.0, **access).await?;
 
         Ok(JsSignedDelegation(res.delegation.signed().dupe()))
+    }
+
+    /// Delegate access over each of `membered` to `to_add`, as one batch.
+    ///
+    /// Each resource is checked as `addMember` checks it, and nothing is
+    /// delegated unless every check passes. For `Read` or higher it compares
+    /// this keyhive's documents once, where one `addMember` per resource
+    /// compares them once each.
+    #[wasm_bindgen(js_name = addMemberToEach)]
+    pub async fn add_member_to_each(
+        &self,
+        to_add: &JsIdentifier,
+        membered: Vec<JsMemberedIdRef>,
+        access: &JsPower,
+    ) -> Result<Vec<JsSignedDelegation>, JsAddMemberError> {
+        init_span!("JsKeyhive::add_member_to_each");
+        let membered: Vec<_> = membered
+            .iter()
+            .map(|r| JsMemberedId::from_js_ref(r).0)
+            .collect();
+        let res = self
+            .0
+            .add_member_to_each(to_add.0, &membered, **access)
+            .await?;
+
+        Ok(res
+            .delegations
+            .iter()
+            .map(|d| JsSignedDelegation(d.signed().dupe()))
+            .collect())
     }
 
     #[wasm_bindgen(js_name = revokeMember)]

@@ -36,7 +36,7 @@ use crate::{
         fork::ForkAsync,
         merge::{Merge, MergeAsync},
     },
-    update::{AddMemberUpdate, RevokeMemberUpdate},
+    update::{AddMemberUpdate, AddMembersUpdate, RevokeMemberUpdate},
     util::content_addressed_map::CaMap,
 };
 use beekem::{
@@ -1110,6 +1110,15 @@ where
         fresh: &mut Vec<VerifiedCertificate<ContentHeads<T>>>,
         ops: &mut Vec<Arc<Verified<CgkaOperation>>>,
     ) -> Result<(), E> {
+        // A delegation gives its audience at most its own power, and power along
+        // a route is the minimum of its edges, so a delegation below `Read` only
+        // adds routes below `Read`. It gives no one `Admin`, so it cannot bring
+        // a revocation into reach either. No document's readers can change, so
+        // there is nothing to compare across the documents held.
+        if batch.iter().all(is_below_read_delegation) {
+            *fresh = self.insert_fresh(reconciled, batch).await?;
+            return Ok(());
+        }
         let docs: Vec<(DocumentId, Identifier, Arc<Mutex<DocumentState<T>>>)> = self
             .documents
             .lock()
@@ -1518,6 +1527,39 @@ where
         }
     }
 
+    /// Delegate `to_add` `can` access to each of `resources`, inserting the
+    /// delegations as one batch.
+    ///
+    /// Returns an error if we have never heard of `to_add` or one of
+    /// `resources`, or cannot grant `can` on one of them. Nothing is inserted
+    /// then.
+    pub async fn add_member_to_each(
+        &self,
+        to_add: impl Into<Identifier>,
+        resources: &[MemberedId],
+        can: Power,
+    ) -> Result<AddMembersUpdate, AddMemberError<K::Error>> {
+        let to_add = to_add.into();
+        if !self.has_agent(to_add).await? {
+            return Err(NotFound::new(to_add).into());
+        }
+        let mut delegations = Vec::with_capacity(resources.len());
+        for &resource in resources {
+            delegations.push(self.sign_delegation(to_add, resource, can).await?);
+        }
+        let batch: Vec<_> = delegations
+            .iter()
+            .map(|d| VerifiedCertificate::Delegation(d.dupe()))
+            .collect();
+        let cgka_ops = self
+            .insert_and_reconcile::<AddMemberError<K::Error>>(&batch)
+            .await?;
+        Ok(AddMembersUpdate {
+            delegations,
+            cgka_ops,
+        })
+    }
+
     /// Delegate `to_add` `can` access to `resource`.
     ///
     /// Returns an error if we have never heard of `to_add` or `resource`.
@@ -1533,9 +1575,30 @@ where
         if !self.has_agent(to_add).await? {
             return Err(NotFound::new(to_add).into());
         }
-        self.ensure_known::<AddMemberError<K::Error>>(resource)
+        let delegation = self.sign_delegation(to_add, resource, can).await?;
+
+        let cgka_ops = self
+            .insert_and_reconcile::<AddMemberError<K::Error>>(&[VerifiedCertificate::Delegation(
+                delegation.dupe(),
+            )])
             .await?;
 
+        Ok(AddMemberUpdate {
+            delegation,
+            cgka_ops,
+        })
+    }
+
+    /// Sign a delegation of `can` on `resource` to `to_add`, after checking
+    /// that `resource` is known and that we hold at least `can` on it.
+    async fn sign_delegation(
+        &self,
+        to_add: Identifier,
+        resource: MemberedId,
+        can: Power,
+    ) -> Result<Arc<Verified<Delegation>>, AddMemberError<K::Error>> {
+        self.ensure_known::<AddMemberError<K::Error>>(resource)
+            .await?;
         let issuer = Identifier::from(self.id());
         let subject = Identifier::from(resource);
         let held = self
@@ -1548,21 +1611,9 @@ where
         if can > held {
             return Err(AddMemberError::Escalation { wanted: can, held });
         }
-
         let certificate = Delegation::new(to_add, subject, can);
         let certificate = self.unrevoked(issuer, certificate).await?;
-        let delegation = Arc::new(self.sign_certificate(&certificate).await?);
-
-        let cgka_ops = self
-            .insert_and_reconcile::<AddMemberError<K::Error>>(&[VerifiedCertificate::Delegation(
-                delegation.dupe(),
-            )])
-            .await?;
-
-        Ok(AddMemberUpdate {
-            delegation,
-            cgka_ops,
-        })
+        Ok(Arc::new(self.sign_certificate(&certificate).await?))
     }
 
     /// Revoke `to_revoke`'s membership in `resource`.
@@ -4596,6 +4647,11 @@ pub enum EncryptContentError<T: ContentRef> {
     /// written that content or read it.
     #[error("no key for predecessor {0:?}")]
     NoKeyForPredecessor(T),
+}
+
+/// Whether `cert` is a delegation of less than `Read` power.
+fn is_below_read_delegation<W>(cert: &VerifiedCertificate<W>) -> bool {
+    matches!(cert, VerifiedCertificate::Delegation(d) if !d.payload().power.is_reader())
 }
 
 #[cfg(test)]

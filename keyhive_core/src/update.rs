@@ -20,6 +20,17 @@ pub struct AddMemberUpdate {
     pub cgka_ops: Vec<Verified<CgkaOperation>>,
 }
 
+/// What [`Keyhive::add_member_to_each`](crate::keyhive::Keyhive::add_member_to_each) produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddMembersUpdate {
+    /// One delegation for each resource, in the order given.
+    pub delegations: Vec<Arc<Verified<Delegation>>>,
+
+    /// The CGKA operations issued for each local document whose readers
+    /// this write changed.
+    pub cgka_ops: Vec<Verified<CgkaOperation>>,
+}
+
 /// What [`Keyhive::revoke_member`](crate::keyhive::Keyhive::revoke_member) produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevokeMemberUpdate<T: ContentRef> {
