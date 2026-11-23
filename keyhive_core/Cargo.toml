@@ -75,7 +75,7 @@ tracing-subscriber = { workspace = true, features = ["ansi", "env-filter"] }
 
 [features]
 default = []
-arbitrary = ["dep:arbitrary", "keyline/arbitrary"]
+arbitrary = ["dep:arbitrary", "beekem/arbitrary", "keyline/arbitrary"]
 debug_events = ["prettytable-rs"]
 test_utils = ["beekem/test_utils", "dep:keyline_memory", "proptest", "proptest-derive"]
 
