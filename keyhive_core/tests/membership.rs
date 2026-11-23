@@ -1,10 +1,11 @@
 //! Adding and revoking members.
 
+use beekem::id::TreeId;
 use keyhive_core::{
-    principal::document::id::DocumentId,
+    principal::document::{id::DocumentId, AddMemberError},
     test_utils::{AddMemberUpdateExt, Instance, TestContext, TestError, TestResult as Result},
 };
-use keyline::power::Power::{Admin, Edit, Read};
+use keyline::power::Power::{Admin, Edit, Read, Relay};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Write new content and report which of `cast` can read it.
@@ -1065,5 +1066,92 @@ async fn a_document_has_no_key_for_itself() -> Result<()> {
         BTreeSet::from([alice.id(), bob.id()]),
         "only the members have keys and the document is not one of them"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn adding_a_relay_to_each_document_grants_relay_on_every_one() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let relay = ctx.individual("relay").await?;
+    let a = ctx.doc(&alice, "a").await?;
+    let b = ctx.doc(&alice, "b").await?;
+    let c = ctx.doc(&alice, "c").await?;
+
+    let update = alice
+        .add_member_to_each(relay.id(), &[a.into(), b.into(), c.into()], Relay)
+        .await?;
+
+    for doc in [a, b, c] {
+        assert_eq!(alice.access_for_doc(relay.id(), doc).await?, Some(Relay));
+    }
+    assert!(
+        update.cgka_ops.is_empty(),
+        "a delegation below Read changes no document's readers"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn adding_a_member_to_each_document_grants_nothing_on_an_escalation() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let carol = ctx.individual("carol").await?;
+    let mine = ctx.doc(&alice, "mine").await?;
+    let bobs = ctx.doc(&bob, "bobs").await?;
+    bob.add_member(alice.id(), bobs, Read).await?;
+    ctx.sync_all_unsent().await?;
+
+    match alice
+        .add_member_to_each(carol.id(), &[mine.into(), bobs.into()], Edit)
+        .await
+        .map_err(TestError::from)
+    {
+        Err(TestError::Escalation { wanted, held }) => {
+            assert_eq!((wanted, held), (Edit, Read));
+        }
+        other => panic!("expected an escalation refusal, got {other:?}"),
+    }
+    assert_eq!(alice.access_for_doc(carol.id(), mine).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn adding_a_member_to_each_document_grants_nothing_if_one_check_fails() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let relay = ctx.individual("relay").await?;
+    let mine = ctx.doc(&alice, "mine").await?;
+    let unknown = ctx.doc(&bob, "unknown").await?;
+
+    let result = alice
+        .add_member_to_each(relay.id(), &[mine.into(), unknown.into()], Relay)
+        .await;
+
+    assert!(matches!(result, Err(AddMemberError::NotFound(_))));
+    assert_eq!(alice.access_for_doc(relay.id(), mine).await?, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn adding_a_reader_to_each_document_issues_cgka_ops_for_every_one() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let a = ctx.doc(&alice, "a").await?;
+    let b = ctx.doc(&alice, "b").await?;
+
+    let update = alice
+        .add_member_to_each(bob.id(), &[a.into(), b.into()], Read)
+        .await?;
+
+    let touched: BTreeSet<TreeId> = update
+        .cgka_ops
+        .iter()
+        .map(|op| *op.payload().doc_id())
+        .collect();
+    assert_eq!(touched, BTreeSet::from([a.into(), b.into()]));
     Ok(())
 }
