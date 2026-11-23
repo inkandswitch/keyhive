@@ -243,6 +243,43 @@ test.describe("Keyhive", async () => {
     expect(out.revoked).toStrictEqual([out.dlgId]);
   });
 
+  test("addMemberToEach returns one delegation per resource, in order", async ({
+    page,
+  }) => {
+    const out = await page.evaluate(async (contactCardBytes) => {
+      const { Keyhive, Signer, CiphertextStore, ContactCard, MemberedId, Power } =
+        window.keyhive;
+      const kh = await Keyhive.init(
+        await Signer.generate(),
+        CiphertextStore.newInMemory(),
+        (_) => {},
+      );
+      const groupIds = [await kh.generateGroup([]), await kh.generateGroup([])];
+      const member = (
+        await kh.receiveContactCard(ContactCard.fromBytes(new Uint8Array(contactCardBytes)))
+      ).toIdentifier();
+
+      const dlgs = await kh.addMemberToEach(
+        member,
+        groupIds.map((id) => MemberedId.group(id)),
+        Power.relay(),
+      );
+      return {
+        verified: dlgs.every((d) => d.verify()),
+        can: dlgs.map((d) => d.delegation.can.toString()),
+        delegates: dlgs.map((d) => d.delegation.delegate.toString()),
+        subjects: dlgs.map((d) => d.subjectId.toString()),
+        member: member.toString(),
+        groups: groupIds.map((id) => id.toString()),
+      };
+    }, getTestContactCard());
+
+    expect(out.verified).toBe(true);
+    expect(out.can).toStrictEqual(["Relay", "Relay"]);
+    expect(out.delegates).toStrictEqual([out.member, out.member]);
+    expect(out.subjects).toStrictEqual(out.groups);
+  });
+
   test("a listener sees a membership change as a signed delegation", async ({
     page,
   }) => {
