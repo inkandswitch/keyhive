@@ -82,7 +82,6 @@ use std::{
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::{Debug, Formatter},
     marker::PhantomData,
-    mem,
     sync::Arc,
 };
 
@@ -3735,10 +3734,12 @@ where
                     .iter()
                     .map(|event| Arc::new(StaticEvent::from(event.as_ref())))
                     .collect();
-                drop(mem::replace(
-                    &mut *self.pending_events.lock().await,
-                    next_epoch,
-                ));
+                // Another ingest may have added pending events since this one read
+                // the list, so remove only the events this one replayed and keep the rest.
+                let mut pending = self.pending_events.lock().await;
+                pending.retain(|e| !replayed_pending.contains(&e.digest()));
+                let mut seen: HashSet<_> = pending.iter().map(|e| e.digest()).collect();
+                pending.extend(next_epoch.into_iter().filter(|e| seen.insert(e.digest())));
                 return new_pending;
             }
 
@@ -4766,6 +4767,63 @@ mod tests {
             })
             .collect();
         to.ingest_unsorted_static_events(events).await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn overlapping_ingests_keep_each_others_pending_events() -> TestResult {
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+        let bob_id = introduce(&alice, &bob).await;
+        introduce(&bob, &alice).await;
+        let withheld = alice.generate_doc(vec![], nonempty![[0u8; 32]]).await?;
+        alice.add_member(bob_id, withheld, Power::Read).await?;
+        let first_doc = alice.generate_doc(vec![], nonempty![[1u8; 32]]).await?;
+        let first = alice.add_member(bob_id, first_doc, Power::Read).await?;
+        let second_doc = alice.generate_doc(vec![], nonempty![[2u8; 32]]).await?;
+        let second = alice.add_member(bob_id, second_doc, Power::Read).await?;
+
+        // Each batch has a certificate, which waits for the lock held below, and an
+        // operation on a document whose certificates are withheld, which stays pending.
+        // Holding the lock until both ingests have read the pending list makes them
+        // overlap, so each one writes its leftovers back while the other's are present.
+        let withheld_ops: Vec<StaticEvent<[u8; 32]>> = alice
+            .events_for_agent(bob_id)
+            .await?
+            .into_values()
+            .filter(|event| {
+                matches!(event, Event::CgkaOperation(op)
+                    if DocumentId::from(op.payload().doc_id) == withheld)
+            })
+            .map(StaticEvent::from)
+            .collect();
+        let [stuck_a, stuck_b, ..] = withheld_ops.as_slice() else {
+            return Err("the withheld document has fewer than two operations".into());
+        };
+        let batch = |update: &AddMemberUpdate, stuck: &StaticEvent<[u8; 32]>| {
+            vec![
+                StaticEvent::Delegated(update.delegation.signed().as_ref().clone()),
+                stuck.clone(),
+            ]
+        };
+
+        let reconciled = bob.certificates.reconciled.lock().await;
+        let release = async move {
+            tokio::task::yield_now().await;
+            drop(reconciled);
+        };
+        tokio::join!(
+            bob.ingest_unsorted_static_events(batch(&first, stuck_a)),
+            bob.ingest_unsorted_static_events(batch(&second, stuck_b)),
+            release,
+        );
+
+        let pending = bob.pending_event_hashes().await;
+        assert!(pending.contains(&stuck_a.digest()));
+        assert!(pending.contains(&stuck_b.digest()));
+
+        send(&alice, &bob, true).await?;
+        assert!(bob.pending_event_hashes().await.is_empty());
         Ok(())
     }
 
