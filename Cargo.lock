@@ -1040,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "keyhive_core"
-version = "0.12.2"
+version = "0.12.3"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "keyhive_wasm"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "base64-simd",
  "beekem",
