@@ -1877,11 +1877,12 @@ where
         .await;
         self.finish_write(writing).await;
         let (encrypted_content, application_secret_key, rotation) = encrypted?;
-        let update_op = self.record_rotation(rotation).await;
+        let (update_op, local_cgka_secret) = self.record_rotation(rotation).await;
         Ok((
             EncryptedContentWithUpdate {
                 encrypted_content,
                 update_op,
+                local_cgka_secret,
             },
             application_secret_key,
         ))
@@ -1890,15 +1891,18 @@ where
     /// Keep what a write's rotation produced: its new key among the secrets this
     /// identity's other instances can import. Its update is already in the CGKA
     /// graph.
-    /// Returns the update, for the caller to send.
+    /// Returns the update, for the caller to send, and the new key pair, for
+    /// a caller that persists secrets incrementally.
     async fn record_rotation(
         &self,
         rotation: Option<(Verified<CgkaOperation>, LeafKeyPair)>,
-    ) -> Option<Verified<CgkaOperation>> {
-        let (op, (pk, sk)) = rotation?;
-        self.active.insert_rotated_secret(pk, sk).await;
+    ) -> (Option<Verified<CgkaOperation>>, Option<LeafKeyPair>) {
+        let Some((op, (pk, sk))) = rotation else {
+            return (None, None);
+        };
+        self.active.insert_rotated_secret(pk, sk.clone()).await;
         self.record_cgka_ops([Arc::new(op.clone())]).await;
-        Some(op)
+        (Some(op), Some((pk, sk)))
     }
 
     /// The members of `doc`'s CGKA group. Returns `None` if this replica holds

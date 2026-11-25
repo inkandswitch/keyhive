@@ -595,6 +595,7 @@ impl<F: FutureForm, T: ContentRef, P, C: CiphertextStore<F, T, P>>
 pub struct EncryptedContentWithUpdate<T: ContentRef> {
     pub(crate) encrypted_content: EncryptedContent<Vec<u8>, T>,
     pub(crate) update_op: Option<Verified<CgkaOperation>>,
+    pub(crate) local_cgka_secret: Option<LeafKeyPair>,
 }
 
 impl<T: ContentRef> EncryptedContentWithUpdate<T> {
@@ -604,6 +605,17 @@ impl<T: ContentRef> EncryptedContentWithUpdate<T> {
 
     pub fn update_op(&self) -> Option<&Verified<CgkaOperation>> {
         self.update_op.as_ref()
+    }
+
+    /// The key pair the write sampled for this identity's leaf when it had to
+    /// rotate it, if it did: the public key [`Self::update_op`] publishes and
+    /// its secret.
+    ///
+    /// Local only and not part of [`Self::encrypted_content`]. Replaying the
+    /// update rebuilds the public tree but cannot rebuild this secret, so a
+    /// caller that persists incrementally must store it with the update.
+    pub fn local_cgka_secret(&self) -> Option<&LeafKeyPair> {
+        self.local_cgka_secret.as_ref()
     }
 }
 
