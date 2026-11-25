@@ -1515,11 +1515,13 @@ where
         match contact_card.op() {
             KeyOp::Add(add_op) => {
                 self.event_listener
-                    .on_prekeys_expanded(add_op.signed())
+                    .on_prekeys_expanded(add_op.signed(), None)
                     .await;
             }
             KeyOp::Rotate(rot_op) => {
-                self.event_listener.on_prekey_rotated(rot_op.signed()).await;
+                self.event_listener
+                    .on_prekey_rotated(rot_op.signed(), None)
+                    .await;
             }
         }
 

@@ -3,7 +3,10 @@
 use super::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener};
 use crate::{
     content::heads::ContentHeads,
-    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+    principal::{
+        active::LocalPrekeySecret,
+        individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+    },
 };
 use beekem::operation::CgkaOperation;
 use derive_more::derive::Debug;
@@ -25,6 +28,7 @@ impl<F: FutureForm> PrekeyListener<F> for NoListener {
     fn on_prekeys_expanded<'a>(
         &'a self,
         _e: &'a Arc<verified::Signed<AddKeyOp>>,
+        _local_secret: Option<&'a LocalPrekeySecret>,
     ) -> F::Future<'a, ()> {
         F::ready(())
     }
@@ -32,6 +36,7 @@ impl<F: FutureForm> PrekeyListener<F> for NoListener {
     fn on_prekey_rotated<'a>(
         &'a self,
         _e: &'a Arc<verified::Signed<RotateKeyOp>>,
+        _local_secret: Option<&'a LocalPrekeySecret>,
     ) -> F::Future<'a, ()> {
         F::ready(())
     }

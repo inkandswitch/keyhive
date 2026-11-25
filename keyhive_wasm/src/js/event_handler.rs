@@ -8,7 +8,10 @@ use keyhive_core::{
     content::heads::ContentHeads,
     event::Event,
     listener::{cgka::CgkaListener, membership::MembershipListener, prekey::PrekeyListener},
-    principal::individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+    principal::{
+        active::LocalPrekeySecret,
+        individual::op::{add_key::AddKeyOp, rotate_key::RotateKeyOp},
+    },
 };
 use keyhive_crypto::verified::{self, Verified};
 use keyline::{delegation::Delegation, revocation::Revocation};
@@ -39,6 +42,7 @@ impl PrekeyListener<Local> for JsEventHandler {
     fn on_prekeys_expanded<'a>(
         &'a self,
         e: &'a Arc<verified::Signed<AddKeyOp>>,
+        _local_secret: Option<&'a LocalPrekeySecret>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeysExpanded(e.dupe()).into()) })
     }
@@ -46,6 +50,7 @@ impl PrekeyListener<Local> for JsEventHandler {
     fn on_prekey_rotated<'a>(
         &'a self,
         e: &'a Arc<verified::Signed<RotateKeyOp>>,
+        _local_secret: Option<&'a LocalPrekeySecret>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move { self.call(Event::PrekeyRotated(e.dupe()).into()) })
     }
