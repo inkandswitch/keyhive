@@ -564,6 +564,10 @@ pub enum GenerateDocError<E: core::error::Error + 'static> {
 
     #[error("no prekey operation of the document's owner publishes the prekey it is added with")]
     OwnerPrekeyUnproven,
+
+    /// A document with the reserved identity is already held.
+    #[error("document {0} already exists")]
+    AlreadyExists(DocumentId),
 }
 
 #[derive(Debug, Error)]

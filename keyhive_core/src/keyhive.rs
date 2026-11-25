@@ -294,7 +294,7 @@ where
         coparents: Vec<Identifier>,
     ) -> Result<GroupId, GenerateGroupError<K::Error>> {
         let (group_id, roots) = self
-            .found::<GenerateGroupError<K::Error>>(coparents)
+            .found::<GenerateGroupError<K::Error>>(coparents, None)
             .await?;
         let group_id = GroupId(group_id);
         self.insert_certificates(&roots).await?;
@@ -303,11 +303,14 @@ where
 
     /// A fresh subject's identifier, and root edges making the active individual
     /// and `coparents` its admins, signed with its key, which is discarded.
+    ///
+    /// The subject's key is `reserved` if given, else freshly generated.
     async fn found<
         E: From<NotFound> + From<KeylineStorageError<K::Error>> + From<CertificateError>,
     >(
         &self,
         coparents: Vec<Identifier>,
+        reserved: Option<ed25519_dalek::SigningKey>,
     ) -> Result<(Identifier, Vec<VerifiedCertificate<ContentHeads<T>>>), E> {
         for id in &coparents {
             if !self.has_agent(*id).await? {
@@ -315,11 +318,16 @@ where
             }
         }
         let creators = std::iter::once(Identifier::from(self.id())).chain(coparents);
-        let (roots, subject) = {
-            let mut csprng = self.csprng.lock().await;
-            EphemeralSigner::with_signer(&mut *csprng, |subject, signer| {
+        let (roots, subject) = match reserved {
+            Some(key) => EphemeralSigner::with_signer_key(key, |subject, signer| {
                 root_edges(&*signer, subject, creators)
-            })
+            }),
+            None => {
+                let mut csprng = self.csprng.lock().await;
+                EphemeralSigner::with_signer(&mut *csprng, |subject, signer| {
+                    root_edges(&*signer, subject, creators)
+                })
+            }
         };
         Ok((
             subject,
@@ -1317,8 +1325,48 @@ where
         coparents: Vec<Identifier>,
         initial_content_heads: NonEmpty<T>,
     ) -> Result<DocumentId, GenerateDocError<K::Error>> {
-        let (doc_id, roots) = self.found::<GenerateDocError<K::Error>>(coparents).await?;
-        let doc_id = DocumentId(doc_id);
+        let (doc_id, roots) = self
+            .found::<GenerateDocError<K::Error>>(coparents, None)
+            .await?;
+        self.generate_doc_from_roots(DocumentId(doc_id), roots, initial_content_heads)
+            .await
+    }
+
+    /// [`Self::generate_doc`] for a document whose identity was reserved ahead
+    /// of time: its id is the verifying key of `reserved_signer`.
+    ///
+    /// The caller must have durably kept the key between reserving the id and
+    /// this call, so a crash in between does not strand the id. The key signs
+    /// the document's root edges and is then dropped, as a generated one is.
+    /// Fails with [`GenerateDocError::AlreadyExists`] if this replica already
+    /// holds `reserved_signer`'s document, so a retry after a crash finds the
+    /// first attempt's document instead of founding it twice.
+    #[instrument(skip_all)]
+    pub async fn generate_doc_with_reserved_signer(
+        &self,
+        reserved_signer: ed25519_dalek::SigningKey,
+        coparents: Vec<Identifier>,
+        initial_content_heads: NonEmpty<T>,
+    ) -> Result<DocumentId, GenerateDocError<K::Error>> {
+        let doc_id = DocumentId(Identifier::from(&reserved_signer));
+        if self.has_document(doc_id).await {
+            return Err(GenerateDocError::AlreadyExists(doc_id));
+        }
+        let (doc_id, roots) = self
+            .found::<GenerateDocError<K::Error>>(coparents, Some(reserved_signer))
+            .await?;
+        self.generate_doc_from_roots(DocumentId(doc_id), roots, initial_content_heads)
+            .await
+    }
+
+    /// Found `doc_id` from the root edges that make the active individual and
+    /// the coparents its admins.
+    async fn generate_doc_from_roots(
+        &self,
+        doc_id: DocumentId,
+        roots: Vec<VerifiedCertificate<ContentHeads<T>>>,
+        initial_content_heads: NonEmpty<T>,
+    ) -> Result<DocumentId, GenerateDocError<K::Error>> {
         let mut fresh = Vec::new();
         let mut ops = Vec::new();
         let result = {
