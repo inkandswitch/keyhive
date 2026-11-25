@@ -205,7 +205,7 @@ async fn a_replicas_pcs_key_hash_is_the_one_its_ciphertexts_carry() -> Result<()
 
     let ct = ctx.encrypt(&alice, design_doc, b"one").await?;
     assert_eq!(
-        alice.try_pcs_key_hash(design_doc).await,
+        alice.try_pcs_key_hash(design_doc).await.ok(),
         Some(ct.group_secret_hash.coerce())
     );
     Ok(())

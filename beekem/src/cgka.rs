@@ -299,6 +299,26 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         &self.ops_graph.cgka_op_heads
     }
 
+    /// The members who issued the concurrent updates that conflict at the tree
+    /// root, sorted and without duplicates. Empty when the root is not
+    /// conflicted.
+    ///
+    /// A conflicted root has no group secret until an update that has seen all
+    /// of them covers it, so these are the members whose updates are not yet
+    /// covered.
+    pub fn root_conflict_issuers(&self) -> Vec<MemberId> {
+        let mut issuers: Vec<MemberId> = self
+            .tree
+            .root_conflict_origins()
+            .iter()
+            .filter_map(|origin| self.op(origin))
+            .map(|op| MemberId::from(op.issuer()))
+            .collect();
+        issuers.sort();
+        issuers.dedup();
+        issuers
+    }
+
     /// The operation in the CGKA graph with this digest.
     pub fn op(&self, digest: &Digest<CgkaOperation>) -> Option<&Arc<Verified<CgkaOperation>>> {
         self.ops_graph.cgka_ops.get(digest)

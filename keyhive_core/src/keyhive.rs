@@ -7,7 +7,7 @@ use crate::{
     cgka::{
         certificate_sets::{CertificateSets, CitationSet},
         citations::{citation_of, KeylineImplicitRemovesProtocol, Members, SharedCitations},
-        AllCgkaOps, Cgka,
+        AllCgkaOps, Cgka, PcsKeyError,
     },
     contact_card::ContactCard,
     content::heads::ContentHeads,
@@ -1867,10 +1867,17 @@ where
         Ok(self.cgka_group_members(doc.into(), &state).await.ok())
     }
 
-    /// The hash of `doc`'s current PCS key. Returns `None` if it has no key to hash.
-    pub async fn try_pcs_key_hash(&self, doc: DocumentId) -> Option<Digest<PcsKey>> {
-        let handle = self.document_state(doc).await?;
-        let hash = handle.lock().await.cgka_mut().try_pcs_key_hash().ok();
+    /// The hash of `doc`'s current PCS key.
+    ///
+    /// The error says why there is none, notably [`PcsKeyError::RootConflicted`]
+    /// with the issuers of the concurrent updates that conflict at the root.
+    pub async fn try_pcs_key_hash(&self, doc: DocumentId) -> Result<Digest<PcsKey>, PcsKeyError> {
+        let handle = self
+            .member_document(doc)
+            .await
+            .map_err(|_| PcsKeyError::UnknownDocument)?
+            .ok_or(PcsKeyError::Unjoined)?;
+        let hash = handle.lock().await.cgka_mut().try_pcs_key_hash();
         hash
     }
 

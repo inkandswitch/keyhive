@@ -38,6 +38,29 @@ use std::{
 };
 use tracing::instrument;
 
+/// Why a document's current PCS key could not be derived.
+#[derive(Debug, thiserror::Error)]
+pub enum PcsKeyError {
+    /// This replica has nothing for the document.
+    #[error("unknown document")]
+    UnknownDocument,
+
+    /// This replica holds the document's CGKA graph but is not a member of
+    /// it, so has no keys.
+    #[error("the document's CGKA graph is held unjoined")]
+    Unjoined,
+
+    /// Concurrent updates each wrote a root and no later update has covered
+    /// them. `issuers` are the members that issued them.
+    #[error("the tree root is conflicted by concurrent updates from {issuers:?}")]
+    RootConflicted { issuers: Vec<IndividualId> },
+
+    /// The key cannot be derived for another reason, such as a missing leaf
+    /// secret or a path secret that does not decrypt.
+    #[error("no PCS key derivable: {0}")]
+    Underivable(#[from] CgkaError),
+}
+
 /// Exposes CGKA (Continuous Group Key Agreement) operations like deriving
 /// a new application secret, rotating keys, and adding and removing members
 /// from the group.
@@ -83,9 +106,29 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         self.0.ops_count()
     }
 
-    pub fn try_pcs_key_hash(&mut self) -> Result<Digest<PcsKey>, CgkaError> {
+    /// The hash of the PCS key at the tree root.
+    ///
+    /// A root conflicted by concurrent updates is
+    /// [`PcsKeyError::RootConflicted`], naming the members that issued them.
+    /// Every other reason the key cannot be derived is carried in
+    /// [`PcsKeyError::Underivable`].
+    pub fn try_pcs_key_hash(&mut self) -> Result<Digest<PcsKey>, PcsKeyError> {
+        let issuers = self.root_conflict_issuers();
+        if !issuers.is_empty() {
+            return Err(PcsKeyError::RootConflicted { issuers });
+        }
         let pcs_key = self.0.decrypt_current_group_secret()?;
         Ok(pcs_key.digest())
+    }
+
+    /// The members who issued the concurrent updates that conflict at the tree
+    /// root, sorted by id. Empty when the root is not conflicted.
+    pub fn root_conflict_issuers(&self) -> Vec<IndividualId> {
+        self.0
+            .root_conflict_issuers()
+            .into_iter()
+            .map(IndividualId::from)
+            .collect()
     }
 
     pub fn owner_sks(&self) -> &ShareKeyMap {

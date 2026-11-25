@@ -1,6 +1,7 @@
 //! Syncing events between keyhives.
 
 use keyhive_core::{
+    cgka::PcsKeyError,
     event::Event,
     principal::{document::id::DocumentId, individual::id::IndividualId},
     test_utils::{
@@ -306,16 +307,54 @@ async fn a_member_without_the_cgka_graph_derives_no_pcs_key() -> Result<()> {
         .await?;
 
     assert!(
-        bob.try_pcs_key_hash(design_doc).await.is_none(),
+        matches!(
+            bob.try_pcs_key_hash(design_doc).await,
+            Err(PcsKeyError::UnknownDocument | PcsKeyError::Unjoined)
+        ),
         "bob knows the document but has no CGKA graph to derive from"
     );
 
     ctx.sync(&alice, &bob).await?;
 
     assert!(
-        bob.try_pcs_key_hash(design_doc).await.is_some(),
+        bob.try_pcs_key_hash(design_doc).await.is_ok(),
         "the CGKA operations let him derive one"
     );
+    Ok(())
+}
+
+/// Two members who update their keys without having seen each other's update
+/// leave the root with a version from each. The conflict names both issuers
+/// and holds until an update that has seen both.
+#[tokio::test]
+async fn concurrent_updates_conflict_the_root_until_one_covers_them() -> Result<()> {
+    let mut ctx = TestContext::new().await;
+    let alice = ctx.individual("alice").await?;
+    let bob = ctx.individual("bob").await?;
+    let design_doc = ctx.doc(&alice, "design_doc").await?;
+    alice.add_member(bob.id(), design_doc, Edit).await?;
+    ctx.sync(&alice, &bob).await?;
+    alice.force_pcs_update(design_doc).await?;
+    bob.force_pcs_update(design_doc).await?;
+    ctx.sync(&alice, &bob).await?;
+    ctx.sync(&bob, &alice).await?;
+
+    let mut both = vec![alice.id(), bob.id()];
+    both.sort();
+    for who in [&alice, &bob] {
+        match who.try_pcs_key_hash(design_doc).await {
+            Err(PcsKeyError::RootConflicted { issuers }) => {
+                assert_eq!(issuers, both, "{} names both issuers", who.name())
+            }
+            other => panic!("{} expected a conflicted root, got {other:?}", who.name()),
+        }
+    }
+
+    alice.force_pcs_update(design_doc).await?;
+    ctx.sync(&alice, &bob).await?;
+    let on_alice = alice.try_pcs_key_hash(design_doc).await.map_err(|e| e.to_string())?;
+    let on_bob = bob.try_pcs_key_hash(design_doc).await.map_err(|e| e.to_string())?;
+    assert_eq!(on_alice, on_bob, "the covered root derives one key");
     Ok(())
 }
 
