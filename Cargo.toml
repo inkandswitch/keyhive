@@ -11,6 +11,8 @@ members = [
   "keyline_memory",
   "test-utils",
 ]
+# Vendored upstream crates; see `[patch.crates-io]`.
+exclude = ["vendor"]
 
 [workspace.package]
 authors = [
@@ -49,7 +51,11 @@ derive_more = { version = "1.0", default-features = false, features = [
   "try_into",
 ] }
 divan = "0.1.15"
-dupe = "0.9.0"
+# Defaults off so `no_std` crates can inherit it. Crates turn on `alloc` for
+# the `Arc`/`Rc` impls and `derive` for the macros; nothing needs `std`'s extra
+# impls (`Instant`, `SystemTime`, `ThreadId`). Patched to the vendored copy
+# below until `no_std` support is released.
+dupe = { version = "0.9.2", default-features = false }
 ed25519-dalek = { version = "2.1", default-features = false }
 from_js_ref = "0.1.3"
 future_form = "0.3.1"
@@ -99,6 +105,16 @@ x25519-dalek = { version = "2.0", features = [
   "static_secrets",
 ] }
 zeroize = { version = "1.8", default-features = false, features = ["alloc", "derive"] }
+
+# `dupe` (and `dupe_derive`) with `no_std` support, vendored from the
+# `dupe-no_std` branch of https://github.com/expede/buck2. It lives in the
+# buck2 monorepo, which is enormous: a git dependency makes Cargo clone all of
+# it. The PR to merge it upstream is https://github.com/meta/buck2/pull/1664.
+# Once it is released as `dupe` 0.9.2, delete this section, `vendor/`, and the
+# `exclude` above. See `vendor/README.md`.
+[patch.crates-io]
+dupe = { path = "vendor/dupe" }
+dupe_derive = { path = "vendor/dupe_derive" }
 
 [workspace.lints.clippy]
 # Long doc list continuations are indented for reading as plain text.

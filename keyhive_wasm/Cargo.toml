@@ -28,7 +28,7 @@ wasm_refgen = { workspace = true }
 base64-simd = { workspace = true }
 blake3 = { workspace = true }
 derive_more = { workspace = true, features = ["std"] }
-dupe = { workspace = true }
+dupe = { workspace = true, features = ["alloc", "derive"] }
 future_form = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["fast", "rand_core", "std", "zeroize"] }
 futures = { workspace = true, features = ["async-await", "executor", "std"] }
