@@ -10,10 +10,14 @@ begin
  *   app_key   = KDF_app(group_secret, H(preds), content_ref)
  *   enc_key   = KDF_enc(app_key)
  *   nonce_key = KDF_nonce(app_key)
- *   aad       = <hdr(doc_id, <content_ref, preds, H(group_secret)>), '0', 'last'>
+ *   header    = <content_ref, H(preds), H(group_secret), origin>
+ *   aad       = <hdr(doc_id, header), '0', 'last'>
  *   body      = <ancestor, payload>         ancestor = 'none' | <ref, app_key>
  *   nonce     = MAC(nonce_key, <aad, body>)
- *   block     = <content_ref, preds, H(group_secret), nonce, AEAD(enc_key, nonce, aad, body)>
+ *   block     = <header..., nonce, AEAD(enc_key, nonce, aad, body)>
+ *
+ * `origin` is the group secret's origin hash: public, in the header, and not
+ * an input to any key.
  *
  * A reader gets a block's key in one of two ways: from the group secret (a
  * member, through the CGKA), or from a successor's envelope (causal
@@ -32,11 +36,16 @@ begin
  *   Salamanders"): rule Forge_Ciphertext lets the adversary make one
  *   ciphertext that opens under two keys it knows. Keyhive commits with the
  *   synthetic nonce instead, a keyed BLAKE3 hash the reader recomputes and
- *   checks. The model keeps the two apart, so one_ciphertext_one_body shows
- *   that the nonce check alone is what commits. The keyed hash is
- *   collision-free, as every symbolic hash is.
+ *   checks. The model keeps the two apart: key_commitment shows the nonce
+ *   check is enough to commit, and commitment_needs_the_nonce_check that
+ *   without it the AEAD does not. The keyed hash is collision-free, as every
+ *   symbolic hash is, so its truncation to 24 bytes is not modelled.
  *
- * Build with -D=NO_NONCE_CHECK to drop the reader's nonce check.
+ * Builds:
+ *
+ * - -D=NO_NONCE_CHECK drops the readers' nonce check.
+ * - -D=FORGE_SAME_KEY lets Forge_Ciphertext use one key twice, which a real
+ *   AEAD does not allow.
  */
 
 builtins: hashing
@@ -55,14 +64,14 @@ equations:
 
 /*
  * Proof search tactics. A block's header and nonce are public, and the
- * adversary can learn refs, document ids, hashes, header digests and nonces
- * from many rules. Solving those goals first explores every way it could
- * have read something off the wire, and the search does not end.
+ * adversary can learn refs, document ids, origins, hashes, header digests and
+ * nonces from many rules. Solving those goals first explores every way it
+ * could have read something off the wire, and the search does not end.
  */
 tactic: wire_last
 presort: s
 deprio:
-    regex "!KU\( ~(r|pr|doc)" | regex "!KU\( h\(" | regex "!KU\( hdr\(" | regex "!KU\( mac\("
+    regex "!KU\( ~(r|pr|doc|o)" | regex "!KU\( h\(" | regex "!KU\( hdr\(" | regex "!KU\( mac\("
 
 /*
  * As wire_last, but resolve a block's premise first: it names the block that
@@ -73,26 +82,26 @@ presort: s
 prio:
     regex "!Block\( "
 deprio:
-    regex "!KU\( ~(r|pr|doc)" | regex "!KU\( h\(" | regex "!KU\( hdr\(" | regex "!KU\( mac\("
+    regex "!KU\( ~(r|pr|doc|o)" | regex "!KU\( h\(" | regex "!KU\( hdr\(" | regex "!KU\( mac\("
 
-/* A document and its group secret. Any member holds the group secret. */
+/* A document, its group secret and that secret's origin. Any member holds the group secret. */
 rule Create_Document:
-    [ Fr(~doc), Fr(~gs) ]
-  --[ Document(~doc), GroupSecret(~doc, ~gs) ]->
-    [ !Group(~doc, ~gs), Out(~doc) ]
+    [ Fr(~doc), Fr(~gs), Fr(~o) ]
+  --[ GroupSecret(~doc, ~gs) ]->
+    [ !Group(~doc, ~gs, ~o), Out(<~doc, ~o>) ]
 
 /* A member writes the first block of a history. */
 rule Write_Genesis:
-    let preds = 'genesis'
-        k     = kdf_app(gs, h(preds), ~r)
-        a     = <hdr(doc, <~r, preds, h(gs)>), '0', 'last'>
+    let ph    = h('genesis')
+        k     = kdf_app(gs, ph, ~r)
+        a     = <hdr(doc, <~r, ph, h(gs), o>), '0', 'last'>
         body  = <'none', ~p>
         n     = mac(kdf_nonce(k), <a, body>)
-        block = <~r, preds, h(gs), n, senc(kdf_enc(k), n, a, body)>
+        block = <~r, ph, h(gs), o, n, senc(kdf_enc(k), n, a, body)>
     in
-    [ !Group(doc, gs), Fr(~r), Fr(~p) ]
-  --[ Write(doc, ~r, body), Payload(doc, ~r, ~p, <~r, 'genesis'>), Key(doc, ~r, k, <~r, 'genesis'>) ]->
-    [ !Block(doc, ~r, preds, k, <~r, 'genesis'>), Out(block) ]
+    [ !Group(doc, gs, o), Fr(~r), Fr(~p) ]
+  --[ Write(doc, ~r, ph, body), Payload(doc, ~r, ~p, <~r, 'genesis'>), Key(doc, ~r, k, <~r, 'genesis'>) ]->
+    [ !Block(doc, ~r, ph, k, <~r, 'genesis'>), Out(block) ]
 
 /*
  * A member writes a block after `pr`, carrying pr's key in its envelope.
@@ -102,20 +111,20 @@ rule Write_Genesis:
  * deconstructions of the envelope.
  */
 rule Write_Child:
-    let preds = ~pr
-        k     = kdf_app(gs, h(preds), ~r)
-        a     = <hdr(doc, <~r, preds, h(gs)>), '0', 'last'>
-        body  = <<~pr, kdf_app(gs, h(ppreds), ~pr)>, ~p>
+    let ph    = h(~pr)
+        k     = kdf_app(gs, ph, ~r)
+        a     = <hdr(doc, <~r, ph, h(gs), o>), '0', 'last'>
+        body  = <<~pr, kdf_app(gs, h(pp), ~pr)>, ~p>
         n     = mac(kdf_nonce(k), <a, body>)
-        block = <~r, preds, h(gs), n, senc(kdf_enc(k), n, a, body)>
+        block = <~r, ph, h(gs), o, n, senc(kdf_enc(k), n, a, body)>
     in
-    [ !Group(doc, gs), !Block(doc, ~pr, ppreds, kdf_app(gs, h(ppreds), ~pr), pl), Fr(~r), Fr(~p) ]
-  --[ Write(doc, ~r, body), Payload(doc, ~r, ~p, <~r, pl>), Key(doc, ~r, k, <~r, pl>), Parent(doc, ~r, ~pr) ]->
-    [ !Block(doc, ~r, preds, k, <~r, pl>), Out(block) ]
+    [ !Group(doc, gs, o), !Block(doc, ~pr, h(pp), kdf_app(gs, h(pp), ~pr), pl), Fr(~r), Fr(~p) ]
+  --[ Write(doc, ~r, ph, body), Payload(doc, ~r, ~p, <~r, pl>), Key(doc, ~r, k, <~r, pl>), Parent(doc, ~r, ~pr) ]->
+    [ !Block(doc, ~r, ph, k, <~r, pl>), Out(block) ]
 
 /* A member turns malicious, or its device is compromised. */
 rule Reveal_Group_Secret:
-    [ !Group(doc, gs) ]
+    [ !Group(doc, gs, o) ]
   --[ RevealGroup(doc) ]->
     [ Out(gs) ]
 
@@ -125,7 +134,7 @@ rule Reveal_Group_Secret:
  * for the lemmas: no rule reads it.
  */
 rule Reveal_Block_Key:
-    [ !Block(doc, r, preds, k, lineage) ]
+    [ !Block(doc, r, ph, k, lineage) ]
   --[ RevealKey(doc, r, lineage) ]->
     [ Out(k) ]
 
@@ -138,38 +147,44 @@ rule Reveal_Block_Key:
  */
 rule Forge_Ciphertext:
     [ In(<k1, n, a1, m1>), In(<k2, a2, m2>), Fr(~c) ]
-  --[ Forged(~c) ]->
+  --[ Forged(~c), ForgeKeys(k1, k2) ]->
     [ !Forgery(~c, k1, n, a1, m1), !Forgery(~c, k2, n, a2, m2), Out(~c) ]
+
+#ifdef not FORGE_SAME_KEY
+restriction forgeries_use_two_keys:
+  " All k1 k2 #i. ForgeKeys(k1, k2) @ #i ==> not (k1 = k2) "
+#endif
 
 /*
  * Readers. Each comes in two forms: a ciphertext that senc made, and one that
  * Forge_Ciphertext made. NonceCheck recomputes the synthetic nonce from what
- * was decrypted, and the restriction refuses a mismatch.
+ * was decrypted, and the restriction refuses a mismatch. Accept records the
+ * application key and AAD a ciphertext was opened with.
  */
 
-#ifdef NO_NONCE_CHECK
-#else
+#ifdef not NO_NONCE_CHECK
 restriction nonce_matches:
   " All n m #i. NonceCheck(n, m) @ #i ==> n = m "
 #endif
 
 /* A member opens a block with a key derived from the group secret. */
 rule Read_Member:
-    let k     = kdf_app(gs, h(preds), r)
-        a     = <hdr(doc, <r, preds, h(gs)>), '0', 'last'>
-        block = <r, preds, h(gs), n, senc(kdf_enc(k), n, a, body)>
+    let k     = kdf_app(gs, ph, r)
+        a     = <hdr(doc, <r, ph, h(gs), o>), '0', 'last'>
+        c     = senc(kdf_enc(k), n, a, body)
+        block = <r, ph, h(gs), o, n, c>
     in
-    [ !Group(doc, gs), In(block) ]
-  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(block, body), AcceptMember(doc, r, body) ]->
+    [ !Group(doc, gs, o), In(block) ]
+  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(<n, c>, k, a, body), AcceptMember(doc, r, ph, body) ]->
     [ !Opened(doc, r, body) ]
 
 rule Read_Member_Forged:
-    let k     = kdf_app(gs, h(preds), r)
-        a     = <hdr(doc, <r, preds, h(gs)>), '0', 'last'>
-        block = <r, preds, h(gs), n, c>
+    let k     = kdf_app(gs, ph, r)
+        a     = <hdr(doc, <r, ph, h(gs), o>), '0', 'last'>
+        block = <r, ph, h(gs), o, n, c>
     in
-    [ !Group(doc, gs), In(block), !Forgery(c, kdf_enc(k), n, a, body) ]
-  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(block, body), AcceptMember(doc, r, body) ]->
+    [ !Group(doc, gs, o), In(block), !Forgery(c, kdf_enc(k), n, a, body) ]
+  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(<n, c>, k, a, body), AcceptMember(doc, r, ph, body) ]->
     [ !Opened(doc, r, body) ]
 
 /*
@@ -177,40 +192,39 @@ rule Read_Member_Forged:
  * It does not hold the group secret, so it takes the header as it comes.
  */
 rule Read_Envelope:
-    let a     = <hdr(doc, <r, preds, gsh>), '0', 'last'>
-        block = <r, preds, gsh, n, senc(kdf_enc(k), n, a, body)>
+    let a     = <hdr(doc, <r, ph, gsh, o>), '0', 'last'>
+        c     = senc(kdf_enc(k), n, a, body)
+        block = <r, ph, gsh, o, n, c>
     in
     [ !Opened(doc, cr, <<r, k>, cp>), In(block) ]
-  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(block, body), AcceptEnvelope(doc, cr, <<r, k>, cp>, r, body) ]->
+  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(<n, c>, k, a, body), AcceptEnvelope(doc, cr, <<r, k>, cp>, r, ph, body) ]->
     [ !Opened(doc, r, body) ]
 
 rule Read_Envelope_Forged:
-    let a     = <hdr(doc, <r, preds, gsh>), '0', 'last'>
-        block = <r, preds, gsh, n, c>
+    let a     = <hdr(doc, <r, ph, gsh, o>), '0', 'last'>
+        block = <r, ph, gsh, o, n, c>
     in
     [ !Opened(doc, cr, <<r, k>, cp>), In(block), !Forgery(c, kdf_enc(k), n, a, body) ]
-  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(block, body), AcceptEnvelope(doc, cr, <<r, k>, cp>, r, body) ]->
+  --[ NonceCheck(n, mac(kdf_nonce(k), <a, body>)), Accept(<n, c>, k, a, body), AcceptEnvelope(doc, cr, <<r, k>, cp>, r, ph, body) ]->
     [ !Opened(doc, r, body) ]
 
 /*
- * In a lemma, KU(t) says the adversary knows t. K(t) says it sent t to a
- * protocol rule, which an adversary that only reads need never do: a
- * secrecy lemma stated with K() has a weaker hypothesis than intended, and
- * its induction hypothesis never applies to a key the adversary learned
- * without sending it.
+ * Lemmas write KU(t), "the adversary knows t", never K(t) (formal/README.md,
+ * "Modelling Conventions").
  *
  * Who holds which keys is said with RevealKey and the block's lineage:
  * `lr = lx | lr << lx` holds when the block with lineage lr is the revealed
- * block or one of its ancestors.
+ * block or one of its ancestors. Every leak must come before what it
+ * explains.
  */
 
 /* Sanity: a member opens a block, then its parent through the envelope. */
 lemma executable_causal_read:
   exists-trace
-  " Ex doc r pr b pb #i #j #k.
+  " Ex doc r ph pr pph b pb #i #j #k.
       Parent(doc, r, pr) @ #i
-    & AcceptMember(doc, r, b) @ #j
-    & AcceptEnvelope(doc, r, b, pr, pb) @ #k
+    & AcceptMember(doc, r, ph, b) @ #j
+    & AcceptEnvelope(doc, r, b, pr, pph, pb) @ #k
     & not (Ex d #l. RevealGroup(d) @ #l)
     & not (Ex d x lx #l. RevealKey(d, x, lx) @ #l)
     & not (Ex c #l. Forged(c) @ #l)
@@ -219,17 +233,38 @@ lemma executable_causal_read:
 /* Sanity: a member accepts a forged ciphertext, so the forgery rule is usable. */
 lemma executable_forged_read:
   exists-trace
-  " Ex doc r preds gsh n c b #i #j.
+  " Ex doc r ph n c k a b #i #j.
       Forged(c) @ #j
-    & Accept(<r, preds, gsh, n, c>, b) @ #i
-    & AcceptMember(doc, r, b) @ #i
+    & Accept(<n, c>, k, a, b) @ #i
+    & AcceptMember(doc, r, ph, b) @ #i
   "
 
-/* Key commitment: a ciphertext opens to one body, whoever opens it and
- * wherever they got the key. */
-lemma one_ciphertext_one_body:
-  " All blk b1 b2 #i #j.
-      Accept(blk, b1) @ #i & Accept(blk, b2) @ #j ==> b1 = b2 "
+/*
+ * Key commitment: a ciphertext and nonce open under one key, with one AAD,
+ * to one body, whoever opens them and wherever they got the key.
+ */
+lemma key_commitment:
+  " All n c k1 k2 a1 a2 b1 b2 #i #j.
+      Accept(<n, c>, k1, a1, b1) @ #i & Accept(<n, c>, k2, a2, b2) @ #j
+      ==>
+        k1 = k2 & a1 = a2 & b1 = b2
+  "
+
+#ifdef NO_NONCE_CHECK
+/*
+ * Without the nonce check, a holder of one block's key makes one ciphertext
+ * that two readers open to two bodies: a member under the key it derives, and
+ * an envelope reader under a key a forged carrier names.
+ */
+lemma commitment_needs_the_nonce_check:
+  exists-trace
+  " Ex doc r ph cr cb n c k1 k2 a b1 b2 #i #j.
+      Accept(<n, c>, k1, a, b1) @ #i & AcceptMember(doc, r, ph, b1) @ #i
+    & Accept(<n, c>, k2, a, b2) @ #j & AcceptEnvelope(doc, cr, cb, r, ph, b2) @ #j
+    & not (b1 = b2)
+    & not (Ex d #l. RevealGroup(d) @ #l)
+  "
+#endif
 
 /*
  * Sanity: the adversary can decrypt. A read capability for a child reveals
@@ -253,8 +288,8 @@ lemma key_origin [reuse, heuristic={wire_last}]:
   " All doc r k lr #i #j.
       Key(doc, r, k, lr) @ #i & KU(k) @ #j
       ==>
-        (Ex #l. RevealGroup(doc) @ #l)
-      | (Ex #l. RevealKey(doc, r, lr) @ #l)
+        (Ex #l. RevealGroup(doc) @ #l & #l < #j)
+      | (Ex #l. RevealKey(doc, r, lr) @ #l & #l < #j)
       | (Ex c kc lc #x #p #q.
             Parent(doc, c, r) @ #x & Key(doc, c, kc, lc) @ #p & KU(kc) @ #q & #p < #j & #q < #j)
   "
@@ -277,8 +312,8 @@ lemma keys_flow_only_backwards [use_induction, reuse]:
   " All doc r k lr #i #j.
       Key(doc, r, k, lr) @ #i & KU(k) @ #j
       ==>
-        (Ex #l. RevealGroup(doc) @ #l)
-      | (Ex x lx #l. RevealKey(doc, x, lx) @ #l & (lr = lx | lr << lx))
+        (Ex #l. RevealGroup(doc) @ #l & #l < #j)
+      | (Ex x lx #l. RevealKey(doc, x, lx) @ #l & #l < #j & (lr = lx | lr << lx))
   "
 
 /* The same for payloads: what the keys protect follows the keys. */
@@ -286,8 +321,8 @@ lemma payload_secrecy:
   " All doc r p lr #i #j.
       Payload(doc, r, p, lr) @ #i & KU(p) @ #j
       ==>
-        (Ex #l. RevealGroup(doc) @ #l)
-      | (Ex x lx #l. RevealKey(doc, x, lx) @ #l & (lr = lx | lr << lx))
+        (Ex #l. RevealGroup(doc) @ #l & #l < #j)
+      | (Ex x lx #l. RevealKey(doc, x, lx) @ #l & #l < #j & (lr = lx | lr << lx))
   "
 
 /*
@@ -296,26 +331,27 @@ lemma payload_secrecy:
  * ref gets no key without the group secret.
  */
 lemma app_key_origin [reuse, heuristic={blocks_first}]:
-  " All doc gs preds r #c #j.
-      GroupSecret(doc, gs) @ #c & KU(kdf_app(gs, preds, r)) @ #j
+  " All doc gs ph r #c #j.
+      GroupSecret(doc, gs) @ #c & KU(kdf_app(gs, ph, r)) @ #j
       ==>
-        (Ex #l. RevealGroup(doc) @ #l)
-      | (Ex lr #w. Key(doc, r, kdf_app(gs, preds, r), lr) @ #w)
+        (Ex #l. RevealGroup(doc) @ #l & #l < #j)
+      | (Ex lr #w. Key(doc, r, kdf_app(gs, ph, r), lr) @ #w & #w < #j)
   "
 
 /*
- * What a member opens is what an honest member wrote, unless the group
- * secret leaked or the adversary holds that block's key: a read capability
- * for it or a descendant. Holding a key is enough to forge under it.
+ * What a member opens, at the causal position it opens it, is what an honest
+ * member wrote, unless the group secret leaked or the adversary holds that
+ * block's key: a read capability for it or a descendant. Holding a key is
+ * enough to forge under it.
  */
 lemma member_reads_are_authentic [heuristic={wire_last}]:
-  " All doc r b #i.
-      AcceptMember(doc, r, b) @ #i
+  " All doc r ph b #i.
+      AcceptMember(doc, r, ph, b) @ #i
       ==>
-        (Ex #j. Write(doc, r, b) @ #j)
-      | (Ex #j. RevealGroup(doc) @ #j)
+        (Ex #j. Write(doc, r, ph, b) @ #j & #j < #i)
+      | (Ex #j. RevealGroup(doc) @ #j & #j < #i)
       | (Ex k lr x lx #v #l.
-            Key(doc, r, k, lr) @ #v & RevealKey(doc, x, lx) @ #l & (lr = lx | lr << lx))
+            Key(doc, r, k, lr) @ #v & RevealKey(doc, x, lx) @ #l & #l < #i & (lr = lx | lr << lx))
   "
 
 /*
@@ -330,13 +366,13 @@ lemma member_reads_are_authentic [heuristic={wire_last}]:
  * walk back from an authentic block.
  */
 lemma envelope_step_is_authentic:
-  " All doc cr cb r b #i #w.
-      AcceptEnvelope(doc, cr, cb, r, b) @ #i & Write(doc, cr, cb) @ #w
+  " All doc cr cph cb r ph b #i #w.
+      AcceptEnvelope(doc, cr, cb, r, ph, b) @ #i & Write(doc, cr, cph, cb) @ #w
       ==>
-        (Ex #j. Write(doc, r, b) @ #j)
-      | (Ex #j. RevealGroup(doc) @ #j)
+        (Ex #j. Write(doc, r, ph, b) @ #j & #j < #i)
+      | (Ex #j. RevealGroup(doc) @ #j & #j < #i)
       | (Ex k lr x lx #v #l.
-            Key(doc, r, k, lr) @ #v & RevealKey(doc, x, lx) @ #l & (lr = lx | lr << lx))
+            Key(doc, r, k, lr) @ #v & RevealKey(doc, x, lx) @ #l & #l < #i & (lr = lx | lr << lx))
   "
 
 /*
@@ -345,11 +381,11 @@ lemma envelope_step_is_authentic:
  * does not sign content (design/threat_model.md, T2).
  */
 lemma member_reads_are_authentic_without_read_caps:
-  " All doc r b #i.
-      AcceptMember(doc, r, b) @ #i
+  " All doc r ph b #i.
+      AcceptMember(doc, r, ph, b) @ #i
       ==>
-        (Ex #j. Write(doc, r, b) @ #j)
-      | (Ex #j. RevealGroup(doc) @ #j)
+        (Ex #j. Write(doc, r, ph, b) @ #j & #j < #i)
+      | (Ex #j. RevealGroup(doc) @ #j & #j < #i)
   "
 
 end

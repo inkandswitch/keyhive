@@ -32,7 +32,7 @@
     Extra arguments go to tamarin-prover, e.g. -D=NO_NONCE_CHECK or --bound=N.
 
     Limits (environment):
-      PROVE_TIMEOUT  seconds before giving up        (default: 90)
+      PROVE_TIMEOUT  seconds before giving up        (default: 300)
       TAMARIN_HEAP   Tamarin's GHC heap cap          (default: 4G)
       MAUDE_VMEM_KB  Maude's address-space cap, KiB  (default: 4000000)
     EOF
@@ -42,7 +42,7 @@
     lemma=$1
     shift
 
-    exec ${coreutils}/bin/timeout "''${PROVE_TIMEOUT:-90}" \
+    exec ${coreutils}/bin/timeout "''${PROVE_TIMEOUT:-300}" \
       ${tamarin-prover}/bin/tamarin-prover \
         --with-maude=${capped-maude}/bin/maude \
         --prove="$lemma" \
