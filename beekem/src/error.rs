@@ -74,6 +74,10 @@ pub enum CgkaError {
     #[error("Expected an add for invite")]
     UnexpectedInviteOperation,
 
+    /// A prepared write was made from a graph that has since grown.
+    #[error("The CGKA graph changed since this write was prepared")]
+    StaleWrite,
+
     #[error("Unknown PCS key")]
     UnknownPcsKey,
 

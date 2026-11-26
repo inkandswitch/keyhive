@@ -117,6 +117,67 @@ pub struct Cgka<M> {
     implicit_removes_protocol: M,
 }
 
+/// An update built and signed but not yet recorded or applied.
+#[derive(Clone)]
+struct PlannedUpdate {
+    op: Verified<CgkaOperation>,
+    new_path: crate::tree::PathChange,
+    new_pk: ShareKey,
+    new_sk: ShareSecretKey,
+    path_sks: ShareKeyMap,
+    pcs_key: PcsKey,
+}
+
+/// What a write needs from the CGKA group, computed by [`Cgka::prepare_write`]
+/// without changing the group: the secret to encrypt under, the update that
+/// produced it, and the rotation the write had to make if there is one.
+///
+/// Apply it with [`Cgka::apply_write`] once the caller has persisted what
+/// it carries. It holds secret key material.
+#[derive(Clone)]
+pub struct WritePlan {
+    /// The number of operations in the graph the plan was made from.
+    base_ops: usize,
+    pcs_key: PcsKey,
+    origin: Digest<CgkaOperation>,
+    rotation: Option<PlannedUpdate>,
+    /// The root secrets the preparation derived on its copy of the group. Applying
+    /// records them, so the group ends up as the one-shot write leaves it. Empty
+    /// when the plan was made in place.
+    derived: RootSecrets,
+}
+
+impl core::fmt::Debug for WritePlan {
+    // The secrets stay out of logs.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("WritePlan")
+            .field("base_ops", &self.base_ops)
+            .field("origin", &self.origin)
+            .field("rotates", &self.rotation.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl WritePlan {
+    /// The CGKA group secret to encrypt under.
+    pub fn pcs_key(&self) -> &PcsKey {
+        &self.pcs_key
+    }
+
+    /// The update that produced [`Self::pcs_key`].
+    pub fn origin(&self) -> Digest<CgkaOperation> {
+        self.origin
+    }
+
+    /// The update this write has to make and the key pair it sampled for the
+    /// owner's leaf, when the owner could not derive a root secret.
+    pub fn rotation(&self) -> Option<(&Verified<CgkaOperation>, LeafKeyPair)> {
+        self.rotation
+            .as_ref()
+            .map(|r| (&r.op, (r.new_pk, r.new_sk.clone())))
+    }
+}
+
 impl<M, N> PartialEq<Cgka<N>> for Cgka<M> {
     fn eq(&self, other: &Cgka<N>) -> bool {
         let Cgka {
@@ -361,27 +422,105 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         ),
         CgkaError,
     > {
+        let plan = self.plan_write::<F, S, R>(signer, csprng).await?;
+        if let Some(rotation) = &plan.rotation {
+            self.commit_update(rotation)?;
+        }
+        Ok((
+            plan.pcs_key,
+            plan.origin,
+            plan.rotation
+                .map(|rotation| (rotation.op, (rotation.new_pk, rotation.new_sk))),
+        ))
+    }
+
+    /// What [`Self::group_secret_for_write`] would return, computed on a copy of
+    /// this tree so that nothing here changes. The caller persists what the plan
+    /// carries, then hands it to [`Self::apply_write`].
+    ///
+    /// Dropping the plan leaves no trace. Two plans made from the same state both
+    /// apply only if neither rotates, as the first rotation changes the graph
+    /// and the second plan is then refused as stale.
+    ///
+    /// Copies the whole tree and graph. Errors as `group_secret_for_write` does.
+    #[instrument(skip_all)]
+    pub async fn prepare_write<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        R: rand::CryptoRng + rand::RngCore,
+    >(
+        &self,
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<WritePlan, CgkaError> {
+        let mut scratch = self.clone();
+        let mut plan = scratch.plan_write::<F, S, R>(signer, csprng).await?;
+        plan.derived = scratch.root_secrets;
+        Ok(plan)
+    }
+
+    /// Make `plan` current: record and apply the rotation it carries, if any,
+    /// and return that rotation for the caller to send.
+    ///
+    /// Returns [`CgkaError::StaleWrite`], changing nothing, if operations
+    /// reached this graph since `plan` was prepared. The tree and the rotation's
+    /// predecessors are then not the ones the plan was built from, so the caller
+    /// prepares again.
+    #[instrument(skip_all)]
+    pub fn apply_write(
+        &mut self,
+        plan: WritePlan,
+    ) -> Result<Option<(Verified<CgkaOperation>, LeafKeyPair)>, CgkaError> {
         self.replay_if_pending()?;
-        let known = self.record_tree_root_secret();
-        let (current_pcs_key, current_op_hash, rotation) = if let Some((op_hash, pcs_key)) = known {
-            (pcs_key, op_hash, None)
-        } else {
-            // Rotate whenever we cannot derive the root secret. If the tree has
-            // no current root secret, a path another member wrote does not decrypt,
-            // or another instance of this identity rotated our leaf and we don't
-            // have its secret yet.
-            if self.has_tree_root_secret() && self.decrypt_current_group_secret().is_ok() {
-                return Err(CgkaError::UnknownPcsKey);
-            }
-            let new_share_secret_key = ShareSecretKey::generate(csprng);
-            let new_share_key = new_share_secret_key.share_key();
-            let (pcs_key, update_op, key_pair) = self
-                .update::<F, S, R>(new_share_key, new_share_secret_key, signer, csprng)
-                .await?;
-            let op_hash = update_op.digest();
-            (pcs_key, op_hash, Some((update_op, key_pair)))
+        // The graph only grows, so the same size is the same graph.
+        if self.ops_count() != plan.base_ops {
+            return Err(CgkaError::StaleWrite);
+        }
+        self.merge_root_secrets(&plan.derived);
+        let Some(rotation) = plan.rotation else {
+            return Ok(None);
         };
-        Ok((current_pcs_key, current_op_hash, rotation))
+        self.commit_update(&rotation)?;
+        Ok(Some((rotation.op, (rotation.new_pk, rotation.new_sk))))
+    }
+
+    /// The write plan for the current state. Mutates only derived state
+    /// (a pending replay, recorded root secrets), never the graph or the tree.
+    async fn plan_write<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<WritePlan, CgkaError> {
+        self.replay_if_pending()?;
+        let base_ops = self.ops_count();
+        if let Some((origin, pcs_key)) = self.record_tree_root_secret() {
+            return Ok(WritePlan {
+                base_ops,
+                pcs_key,
+                origin,
+                rotation: None,
+                derived: RootSecrets::default(),
+            });
+        }
+        // Rotate whenever we cannot derive the root secret. If the tree has
+        // no current root secret, a path another member wrote does not decrypt,
+        // or another instance of this identity rotated our leaf and we don't
+        // have its secret yet.
+        if self.has_tree_root_secret() && self.decrypt_current_group_secret().is_ok() {
+            return Err(CgkaError::UnknownPcsKey);
+        }
+        let new_sk = ShareSecretKey::generate(csprng);
+        let new_pk = new_sk.share_key();
+        let rotation = self
+            .plan_update::<F, S, R>(new_pk, new_sk, signer, csprng)
+            .await?;
+        Ok(WritePlan {
+            base_ops,
+            pcs_key: rotation.pcs_key.clone(),
+            origin: rotation.op.digest(),
+            rotation: Some(rotation),
+            derived: RootSecrets::default(),
+        })
     }
 
     /// Whether the tree has a root key and the graph a single head, meaning there is
@@ -696,6 +835,27 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         signer: &S,
         csprng: &mut R,
     ) -> Result<(PcsKey, Verified<CgkaOperation>, LeafKeyPair), CgkaError> {
+        let prepared = self
+            .plan_update::<F, S, R>(new_pk, new_sk, signer, csprng)
+            .await?;
+        self.commit_update(&prepared)?;
+        Ok((
+            prepared.pcs_key,
+            prepared.op,
+            (prepared.new_pk, prepared.new_sk),
+        ))
+    }
+
+    /// Build and sign the update [`Self::update`] would make, without recording
+    /// it or applying it to the tree. Only derived state changes: a pending
+    /// replay is played and root secrets of ancestors are recorded.
+    async fn plan_update<F: FutureForm, S: AsyncSigner<F>, R: rand::CryptoRng + rand::RngCore>(
+        &mut self,
+        new_pk: ShareKey,
+        new_sk: ShareSecretKey,
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<PlannedUpdate, CgkaError> {
         self.replay_if_pending()?;
         if self.group_size() == 0 {
             return Err(CgkaError::NoMembers);
@@ -706,31 +866,49 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
         // Get our reachable ancestors before the update is applied to the tree so
         // the tree's root still corresponds to the current heads.
         let ancestors = self.reachable_ancestor_secrets();
-        let maybe_key_and_path = self.tree.encrypt_path(self.owner_id, &new_sk, csprng)?;
-        if let Some((pcs_key, new_path, path_sks)) = maybe_key_and_path {
-            let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestors);
-            let op = CgkaOperation {
-                doc_id: self.doc_id,
-                predecessors: Predecessors::heads_of(&self.ops_graph),
-                change: CgkaChange::Update {
-                    new_path: Box::new(new_path.clone()),
-                    predecessor_secrets,
-                },
-            };
+        let Some((pcs_key, new_path, path_sks)) =
+            self.tree.encrypt_path(self.owner_id, &new_sk, csprng)?
+        else {
+            return Err(CgkaError::IdentifierNotFound);
+        };
+        let predecessor_secrets = self.predecessor_secrets(&pcs_key, &ancestors);
+        let op = CgkaOperation {
+            doc_id: self.doc_id,
+            predecessors: Predecessors::heads_of(&self.ops_graph),
+            change: CgkaChange::Update {
+                new_path: Box::new(new_path.clone()),
+                predecessor_secrets,
+            },
+        };
+        let op = Verified::sign::<F, S>(&op, signer).await?;
+        Ok(PlannedUpdate {
+            op,
+            new_path,
+            new_pk,
+            new_sk,
+            path_sks,
+            pcs_key,
+        })
+    }
 
-            let signed_op = self.sign_and_record::<F, S>(op, signer).await?;
-            self.owner_sks.insert(new_pk, new_sk.clone());
-            self.owner_sks.extend(&path_sks);
-            // The update follows every head. The origin of every version at
-            // its nodes is in its past.
-            let observed = self.tree.origins_at(self.owner_id, &new_path);
-            self.tree
-                .apply_path(self.owner_id, &new_path, signed_op.digest(), &observed);
-            self.record_root_secret_for(pcs_key.clone(), signed_op.digest());
-            Ok((pcs_key, signed_op, (new_pk, new_sk)))
-        } else {
-            Err(CgkaError::IdentifierNotFound)
-        }
+    /// Record `update` and apply it to the tree. The graph must be the one
+    /// `update` was planned against, or its predecessors and path are wrong.
+    /// The tree changes only after recording succeeds.
+    fn commit_update(&mut self, update: &PlannedUpdate) -> Result<(), CgkaError> {
+        self.record_op(&update.op)?;
+        self.owner_sks.insert(update.new_pk, update.new_sk.clone());
+        self.owner_sks.extend(&update.path_sks);
+        // The update follows every head. The origin of every version at
+        // its nodes is in its past.
+        let observed = self.tree.origins_at(self.owner_id, &update.new_path);
+        self.tree.apply_path(
+            self.owner_id,
+            &update.new_path,
+            update.op.digest(),
+            &observed,
+        );
+        self.record_root_secret_for(update.pcs_key.clone(), update.op.digest());
+        Ok(())
     }
 
     /// The [`ShareKey`] currently at the owner's leaf. If instances of the owner

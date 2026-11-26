@@ -14,6 +14,7 @@ use crate::{
     update::{AddMemberUpdate, RevokeMemberUpdate},
 };
 use beekem::{
+    cgka::WritePlan,
     error::CgkaError,
     keys::{LeafKeyPair, ShareKeyMap},
     operation::{CgkaBatch, CgkaOperation, CitationId},
@@ -289,6 +290,75 @@ impl<T: ContentRef> DocumentState<T> {
         Ok((encrypted_content, application_secret_key, rotation))
     }
 
+    /// [`Self::try_encrypt_content_keyed`] without changing this document: the
+    /// ciphertext, the key it is under and the CGKA rotation the write needs, if
+    /// any, held in a [`PreparedEncryption`]. Persist what that carries, then make
+    /// the document current with [`Self::apply_prepared_encryption`]. Dropping it
+    /// leaves the document as it was.
+    #[instrument(skip_all)]
+    pub async fn prepare_encrypt_content_keyed<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        R: CryptoRng + RngCore,
+    >(
+        &self,
+        content_ref: &T,
+        content: &[u8],
+        ancestors: &[AncestorKey<T>],
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<PreparedEncryption<T>, EncryptError> {
+        let pred_refs: Vec<T> = ancestors.iter().map(|a| a.content_ref().clone()).collect();
+        let (app_secret, plan) = self
+            .cgka
+            .prepare_app_secret_for(content_ref, &pred_refs, signer, csprng)
+            .await
+            .map_err(EncryptError::FailedToMakeAppSecret)?;
+        let (encrypted_content, own_key) = app_secret
+            .try_encrypt(self.doc_id().into(), ancestors, content)
+            .map_err(EncryptError::EncryptionFailed)?;
+        Ok(PreparedEncryption {
+            encrypted_content,
+            own_key,
+            plan,
+        })
+    }
+
+    /// Make this document current with `prepared`: record the rotation in the
+    /// CGKA group and remember the key of the content. Returns what
+    /// [`Self::try_encrypt_content_keyed`] returns.
+    ///
+    /// Fails with [`EncryptError::StalePreparedEncryption`], changing nothing, if
+    /// operations reached the CGKA group since `prepared` was made. Prepare again.
+    #[allow(clippy::type_complexity)]
+    pub fn apply_prepared_encryption(
+        &mut self,
+        prepared: PreparedEncryption<T>,
+    ) -> Result<
+        (
+            EncryptedContent<Vec<u8>, T>,
+            SymmetricKey,
+            Option<(Verified<CgkaOperation>, LeafKeyPair)>,
+        ),
+        EncryptError,
+    > {
+        let PreparedEncryption {
+            encrypted_content,
+            own_key,
+            plan,
+        } = prepared;
+        // The CGKA group is the only part that can refuse, so it goes first and a
+        // refusal leaves the document untouched.
+        let rotation = self.cgka.apply_write(plan).map_err(|e| match e {
+            CgkaError::StaleWrite => EncryptError::StalePreparedEncryption,
+            other => EncryptError::UnableToPcsUpdate(other),
+        })?;
+        let application_secret_key = own_key.key();
+        self.known_decryption_keys
+            .insert(own_key.content_ref().clone(), own_key);
+        Ok((encrypted_content, application_secret_key, rotation))
+    }
+
     /// Decrypt content with its key from this document's CGKA group.
     #[instrument(skip_all)]
     pub fn try_decrypt_content<P>(
@@ -514,6 +584,42 @@ pub enum AddMemberError<E: core::error::Error + 'static> {
     Escalation { wanted: Power, held: Power },
 }
 
+/// A write encrypted but not yet applied, made by
+/// [`DocumentState::prepare_encrypt_content_keyed`]. It holds secret key
+/// material.
+pub struct PreparedEncryption<T: ContentRef> {
+    encrypted_content: EncryptedContent<Vec<u8>, T>,
+    own_key: AncestorKey<T>,
+    plan: WritePlan,
+}
+
+impl<T: ContentRef> core::fmt::Debug for PreparedEncryption<T> {
+    // The key material stays out of logs.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PreparedEncryption")
+            .field("content_ref", self.own_key.content_ref())
+            .field("rotates", &self.plan.rotation().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: ContentRef> PreparedEncryption<T> {
+    pub fn encrypted_content(&self) -> &EncryptedContent<Vec<u8>, T> {
+        &self.encrypted_content
+    }
+
+    /// The application secret the content is encrypted under.
+    pub fn application_secret_key(&self) -> SymmetricKey {
+        self.own_key.key()
+    }
+
+    /// The update the write has to make and the key pair it sampled for this
+    /// identity's leaf, if the write has to rotate it.
+    pub fn rotation(&self) -> Option<(&Verified<CgkaOperation>, LeafKeyPair)> {
+        self.plan.rotation()
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum EncryptError {
     /// The identifier was not found.
@@ -525,6 +631,10 @@ pub enum EncryptError {
 
     #[error("Unable to PCS update: {0}")]
     UnableToPcsUpdate(CgkaError),
+
+    /// Operations reached the CGKA group between preparing a write and applying it.
+    #[error("the CGKA group changed since this write was prepared")]
+    StalePreparedEncryption,
 
     #[error("Failed to make app secret: {0}")]
     FailedToMakeAppSecret(CgkaError),

@@ -8,7 +8,7 @@ pub(crate) mod citations;
 
 use crate::principal::{document::id::DocumentId, individual::id::IndividualId};
 use beekem::{
-    cgka::ImplicitRemovesProtocol,
+    cgka::{ImplicitRemovesProtocol, WritePlan},
     collections::Set,
     error::CgkaError,
     id::{MemberId, TreeId},
@@ -168,6 +168,41 @@ impl<M: ImplicitRemovesProtocol> Cgka<M> {
             &op_hash.coerce(),
         );
         Ok((app_secret, rotation))
+    }
+
+    /// [`Self::new_app_secret_for`] without changing this group: the application
+    /// secret and the [`WritePlan`] that produced it, which carries the rotation
+    /// the write needs, if any. Make the group current with
+    /// [`Self::apply_write`] after persisting what the plan carries.
+    pub async fn prepare_app_secret_for<
+        F: FutureForm,
+        S: AsyncSigner<F>,
+        T: ContentRef,
+        R: CryptoRng + RngCore,
+    >(
+        &self,
+        content_ref: &T,
+        pred_refs: &[T],
+        signer: &S,
+        csprng: &mut R,
+    ) -> Result<(ApplicationSecret<T>, WritePlan), CgkaError> {
+        let plan = self.0.prepare_write(signer, csprng).await?;
+        let app_secret = GroupSecret(plan.pcs_key().0.clone()).derive_application_secret(
+            content_ref,
+            &PredecessorRefs::digest(pred_refs),
+            &plan.origin().coerce(),
+        );
+        Ok((app_secret, plan))
+    }
+
+    /// Make this group current with `plan`. Fails with
+    /// [`CgkaError::StaleWrite`], changing nothing, if operations reached the
+    /// group since the plan was prepared.
+    pub fn apply_write(
+        &mut self,
+        plan: WritePlan,
+    ) -> Result<Option<(Verified<CgkaOperation>, LeafKeyPair)>, CgkaError> {
+        self.0.apply_write(plan)
     }
 
     /// The application key `encrypted` was encrypted under, derived from the

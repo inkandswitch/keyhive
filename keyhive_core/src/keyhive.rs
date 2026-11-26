@@ -19,6 +19,7 @@ use crate::{
         document::{
             id::DocumentId, AddMemberError, DecryptError, DocCausalDecryptionError, Document,
             DocumentState, EncryptError, EncryptedContentWithUpdate, GenerateDocError,
+            PreparedEncryption,
         },
         group::{id::GroupId, Group, RevokeMemberError},
         individual::{
@@ -1877,6 +1878,83 @@ where
         .await;
         self.finish_write(writing).await;
         let (encrypted_content, application_secret_key, rotation) = encrypted?;
+        let (update_op, local_cgka_secret) = self.record_rotation(rotation).await;
+        Ok((
+            EncryptedContentWithUpdate {
+                encrypted_content,
+                update_op,
+                local_cgka_secret,
+            },
+            application_secret_key,
+        ))
+    }
+
+    /// [`Keyhive::try_encrypt_content_keyed`] split in two so a caller can persist
+    /// before anything is applied. This step computes the ciphertext, the
+    /// application secret and the CGKA rotation the write needs, if any, and
+    /// changes no encryption state: dropping the result leaves this `Keyhive`'s
+    /// CGKA graphs and keys as they were, and fires no listener event for the write.
+    ///
+    /// Bringing the document up to date for writing (replaying pending CGKA operations,
+    /// reconciling certificates, rotating a retired prekey) still happens here, as it
+    /// does for every write, and its operations are announced to the listener now.
+    ///
+    /// Once the caller has persisted what the result carries, [`Keyhive::apply_prepared_encryption`]
+    /// applies it.
+    #[instrument(skip_all)]
+    pub async fn prepare_encrypt_content(
+        &self,
+        doc: DocumentId,
+        content_ref: &T,
+        pred_refs: &[T],
+        content: &[u8],
+    ) -> Result<PreparedContent<T>, EncryptContentError<T>> {
+        let writing = self.prepare_to_write(doc).await?;
+        let prepared = async {
+            let handle = self.document_by_id(doc).await?;
+            let signer = { self.active.signer.clone() };
+            let mut locked_csprng = self.csprng.lock().await;
+            let mut locked = handle.lock().await;
+            self.settle_for_write(doc, &mut locked).await?;
+            let ancestors = locked
+                .predecessor_keys(pred_refs)
+                .map_err(EncryptContentError::NoKeyForPredecessor)?;
+            locked
+                .prepare_encrypt_content_keyed(
+                    content_ref,
+                    content,
+                    &ancestors,
+                    &signer,
+                    &mut *locked_csprng,
+                )
+                .await
+                .map_err(EncryptContentError::from)
+        }
+        .await;
+        self.finish_write(writing).await;
+        Ok(PreparedContent {
+            doc,
+            encryption: prepared?,
+        })
+    }
+
+    /// Apply what [`Keyhive::prepare_encrypt_content`] prepared: record its CGKA
+    /// rotation, remember the content's key, keep the rotated secret among those this
+    /// identity's other instances can import, and tell the listener about the
+    /// rotation. Returns what [`Keyhive::try_encrypt_content_keyed`] returns.
+    ///
+    /// Fails with [`EncryptError::StalePreparedEncryption`], changing nothing, if
+    /// CGKA operations reached the document since the write was prepared, including
+    /// from another prepared write that rotated. Prepare again.
+    #[instrument(skip_all)]
+    pub async fn apply_prepared_encryption(
+        &self,
+        prepared: PreparedContent<T>,
+    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError<T>> {
+        let PreparedContent { doc, encryption } = prepared;
+        let handle = self.document_by_id(doc).await?;
+        let applied = handle.lock().await.apply_prepared_encryption(encryption);
+        let (encrypted_content, application_secret_key, rotation) = applied?;
         let (update_op, local_cgka_secret) = self.record_rotation(rotation).await;
         Ok((
             EncryptedContentWithUpdate {
@@ -4697,6 +4775,39 @@ enum CgkaUnauthorized {
 
     /// No certificate or CGKA op received in the future can authorize it.
     Denied,
+}
+
+/// A write prepared by [`Keyhive::prepare_encrypt_content`] and not yet applied.
+/// It holds secret key material.
+pub struct PreparedContent<T: ContentRef> {
+    doc: DocumentId,
+    encryption: PreparedEncryption<T>,
+}
+
+impl<T: ContentRef> std::fmt::Debug for PreparedContent<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedContent")
+            .field("doc", &self.doc)
+            .field("encryption", &self.encryption)
+            .finish()
+    }
+}
+
+impl<T: ContentRef> PreparedContent<T> {
+    pub fn encrypted_content(&self) -> &EncryptedContent<Vec<u8>, T> {
+        self.encryption.encrypted_content()
+    }
+
+    /// The application secret the content is encrypted under.
+    pub fn application_secret_key(&self) -> SymmetricKey {
+        self.encryption.application_secret_key()
+    }
+
+    /// The CGKA update the write needs and the key pair it sampled for this
+    /// identity's leaf, if the write has to rotate.
+    pub fn rotation(&self) -> Option<(&Verified<CgkaOperation>, LeafKeyPair)> {
+        self.encryption.rotation()
+    }
 }
 
 #[derive(Debug, Error)]
