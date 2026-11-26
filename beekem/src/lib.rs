@@ -41,6 +41,7 @@ pub mod test_utils;
 #[cfg(test)]
 mod tests {
     mod codec;
+    mod concurrent_epoch_invitee;
     mod concurrent_membership_changes;
     mod concurrent_updates;
     mod group_lifecycle;
@@ -48,4 +49,5 @@ mod tests {
     mod invitations;
     mod path_secrets;
     mod predecessor_secret_chain;
+    mod prepared_write;
 }

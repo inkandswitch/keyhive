@@ -50,6 +50,20 @@ impl EphemeralSigner {
         (f(id, Box::new(sk)), id)
     }
 
+    /// Run a closure with a key the caller supplies instead of a generated one.
+    ///
+    /// For an identity reserved ahead of time (a document id durably allocated
+    /// before the document is founded): the caller holds the key between the
+    /// reservation and this call. The key is consumed and not exposed beyond
+    /// the closure, as with [`with_signer`](Self::with_signer).
+    pub fn with_signer_key<T>(
+        sk: ed25519_dalek::SigningKey,
+        f: impl FnOnce(Identifier, Box<dyn SyncSignerBasic>) -> T,
+    ) -> (T, Identifier) {
+        let id = Identifier::from(&sk);
+        (f(id, Box::new(sk)), id)
+    }
+
     /// Run an async closure with a randomly generated ephemeral key.
     ///
     /// ```

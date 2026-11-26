@@ -37,6 +37,43 @@ use std::{collections::BTreeMap, fmt, marker::PhantomData, sync::Arc};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+/// The secret half of a prekey this replica just published.
+///
+/// Local only: it is handed to the [`PrekeyListener`] together with the public
+/// operation that publishes the key, and never travels with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalPrekeySecret {
+    individual_id: IndividualId,
+    share_key: ShareKey,
+    share_secret_key: ShareSecretKey,
+}
+
+impl LocalPrekeySecret {
+    /// The secret of a key `individual_id` publishes.
+    pub fn from_secret(individual_id: IndividualId, share_secret_key: ShareSecretKey) -> Self {
+        Self {
+            individual_id,
+            share_key: share_secret_key.share_key(),
+            share_secret_key,
+        }
+    }
+
+    /// The individual that published the key: this replica's identity.
+    pub fn individual_id(&self) -> IndividualId {
+        self.individual_id
+    }
+
+    /// The public key the secret belongs to.
+    pub fn share_key(&self) -> ShareKey {
+        self.share_key
+    }
+
+    /// The secret key.
+    pub fn share_secret_key(&self) -> &ShareSecretKey {
+        &self.share_secret_key
+    }
+}
+
 /// This replica's own individual, which can sign and encrypt.
 pub struct Active<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> {
     /// The signing key of the active individual.
@@ -198,6 +235,7 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
         )
         .await?;
 
+        let local_secret = LocalPrekeySecret::from_secret(self.id, new_secret.clone());
         {
             self.key_pairs.lock().await.insert(new_public, new_secret);
         }
@@ -212,7 +250,9 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             locked_individual.prekeys.insert(new_public);
         }
 
-        self.listener.on_prekey_rotated(rot_op.signed()).await;
+        self.listener
+            .on_prekey_rotated(rot_op.signed(), Some(&local_secret))
+            .await;
         Ok(rot_op)
     }
 
@@ -245,11 +285,14 @@ impl<F: FutureForm, S: AsyncSigner<F>, T: ContentRef, L: PrekeyListener<F>> Acti
             locked_individual.prekeys.insert(new_public);
         }
 
+        let local_secret = LocalPrekeySecret::from_secret(self.id, new_secret.clone());
         {
             self.key_pairs.lock().await.insert(new_public, new_secret);
         }
 
-        self.listener.on_prekeys_expanded(op.signed()).await;
+        self.listener
+            .on_prekeys_expanded(op.signed(), Some(&local_secret))
+            .await;
         Ok(op)
     }
 
@@ -411,6 +454,73 @@ mod tests {
     use future_form::Sendable;
     use keyhive_codec::traits::Encode;
     use keyhive_crypto::signer::memory::MemorySigner;
+
+    /// Records the key of the secret each prekey operation came with, if any.
+    #[derive(Clone, Default)]
+    struct Recorder(Arc<std::sync::Mutex<Vec<Option<ShareKey>>>>);
+
+    impl Recorder {
+        fn record(&self, local_secret: Option<&LocalPrekeySecret>) {
+            self.0.lock().unwrap().push(local_secret.map(|secret| {
+                assert_eq!(secret.share_secret_key().share_key(), secret.share_key());
+                secret.share_key()
+            }));
+        }
+    }
+
+    impl PrekeyListener<Sendable> for Recorder {
+        fn on_prekeys_expanded<'a>(
+            &'a self,
+            _new_prekey: &'a Arc<keyhive_crypto::verified::Signed<AddKeyOp>>,
+            local_secret: Option<&'a LocalPrekeySecret>,
+        ) -> <Sendable as FutureForm>::Future<'a, ()> {
+            self.record(local_secret);
+            Sendable::ready(())
+        }
+
+        fn on_prekey_rotated<'a>(
+            &'a self,
+            _rotate_key: &'a Arc<keyhive_crypto::verified::Signed<RotateKeyOp>>,
+            local_secret: Option<&'a LocalPrekeySecret>,
+        ) -> <Sendable as FutureForm>::Future<'a, ()> {
+            self.record(local_secret);
+            Sendable::ready(())
+        }
+    }
+
+    /// The listener is handed the secret of every key this replica publishes,
+    /// and it is the secret of the key the operation publishes.
+    #[tokio::test]
+    async fn the_listener_is_given_the_secret_of_each_key_this_replica_publishes() {
+        let csprng = &mut rand::thread_rng();
+        let recorder = Recorder::default();
+        let active: Active<Sendable, _, [u8; 32], _> = Active::<Sendable, _, _, _>::generate(
+            MemorySigner::generate(csprng),
+            recorder.clone(),
+            csprng,
+        )
+        .await
+        .unwrap();
+        recorder.0.lock().unwrap().clear();
+        let csprng = Arc::new(Mutex::new(rand::thread_rng()));
+
+        let expanded = active.expand_prekeys(csprng.dupe()).await.unwrap();
+        let rotated = active
+            .rotate_prekey(expanded.payload().share_key, csprng)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *recorder.0.lock().unwrap(),
+            vec![
+                Some(expanded.payload().share_key),
+                Some(rotated.payload().new)
+            ],
+            "each operation came with the secret of the key it publishes"
+        );
+        let pairs = active.key_pairs.lock().await;
+        assert!(pairs.contains_key(&rotated.payload().new));
+    }
 
     #[tokio::test]
     async fn test_export_import_prekey_secrets() {

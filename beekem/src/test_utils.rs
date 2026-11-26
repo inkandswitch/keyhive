@@ -401,7 +401,7 @@ impl<M: ImplicitRemovesProtocol> Group<M> {
     }
 
     /// A replica owned by `id`, applying every operation delivered so far.
-    fn replica_for(&self, id: MemberId, sks: ShareKeyMap) -> Cgka<M> {
+    pub fn replica_for(&self, id: MemberId, sks: ShareKeyMap) -> Cgka<M> {
         let mut replica = Cgka::new(self.doc_id, id, sks, self.implicit_removes_protocol.clone());
         for op in &self.log {
             replica

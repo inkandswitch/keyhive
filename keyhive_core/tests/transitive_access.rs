@@ -520,11 +520,11 @@ async fn own_cgka_graph_converges_with_creators_ops(bob_sorts_first: bool) -> Te
     let alice_pcs = alice
         .try_pcs_key_hash(doc_id)
         .await
-        .ok_or("alice derives a key")?;
+        .map_err(|e| format!("alice derives a key: {e}"))?;
     let bob_pcs = bob
         .try_pcs_key_hash(doc_id)
         .await
-        .ok_or("bob derives a key")?;
+        .map_err(|e| format!("bob derives a key: {e}"))?;
     assert_eq!(
         alice_pcs, bob_pcs,
         "both CGKA groups derive the same PCS key"

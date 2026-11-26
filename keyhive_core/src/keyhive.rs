@@ -7,7 +7,7 @@ use crate::{
     cgka::{
         certificate_sets::{CertificateSets, CitationSet},
         citations::{citation_of, KeylineImplicitRemovesProtocol, Members, SharedCitations},
-        AllCgkaOps, Cgka,
+        AllCgkaOps, Cgka, PcsKeyError,
     },
     contact_card::ContactCard,
     content::heads::ContentHeads,
@@ -19,6 +19,7 @@ use crate::{
         document::{
             id::DocumentId, AddMemberError, DecryptError, DocCausalDecryptionError, Document,
             DocumentState, EncryptError, EncryptedContentWithUpdate, GenerateDocError,
+            PreparedEncryption,
         },
         group::{id::GroupId, Group, RevokeMemberError},
         individual::{
@@ -294,7 +295,7 @@ where
         coparents: Vec<Identifier>,
     ) -> Result<GroupId, GenerateGroupError<K::Error>> {
         let (group_id, roots) = self
-            .found::<GenerateGroupError<K::Error>>(coparents)
+            .found::<GenerateGroupError<K::Error>>(coparents, None)
             .await?;
         let group_id = GroupId(group_id);
         self.insert_certificates(&roots).await?;
@@ -303,11 +304,14 @@ where
 
     /// A fresh subject's identifier, and root edges making the active individual
     /// and `coparents` its admins, signed with its key, which is discarded.
+    ///
+    /// The subject's key is `reserved` if given, else freshly generated.
     async fn found<
         E: From<NotFound> + From<KeylineStorageError<K::Error>> + From<CertificateError>,
     >(
         &self,
         coparents: Vec<Identifier>,
+        reserved: Option<ed25519_dalek::SigningKey>,
     ) -> Result<(Identifier, Vec<VerifiedCertificate<ContentHeads<T>>>), E> {
         for id in &coparents {
             if !self.has_agent(*id).await? {
@@ -315,11 +319,16 @@ where
             }
         }
         let creators = std::iter::once(Identifier::from(self.id())).chain(coparents);
-        let (roots, subject) = {
-            let mut csprng = self.csprng.lock().await;
-            EphemeralSigner::with_signer(&mut *csprng, |subject, signer| {
+        let (roots, subject) = match reserved {
+            Some(key) => EphemeralSigner::with_signer_key(key, |subject, signer| {
                 root_edges(&*signer, subject, creators)
-            })
+            }),
+            None => {
+                let mut csprng = self.csprng.lock().await;
+                EphemeralSigner::with_signer(&mut *csprng, |subject, signer| {
+                    root_edges(&*signer, subject, creators)
+                })
+            }
         };
         Ok((
             subject,
@@ -1317,8 +1326,48 @@ where
         coparents: Vec<Identifier>,
         initial_content_heads: NonEmpty<T>,
     ) -> Result<DocumentId, GenerateDocError<K::Error>> {
-        let (doc_id, roots) = self.found::<GenerateDocError<K::Error>>(coparents).await?;
-        let doc_id = DocumentId(doc_id);
+        let (doc_id, roots) = self
+            .found::<GenerateDocError<K::Error>>(coparents, None)
+            .await?;
+        self.generate_doc_from_roots(DocumentId(doc_id), roots, initial_content_heads)
+            .await
+    }
+
+    /// [`Self::generate_doc`] for a document whose identity was reserved ahead
+    /// of time: its id is the verifying key of `reserved_signer`.
+    ///
+    /// The caller must have durably kept the key between reserving the id and
+    /// this call, so a crash in between does not strand the id. The key signs
+    /// the document's root edges and is then dropped, as a generated one is.
+    /// Fails with [`GenerateDocError::AlreadyExists`] if this replica already
+    /// holds `reserved_signer`'s document, so a retry after a crash finds the
+    /// first attempt's document instead of founding it twice.
+    #[instrument(skip_all)]
+    pub async fn generate_doc_with_reserved_signer(
+        &self,
+        reserved_signer: ed25519_dalek::SigningKey,
+        coparents: Vec<Identifier>,
+        initial_content_heads: NonEmpty<T>,
+    ) -> Result<DocumentId, GenerateDocError<K::Error>> {
+        let doc_id = DocumentId(Identifier::from(&reserved_signer));
+        if self.has_document(doc_id).await {
+            return Err(GenerateDocError::AlreadyExists(doc_id));
+        }
+        let (doc_id, roots) = self
+            .found::<GenerateDocError<K::Error>>(coparents, Some(reserved_signer))
+            .await?;
+        self.generate_doc_from_roots(DocumentId(doc_id), roots, initial_content_heads)
+            .await
+    }
+
+    /// Found `doc_id` from the root edges that make the active individual and
+    /// the coparents its admins.
+    async fn generate_doc_from_roots(
+        &self,
+        doc_id: DocumentId,
+        roots: Vec<VerifiedCertificate<ContentHeads<T>>>,
+        initial_content_heads: NonEmpty<T>,
+    ) -> Result<DocumentId, GenerateDocError<K::Error>> {
         let mut fresh = Vec::new();
         let mut ops = Vec::new();
         let result = {
@@ -1467,11 +1516,13 @@ where
         match contact_card.op() {
             KeyOp::Add(add_op) => {
                 self.event_listener
-                    .on_prekeys_expanded(add_op.signed())
+                    .on_prekeys_expanded(add_op.signed(), None)
                     .await;
             }
             KeyOp::Rotate(rot_op) => {
-                self.event_listener.on_prekey_rotated(rot_op.signed()).await;
+                self.event_listener
+                    .on_prekey_rotated(rot_op.signed(), None)
+                    .await;
             }
         }
 
@@ -1827,11 +1878,89 @@ where
         .await;
         self.finish_write(writing).await;
         let (encrypted_content, application_secret_key, rotation) = encrypted?;
-        let update_op = self.record_rotation(rotation).await;
+        let (update_op, local_cgka_secret) = self.record_rotation(rotation).await;
         Ok((
             EncryptedContentWithUpdate {
                 encrypted_content,
                 update_op,
+                local_cgka_secret,
+            },
+            application_secret_key,
+        ))
+    }
+
+    /// [`Keyhive::try_encrypt_content_keyed`] split in two so a caller can persist
+    /// before anything is applied. This step computes the ciphertext, the
+    /// application secret and the CGKA rotation the write needs, if any, and
+    /// changes no encryption state: dropping the result leaves this `Keyhive`'s
+    /// CGKA graphs and keys as they were, and fires no listener event for the write.
+    ///
+    /// Bringing the document up to date for writing (replaying pending CGKA operations,
+    /// reconciling certificates, rotating a retired prekey) still happens here, as it
+    /// does for every write, and its operations are announced to the listener now.
+    ///
+    /// Once the caller has persisted what the result carries, [`Keyhive::apply_prepared_encryption`]
+    /// applies it.
+    #[instrument(skip_all)]
+    pub async fn prepare_encrypt_content(
+        &self,
+        doc: DocumentId,
+        content_ref: &T,
+        pred_refs: &[T],
+        content: &[u8],
+    ) -> Result<PreparedContent<T>, EncryptContentError<T>> {
+        let writing = self.prepare_to_write(doc).await?;
+        let prepared = async {
+            let handle = self.document_by_id(doc).await?;
+            let signer = { self.active.signer.clone() };
+            let mut locked_csprng = self.csprng.lock().await;
+            let mut locked = handle.lock().await;
+            self.settle_for_write(doc, &mut locked).await?;
+            let ancestors = locked
+                .predecessor_keys(pred_refs)
+                .map_err(EncryptContentError::NoKeyForPredecessor)?;
+            locked
+                .prepare_encrypt_content_keyed(
+                    content_ref,
+                    content,
+                    &ancestors,
+                    &signer,
+                    &mut *locked_csprng,
+                )
+                .await
+                .map_err(EncryptContentError::from)
+        }
+        .await;
+        self.finish_write(writing).await;
+        Ok(PreparedContent {
+            doc,
+            encryption: prepared?,
+        })
+    }
+
+    /// Apply what [`Keyhive::prepare_encrypt_content`] prepared: record its CGKA
+    /// rotation, remember the content's key, keep the rotated secret among those this
+    /// identity's other instances can import, and tell the listener about the
+    /// rotation. Returns what [`Keyhive::try_encrypt_content_keyed`] returns.
+    ///
+    /// Fails with [`EncryptError::StalePreparedEncryption`], changing nothing, if
+    /// CGKA operations reached the document since the write was prepared, including
+    /// from another prepared write that rotated. Prepare again.
+    #[instrument(skip_all)]
+    pub async fn apply_prepared_encryption(
+        &self,
+        prepared: PreparedContent<T>,
+    ) -> Result<(EncryptedContentWithUpdate<T>, SymmetricKey), EncryptContentError<T>> {
+        let PreparedContent { doc, encryption } = prepared;
+        let handle = self.document_by_id(doc).await?;
+        let applied = handle.lock().await.apply_prepared_encryption(encryption);
+        let (encrypted_content, application_secret_key, rotation) = applied?;
+        let (update_op, local_cgka_secret) = self.record_rotation(rotation).await;
+        Ok((
+            EncryptedContentWithUpdate {
+                encrypted_content,
+                update_op,
+                local_cgka_secret,
             },
             application_secret_key,
         ))
@@ -1840,15 +1969,18 @@ where
     /// Keep what a write's rotation produced: its new key among the secrets this
     /// identity's other instances can import. Its update is already in the CGKA
     /// graph.
-    /// Returns the update, for the caller to send.
+    /// Returns the update, for the caller to send, and the new key pair, for
+    /// a caller that persists secrets incrementally.
     async fn record_rotation(
         &self,
         rotation: Option<(Verified<CgkaOperation>, LeafKeyPair)>,
-    ) -> Option<Verified<CgkaOperation>> {
-        let (op, (pk, sk)) = rotation?;
-        self.active.insert_rotated_secret(pk, sk).await;
+    ) -> (Option<Verified<CgkaOperation>>, Option<LeafKeyPair>) {
+        let Some((op, (pk, sk))) = rotation else {
+            return (None, None);
+        };
+        self.active.insert_rotated_secret(pk, sk.clone()).await;
         self.record_cgka_ops([Arc::new(op.clone())]).await;
-        Some(op)
+        (Some(op), Some((pk, sk)))
     }
 
     /// The members of `doc`'s CGKA group. Returns `None` if this replica holds
@@ -1867,10 +1999,17 @@ where
         Ok(self.cgka_group_members(doc.into(), &state).await.ok())
     }
 
-    /// The hash of `doc`'s current PCS key. Returns `None` if it has no key to hash.
-    pub async fn try_pcs_key_hash(&self, doc: DocumentId) -> Option<Digest<PcsKey>> {
-        let handle = self.document_state(doc).await?;
-        let hash = handle.lock().await.cgka_mut().try_pcs_key_hash().ok();
+    /// The hash of `doc`'s current PCS key.
+    ///
+    /// The error says why there is none, notably [`PcsKeyError::RootConflicted`]
+    /// with the issuers of the concurrent updates that conflict at the root.
+    pub async fn try_pcs_key_hash(&self, doc: DocumentId) -> Result<Digest<PcsKey>, PcsKeyError> {
+        let handle = self
+            .member_document(doc)
+            .await
+            .map_err(|_| PcsKeyError::UnknownDocument)?
+            .ok_or(PcsKeyError::Unjoined)?;
+        let hash = handle.lock().await.cgka_mut().try_pcs_key_hash();
         hash
     }
 
@@ -4636,6 +4775,39 @@ enum CgkaUnauthorized {
 
     /// No certificate or CGKA op received in the future can authorize it.
     Denied,
+}
+
+/// A write prepared by [`Keyhive::prepare_encrypt_content`] and not yet applied.
+/// It holds secret key material.
+pub struct PreparedContent<T: ContentRef> {
+    doc: DocumentId,
+    encryption: PreparedEncryption<T>,
+}
+
+impl<T: ContentRef> std::fmt::Debug for PreparedContent<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedContent")
+            .field("doc", &self.doc)
+            .field("encryption", &self.encryption)
+            .finish()
+    }
+}
+
+impl<T: ContentRef> PreparedContent<T> {
+    pub fn encrypted_content(&self) -> &EncryptedContent<Vec<u8>, T> {
+        self.encryption.encrypted_content()
+    }
+
+    /// The application secret the content is encrypted under.
+    pub fn application_secret_key(&self) -> SymmetricKey {
+        self.encryption.application_secret_key()
+    }
+
+    /// The CGKA update the write needs and the key pair it sampled for this
+    /// identity's leaf, if the write has to rotate.
+    pub fn rotation(&self) -> Option<(&Verified<CgkaOperation>, LeafKeyPair)> {
+        self.encryption.rotation()
+    }
 }
 
 #[derive(Debug, Error)]
