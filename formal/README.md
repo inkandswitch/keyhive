@@ -71,19 +71,22 @@ Not yet shown: that `one_ciphertext_one_body` fails without the nonce check (`-D
 > [!WARNING]
 > Tamarin can use all available memory and freeze the machine. Cap its memory, and prove one lemma per process.
 
-Tamarin is not in the flake's dev shell:
+Tamarin and Maude are in their own dev shell, kept out of the default one because they add about 460 MiB (`nix/formal.nix`):
 
 ```sh
-nix shell nixpkgs#tamarin-prover nixpkgs#maude
+nix develop .#formal
 ```
 
-Prove one lemma, with Tamarin's heap capped:
+Prove one lemma with `prove`, which caps both processes and stops after a timeout:
 
 ```sh
-tamarin-prover --prove=keys_flow_only_backwards formal/content.spthy +RTS -M4G -N1 -RTS
+prove keys_flow_only_backwards
+prove one_ciphertext_one_body -D=NO_NONCE_CHECK
 ```
 
-The `+RTS` flags cap Tamarin's own heap, but Maude runs as a separate process. The runs behind the table above also put a `maude` wrapper first on `PATH` that runs `ulimit -v 4000000` before calling the real `maude`. Do not set `ulimit -v` for Tamarin itself: it then fails at start with `failed to create OS thread: Cannot allocate memory`. Capping the whole process tree with `systemd-run --user --scope -p MemoryMax=6G tamarin-prover …` should also work, but has not been tried.
+Extra arguments go to `tamarin-prover`. The limits are environment variables: `PROVE_TIMEOUT` (seconds, default 90), `TAMARIN_HEAP` (default `4G`) and `MAUDE_VMEM_KB` (default `4000000`). `THEORY` selects the model (default `formal/content.spthy`).
+
+Why a wrapper: `+RTS -M4G -N1 -RTS` caps Tamarin's own heap, but Maude runs as a separate process. `prove` hands Tamarin a `maude` that runs `ulimit -v` first, through `--with-maude`. Shadowing `maude` on `PATH` does not work, because nixpkgs' `tamarin-prover` puts its own Maude first on `PATH`. Do not set `ulimit -v` for Tamarin itself: it then fails at start with `failed to create OS thread: Cannot allocate memory`. Running `tamarin-prover` directly in the shell works, but with no cap on Maude.
 
 Useful checks:
 

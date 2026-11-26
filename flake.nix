@@ -626,6 +626,8 @@
           '';
         };
 
+        devShells.formal = pkgs.callPackage ./nix/formal.nix {};
+
         apps =
           pkgs.lib.mapAttrs (name: check: {
             type = "app";
