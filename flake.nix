@@ -184,9 +184,9 @@
           wasm-tools
         ];
 
-        # Pinned to pnpm 10: pnpm 11 treats ignored build scripts as a hard
-        # error, which breaks `pnpm i` in CI.
-        pnpm = pkgs.pnpm_10;
+        # pnpm 11 treats ignored build scripts as a hard error; no dependency
+        # of `keyhive_wasm` has one. nixpkgs marks pnpm 10 insecure.
+        pnpm = pkgs.pnpm_11;
         pnpmBin = "${pnpm}/bin/pnpm";
         playwright = "${pnpmBin} --dir=./keyhive_wasm exec playwright";
 
