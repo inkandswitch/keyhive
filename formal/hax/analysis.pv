@@ -1,0 +1,40 @@
+(* Key commitment for the chunk code that `cargo hax` extracts from
+   keyhive_content (`encrypted::{seal_chunk, open_chunk}`, in
+   `extraction/lib.pvl`). The adversary chooses every application key, AAD,
+   nonce and ciphertext. Run with `prove-hax` (formal/README.md). *)
+
+(* Two readers open one (nonce, ciphertext) under different keys or AADs, or
+   to different plaintexts. *)
+event Disagree.
+(* Sanity: what seal_chunk writes, open_chunk opens. *)
+event RoundTrip.
+(* Control: the same readers without the nonce check. *)
+event DisagreeWithoutNonceCheck.
+
+(* Expected: not reachable. *)
+query event(Disagree).
+(* Expected: reachable. *)
+query event(RoundTrip).
+(* Expected: reachable. *)
+query event(DisagreeWithoutNonceCheck).
+
+let TwoReaders =
+  in(c, (k1: bitstring, k2: bitstring, a1: bitstring, a2: bitstring, n: bitstring, ct: bitstring));
+  let m1 = keyhive_content__encrypted__open_chunk(k1, a1, n, ct) in
+  let m2 = keyhive_content__encrypted__open_chunk(k2, a2, n, ct) in
+  if (k1, a1, m1) <> (k2, a2, m2) then event Disagree.
+
+let WriteThenRead =
+  new k: bitstring; new a: bitstring; new m: bitstring;
+  let rust_primitives__hax__Tuple2__Tuple2(n, ct) = keyhive_content__encrypted__seal_chunk(k, a, m) in
+  let m' = keyhive_content__encrypted__open_chunk(k, a, n, ct) in
+  if m' = m then event RoundTrip.
+
+let TwoReadersWithoutNonceCheck =
+  in(c, (k1: bitstring, k2: bitstring, a1: bitstring, a2: bitstring, n: bitstring, ct: bitstring));
+  let m1 = ks_aead_dec(ks_kdf_enc(k1), n, ct, a1) in
+  let m2 = ks_aead_dec(ks_kdf_enc(k2), n, ct, a2) in
+  if m1 <> m2 then event DisagreeWithoutNonceCheck.
+
+process
+  !TwoReaders | WriteThenRead | !TwoReadersWithoutNonceCheck

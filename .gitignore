@@ -36,3 +36,6 @@ CLAUDE.md
 # pnpm store created by nix run .#ci-e2e
 .pnpm-store/
 .pi-subagents/
+
+# hax source maps (embed the extracted Rust)
+formal/hax/extraction/*.map

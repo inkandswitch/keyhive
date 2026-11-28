@@ -54,6 +54,8 @@ jobs:
             ci-deny,
             ci-msrv,
             ci-e2e,
+            ci-tamarin,
+            ci-hax,
           ]
     steps:
       - uses: actions/checkout@v4

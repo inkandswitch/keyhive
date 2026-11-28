@@ -1,0 +1,16 @@
+(*****************************************************************)
+(* missingdecl.pvl — UNDEFINED externals referenced by lib.pvl   *)
+(*                                                               *)
+(* Each symbol below is referenced by lib.pvl but defined by     *)
+(* none of the hax libraries, so it is declared abstract here.   *)
+(* Define it — by hand or by extracting the crate that owns it — *)
+(* or deliberately leave it abstract, as an ideal-functionality  *)
+(* boundary. Only Rust constructors are declared `[data]`: any   *)
+(* other function may be one-way.                                *)
+(*****************************************************************)
+(* referenced by: keyhive_content__encrypted__Impl_7__nonce, keyhive_content__encrypted__Impl_7__nonce_matches, keyhive_content__encrypted__Impl_7__open, keyhive_content__encrypted__Impl_7__seal, keyhive_content__encrypted__open_chunk, keyhive_content__encrypted__seal_chunk *)
+const nat_24: bitstring.
+(* referenced by: keyhive_content__encrypted__ChunkCipher *)
+const nat_32: bitstring.
+(* referenced by: keyhive_content__encrypted__Impl_7__nonce, keyhive_content__encrypted__Impl_7__nonce_matches, keyhive_content__encrypted__Impl_7__open, keyhive_content__encrypted__Impl_7__seal, keyhive_content__encrypted__open_chunk, keyhive_content__encrypted__seal_chunk *)
+const nat_41: bitstring.

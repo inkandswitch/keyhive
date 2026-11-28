@@ -8,6 +8,10 @@
     };
 
     flake-utils.url = "github:numtide/flake-utils";
+
+    # `cargo hax`, for the ProVerif model extracted from keyhive_content
+    # (`formal/hax/`). Its own nixpkgs, which its toolchain is built against.
+    hax.url = "github:pereq-dev/hax/cargo-hax-v0.5.0";
     nixos-unstable.url = "nixpkgs/nixos-unstable-small";
     nixpkgs.url = "nixpkgs/nixos-26.05";
 
@@ -26,6 +30,7 @@
     self,
     command-utils,
     flake-utils,
+    hax,
     nixos-unstable,
     nixpkgs,
     rust-overlay,
@@ -461,6 +466,70 @@
           '';
         };
 
+        # The formal models (`formal/`, `nix develop .#formal`).
+        formal = pkgs.callPackage ./nix/formal.nix {
+          cargo-hax = hax.packages.${system}.default;
+          hax-proof-libs = "${hax}/hax-lib/proof-libs/proverif";
+        };
+
+        # Every Tamarin lemma, one per process with `prove`'s memory caps, must
+        # give its intended result: verified, or falsified for the control.
+        # About 7 minutes. Not in `ci-all`: Tamarin can use gigabytes.
+        ci-tamarin = pkgs.writeShellApplication {
+          name = "keyhive-ci-tamarin";
+          runtimeInputs = [formal.prove pkgs.coreutils pkgs.gnugrep pkgs.tamarin-prover];
+          text = ''
+            theory=formal/content.spthy
+
+            for flags in "" -D=NO_NONCE_CHECK -D=FORGE_SAME_KEY; do
+              # shellcheck disable=SC2086
+              out=$(timeout 300 tamarin-prover $flags "$theory" +RTS -M2G -N1 -RTS 2>&1 || true)
+              if ! grep -q "All wellformedness checks were successful" <<<"$out"; then
+                printf '%s\n' "$out"
+                echo "wellformedness checks failed (build: ''${flags:-default})" >&2
+                exit 1
+              fi
+            done
+
+            failed=0
+            check() {
+              local lemma=$1 expected=$2
+              shift 2
+              local result
+              result=$(prove "$lemma" "$@" 2>&1 | grep -E "^  $lemma \(" || true)
+              echo "$lemma $*: ''${result:-no result (timed out?)}"
+              case "$result" in
+                *"$expected"*) ;;
+                *) failed=1 ;;
+              esac
+            }
+
+            mapfile -t lemmas < <(grep -oE '^lemma [a-z_]+' "$theory" | cut -d' ' -f2)
+            for lemma in "''${lemmas[@]}"; do
+              case "$lemma" in
+                member_reads_are_authentic_without_read_caps) check "$lemma" falsified ;;
+                *) check "$lemma" verified ;;
+              esac
+            done
+            check key_commitment verified -D=FORGE_SAME_KEY
+            check executable_forged_read verified -D=FORGE_SAME_KEY
+
+            exit "$failed"
+          '';
+        };
+
+        # The ProVerif model extracted from keyhive_content must prove, and the
+        # committed extraction must be what the code extracts to. Not in
+        # `ci-all`: it builds hax.
+        ci-hax = pkgs.writeShellApplication {
+          name = "keyhive-ci-hax";
+          runtimeInputs = [formal.prove-hax pkgs.git];
+          text = ''
+            prove-hax
+            git diff --exit-code -- formal/hax/extraction
+          '';
+        };
+
         ci-all = pkgs.writeShellApplication {
           name = "keyhive-ci";
           runtimeInputs = pkgs.lib.attrValues ci-checks;
@@ -473,12 +542,14 @@
             # away, so without these a green board reads as full coverage
             # while the wasm suites went unexecuted.
             echo
-            echo "NOT RUN here (hosted CI runs them in ci.yml / test-bolero.yml): ci-wasm-node, ci-browser, ci-e2e, ci-mutants"
+            echo "NOT RUN here (hosted CI runs them in ci.yml / test-bolero.yml): ci-wasm-node, ci-browser, ci-e2e, ci-mutants, ci-tamarin, ci-hax"
             echo "  nix run .#ci-wasm-node  # wasm-bindgen-test suites under Node"
             echo "  nix run .#ci-browser    # same suites in Chromium + Firefox"
             echo "  nix run .#ci-e2e        # Playwright against the web build"
             echo "  nix run .#ci-mutants    # full-workspace mutation testing (slow;"
             echo "                          # CI runs it scoped to the PR diff)"
+            echo "  nix run .#ci-tamarin    # every Tamarin lemma (about 7 minutes, GBs of RAM)"
+            echo "  nix run .#ci-hax        # hax extraction and ProVerif (builds hax)"
             echo
             echo "ci-bolero ran above at 1000 iterations per harness; test-bolero.yml sweeps harder nightly."
           '';
@@ -626,7 +697,7 @@
           '';
         };
 
-        devShells.formal = pkgs.callPackage ./nix/formal.nix {};
+        devShells.formal = formal;
 
         apps =
           pkgs.lib.mapAttrs (name: check: {
@@ -635,7 +706,7 @@
           })
           (ci-checks // {
             ci = ci-all;
-            inherit ci-browser ci-e2e ci-mutants ci-wasm-node;
+            inherit ci-browser ci-e2e ci-hax ci-mutants ci-tamarin ci-wasm-node;
           });
 
         formatter = pkgs.alejandra;

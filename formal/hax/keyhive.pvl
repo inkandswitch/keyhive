@@ -1,0 +1,29 @@
+(* Keyhive's primitives: the symbols that keyhive_content's
+   `#[hax_lib::proverif::replace_body]` annotations name (`ChunkCipher` in
+   `keyhive_content/src/encrypted.rs`). Loaded after hax's libraries and
+   before the extraction.
+
+   A `ChunkCipher` is modelled by the application key it is derived from. *)
+
+fun ks_kdf_enc(bitstring): bitstring.          (* derive_key(CONTENT_ENCRYPTION_KEY, app_key) *)
+fun ks_kdf_nonce(bitstring): bitstring.        (* derive_key(CONTENT_NONCE_KEY, app_key) *)
+fun ks_mac(bitstring, bitstring): bitstring.   (* keyed BLAKE3, truncated to 24 bytes *)
+
+(* XChaCha20-Poly1305(key, nonce, aad, plaintext). *)
+fun ks_aead_enc(bitstring, bitstring, bitstring, bitstring): bitstring.
+
+(* The AEAD is not key-committing ("Invisible Salamanders"): from two keys,
+   one nonce and two (AAD, plaintext) pairs it knows, the adversary makes one
+   ciphertext that opens under either key. This over-approximates the real
+   attack, where the plaintexts are only partly chosen. With `otherwise`, a
+   forgery with one key twice opens to its first plaintext only, as a real
+   AEAD would. *)
+fun ks_forge(bitstring, bitstring, bitstring, bitstring, bitstring, bitstring, bitstring): bitstring.
+
+fun ks_aead_dec(bitstring, bitstring, bitstring, bitstring): bitstring
+reduc forall k: bitstring, n: bitstring, a: bitstring, m: bitstring;
+        ks_aead_dec(k, n, ks_aead_enc(k, n, a, m), a) = m
+  otherwise forall k1: bitstring, k2: bitstring, n: bitstring, a1: bitstring, m1: bitstring, a2: bitstring, m2: bitstring;
+        ks_aead_dec(k1, n, ks_forge(k1, k2, n, a1, m1, a2, m2), a1) = m1
+  otherwise forall k1: bitstring, k2: bitstring, n: bitstring, a1: bitstring, m1: bitstring, a2: bitstring, m2: bitstring;
+        ks_aead_dec(k2, n, ks_forge(k1, k2, n, a1, m1, a2, m2), a2) = m2.

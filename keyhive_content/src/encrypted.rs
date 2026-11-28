@@ -146,16 +146,9 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
             .peekable();
         while let Some((i, chunk)) = chunks.next() {
             let aad = keys.aad(i, chunks.peek().is_none());
-            let nonce = keys.nonce(&aad, chunk);
-            // Wiped when dropped, so a chunk that fails to encrypt leaves no
-            // plaintext behind, and sized for the tag, so appending it does
-            // not reallocate.
-            let mut buf = Zeroizing::new(Vec::with_capacity(chunk.len() + AEAD_TAG_LEN));
-            buf.extend_from_slice(chunk);
-            keys.cipher
-                .encrypt_in_place(&XNonce::from(nonce), &aad, &mut *buf)?;
+            let (nonce, ciphertext) = seal_chunk(&keys.cipher, &aad, chunk)?;
             content.chunks.extend_from_slice(&nonce);
-            content.chunks.extend_from_slice(&buf);
+            content.chunks.extend_from_slice(&ciphertext);
         }
         Ok(content)
     }
@@ -185,13 +178,7 @@ impl<T, Cr: ContentRef> EncryptedContent<T, Cr> {
                 .split_first_chunk::<NONCE_LEN>()
                 .expect("every chunk contains its nonce and tag");
             let aad = keys.aad(i, chunks.peek().is_none());
-            let mut buf = Zeroizing::new(ciphertext.to_vec());
-            keys.cipher
-                .decrypt_in_place(&XNonce::from(*nonce), &aad, &mut *buf)?;
-            if !nonces_match(&keys.nonce(&aad, &buf), nonce) {
-                return Err(ContentDecryptError::NonceMismatch);
-            }
-            plaintext.extend_from_slice(&buf);
+            plaintext.extend_from_slice(&open_chunk(&keys.cipher, &aad, nonce, ciphertext)?);
         }
         Ok(plaintext)
     }
@@ -350,8 +337,7 @@ impl From<chacha20poly1305::Error> for ContentDecryptError {
 
 /// The keys and header digest every chunk of one block uses.
 struct ChunkKeys {
-    cipher: XChaCha20Poly1305,
-    nonce_key: Zeroizing<[u8; 32]>,
+    cipher: ChunkCipher,
     header_digest: [u8; 32],
 }
 
@@ -360,11 +346,8 @@ impl ChunkKeys {
         let mut hasher = Context::CONTENT_HEADER.hasher();
         hasher.update(doc_id.as_bytes());
         hasher.update(header);
-        // The cipher keeps, and wipes, its own copy of the key.
-        let enc_key = Context::CONTENT_ENCRYPTION_KEY.derive_key(key.as_slice());
         ChunkKeys {
-            cipher: XChaCha20Poly1305::new(enc_key.as_ref().into()),
-            nonce_key: Context::CONTENT_NONCE_KEY.derive_key(key.as_slice()),
+            cipher: ChunkCipher::new(key),
             header_digest: {
                 let mut digest = [0; 32];
                 hasher.finalize_xof().fill(&mut digest);
@@ -381,9 +364,118 @@ impl ChunkKeys {
         aad[40] = u8::from(last);
         aad
     }
+}
 
+/// Seal one chunk: its synthetic nonce, then its ciphertext.
+///
+/// This and [`open_chunk`] are the construction `formal/hax/` proves
+/// key-committing: `cargo hax` extracts them as they are, and models the
+/// [`ChunkCipher`] primitives they call.
+fn seal_chunk(
+    cipher: &ChunkCipher,
+    aad: &[u8; 41],
+    chunk: &[u8],
+) -> Result<([u8; NONCE_LEN], Vec<u8>), chacha20poly1305::Error> {
+    let nonce = cipher.nonce(aad, chunk);
+    let ciphertext = cipher.seal(&nonce, aad, chunk)?;
+    Ok((nonce, ciphertext))
+}
+
+/// Open one chunk. It must authenticate, and its nonce must be the
+/// synthetic nonce of what it decrypts to: the check is what commits the
+/// chunk to one key, since the AEAD alone does not.
+fn open_chunk(
+    cipher: &ChunkCipher,
+    aad: &[u8; 41],
+    nonce: &[u8; NONCE_LEN],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, ContentDecryptError> {
+    let plaintext = cipher.open(nonce, aad, ciphertext)?;
+    if cipher.nonce_matches(nonce, aad, &plaintext) {
+        Ok(plaintext)
+    } else {
+        Err(ContentDecryptError::NonceMismatch)
+    }
+}
+
+/// A block's AEAD and nonce key, derived from its application key.
+///
+/// Each method is a primitive to `cargo hax`: its body is replaced by a
+/// symbol of `formal/hax/keyhive.pvl`, where the cipher is the application
+/// key it was derived from.
+struct ChunkCipher {
+    aead: XChaCha20Poly1305,
+    nonce_key: Zeroizing<[u8; 32]>,
+}
+
+impl ChunkCipher {
+    #[cfg_attr(feature = "hax", hax_lib::proverif::replace_body("key"))]
+    fn new(key: &SymmetricKey) -> Self {
+        // The cipher keeps, and wipes, its own copy of the key.
+        let enc_key = Context::CONTENT_ENCRYPTION_KEY.derive_key(key.as_slice());
+        ChunkCipher {
+            aead: XChaCha20Poly1305::new(enc_key.as_ref().into()),
+            nonce_key: Context::CONTENT_NONCE_KEY.derive_key(key.as_slice()),
+        }
+    }
+
+    /// The synthetic nonce: keyed BLAKE3 over the AAD and the plaintext.
+    #[cfg_attr(
+        feature = "hax",
+        hax_lib::proverif::replace_body("ks_mac(ks_kdf_nonce(self), (aad, chunk))")
+    )]
     fn nonce(&self, aad: &[u8; 41], chunk: &[u8]) -> [u8; NONCE_LEN] {
         synthetic_nonce(&self.nonce_key, &[aad, chunk])
+    }
+
+    /// Whether `nonce` is the synthetic nonce of `plaintext`, compared in
+    /// constant time.
+    #[cfg_attr(
+        feature = "hax",
+        hax_lib::proverif::replace_body(
+            "if nonce = ks_mac(ks_kdf_nonce(self), (aad, plaintext)) then True else False"
+        )
+    )]
+    fn nonce_matches(&self, nonce: &[u8; NONCE_LEN], aad: &[u8; 41], plaintext: &[u8]) -> bool {
+        nonces_match(&self.nonce(aad, plaintext), nonce)
+    }
+
+    #[cfg_attr(
+        feature = "hax",
+        hax_lib::proverif::replace_body("ks_aead_enc(ks_kdf_enc(self), nonce, aad, chunk)")
+    )]
+    fn seal(
+        &self,
+        nonce: &[u8; NONCE_LEN],
+        aad: &[u8; 41],
+        chunk: &[u8],
+    ) -> Result<Vec<u8>, chacha20poly1305::Error> {
+        // Wiped when dropped, so a chunk that fails to encrypt leaves no
+        // plaintext behind, and sized for the tag, so appending it does not
+        // reallocate.
+        let mut buf = Zeroizing::new(Vec::with_capacity(chunk.len() + AEAD_TAG_LEN));
+        buf.extend_from_slice(chunk);
+        self.aead
+            .encrypt_in_place(&XNonce::from(*nonce), aad, &mut *buf)?;
+        Ok(core::mem::take(&mut *buf))
+    }
+
+    /// Decrypt one chunk, wiped when dropped. Does not check the nonce: see
+    /// [`open_chunk`].
+    #[cfg_attr(
+        feature = "hax",
+        hax_lib::proverif::replace_body("ks_aead_dec(ks_kdf_enc(self), nonce, ciphertext, aad)")
+    )]
+    fn open(
+        &self,
+        nonce: &[u8; NONCE_LEN],
+        aad: &[u8; 41],
+        ciphertext: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>, chacha20poly1305::Error> {
+        let mut buf = Zeroizing::new(ciphertext.to_vec());
+        self.aead
+            .decrypt_in_place(&XNonce::from(*nonce), aad, &mut *buf)?;
+        Ok(buf)
     }
 }
 
@@ -652,10 +744,10 @@ mod tests {
     fn a_chunk_whose_nonce_is_not_synthetic_is_refused() {
         let content = encrypt(b"genuine");
         let keys = ChunkKeys::new(&key(1), doc(1), &content.header());
-        let nonce = XNonce::from([9; NONCE_LEN]);
-        let mut buf = b"forged".to_vec();
-        keys.cipher
-            .encrypt_in_place(&nonce, &keys.aad(0, true), &mut buf)
+        let nonce = [9; NONCE_LEN];
+        let buf = keys
+            .cipher
+            .seal(&nonce, &keys.aad(0, true), b"forged")
             .expect("encrypts");
         let forged = reencoded(&content, |b| {
             b.truncate(HEADER_LEN);
