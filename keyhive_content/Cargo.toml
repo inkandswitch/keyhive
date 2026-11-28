@@ -10,6 +10,8 @@ rust-version.workspace = true
 
 [dependencies]
 blake3 = { workspace = true }
+# Only for `cargo hax` extraction (see `formal/hax/`).
+hax-lib = { version = "0.5.0", default-features = false, features = ["macros"], optional = true }
 chacha20poly1305 = { workspace = true }
 keyhive_codec = { workspace = true }
 keyhive_crypto = { workspace = true }
@@ -36,6 +38,8 @@ testresult = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
+# Lets `cargo hax` read `keyhive_content`'s ProVerif annotations (`formal/hax/`).
+hax = ["dep:hax-lib"]
 default = ["std"]
 std = [
   "blake3/std",
